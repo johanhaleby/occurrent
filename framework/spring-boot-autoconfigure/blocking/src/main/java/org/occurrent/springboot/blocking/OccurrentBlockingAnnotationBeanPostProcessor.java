@@ -340,10 +340,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             subscriptionRegistrar.registerSubscriptions(bean, typeResolver.apply(beanName), handlerTargets.apply(beanName, bean), mayBlockForReplay,
                     method -> markRegistered(beanName, method),
                     this::claimSubscriptionId,
-                    (method, id) -> {
-                        registeredIds.remove(id);
-                        registeredHandlers.remove(handlerKey(beanName, method));
-                    });
+                    method -> registeredHandlers.remove(handlerKey(beanName, method)),
+                    registeredIds::remove);
         }
         if (mayBlockForReplay) {
             CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);

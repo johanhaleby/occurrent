@@ -46,7 +46,6 @@ import java.util.Set;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BiConsumer;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -178,16 +177,20 @@ class SubscriptionAnnotationRegistrar {
     // WAIT_UNTIL_STARTED means, which is finishing before the application is up, and the application is already up
     // by the time a lazily built bean is asked for.
     void registerSubscriptions(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
-                               Predicate<Method> reserveHandler, Consumer<String> claimId, BiConsumer<Method, String> release) {
-        // Everything this call has reserved and not yet registered, so a failure releases exactly what it took and
-        // nothing another registration holds. The handler reservation goes with the id, because reserving a
-        // handler is what decides that this call and not another one registers it.
-        List<PendingRegistration> held = new ArrayList<>();
+                               Predicate<Method> reserveHandler, Consumer<String> claimId,
+                               Consumer<Method> releaseHandler, Consumer<String> releaseId) {
+        // Tracked apart, because a call can hold a handler reservation without holding the id. claimId throws when
+        // the id belongs to another registration, and at that moment this call has reserved the handler and
+        // acquired nothing else, so releasing the id here would hand away what that other registration owns and
+        // let a third one claim the same durable checkpoint key.
+        List<PendingRegistration> reservedHandlers = new ArrayList<>();
+        List<PendingRegistration> claimedIds = new ArrayList<>();
         List<PendingRegistration> pending = new ArrayList<>();
         try {
-            claimAndValidate(bean, userClass, handlerTarget, reserveHandler, claimId, pending, held);
+            claimAndValidate(bean, userClass, handlerTarget, reserveHandler, claimId, pending, reservedHandlers, claimedIds);
         } catch (RuntimeException | Error e) {
-            held.forEach(h -> release.accept(h.method(), h.id()));
+            claimedIds.forEach(h -> releaseId.accept(h.id()));
+            reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
             throw e;
         }
         for (PendingRegistration handler : pending) {
@@ -202,10 +205,12 @@ class SubscriptionAnnotationRegistrar {
                     processSynchronousSubscribeAnnotation(bean, handler.method(), handlerTarget, mayBlockForReplay, handler.synchronousSubscription());
                 }
             } catch (RuntimeException | Error e) {
-                held.forEach(h -> release.accept(h.method(), h.id()));
+                claimedIds.forEach(h -> releaseId.accept(h.id()));
+                reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
                 throw e;
             }
-            held.remove(handler);
+            claimedIds.remove(handler);
+            reservedHandlers.remove(handler);
         }
     }
 
@@ -214,7 +219,8 @@ class SubscriptionAnnotationRegistrar {
     // creation is about to fail. What stays outside this is a failure from subscribe itself, a store refusing for
     // example, since undoing that one needs the subscription cancelled rather than never started.
     private void claimAndValidate(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, Predicate<Method> reserveHandler,
-                                  Consumer<String> claimId, List<PendingRegistration> pending, List<PendingRegistration> held) {
+                                  Consumer<String> claimId, List<PendingRegistration> pending,
+                                  List<PendingRegistration> reservedHandlers, List<PendingRegistration> claimedIds) {
         for (Method method : userClass.getDeclaredMethods()) {
             StreamSubscription streamSubscription = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
             Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
@@ -238,8 +244,9 @@ class SubscriptionAnnotationRegistrar {
                     : dcbSubscription != null ? dcbSubscription.id()
                     : synchronousSubscription.id();
             PendingRegistration reserved = new PendingRegistration(method, id, streamSubscription, subscription, dcbSubscription, synchronousSubscription);
-            held.add(reserved);
+            reservedHandlers.add(reserved);
             claimId.accept(id);
+            claimedIds.add(reserved);
             resolveHandlerInvocation(bean, handlerTarget, method);
             pending.add(reserved);
         }

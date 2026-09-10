@@ -486,6 +486,24 @@ class LateBeanAnnotationRegistrationTest {
         });
     }
 
+    // A registration refused because its id belongs to something else must not hand that id away on its way out.
+    // It reserved a handler and acquired no id, so releasing the id would free the owner's claim and let the next
+    // bean register alongside it on the same durable checkpoint key.
+    @Test
+    void a_refused_late_subscription_does_not_release_the_id_it_was_refused() {
+        runner.withUserConfiguration(ProjectionCollaboratorsConfiguration.class, TwoClashingLateBeansConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThatThrownBy(() -> context.getBean("firstClashingSubscriber"))
+                    .rootCause().isInstanceOf(DuplicateSubscriptionIdException.class);
+
+            // The projection still owns the id, so the second bean is refused for the same reason rather than
+            // finding it free.
+            assertThatThrownBy(() -> context.getBean("secondClashingSubscriber"))
+                    .rootCause().isInstanceOf(DuplicateSubscriptionIdException.class);
+        });
+    }
+
     interface Marker {
     }
 
@@ -1389,6 +1407,48 @@ class LateBeanAnnotationRegistrationTest {
         @Lazy
         Marker drainAddedProjectionHolder() {
             return new DrainAddedProjectionHolder();
+        }
+    }
+
+    static class FirstClashingSubscriber implements Marker {
+        @Subscription(id = "owned-by-the-projection")
+        void on(TestEvent event) {
+        }
+    }
+
+    static class SecondClashingSubscriber implements Marker {
+        @Subscription(id = "owned-by-the-projection")
+        void on(TestEvent event) {
+        }
+    }
+
+    static class OwningProjectionHolder {
+        @Projection(id = "owned-by-the-projection", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class TwoClashingLateBeansConfiguration {
+        @Bean
+        OwningProjectionHolder owningProjectionHolder() {
+            return new OwningProjectionHolder();
+        }
+
+        @Bean
+        @Lazy
+        Marker firstClashingSubscriber() {
+            return new FirstClashingSubscriber();
+        }
+
+        @Bean
+        @Lazy
+        Marker secondClashingSubscriber() {
+            return new SecondClashingSubscriber();
         }
     }
 

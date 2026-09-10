@@ -329,10 +329,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             subscriptionRegistrar.registerSubscriptions(bean, typeResolver.apply(beanName), handlerTargets.apply(beanName, bean), mayBlockForReplay,
                     method -> markRegistered(beanName, method),
                     this::claimSubscriptionId,
-                    (method, id) -> {
-                        registeredIds.remove(id);
-                        registeredHandlers.remove(handlerKey(beanName, method));
-                    });
+                    method -> registeredHandlers.remove(handlerKey(beanName, method)),
+                    registeredIds::remove);
         }
         // No early return here. The build step at the end of this method is what lets the loop above finish, so a
         // pass that skips registering must still reach it.
