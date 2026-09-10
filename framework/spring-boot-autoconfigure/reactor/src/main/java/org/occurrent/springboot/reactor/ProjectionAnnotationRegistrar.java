@@ -324,6 +324,12 @@ class ProjectionAnnotationRegistrar {
         while ((polled = domainFeedsToCatchUp.poll()) != null) {
             DomainFeedCatchUp pending = polled;
             if (pending.waitUntilStarted()) {
+                // Refused once close() has begun. This replay is awaited on the calling thread rather than tracked,
+                // so close() cannot stop it, and starting it would fold a whole history into a store the context is
+                // disposing.
+                if (closing) {
+                    continue;
+                }
                 recordingProgress(pending.id(), pending.feed().catchUpAll()).block();
             } else {
                 // startupMode = BACKGROUND. No thread of our own here, unlike the blocking twin: subscribing without
@@ -337,9 +343,18 @@ class ProjectionAnnotationRegistrar {
                 // Rechecked after the subscribe, since catchUpAll() is lazy and the replay starts there. close()
                 // may have stopped this feed before that subscribe, and CatchupProjectionFeed.catchUp clears that
                 // stop when it runs, which is why removeThenStop stops it whether or not the removal found it.
+                //
+                // Then waited for, on the same deadline close() uses, because a stop is only observed between events
+                // and close() is no longer here to wait. Taking the entry out without waiting would leave the replay
+                // still unwinding into a store the context is about to dispose.
                 if (closing) {
                     backgroundCatchUps.remove(catchUp);
                     removeThenStop(backgroundFeeds, pending.feed(), DomainEventFeed::stopCatchUp);
+                    try {
+                        catchUp.block(SHUTDOWN_CATCHUP_TIMEOUT);
+                    } catch (RuntimeException e) {
+                        // Already recorded by the subscriber above, and a shutdown has nowhere to put a timeout.
+                    }
                 }
             }
         }
@@ -679,6 +694,11 @@ class ProjectionAnnotationRegistrar {
             // together, so nothing about this projection reaches the feed until the application starts it, and
             // running the deferred work leaves the feed in the same state registering it under auto mode would.
             applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
+                // Same refusal as catchUpCollectedFeeds, and this path is why it is needed: start(id) can be called
+                // long after close() has returned.
+                if (closing) {
+                    return Mono.<Void>empty();
+                }
                 registerOnFeed.run();
                 return catchesUp
                         ? recordingProgress(id, feed.catchUp(id))

@@ -243,6 +243,12 @@ class ProjectionAnnotationRegistrar {
         while ((polled = domainFeedsToCatchUp.poll()) != null) {
             DomainFeedCatchUp pending = polled;
             if (pending.waitUntilStarted()) {
+                // Refused once close() has begun. This replay runs on the calling thread rather than one of ours, so
+                // nothing tracks it and close() cannot stop it, and starting it would fold a whole history into a
+                // store the context is disposing.
+                if (closing) {
+                    continue;
+                }
                 recordingProgress(pending.id(), () -> pending.feed().catchUpAll()).run();
             } else {
                 // startupMode = BACKGROUND. The feed itself deliberately has no background overload, since a caller
@@ -732,6 +738,11 @@ class ProjectionAnnotationRegistrar {
                     feed.goLive(id);
                     withPushCatchupStatus(status -> status.recordLive(id));
                 } else if (waitUntilStarted) {
+                    // Same refusal as catchUpCollectedFeeds, and this path is why it is needed: start(id) can be
+                    // called long after close() has returned.
+                    if (closing) {
+                        return;
+                    }
                     recordingProgress(id, () -> feed.catchUp(id)).run();
                 } else {
                     // Same treatment as auto mode, or startAll() would block for a full replay on a projection that
