@@ -339,7 +339,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         for (String beanName : subscriptionBeanNames) {
             Object bean = beanResolver.apply(beanName);
-            subscriptionRegistrar.registerSubscriptions(bean, typeResolver.apply(beanName).type(), handlerTargets.apply(beanName, bean), mayBlockForReplay,
+            // The class of the instance just resolved, not another lookup by name. A non-singleton bean is a new
+            // instance here, and a factory that can return different implementations would otherwise have this
+            // register one implementation's methods against another's instance.
+            subscriptionRegistrar.registerSubscriptions(bean, userClassOf(bean), handlerTargets.apply(beanName, bean), mayBlockForReplay,
                     method -> markRegistered(beanName, method),
                     this::claimSubscriptionId,
                     method -> registeredHandlers.remove(handlerKey(beanName, method)),
