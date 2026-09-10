@@ -336,17 +336,19 @@ class ProjectionAnnotationRegistrar {
                 backgroundCatchUps.add(catchUp);
                 catchUp.subscribe(ignored -> {
                 }, error -> recordBackgroundFailure(pending.id(), error));
-                // Recheck after subscribing rather than before, because stopping a feed only takes effect on a
-                // replay that is already running, so a stop issued before the subscribe would be cleared by the
-                // catch-up itself and the whole history would replay into a closing store.
+                // Rechecked after subscribing rather than before. catchUpAll() is lazy, so the replay starts on
+                // the subscribe above, and CatchupProjectionFeed.catchUp clears its own stopped flag when it runs.
+                // A stop issued before the subscribe is therefore cleared by the replay it was meant to stop.
                 //
-                // Both queues are rechecked because each holds a different half of the same obligation. Taking the
-                // feed back is what stops the replay. Taking the mono back only spares close() a wait it can no
-                // longer be doing. Stopping is the half the invariant is about, so the feed is stopped through the
-                // named operation and the mono is merely discarded.
+                // stopCatchUp() is called whenever closing is set, rather than only when this took the feed back
+                // out of the queue, and that is the part worth reading twice. close() may have taken the feed
+                // between the add above and the subscribe, stopped it, and had that stop cleared a moment later by
+                // this very subscribe. The removal says nothing about whether that happened, so it cannot decide
+                // whether to stop. Stopping twice only sets a flag that is already set.
                 if (closing) {
                     backgroundCatchUps.remove(catchUp);
-                    removeAndStop(backgroundFeeds, pending.feed(), DomainEventFeed::stopCatchUp);
+                    backgroundFeeds.remove(pending.feed());
+                    pending.feed().stopCatchUp();
                 }
             }
         }
