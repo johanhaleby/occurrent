@@ -37,6 +37,7 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.SmartFactoryBean;
 import org.springframework.beans.factory.config.BeanPostProcessor;
@@ -45,6 +46,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Scope;
 import org.mockito.ArgumentCaptor;
 
@@ -60,6 +62,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -194,6 +199,86 @@ class LateBeanAnnotationRegistrationTest {
             handler.getValue().invoke(null, new TestEvent());
 
             assertThat(LateWrappingProxyConfiguration.ADVICE_CALLS).containsExactly("on");
+        });
+    }
+
+    // A handler registered from the creation callback can be delivered to before that callback returns, because
+    // startupMode = WAIT_UNTIL_STARTED replays history inside subscribe. The singleton is not published yet at that
+    // point, so a handler target that always asks the context by name would throw BeanCurrentlyInCreationException
+    // and the bean could never finish being built.
+    @Test
+    void a_late_handler_replaying_history_inside_its_own_registration_is_delivered_to() {
+        runner.withUserConfiguration(ReplayDuringRegistrationConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            context.getBean("replayingSubscriber");
+
+            assertThat(ReplayingSubscriber.DELIVERED).containsExactly("replayed");
+        });
+    }
+
+    // The startup ordering used to make this impossible, since every subscription id was collected before the first
+    // projection checked one out. A subscription registering after startup arrives after all of them, so it has to
+    // refuse an id one of them already holds rather than write to the same durable checkpoint key.
+    @Test
+    void a_late_subscription_reusing_a_projections_id_is_refused() {
+        runner.withUserConfiguration(ProjectionCollaboratorsConfiguration.class, LateIdClashConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThatThrownBy(() -> context.getBean("clashingSubscriber"))
+                    .rootCause()
+                    .isInstanceOf(DuplicateSubscriptionIdException.class)
+                    .hasMessageContaining("clashing-id");
+        });
+    }
+
+    // The startup path binds a handler to the instance it resolved, so a prototype whose declared type already
+    // exposes the annotation keeps the single instance it registered with. Asking the context by name per delivery
+    // would build a fresh prototype for every event instead.
+    @Test
+    void a_prototype_registered_at_startup_keeps_the_instance_it_registered_with() {
+        runner.withUserConfiguration(VisiblePrototypeConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Function2<EventMetadata, TestEvent, ?>> handler = ArgumentCaptor.forClass(Function2.class);
+            verify(context.getBean(Subscriptions.class))
+                    .subscribe(eq("visible-prototype-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), handler.capture());
+            int afterStartup = INSTANTIATIONS.get();
+
+            handler.getValue().invoke(null, new TestEvent());
+
+            assertThat(INSTANTIATIONS).describedAs("a delivery builds no further instance").hasValue(afterStartup);
+        });
+    }
+
+    // Registering a handler builds its bean, and building it, or invoking the descriptor factory it declares, can
+    // build another bean whose class the scan has never read. Each pass therefore reveals the next, so the scan
+    // has to repeat until a pass registers nothing rather than run a fixed number of times. This chain needs three
+    // passes. The first registers chainHead, whose construction reveals chainSecond, and the second registers
+    // chainSecond's projection, whose factory reveals chainThird.
+    @Test
+    void a_handler_revealed_by_a_bean_that_a_later_pass_built_registers_too() {
+        runner.withUserConfiguration(ProjectionCollaboratorsConfiguration.class, ChainedDiscoveryConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+            verify(subscriptions).subscribe(eq("chain-visible"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+            verify(subscriptions).subscribe(eq("chain-third"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+        });
+    }
+
+    // A registration that throws fails the bean's creation, and Spring caches nothing for a creation that failed,
+    // so the next request builds the bean again. The handler has to be registered on that second attempt, which it
+    // is not if the first attempt recorded it as registered before doing the work.
+    @Test
+    void a_late_handler_whose_first_registration_threw_registers_on_the_retry() {
+        runner.withUserConfiguration(FailingFirstRegistrationConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThatThrownBy(() -> context.getBean("retriedSubscriber")).isNotNull();
+
+            context.getBean("retriedSubscriber");
+
+            verify(context.getBean(Subscriptions.class), times(2))
+                    .subscribe(eq("retried-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
         });
     }
 
@@ -509,6 +594,206 @@ class LateBeanAnnotationRegistrationTest {
             assertThat(context).hasNotFailed();
             assertThat(INTERFACE_PROJECTION_FACTORY_INVOCATIONS).hasValue(1);
         });
+    }
+
+    public static class ReplayingSubscriber implements Marker {
+        static final List<String> DELIVERED = new ArrayList<>();
+
+        @Subscription(id = "replay-during-registration")
+        public void on(TestEvent event) {
+            DELIVERED.add("replayed");
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class ReplayDuringRegistrationConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        // Delivers to the handler from inside subscribe, the way a WAIT_UNTIL_STARTED history replay does, so the
+        // delivery arrives while the bean this handler belongs to is still being built.
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
+            doAnswer(invocation -> {
+                Function2<EventMetadata, TestEvent, ?> handler = invocation.getArgument(4);
+                handler.invoke(null, new TestEvent());
+                return null;
+            }).when(subscriptions).subscribe(eq("replay-during-registration"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+            return subscriptions;
+        }
+
+        @Bean
+        @Lazy
+        Marker replayingSubscriber() {
+            ReplayingSubscriber.DELIVERED.clear();
+            return new ReplayingSubscriber();
+        }
+    }
+
+    static class ClashingSubscriber implements Marker {
+        @Subscription(id = "clashing-id")
+        void on(TestEvent event) {
+        }
+    }
+
+    static class ClashingProjectionHolder {
+        @Projection(id = "clashing-id", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class LateIdClashConfiguration {
+        @Bean
+        ClashingProjectionHolder clashingProjectionHolder() {
+            return new ClashingProjectionHolder();
+        }
+
+        @Bean
+        @Lazy
+        Marker clashingSubscriber() {
+            return new ClashingSubscriber();
+        }
+    }
+
+    // Declared as the concrete class, so the startup scan sees the handler and registers it there rather than from
+    // the creation callback.
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class VisiblePrototypeConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        @Scope("prototype")
+        VisiblePrototypeSubscriber visiblePrototypeSubscriber() {
+            return new VisiblePrototypeSubscriber();
+        }
+    }
+
+    static class VisiblePrototypeSubscriber {
+        VisiblePrototypeSubscriber() {
+            INSTANTIATIONS.incrementAndGet();
+        }
+
+        @Subscription(id = "visible-prototype-handler")
+        void on(TestEvent event) {
+        }
+    }
+
+    interface ChainMarker {
+    }
+
+    // Declared as the concrete class, so the first pass sees this handler. Building it builds the second bean,
+    // whose class the first pass had no way to read.
+    static class ChainHead {
+        ChainHead(ObjectProvider<ChainMarker> second) {
+            second.getObject();
+        }
+
+        @Subscription(id = "chain-visible")
+        void on(TestEvent event) {
+        }
+    }
+
+    // Found by the second pass, and its @Projection factory is what builds the third bean. Building it from the
+    // factory rather than from this constructor is the point, because the third bean's class is recorded after the
+    // second pass has already collected, so only a third pass can read it.
+    static class ChainSecond implements ChainMarker {
+        private final ObjectProvider<ChainTailMarker> third;
+
+        ChainSecond(ObjectProvider<ChainTailMarker> third) {
+            this.third = third;
+        }
+
+        @Projection(id = "chain-second-projection", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            third.getObject();
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    interface ChainTailMarker {
+    }
+
+    static class ChainThird implements ChainTailMarker {
+        @Subscription(id = "chain-third")
+        void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class ChainedDiscoveryConfiguration {
+        @Bean
+        @Lazy
+        ChainHead chainHead(ObjectProvider<ChainMarker> second) {
+            return new ChainHead(second);
+        }
+
+        @Bean
+        @Lazy
+        ChainMarker chainSecond(ObjectProvider<ChainTailMarker> third) {
+            return new ChainSecond(third);
+        }
+
+        @Bean
+        @Lazy
+        ChainTailMarker chainThird() {
+            return new ChainThird();
+        }
+    }
+
+    static class RetriedSubscriber implements Marker {
+        @Subscription(id = "retried-handler")
+        void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class FailingFirstRegistrationConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        // Refuses the first registration and accepts the second, so the retry Spring performs after a failed bean
+        // creation is what this fixture exercises.
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
+            doThrow(new IllegalStateException("refused once"))
+                    .doAnswer(invocation -> null)
+                    .when(subscriptions).subscribe(eq("retried-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+            return subscriptions;
+        }
+
+        @Bean
+        @Lazy
+        Marker retriedSubscriber() {
+            return new RetriedSubscriber();
+        }
     }
 
     record TestEvent() {

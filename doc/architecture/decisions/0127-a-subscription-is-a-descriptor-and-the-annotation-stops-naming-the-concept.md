@@ -272,6 +272,38 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > fails fast at startup instead of running unadvised. The `@SynchronousSubscription` behaviour change this section
 > already anticipates, a write during startup not reaching a handler whose collaborators are not yet wired, is what
 > #965 makes true today rather than only once this epic ships.
+>
+> **Amended on 2026-09-10, for #981.** "Settled for both" was true only for where an annotation is *registered*. It
+> is not true for where one is *read*, and after #981 those are different phases. A bean the container has not built
+> when `afterSingletonsInstantiated` runs is read through `ApplicationContext.getType`, which for a factory-method
+> definition answers with the method's declared return type rather than the concrete class, so an annotation only
+> the class declares was never seen and the handler never ran. Building the bean to read its class is not available,
+> because it would defeat `@Lazy` and `spring.main.lazy-initialization`, and no bean-definition API can name the
+> concrete class without running the factory method. So the annotation is now read across three phases rather than
+> one.
+>
+> `postProcessBeforeInitialization` records the class the container actually built, and nothing else.
+> `afterSingletonsInstantiated` still does every registration for a bean that exists by then, repeating until a pass
+> registers nothing, since registering a handler can build a bean whose class no earlier pass could read.
+> `postProcessAfterInitialization` registers a bean the container builds later, which is the first moment that
+> bean's class exists.
+>
+> The recording step does not reintroduce the hazard the amendment above describes, and the distinction is the whole
+> reason it is safe. That hazard is a lookup by name during creation. Recording a class is neither a lookup nor an
+> invocation, so it cannot deadlock and has no raw-bean fallback to take, and it registers nothing.
+>
+> Registering from `postProcessAfterInitialization` does meet the creation window, and the same
+> `startupMode = WAIT_UNTIL_STARTED` replay is what it meets, delivering inside the callback while the singleton is
+> still unpublished. Nothing is looked up by name there. The handler runs on the instance that callback received,
+> which is already past every ordered `BeanPostProcessor` and so already has its AOP advice applied, and moves to
+> the published singleton once the bean has finished being created. A handler registered at startup is unaffected
+> and still binds to the instance it resolved.
+>
+> One consequence belongs to a different decision. A live-only handler registering late starts from where the feed
+> has reached, so it misses what was written between startup and the bean being built. That is the window
+> [#979](https://github.com/johanhaleby/occurrent/issues/979) already tracks, widened rather than new, and #979's
+> fix closes it for both. Registering late with that window is narrower than never registering at all, which is
+> what this replaces.
 
 **Moving there inherits how the existing descriptor annotations invoke a factory, including one hazard they already
 have.** `OccurrentBlockingAnnotationBeanPostProcessor` resolves the bean from the context and `invokeFactory` calls the

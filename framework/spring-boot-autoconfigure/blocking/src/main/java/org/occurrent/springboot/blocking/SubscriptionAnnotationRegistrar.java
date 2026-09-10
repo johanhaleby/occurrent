@@ -44,6 +44,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -105,17 +106,48 @@ class SubscriptionAnnotationRegistrar {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The method is final, so a CGLIB proxy in the chain cannot override it. Remove final from the method.");
         }
-        return new HandlerInvocation(handlerTarget, invocableMethod);
+        return new HandlerInvocation(handlerTarget, method, invocableMethod, bean.getClass());
     }
 
-    // target is a supplier rather than the instance, because a bean created after startup registers from
-    // postProcessAfterInitialization, where the singleton is not published yet. Asking the context for it by name
-    // there throws BeanCurrentlyInCreationException, and holding on to the instance that callback receives would
-    // keep whichever proxy layer existed at that moment, losing the advice of any layer a later
-    // BeanPostProcessor adds. Resolving by name per delivery, once creation has finished, always reaches the
-    // published singleton.
-    // The startup path supplies the instance it already resolved, so nothing about it changes.
-    private record HandlerInvocation(Supplier<Object> target, Method method) {
+    // Both the object to invoke on and the method to invoke depend on when the delivery happens. A handler
+    // registered after startup runs on the instance its creation callback received while its bean is still being
+    // created, and on the published singleton afterwards, and a BeanPostProcessor after that callback can make
+    // those two different classes. A concrete method resolved against one is not invocable on the other, so the
+    // method is resolved from the object actually being invoked and the last answer is kept. A handler that always
+    // runs on the same class therefore resolves once, which is every handler registered at startup.
+    private static final class HandlerInvocation {
+        private final Supplier<Object> target;
+        private final Method declaredMethod;
+        private volatile Class<?> resolvedFor;
+        private volatile Method resolved;
+
+        HandlerInvocation(Supplier<Object> target, Method declaredMethod, Method resolved, Class<?> resolvedFor) {
+            this.target = target;
+            this.declaredMethod = declaredMethod;
+            this.resolved = resolved;
+            this.resolvedFor = resolvedFor;
+        }
+
+        Object target() {
+            return target.get();
+        }
+
+        Method methodFor(Object target) {
+            Class<?> targetClass = target.getClass();
+            if (targetClass == resolvedFor) {
+                return resolved;
+            }
+            Method method;
+            try {
+                method = AopUtils.selectInvocableMethod(declaredMethod, targetClass);
+            } catch (IllegalStateException e) {
+                throw new SubscriptionHandlerNotInvocableException(declaredMethod,
+                        "The proxy does not implement it. Either the method is private, so a CGLIB proxy cannot override it, or the bean is a JDK interface proxy implementing none of the interfaces the method is declared on. Make the method non-private, expose it on an interface, or set spring.aop.proxy-target-class=true so a CGLIB proxy is used instead.");
+            }
+            resolved = method;
+            resolvedFor = targetClass;
+            return method;
+        }
     }
 
     // userClass, not bean.getClass(): bean is already the resolved proxy, and a JDK interface proxy's class
@@ -124,7 +156,7 @@ class SubscriptionAnnotationRegistrar {
     // shouldRegister decides per method, so a bean scanned a second time (its real class revealing a handler the
     // first scan's predicted type did not declare) registers only what is new. The validation above every branch
     // still runs for every method, since a misconfigured handler must fail whether or not it registers.
-    void registerSubscriptions(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, Predicate<Method> shouldRegister) {
+    void registerSubscriptions(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, Predicate<Method> shouldRegister, Consumer<Method> onRegistered) {
         for (Method method : userClass.getDeclaredMethods()) {
             StreamSubscription streamSubscription = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
             Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
@@ -146,6 +178,9 @@ class SubscriptionAnnotationRegistrar {
             } else if (synchronousSubscription != null) {
                 processSynchronousSubscribeAnnotation(bean, method, handlerTarget, synchronousSubscription);
             }
+            if (annotationCount == 1) {
+                onRegistered.accept(method);
+            }
         }
     }
 
@@ -158,7 +193,7 @@ class SubscriptionAnnotationRegistrar {
 
         HandlerInvocation invocation = resolveHandlerInvocation(bean, handlerTarget, method);
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            invoke(invocation.method(), invocation.target().get(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+            invoke(invocation, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
 
@@ -183,7 +218,7 @@ class SubscriptionAnnotationRegistrar {
 
         HandlerInvocation invocation = resolveHandlerInvocation(bean, handlerTarget, method);
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            invoke(invocation.method(), invocation.target().get(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+            invoke(invocation, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
 
@@ -210,7 +245,7 @@ class SubscriptionAnnotationRegistrar {
 
         HandlerInvocation invocation = resolveHandlerInvocation(bean, handlerTarget, method);
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            invoke(invocation.method(), invocation.target().get(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+            invoke(invocation, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
 
@@ -249,7 +284,7 @@ class SubscriptionAnnotationRegistrar {
         BiConsumer<DcbEventMetadata, E> consumer = (dcbMetadata, event) -> {
             boolean hasDcbEventMetadataParam = parameters.stream().anyMatch(p -> p.type() == DcbEventMetadata.class);
             Object metadataArgument = hasDcbEventMetadataParam ? dcbMetadata : dcbMetadata.eventMetadata();
-            invoke(invocation.method(), invocation.target().get(), SubscriptionAnnotations.bindArguments(parameters, event, metadataArgument, dcbMetadata.eventMetadata()));
+            invoke(invocation, SubscriptionAnnotations.bindArguments(parameters, event, metadataArgument, dcbMetadata.eventMetadata()));
         };
 
         long startAtDcbPosition = annotation.startAtDcbPosition();
@@ -267,6 +302,13 @@ class SubscriptionAnnotationRegistrar {
         if (shouldWaitUntilStarted) {
             subscription.waitUntilStarted();
         }
+    }
+
+    // Resolves the object first, then the method against that object, so the two always agree even when a late
+    // handler's target changes class once its bean is published.
+    private static void invoke(HandlerInvocation invocation, Object[] arguments) {
+        Object target = invocation.target();
+        invoke(invocation.methodFor(target), target, arguments);
     }
 
     private static void invoke(Method method, Object bean, Object[] arguments) {

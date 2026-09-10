@@ -23,6 +23,7 @@ import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
@@ -40,11 +41,13 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -124,11 +127,17 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // callback once per instance, and a subscription id is the durable checkpoint key, so a second registration of
     // it is never a harmless repeat.
     //
-    // The handler target is a supplier because getBean(beanName) throws BeanCurrentlyInCreationException from here.
-    // For a singleton, resolving by name per delivery reaches the object the context publishes, whatever a later
-    // BeanPostProcessor wrapped it in. For anything else, resolving by name would build a new instance per delivery,
-    // so the handler stays bound to the instance this callback received, the way the startup scan already binds a
-    // prototype's handler to the single instance it asked for.
+    // The handler target is a supplier rather than an instance, because which object to invoke on depends on when
+    // the delivery happens. Asking the context by name is what reaches the published singleton, whatever a
+    // BeanPostProcessor later in the chain wrapped it in, but the singleton is not published until this callback
+    // returns and asking for it before then throws BeanCurrentlyInCreationException. A subscription registered
+    // here with startupMode = WAIT_UNTIL_STARTED replays its history inside this very callback, so that is not a
+    // theoretical window. Until the bean has finished being created the handler runs on the instance this callback
+    // received, which is already past every ordered BeanPostProcessor and so already has its AOP advice applied,
+    // and after that
+    // on the published one. A bean of any other scope is never published under its name at all, so it stays on the
+    // instance this callback received, the way the startup scan binds a prototype's handler to the single instance
+    // it asked for.
     @Override
     public Object postProcessAfterInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
         if (bean instanceof FactoryBean<?>) {
@@ -137,9 +146,10 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         userClassByBeanName.putIfAbsent(beanName, userClassOf(bean));
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         if (startupScanComplete && beanFactory.containsBeanDefinition(beanName)) {
-            Supplier<Object> handlerTarget = beanFactory.isSingleton(beanName) ? () -> applicationContext.getBean(beanName) : () -> bean;
+            boolean singleton = beanFactory.isSingleton(beanName);
             synchronized (registrationLock) {
-                scan(new String[]{beanName}, name -> bean, name -> handlerTarget);
+                scan(new String[]{beanName}, name -> bean,
+                        (name, resolved) -> () -> singleton && !beanFactory.isCurrentlyInCreation(name) ? applicationContext.getBean(name) : resolved);
             }
         }
         return bean;
@@ -158,26 +168,29 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // subscription id so a projection or snapshot cannot reuse one, then register the subscriptions, then each
     // projection, catch up domain-push feeds, then register each snapshot.
     //
-    // The scan runs twice. Registering a bean creates it, and creating it records its real class, so a second pass
-    // sees an annotation the first pass's prediction could not, an interface declaring one handler implemented by a
-    // class declaring a second. Everything the first pass registered is skipped by handler key, so the second pass
-    // registers only what the first could not see. It terminates because a bean's recorded real class never changes
-    // once the container has built it.
+    // The scan repeats until a pass registers nothing. Registering a handler builds its bean, and building it
+    // records that bean's real class, so a later pass sees an annotation an earlier pass's predicted type did not
+    // declare. Registering also builds whatever collaborators the handler asks for, and those beans are recorded
+    // after the pass that collected, so one extra pass is not enough. Everything already registered is skipped by
+    // handler key, so each pass registers only what the ones before it could not see. It terminates because a pass
+    // that registers nothing has built nothing, so nothing new was recorded for the next pass to find, and the
+    // handlers a context declares are finite.
     @Override
     public void afterSingletonsInstantiated() {
         synchronized (registrationLock) {
             String[] beanNames = applicationContext.getBeanDefinitionNames();
-            scan(beanNames, applicationContext::getBean, name -> () -> applicationContext.getBean(name));
-            scan(beanNames, applicationContext::getBean, name -> () -> applicationContext.getBean(name));
+            while (scan(beanNames, applicationContext::getBean, (name, resolved) -> () -> resolved)) {
+                beanNames = applicationContext.getBeanDefinitionNames();
+            }
             startupScanComplete = true;
         }
     }
 
     // beanResolver hands back the object to read a descriptor factory from and to check the invocation guards
-    // against. targetSupplier hands back the object a handler is invoked on, per delivery. They differ only for a
-    // bean created after the startup scan, where the object is in hand but its name cannot be resolved until
-    // creation finishes.
-    private void scan(String[] beanNames, Function<String, Object> beanResolver, Function<String, Supplier<Object>> targetSupplier) {
+    // against. handlerTargets turns that object into the one a handler is invoked on, per delivery. They differ
+    // only for a bean created after the startup scan, where the object is in hand but its name cannot be resolved
+    // until creation finishes. Answers whether anything registered, which is what the loop above repeats on.
+    private boolean scan(String[] beanNames, Function<String, Object> beanResolver, BiFunction<String, Object, Supplier<Object>> handlerTargets) {
         // A presence check, not a resolution: getBeanProvider(...).getIfAvailable() throws NoUniqueBeanDefinitionException
         // the moment two Subscribable beans exist (an application's own asynchronous model plus the register-only
         // SynchronousSubscriptionModel this starter always contributes), which starts failing every context the
@@ -197,6 +210,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // Iteration order of getBeanDefinitionNames() is deterministic, so a LinkedHashSet keeps registration order
         // reproducible across runs.
         Set<String> subscriptionBeanNames = new LinkedHashSet<>();
+        // Held aside until each id's own registration succeeds, see claimSubscriptionId.
+        Map<String, String> pendingSubscriptionIds = new LinkedHashMap<>();
         for (String beanName : beanNames) {
             Class<?> type;
             try {
@@ -211,7 +226,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 if (isAlreadyRegistered(beanName, method)) {
                     continue;
                 }
-                collectSubscriptionId(beanName, method, subscriptionBeanNames);
+                collectSubscriptionId(beanName, method, subscriptionBeanNames, pendingSubscriptionIds);
                 if (!subscribableExists) {
                     continue;
                 }
@@ -225,26 +240,35 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 }
             }
         }
+        boolean registeredAnything = !subscriptionBeanNames.isEmpty() || !projectionMethods.isEmpty() || !snapshotMethods.isEmpty();
+        // Marking happens after the registration it stands for, never before. A registration that throws while a
+        // bean is being created fails that bean's creation, and Spring caches nothing for a creation that failed,
+        // so asking for the bean again creates it again and runs this callback again. A handler marked ahead of
+        // its own registration would be skipped on that second attempt, and the bean would then be published with
+        // a handler that never registered, which is the loss this whole class exists to close.
         for (String beanName : subscriptionBeanNames) {
             Object bean = beanResolver.apply(beanName);
-            subscriptionRegistrar.registerSubscriptions(bean, resolveScanType(beanName), targetSupplier.apply(beanName),
-                    method -> markRegistered(beanName, method));
+            subscriptionRegistrar.registerSubscriptions(bean, resolveScanType(beanName), handlerTargets.apply(beanName, bean),
+                    method -> !isAlreadyRegistered(beanName, method),
+                    method -> {
+                        markRegistered(beanName, method);
+                        registeredIds.add(pendingSubscriptionIds.get(handlerKey(beanName, method)));
+                    });
         }
         if (!subscribableExists) {
-            return;
+            return registeredAnything;
         }
         for (Object[] pm : projectionMethods) {
-            if (markRegistered((String) pm[0], (Method) pm[1])) {
-                projectionRegistrar.processProjectionAnnotation(beanResolver.apply((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
-            }
+            projectionRegistrar.processProjectionAnnotation(beanResolver.apply((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
+            markRegistered((String) pm[0], (Method) pm[1]);
         }
         // Catch up each domain-push feed once, after all its projections are registered.
         projectionRegistrar.catchUpCollectedFeeds();
         for (Object[] sm : snapshotMethods) {
-            if (markRegistered((String) sm[0], (Method) sm[1])) {
-                snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply((String) sm[0]), (Method) sm[1], (org.occurrent.annotation.Snapshot) sm[2]);
-            }
+            snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply((String) sm[0]), (Method) sm[1], (org.occurrent.annotation.Snapshot) sm[2]);
+            markRegistered((String) sm[0], (Method) sm[1]);
         }
+        return registeredAnything;
     }
 
 
@@ -325,28 +349,42 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         return type == null ? null : ClassUtils.getUserClass(type);
     }
 
-    // A bean carrying any of the four annotations goes into subscriptionBeanNames so registerSubscriptions runs for
+    // A bean with any of the four annotations goes into subscriptionBeanNames so registerSubscriptions runs for
     // it exactly once, above.
-    private void collectSubscriptionId(String beanName, Method method, Set<String> subscriptionBeanNames) {
+    //
+    // The id is refused here when something else already holds it, and joins registeredIds only once its own
+    // registration has succeeded. Refusing here is what the startup ordering used to give for free, since every
+    // subscription id was collected before the first projection or snapshot checked one out. A subscription
+    // registering after startup arrives long after all of those, so without this check it would take an id one of
+    // them already holds and write to the same durable checkpoint key.
+    private void collectSubscriptionId(String beanName, Method method, Set<String> subscriptionBeanNames, Map<String, String> pendingIds) {
         StreamSubscription s = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
         if (s != null) {
-            registeredIds.add(s.id());
+            claimSubscriptionId(beanName, method, s.id(), "@StreamSubscription", pendingIds);
             subscriptionBeanNames.add(beanName);
         }
         Subscription a = AnnotationUtils.findAnnotation(method, Subscription.class);
         if (a != null) {
-            registeredIds.add(a.id());
+            claimSubscriptionId(beanName, method, a.id(), "@Subscription", pendingIds);
             subscriptionBeanNames.add(beanName);
         }
         DcbSubscription d = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
         if (d != null) {
-            registeredIds.add(d.id());
+            claimSubscriptionId(beanName, method, d.id(), "@DcbSubscription", pendingIds);
             subscriptionBeanNames.add(beanName);
         }
         SynchronousSubscription sy = AnnotationUtils.findAnnotation(method, SynchronousSubscription.class);
         if (sy != null) {
-            registeredIds.add(sy.id());
+            claimSubscriptionId(beanName, method, sy.id(), "@SynchronousSubscription", pendingIds);
             subscriptionBeanNames.add(beanName);
         }
+    }
+
+    private void claimSubscriptionId(String beanName, Method method, String id, String annotationName, Map<String, String> pendingIds) {
+        if (registeredIds.contains(id) || pendingIds.containsValue(id)) {
+            throw new DuplicateSubscriptionIdException(id, "Duplicate subscription/projection id '%s' (used by %s on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(
+                    id, annotationName, userClassByBeanName.getOrDefault(beanName, method.getDeclaringClass()).getName(), method.getName()));
+        }
+        pendingIds.put(handlerKey(beanName, method), id);
     }
 }
