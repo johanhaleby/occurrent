@@ -48,6 +48,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BiFunction;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWaitUntilStarted;
@@ -95,7 +97,7 @@ class SubscriptionAnnotationRegistrar {
     // A static method is refused unconditionally, proxied or not. Method.invoke ignores its target argument for a
     // static method and dispatches on the declaring class alone, so it always runs the same way a direct static call
     // would, with no proxy in the invocation at all for any advice to apply through.
-    private HandlerInvocation resolveHandlerInvocation(Object bean, Method method) {
+    private HandlerInvocation resolveHandlerInvocation(Object bean, Supplier<Object> handlerTarget, Method method) {
         if (Modifier.isStatic(method.getModifiers())) {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The method is static, so invoking it never goes through the bean's proxy. Make the method an instance method.");
@@ -111,15 +113,26 @@ class SubscriptionAnnotationRegistrar {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The method is final, so a CGLIB proxy in the chain cannot override it. Remove final from the method.");
         }
-        return new HandlerInvocation(bean, invocableMethod);
+        return new HandlerInvocation(handlerTarget, invocableMethod);
     }
 
-    private record HandlerInvocation(Object target, Method method) {
+    // target is a supplier rather than the instance, because a bean created after startup registers from
+    // postProcessAfterInitialization, where the singleton is not published yet. Asking the context for it by name
+    // there throws BeanCurrentlyInCreationException, and holding on to the instance that callback receives would
+    // keep whichever proxy layer existed at that moment, losing the advice of any layer a later
+    // BeanPostProcessor adds. Resolving by name per delivery, once creation has finished, always reaches the
+    // published singleton.
+    // The startup path supplies the instance it already resolved, so nothing about it changes.
+    private record HandlerInvocation(Supplier<Object> target, Method method) {
     }
 
     // userClass, not bean.getClass(): bean is already the resolved proxy, and a JDK interface proxy's class
     // implements only interfaces, so scanning it here would miss a method declared on the concrete class.
-    void registerSubscriptions(Object bean, Class<?> userClass) {
+    //
+    // shouldRegister decides per method, so a bean scanned a second time (its real class revealing a handler the
+    // first scan's predicted type did not declare) registers only what is new. The validation above every branch
+    // still runs for every method, since a misconfigured handler must fail whether or not it registers.
+    void registerSubscriptions(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, Predicate<Method> shouldRegister) {
         for (Method method : userClass.getDeclaredMethods()) {
             StreamSubscription streamSubscription = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
             Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
@@ -129,20 +142,23 @@ class SubscriptionAnnotationRegistrar {
             if (annotationCount > 1) {
                 throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @Subscription, @StreamSubscription, @DcbSubscription and @SynchronousSubscription, use only one.".formatted(userClass.getName(), method.getName()));
             }
+            if (annotationCount == 1 && !shouldRegister.test(method)) {
+                continue;
+            }
             if (streamSubscription != null) {
-                processSubscribeAnnotation(bean, method, StreamSubscriptionDefinition.from(streamSubscription));
+                processSubscribeAnnotation(bean, method, handlerTarget, StreamSubscriptionDefinition.from(streamSubscription));
             } else if (subscription != null) {
-                processAgnosticSubscribeAnnotation(bean, method, subscription);
+                processAgnosticSubscribeAnnotation(bean, method, handlerTarget, subscription);
             } else if (dcbSubscription != null) {
-                processDcbSubscribeAnnotation(bean, method, dcbSubscription);
+                processDcbSubscribeAnnotation(bean, method, handlerTarget, dcbSubscription);
             } else if (synchronousSubscription != null) {
-                processSynchronousSubscribeAnnotation(bean, method, synchronousSubscription);
+                processSynchronousSubscribeAnnotation(bean, method, handlerTarget, synchronousSubscription);
             }
         }
     }
 
     @SuppressWarnings("unchecked")
-    private <E> void processSubscribeAnnotation(Object bean, Method method, StreamSubscriptionDefinition subscription) {
+    private <E> void processSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, StreamSubscriptionDefinition subscription) {
         String id = subscription.id();
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, subscription.eventTypes(), subscription.annotationName(), applicationContext.getBean(CloudEventConverter.class));
         List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
@@ -151,9 +167,9 @@ class SubscriptionAnnotationRegistrar {
         boolean streamHistoryReplaySupported = startPositionSupport.streamHistoryReplaySupported();
         StartAt startAt = startPositionSupport.generateStreamStartAt(subscription, streamHistoryReplaySupported);
 
-        HandlerInvocation invocation = resolveHandlerInvocation(bean, method);
+        HandlerInvocation invocation = resolveHandlerInvocation(bean, handlerTarget, method);
         Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
-                invokeMono(invocation.method(), invocation.target(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+                invokeMono(invocation.method(), invocation.target().get(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
 
         boolean shouldWaitUntilStarted = subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(subscription.startAt() == StartPosition.BEGINNING_OF_TIME && streamHistoryReplaySupported, subscription.startupMode());
         StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
@@ -167,15 +183,15 @@ class SubscriptionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E> void processAgnosticSubscribeAnnotation(Object bean, Method method, Subscription annotation) {
+    private <E> void processAgnosticSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, Subscription annotation) {
         String id = annotation.id();
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@Subscription", applicationContext.getBean(CloudEventConverter.class));
         List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
         Filter filter = resolved.filter();
 
-        HandlerInvocation invocation = resolveHandlerInvocation(bean, method);
+        HandlerInvocation invocation = resolveHandlerInvocation(bean, handlerTarget, method);
         Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
-                invokeMono(invocation.method(), invocation.target(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+                invokeMono(invocation.method(), invocation.target().get(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
 
         long startAtGlobalPosition = annotation.startAtGlobalPosition();
         if (startAtGlobalPosition >= 0 && annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT) {
@@ -199,15 +215,15 @@ class SubscriptionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E> void processSynchronousSubscribeAnnotation(Object bean, Method method, SynchronousSubscription annotation) {
+    private <E> void processSynchronousSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, SynchronousSubscription annotation) {
         String id = annotation.id();
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@SynchronousSubscription", applicationContext.getBean(CloudEventConverter.class));
         List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
         Filter filter = resolved.filter();
 
-        HandlerInvocation invocation = resolveHandlerInvocation(bean, method);
+        HandlerInvocation invocation = resolveHandlerInvocation(bean, handlerTarget, method);
         Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
-                invokeMono(invocation.method(), invocation.target(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+                invokeMono(invocation.method(), invocation.target().get(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
 
         Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentReactorBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
         // The synchronous subscription model has no start position or background subscription, so there is no
@@ -216,7 +232,7 @@ class SubscriptionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E> void processDcbSubscribeAnnotation(Object bean, Method method, DcbSubscription annotation) {
+    private <E> void processDcbSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, DcbSubscription annotation) {
         String id = annotation.id();
         final DcbCriteria criteria;
         final List<SubscriptionAnnotations.HandlerParameter> parameters;
@@ -239,11 +255,11 @@ class SubscriptionAnnotationRegistrar {
             throw new IllegalArgumentException("A @DcbSubscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
         }
 
-        HandlerInvocation invocation = resolveHandlerInvocation(bean, method);
+        HandlerInvocation invocation = resolveHandlerInvocation(bean, handlerTarget, method);
         BiFunction<DcbEventMetadata, E, Mono<Void>> consumer = (dcbMetadata, event) -> {
             boolean hasDcbEventMetadataParam = parameters.stream().anyMatch(p -> p.type() == DcbEventMetadata.class);
             Object metadataArgument = hasDcbEventMetadataParam ? dcbMetadata : dcbMetadata.eventMetadata();
-            return invokeMono(invocation.method(), invocation.target(), SubscriptionAnnotations.bindArguments(parameters, event, metadataArgument, dcbMetadata.eventMetadata()));
+            return invokeMono(invocation.method(), invocation.target().get(), SubscriptionAnnotations.bindArguments(parameters, event, metadataArgument, dcbMetadata.eventMetadata()));
         };
 
         long startAtDcbPosition = annotation.startAtDcbPosition();

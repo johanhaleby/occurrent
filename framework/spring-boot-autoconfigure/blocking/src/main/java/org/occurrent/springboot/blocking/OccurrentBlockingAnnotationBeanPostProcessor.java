@@ -27,6 +27,7 @@ import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
@@ -38,10 +39,15 @@ import org.springframework.util.ClassUtils;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Implements support for the {@link Subscription}, {@link StreamSubscription} and {@link DcbSubscription} annotations in
@@ -58,6 +64,15 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // One shared duplicate-id registry across every registrar: all subscription ids are collected before projections,
     // snapshots and sagas each check-and-add against it.
     private final Set<String> registeredIds = new HashSet<>();
+    // The class the container actually built for a bean, recorded as the container hands the object over. This is
+    // the only source that cannot fall short of the real class, see resolveScanType below for why the prediction
+    // this replaces can.
+    private final Map<String, Class<?>> userClassByBeanName = new ConcurrentHashMap<>();
+    // Every handler already registered, so scanning a bean a second time registers only what is new. Guarded by
+    // registrationLock, since a bean created after startup is created on whatever thread asked for it.
+    private final Set<String> registeredHandlers = new HashSet<>();
+    private final Object registrationLock = new Object();
+    private volatile boolean startupScanComplete;
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
     private ProjectionAnnotationRegistrar projectionRegistrar;
     private SnapshotAnnotationRegistrar snapshotRegistrar;
@@ -75,24 +90,91 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         this.sagaRegistrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport, registeredIds);
     }
 
-    // Still a BeanPostProcessor only so the static @Bean factory method below registers it ahead of ordinary beans;
-    // postProcessBeforeInitialization and postProcessAfterInitialization do no work and use the interface's defaults.
+    // The container hands over the raw instance here, before any proxy wraps it, so this is where a bean's real
+    // class is knowable without predicting it. Nothing registers from this callback, since the bean is still being
+    // created and a lookup by name for it would deadlock or hand back the unproxied target, which is the whole
+    // reason registration moved to afterSingletonsInstantiated.
+    //
+    // A FactoryBean is skipped, because the container passes the factory itself under the product's own bean name
+    // and the factory's class says nothing about the product's. The product arrives at
+    // postProcessAfterInitialization instead, under the same name, and is recorded there.
+    @Override
+    public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
+        if (!(bean instanceof FactoryBean<?>)) {
+            userClassByBeanName.putIfAbsent(beanName, userClassOf(bean));
+        }
+        return bean;
+    }
+
+    // Where a bean created after the startup scan registers. A @Lazy bean, or a FactoryBean product nothing has
+    // asked for yet, does not exist when afterSingletonsInstantiated runs, and the startup scan therefore reads it
+    // through a prediction that can fall short of its real class (resolveScanType says how). The container creates
+    // it later, and creating it is exactly what makes its real class knowable, so that is when it registers.
+    //
+    // Registering here happens at most once per handler, whatever the scope. A prototype passes through this
+    // callback once per instance, and a subscription id is the durable checkpoint key, so a second registration of
+    // it is never a harmless repeat.
+    //
+    // The handler target is a supplier because getBean(beanName) throws BeanCurrentlyInCreationException from here.
+    // For a singleton, resolving by name per delivery reaches the object the context publishes, whatever a later
+    // BeanPostProcessor wrapped it in. For anything else, resolving by name would build a new instance per delivery,
+    // so the handler stays bound to the instance this callback received, the way the startup scan already binds a
+    // prototype's handler to the single instance it asked for.
+    @Override
+    public Object postProcessAfterInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
+        if (bean instanceof FactoryBean<?>) {
+            return bean;
+        }
+        userClassByBeanName.putIfAbsent(beanName, userClassOf(bean));
+        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
+        if (startupScanComplete && beanFactory.containsBeanDefinition(beanName)) {
+            Supplier<Object> handlerTarget = beanFactory.isSingleton(beanName) ? () -> applicationContext.getBean(beanName) : () -> bean;
+            synchronized (registrationLock) {
+                scan(new String[]{beanName}, name -> bean, name -> handlerTarget);
+            }
+        }
+        return bean;
+    }
+
+    private static Class<?> userClassOf(Object bean) {
+        return ClassUtils.getUserClass(SubscriptionAnnotations.ultimateTarget(bean).getClass());
+    }
 
     // @Projection factory methods, and @Subscription, @StreamSubscription, @DcbSubscription and
     // @SynchronousSubscription handler methods, register after all singletons are instantiated: the factory has to
     // be invoked to obtain the descriptor, and its collaborators (the store, the subscription model) must already be
     // wired. Every handler resolves its invocation through applicationContext.getBean(beanName), which by this point
     // always returns the fully proxied singleton, so advice such as @Transactional applies to every delivery,
-    // including a WAIT_UNTIL_STARTED history replay, not just the ones after startup. First collect every
-    // subscription id so a projection cannot reuse one and so the fencing check below can be asked about each one,
-    // then register the subscriptions, then the projections.
+    // including a WAIT_UNTIL_STARTED history replay, not just the ones after startup.
+    //
+    // The scan runs twice. Registering a bean creates it, and creating it records its real class, so a second pass
+    // sees an annotation the first pass's prediction could not, an interface declaring one handler implemented by a
+    // class declaring a second. Everything the first pass registered is skipped by handler key, so the second pass
+    // registers only what the first could not see. It terminates because a bean's recorded real class never changes
+    // once the container has built it.
+    @Override
+    public void afterSingletonsInstantiated() {
+        synchronized (registrationLock) {
+            String[] beanNames = applicationContext.getBeanDefinitionNames();
+            scan(beanNames, applicationContext::getBean, name -> () -> applicationContext.getBean(name));
+            scan(beanNames, applicationContext::getBean, name -> () -> applicationContext.getBean(name));
+            startupScanComplete = true;
+        }
+    }
+
+    // beanResolver hands back the object to read a descriptor factory from and to check the invocation guards
+    // against. targetSupplier hands back the object a handler is invoked on, per delivery. They differ only for a
+    // bean created after the startup scan, where the object is in hand but its name cannot be resolved until
+    // creation finishes.
+    //
+    // First collect every subscription id so a projection cannot reuse one and so the fencing check below can be
+    // asked about each one, then register the subscriptions, then the projections.
     //
     // @Subscription, @StreamSubscription, @DcbSubscription and @SynchronousSubscription methods register before the
     // fencing check below runs, so one can already write a checkpoint before the check inspects idsToCheck.
     // Pre-existing, not introduced by this reorder. CheckpointStorageCannotFenceSubscriptionException's javadoc
     // covers it.
-    @Override
-    public void afterSingletonsInstantiated() {
+    private void scan(String[] beanNames, Function<String, Object> beanResolver, Function<String, Supplier<Object>> targetSupplier) {
         // Reflects over method signatures only, no store access or checkpoint write, so running it before any
         // registration is safe. Spring creates this bean before CheckpointFencingConfigurationCheck's own bean, so
         // a check that instead waited for its own SmartInitializingSingleton callback would run after a catch-up
@@ -107,7 +189,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // Iteration order of getBeanDefinitionNames() is deterministic, so a LinkedHashSet keeps registration order
         // reproducible across runs.
         Set<String> subscriptionBeanNames = new LinkedHashSet<>();
-        for (String beanName : applicationContext.getBeanDefinitionNames()) {
+        for (String beanName : beanNames) {
             Class<?> type;
             try {
                 type = resolveScanType(beanName);
@@ -118,6 +200,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 continue;
             }
             for (Method method : type.getDeclaredMethods()) {
+                if (isAlreadyRegistered(beanName, method)) {
+                    continue;
+                }
                 collectSubscriptionId(beanName, method, idsToCheck, subscriptionBeanNames);
                 org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
                 if (projection != null) {
@@ -144,20 +229,47 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
         }
         for (String beanName : subscriptionBeanNames) {
-            subscriptionRegistrar.registerSubscriptions(applicationContext.getBean(beanName), resolveScanType(beanName));
+            Object bean = beanResolver.apply(beanName);
+            subscriptionRegistrar.registerSubscriptions(bean, resolveScanType(beanName), targetSupplier.apply(beanName),
+                    method -> markRegistered(beanName, method));
         }
         CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
         for (Object[] pm : projectionMethods) {
-            projectionRegistrar.processProjectionAnnotation(applicationContext.getBean((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
+            if (markRegistered((String) pm[0], (Method) pm[1])) {
+                projectionRegistrar.processProjectionAnnotation(beanResolver.apply((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
+            }
         }
         // Catch up each domain-push feed once, after all its projections are registered.
         projectionRegistrar.catchUpCollectedFeeds();
         for (Object[] sm : snapshotMethods) {
-            snapshotRegistrar.processSnapshotAnnotation(applicationContext.getBean((String) sm[0]), (Method) sm[1], (org.occurrent.annotation.Snapshot) sm[2]);
+            if (markRegistered((String) sm[0], (Method) sm[1])) {
+                snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply((String) sm[0]), (Method) sm[1], (org.occurrent.annotation.Snapshot) sm[2]);
+            }
         }
         for (Object[] gm : sagaMethods) {
-            sagaRegistrar.processSagaAnnotation(applicationContext.getBean((String) gm[0]), (Method) gm[1], (org.occurrent.annotation.Saga) gm[2]);
+            if (markRegistered((String) gm[0], (Method) gm[1])) {
+                sagaRegistrar.processSagaAnnotation(beanResolver.apply((String) gm[0]), (Method) gm[1], (org.occurrent.annotation.Saga) gm[2]);
+            }
         }
+    }
+
+
+    // A handler is identified by its bean name, method name and parameter types, so the same method found again on
+    // a rescan is skipped while a second method on the same bean is not. The declaring class is deliberately left
+    // out. A method an interface declares and the bean's class overrides is one handler, and the two passes see a
+    // different Method for it, so including the declaring class would register that handler's id twice and the
+    // second registration would be refused as a duplicate.
+    private boolean isAlreadyRegistered(String beanName, Method method) {
+        return registeredHandlers.contains(handlerKey(beanName, method));
+    }
+
+    // True the first time a handler is registered, false every time after, so a caller registers it exactly once.
+    private boolean markRegistered(String beanName, Method method) {
+        return registeredHandlers.add(handlerKey(beanName, method));
+    }
+
+    private static String handlerKey(String beanName, Method method) {
+        return beanName + '#' + method.getName() + Arrays.toString(method.getParameterTypes());
     }
 
     // getType(beanName) predicts the type from the bean definition without forcing creation, which is what lets a
@@ -181,12 +293,26 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     //
     // A bean neither branch has created yet, an uncreated @Lazy bean or an uncreated FactoryBean product, stays on
     // the metadata-only getType(beanName) branch below by construction, since forcing it here to read its real class
-    // would defeat the laziness the FactoryBean case above is already written to preserve. getType's prediction can
-    // fall short of the bean's eventual concrete class, a @Bean factory method declared to return an interface being
-    // the common shape, and an annotation the concrete class alone carries then goes undetected, with no rescan once
-    // the bean is later created, since afterSingletonsInstantiated runs this whole scan exactly once. #981 tracks a
-    // fix that keeps this scan lazy while also closing that gap.
+    // would defeat the laziness the FactoryBean case above is already written to preserve, and would defeat
+    // spring.main.lazy-initialization for a whole application. That branch is a prediction rather than the class.
+    // For a definition backed by a factory method, AbstractAutowireCapableBeanFactory.getTypeForFactoryMethod
+    // answers with the method's declared return type, or the common ancestor of the overloads when there are
+    // several, and its own
+    // comment says why ("Can't clearly figure out exact method due to type converting / autowiring!"). A @Bean method
+    // declared to return an interface therefore predicts the interface, whatever concrete class it returns, and no
+    // bean-definition API can say more, because the concrete class is decided by running the method.
+    //
+    // So the real class is not predicted here at all. It is recorded when the container hands the object over, in
+    // postProcessBeforeInitialization for an ordinary bean and postProcessAfterInitialization for a FactoryBean
+    // product, and that recording is what the first branch below reads. The containsSingleton branch after it is
+    // for a bean the container built before this post processor was registered as a BeanPostProcessor, which has no
+    // recording of its own. A bean the container has not built has neither, and registers when it is built instead,
+    // from postProcessAfterInitialization.
     private Class<?> resolveScanType(String beanName) {
+        Class<?> recorded = userClassByBeanName.get(beanName);
+        if (recorded != null) {
+            return recorded;
+        }
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         if (beanFactory.containsSingleton(beanName) && !beanFactory.isFactoryBean(beanName)) {
             return ClassUtils.getUserClass(SubscriptionAnnotations.ultimateTarget(applicationContext.getBean(beanName)).getClass());
