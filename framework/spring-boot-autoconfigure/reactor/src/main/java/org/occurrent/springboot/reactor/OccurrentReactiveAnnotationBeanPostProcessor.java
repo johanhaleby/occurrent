@@ -198,7 +198,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             // one's class and this bean would be scanned for methods its own class does not declare.
             ScanType userClass = new ScanType(userClassOf(bean), true);
             scan(new String[]{beanName}, name -> userClass, name -> bean,
-                    (name, resolved) -> () -> singleton && !beanFactory.isCurrentlyInCreation(name) ? applicationContext.getBean(name) : resolved, false);
+                    (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved, false);
         }
         return bean;
     }
@@ -237,6 +237,13 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
     }
 
+    // Whether a handler invocation for this name can reach the object the container published, rather than the
+    // instance captured on the way through. A registration may block for a replay only where this holds, since a
+    // blocking replay delivers before creation has finished and would otherwise reach the captured instance.
+    private static boolean publishedBeanIsResolvable(ConfigurableListableBeanFactory beanFactory, String beanName, boolean singleton) {
+        return singleton && !beanFactory.isCurrentlyInCreation(beanName);
+    }
+
     // A bean another thread finished during the scan may have been passed over, so each one is scanned again now
     // that the flag is set. Every entry is scanned, including one whose name is still in creation, because the
     // callback that recorded it may have read startupScanComplete as false and declined before the flag was set.
@@ -247,9 +254,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // thread creating it, which may be waiting for the lock this holds, so nothing here resolves anything. Both
     // sides can reach the same bean, and the handler keys they both go through admit only the first.
     //
-    // This runs on the startup thread inside afterSingletonsInstantiated, so it registers under the startup policy
-    // rather than the late one. A bean that happened to finish on another thread during the scan keeps the
-    // WAIT_UNTIL_STARTED guarantee it would have had a moment earlier.
+    // This runs on the startup thread inside afterSingletonsInstantiated, so a bean whose creating thread has
+    // finished with it registers under the startup policy and keeps the WAIT_UNTIL_STARTED guarantee it would have
+    // had a moment earlier. A bean still in creation does not, because a blocking replay delivers while this call
+    // is on the stack, and what it would reach is the instance captured before the post-processors after this one
+    // ran. That is the split #965 removed, where a replay ran on the raw bean and everything after it on the proxy.
     private void drainBeansBuiltWhileScanning() {
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         BuiltWhileScanning built;
@@ -262,8 +271,13 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
             boolean singleton = beanFactory.isSingleton(beanName);
             ScanType userClass = new ScanType(userClassOf(bean), true);
+            // One condition answers both, so a blocking replay cannot deliver anywhere the supplier would not have
+            // sent it. Asked once here for the whole registration, and again per delivery below, since creation
+            // finishing between the two only turns a replay this declined to block for into deliveries that do
+            // resolve the published bean.
             scan(new String[]{beanName}, name -> userClass, name -> bean,
-                    (name, resolved) -> () -> singleton && !beanFactory.isCurrentlyInCreation(name) ? applicationContext.getBean(name) : resolved, true);
+                    (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved,
+                    publishedBeanIsResolvable(beanFactory, beanName, singleton));
         }
     }
 

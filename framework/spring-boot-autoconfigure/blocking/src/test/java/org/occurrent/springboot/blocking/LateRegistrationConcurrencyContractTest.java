@@ -20,6 +20,8 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+
 import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
@@ -73,6 +75,18 @@ class LateRegistrationConcurrencyContractTest {
         assertQueue(ProjectionAnnotationRegistrar.class, "backgroundCatchUps");
         assertQueue(SagaAnnotationRegistrar.class, "pushModels");
         assertQueue(SagaAnnotationRegistrar.class, "sagaSubscriptions");
+    }
+
+    // Whether a registration may block for a replay and where a delivery is sent are the same question, and one
+    // method answers it. Two copies of the condition is the regression, since changing one and not the other sends
+    // a blocking replay to the instance captured on the way through. This only catches the copies being made, not
+    // the two answers drifting, which is why the method exists rather than the condition being written twice.
+    @Test
+    void one_method_decides_both_whether_to_block_and_where_to_deliver() throws Exception {
+        assertThat(OccurrentBlockingAnnotationBeanPostProcessor.class.getDeclaredMethod(
+                "publishedBeanIsResolvable", ConfigurableListableBeanFactory.class, String.class, boolean.class))
+                .describedAs("the single condition behind blocking and delivery")
+                .isNotNull();
     }
 
     // The name and the instance travel together through the startup handoff. A queue of names alone leaves the
