@@ -72,6 +72,8 @@ import java.lang.reflect.Type;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -104,13 +106,17 @@ class ProjectionAnnotationRegistrar {
     // Domain-push feeds collected during projection registration, caught up once after every projection is registered.
     // A list rather than a set now that a feed carries one projection: each entry is one projection's catch-up, and
     // each carries its own startupMode, so there is nothing left to de-duplicate.
-    private final List<DomainFeedCatchUp> domainFeedsToCatchUp = new ArrayList<>();
+    // Concurrent and drained by polling rather than by iterating and then clearing. Two lazily built beans can
+    // register on two threads at once, an unsynchronised append can drop an entry, and a dropped entry here is a
+    // feed that never catches up. Iterate-then-clear drops one just as surely, since an entry added between the
+    // two is cleared without being processed.
+    private final Queue<DomainFeedCatchUp> domainFeedsToCatchUp = new ConcurrentLinkedQueue<>();
     // Push catch-up models created here, kept so the context can stop their replay threads on the way down.
-    private final List<CatchupThenPushSubscriptionModel> pushModels = new ArrayList<>();
+    private final Queue<CatchupThenPushSubscriptionModel> pushModels = new ConcurrentLinkedQueue<>();
     // Catch-ups this registrar started on a thread of its own, plus how to stop each one. Concurrent because under
     // occurrent.subscription.mode = manual these are added from whichever thread calls ManualStartPushSources.start,
     // which can run long after refresh and alongside close().
-    private final List<BackgroundCatchUp> backgroundCatchUps = new CopyOnWriteArrayList<>();
+    private final Queue<BackgroundCatchUp> backgroundCatchUps = new ConcurrentLinkedQueue<>();
     // Set by close(). A background catch-up checks it before starting, because stopping a feed only takes effect once
     // the replay is running: a stop that lands before the thread gets scheduled would otherwise be cleared by the
     // catch-up itself and the whole history would replay into a closing store.
@@ -174,11 +180,22 @@ class ProjectionAnnotationRegistrar {
         awaitTermination(tickExecutorToClose);
         // The models first, because their shutdown is what stops a push replay and so releases the watcher joined
         // below. Each model waits for its own replays, so this can take that long again before the join starts.
-        pushModels.forEach(CatchupThenPushSubscriptionModel::shutdown);
-        pushModels.clear();
-        backgroundCatchUps.forEach(background -> background.stop().run());
+        CatchupThenPushSubscriptionModel pushModel;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
+        while ((pushModel = pushModels.poll()) != null) {
+            pushModel.shutdown();
+        }
+        // Drained by polling before anything is stopped, so an entry added while this runs is either taken here or
+        // left in the queue, never cleared without being stopped and waited for. Everything is stopped before
+        // anything is waited for, which is why they come out into a list first rather than one at a time.
+        List<BackgroundCatchUp> draining = new ArrayList<>();
+        BackgroundCatchUp polled;
+        while ((polled = backgroundCatchUps.poll()) != null) {
+            draining.add(polled);
+        }
+        draining.forEach(background -> background.stop().run());
         long deadline = System.nanoTime() + SHUTDOWN_CATCHUP_TIMEOUT.toNanos();
-        for (BackgroundCatchUp background : backgroundCatchUps) {
+        for (BackgroundCatchUp background : draining) {
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) {
                 break;
@@ -193,12 +210,14 @@ class ProjectionAnnotationRegistrar {
                 // put either that or a timeout. Keep unwinding the rest.
             }
         }
-        backgroundCatchUps.clear();
     }
 
     // Catch up each domain-push feed once, after every projection is registered.
     void catchUpCollectedFeeds() {
-        for (DomainFeedCatchUp pending : domainFeedsToCatchUp) {
+        DomainFeedCatchUp polled;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
+        while ((polled = domainFeedsToCatchUp.poll()) != null) {
+            DomainFeedCatchUp pending = polled;
             if (pending.waitUntilStarted()) {
                 recordingProgress(pending.id(), () -> pending.feed().catchUpAll()).run();
             } else {
@@ -209,7 +228,6 @@ class ProjectionAnnotationRegistrar {
                         recordingProgress(pending.id(), () -> pending.feed().catchUpAll()), pending.feed()::stopCatchUp);
             }
         }
-        domainFeedsToCatchUp.clear();
     }
 
     // Run catch-up work on a virtual thread this registrar owns, recording a failure where the application can see it.

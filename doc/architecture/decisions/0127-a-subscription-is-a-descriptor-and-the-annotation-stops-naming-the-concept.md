@@ -272,6 +272,49 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > fails fast at startup instead of running unadvised. The `@SynchronousSubscription` behaviour change this section
 > already anticipates, a write during startup not reaching a handler whose collaborators are not yet wired, is what
 > #965 makes true today rather than only once this epic ships.
+>
+> **Amended on 2026-09-10, for #981.** "Settled for both" was true only for where an annotation is *registered*. It
+> is not true for where one is *read*, and after #981 those are different phases. A bean the container has not built
+> when `afterSingletonsInstantiated` runs is read through `ApplicationContext.getType`, which for a factory-method
+> definition answers with the method's declared return type rather than the concrete class, so an annotation only
+> the class declares was never seen and the handler never ran. Building the bean to read its class is not available,
+> because it would defeat `@Lazy` and `spring.main.lazy-initialization`, and no bean-definition API can name the
+> concrete class without running the factory method. So the annotation is now read across three phases rather than
+> one.
+>
+> `postProcessBeforeInitialization` records the class the container actually built, and nothing else.
+> `afterSingletonsInstantiated` still does every registration for a bean that exists by then, repeating until a pass
+> registers nothing, since registering a handler can build a bean whose class no earlier pass could read.
+> `postProcessAfterInitialization` registers a bean the container builds later, which is the first moment that
+> bean's class exists.
+>
+> The recording step does not reintroduce the hazard the amendment above describes, and the distinction is the whole
+> reason it is safe. That hazard is a lookup by name during creation. Recording a class is neither a lookup nor an
+> invocation, so it cannot deadlock and has no raw-bean fallback to take, and it registers nothing.
+>
+> Registering from `postProcessAfterInitialization` does meet the creation window, and the same
+> `startupMode = WAIT_UNTIL_STARTED` replay is what it meets. A late `@Subscription`, `@StreamSubscription`,
+> `@DcbSubscription` or `@SynchronousSubscription` therefore never waits for its replay, whatever `startupMode`
+> says, so creation finishes alongside the replay rather than behind it, and every delivery after publication
+> resolves the published singleton with all of its advice. A late `@Projection`, `@Snapshot` or `@Saga` still reads
+> `startupMode` itself and can wait inside the callback, so this decision covers the four handler annotations rather
+> than all seven. Waiting there
+> would have run the whole history against an object the context had not published, which is the loss the amendment
+> above exists to close, reappearing one phase later. Ignoring `startupMode` for these is also what the setting
+> means, since it asks for the replay to finish before the application is up and the application is already up by
+> the time a lazily built bean is asked for.
+>
+> What remains is a race rather than a window anyone can plan around. A replay running on its own thread can deliver
+> while the bean it belongs to is still finishing, and a delivery there runs on the instance the callback received.
+> That instance has the advice of every `BeanPostProcessor` up to this one, since Spring's auto-proxy creators are
+> ordered ahead of it, but not of one registered after it. A handler registered at startup is unaffected and still
+> binds to the instance it resolved.
+>
+> One consequence belongs to a different decision. A live-only handler registering late starts from where the feed
+> has reached, so it misses what was written between startup and the bean being built. That is the window
+> [#979](https://github.com/johanhaleby/occurrent/issues/979) already tracks, widened rather than new, and #979's
+> fix closes it for both. Registering late with that window is narrower than never registering at all, which is
+> what this replaces.
 
 **Moving there inherits how the existing descriptor annotations invoke a factory, including one hazard they already
 have.** `OccurrentBlockingAnnotationBeanPostProcessor` resolves the bean from the context and `invokeFactory` calls the
@@ -281,6 +324,15 @@ Spring Boot proxies by target class by default, so this bites only an applicatio
 which is why `@Projection`, `@Snapshot` and `@Saga` have not tripped over it. It is a defect on that path today rather
 than anything this design introduces, and the epic inherits it rather than widening it. Fixing it means unwrapping to
 the target before invoking a factory, for all four descriptor annotations at once, and that is its own issue.
+
+> **Amended on 2026-09-10, for #981.** The paragraph above describes a defect that has since been fixed and shipped.
+> [#836](https://github.com/johanhaleby/occurrent/issues/836) was the issue it says fixing this needs, and it closed
+> in 0.34.0. `SubscriptionAnnotations.invokeDescriptorFactory` unwraps a bean to its ultimate AOP target and
+> re-resolves the factory method there, shared by all five registrar paths that make this call, so a JDK interface
+> proxy no longer fails. A proxy backed by a prototype- or pool-scoped target source is left proxied and still
+> fails, now naming the annotation, the factory and the fix. Corrected here because the changelog entry for #836
+> links to this section, so a reader arriving from the release notes would otherwise be told that what they had
+> just read was fixed is still broken.
 
 This also closes something the current code calls out as a wart. Its comment notes that a `@Subscription` method
 registers per bean before the checkpoint fencing check runs, so one can write a checkpoint before that check happens,

@@ -68,6 +68,8 @@ import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.Queue;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiFunction;
@@ -98,13 +100,17 @@ class ProjectionAnnotationRegistrar {
     // Domain-push feeds collected during projection registration, caught up once after every projection is
     // registered. A list rather than a set now that a feed carries one projection: each entry is one projection's
     // catch-up and carries its own startupMode, so there is nothing left to de-duplicate.
-    private final List<DomainFeedCatchUp> domainFeedsToCatchUp = new ArrayList<>();
+    // Concurrent and drained by polling rather than by iterating and then clearing. Two lazily built beans can
+    // register on two threads at once, an unsynchronised append can drop an entry, and a dropped entry here is a
+    // feed that never catches up. Iterate-then-clear drops one just as surely, since an entry added between the
+    // two is cleared without being processed.
+    private final Queue<DomainFeedCatchUp> domainFeedsToCatchUp = new ConcurrentLinkedQueue<>();
     // Push catch-up models created here, kept so the context can stop their replays on the way down.
-    private final List<CatchupThenPushSubscriptionModel> pushModels = new ArrayList<>();
+    private final Queue<CatchupThenPushSubscriptionModel> pushModels = new ConcurrentLinkedQueue<>();
     // Domain feeds whose catch-up was started in the background, kept so the context can stop those too, each with
     // the signal close() waits on afterwards.
-    private final List<DomainEventFeed<?>> backgroundFeeds = new ArrayList<>();
-    private final List<Mono<Void>> backgroundCatchUps = new ArrayList<>();
+    private final Queue<DomainEventFeed<?>> backgroundFeeds = new ConcurrentLinkedQueue<>();
+    private final Queue<Mono<Void>> backgroundCatchUps = new ConcurrentLinkedQueue<>();
 
     // The applied-append recording poll's pacing (ADR 132 decision 7), and the scheduler that runs it. Both created
     // lazily on the first recordAppliedAppends = true projection, so an application that never uses the feature pays
@@ -133,12 +139,25 @@ class ProjectionAnnotationRegistrar {
     // its next event, and the store can be gone by then.
     void close() {
         closing = true;
-        pushModels.forEach(CatchupThenPushSubscriptionModel::shutdown);
-        pushModels.clear();
-        backgroundFeeds.forEach(DomainEventFeed::stopCatchUp);
-        backgroundFeeds.clear();
+        CatchupThenPushSubscriptionModel pushModel;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
+        while ((pushModel = pushModels.poll()) != null) {
+            pushModel.shutdown();
+        }
+        DomainEventFeed<?> backgroundFeed;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
+        while ((backgroundFeed = backgroundFeeds.poll()) != null) {
+            backgroundFeed.stopCatchUp();
+        }
+        // Drained by polling, so an entry added while this runs is either taken here or left in the queue, never
+        // cleared without being waited for.
+        List<Mono<Void>> draining = new ArrayList<>();
+        Mono<Void> polled;
+        while ((polled = backgroundCatchUps.poll()) != null) {
+            draining.add(polled);
+        }
         long deadline = System.nanoTime() + SHUTDOWN_CATCHUP_TIMEOUT.toNanos();
-        for (Mono<Void> catchUp : backgroundCatchUps) {
+        for (Mono<Void> catchUp : draining) {
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) {
                 break;
@@ -149,7 +168,6 @@ class ProjectionAnnotationRegistrar {
                 // Already logged and recorded where it happened, and a shutdown has nowhere useful to put a timeout.
             }
         }
-        backgroundCatchUps.clear();
         // dispose() alone only stops the scheduler from accepting new work. A tick already blocked in
         // AppliedAppendStore.clear() can otherwise still be running once close() returns, against a store the
         // context is tearing down. disposeGracefully() is awaited outside recordingLock instead, capped at the
@@ -277,7 +295,10 @@ class ProjectionAnnotationRegistrar {
 
     // Catch up each domain-push feed once, after every projection is registered.
     void catchUpCollectedFeeds() {
-        for (DomainFeedCatchUp pending : domainFeedsToCatchUp) {
+        DomainFeedCatchUp polled;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
+        while ((polled = domainFeedsToCatchUp.poll()) != null) {
+            DomainFeedCatchUp pending = polled;
             if (pending.waitUntilStarted()) {
                 recordingProgress(pending.id(), pending.feed().catchUpAll()).block();
             } else {
@@ -291,7 +312,6 @@ class ProjectionAnnotationRegistrar {
                 }, error -> recordBackgroundFailure(pending.id(), error));
             }
         }
-        domainFeedsToCatchUp.clear();
     }
 
     // Put a background catch-up failure where the application can read it. Nobody waited for the replay, which is the

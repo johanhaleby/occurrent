@@ -58,6 +58,8 @@ import java.lang.reflect.Type;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
@@ -85,11 +87,11 @@ class SagaAnnotationRegistrar {
     // Registered sagas own a timer poller each, stop them when the context is destroyed so no poller thread leaks.
     // Concurrent because a push saga withheld by manual mode is added when the application starts it, on whichever
     // thread that is, while close() may be reading the list.
-    private final List<SagaSubscription> sagaSubscriptions = new CopyOnWriteArrayList<>();
+    private final Queue<SagaSubscription> sagaSubscriptions = new ConcurrentLinkedQueue<>();
     // Push catch-up models created here, kept so the context can stop their replay threads on the way down. Created
     // during registration on the refresh thread, whether or not manual mode withholds the saga itself, so a plain list
     // is enough where sagaSubscriptions needs a concurrent one.
-    private final List<CatchupThenPushSubscriptionModel> pushModels = new ArrayList<>();
+    private final Queue<CatchupThenPushSubscriptionModel> pushModels = new ConcurrentLinkedQueue<>();
 
     SagaAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, Set<String> registeredIds) {
         this.applicationContext = applicationContext;
@@ -458,12 +460,18 @@ class SagaAnnotationRegistrar {
         // Stop each saga's timer poller so no poller thread survives context shutdown. Before the models, because
         // shutting one down waits for a replay still in flight, and a timer that fires during that wait dispatches a
         // command into a context that is already going down.
-        sagaSubscriptions.forEach(SagaSubscription::close);
-        sagaSubscriptions.clear();
+        SagaSubscription sagaSubscription;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
+        while ((sagaSubscription = sagaSubscriptions.poll()) != null) {
+            sagaSubscription.close();
+        }
         // Then the catch-up replays, which the timer pollers are not: a replay runs on a thread of its own and only the
         // model that owns it can stop it.
-        pushModels.forEach(CatchupThenPushSubscriptionModel::shutdown);
-        pushModels.clear();
+        CatchupThenPushSubscriptionModel pushModel;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
+        while ((pushModel = pushModels.poll()) != null) {
+            pushModel.shutdown();
+        }
     }
 
     // Resolve the SagaStateStore: by store()/storeName() reference, else the unique SagaStateStore bean, else the
