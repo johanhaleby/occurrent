@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * It does not catch the drain style either, and the drain style is what actually went wrong. One of these collections shipped with the right type and a drain that still iterated and then
  * cleared, and this passed it. The reason each drain says so at the loop itself is that a sentence where the
  * cursor already is beats an assertion in another file. What is left here is somebody putting an
- * {@code ArrayList} or a {@code HashSet} back, which is a smaller regression than this one.
+ * {@code ArrayList} or a {@code HashSet} back, which is a smaller regression than a drain that clears.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class LateRegistrationConcurrencyContractTest {
