@@ -293,11 +293,19 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > invocation, so it cannot deadlock and has no raw-bean fallback to take, and it registers nothing.
 >
 > Registering from `postProcessAfterInitialization` does meet the creation window, and the same
-> `startupMode = WAIT_UNTIL_STARTED` replay is what it meets, delivering inside the callback while the singleton is
-> still unpublished. Nothing is looked up by name there. The handler runs on the instance that callback received,
-> which is already past every ordered `BeanPostProcessor` and so already has its AOP advice applied, and moves to
-> the published singleton once the bean has finished being created. A handler registered at startup is unaffected
-> and still binds to the instance it resolved.
+> `startupMode = WAIT_UNTIL_STARTED` replay is what it meets. A late registration therefore never waits for its
+> replay, whatever `startupMode` says, so the replay runs after the callback has returned and every delivery
+> resolves the published singleton with all of its advice. Waiting there would have run the whole history against
+> an object the context had not published, which is the loss the amendment above exists to close, reappearing one
+> phase later. Ignoring `startupMode` for these is also what the setting means, since it asks for the replay to
+> finish before the application is up and the application is already up by the time a lazily built bean is asked
+> for.
+>
+> What remains is a race rather than a window anyone can plan around. A replay running on its own thread can deliver
+> while the bean it belongs to is still finishing, and a delivery there runs on the instance the callback received.
+> That instance has the advice of every `BeanPostProcessor` up to this one, since Spring's auto-proxy creators are
+> ordered ahead of it, but not of one registered after it. A handler registered at startup is unaffected and still
+> binds to the instance it resolved.
 >
 > One consequence belongs to a different decision. A live-only handler registering late starts from where the feed
 > has reached, so it misses what was written between startup and the bean being built. That is the window

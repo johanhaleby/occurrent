@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import kotlin.jvm.functions.Function2;
 import org.aopalliance.intercept.MethodInterceptor;
+import org.aopalliance.intercept.MethodInvocation;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -48,6 +49,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Scope;
+import org.springframework.core.NestedExceptionUtils;
 import org.mockito.ArgumentCaptor;
 
 import java.net.URI;
@@ -86,6 +88,7 @@ class LateBeanAnnotationRegistrationTest {
     private static final AtomicInteger INSTANTIATIONS = new AtomicInteger();
     private static final AtomicInteger PROJECTION_FACTORY_INVOCATIONS = new AtomicInteger();
     private static final AtomicInteger INTERFACE_PROJECTION_FACTORY_INVOCATIONS = new AtomicInteger();
+    private static final AtomicInteger FAILING_PROJECTION_FACTORY_CALLS = new AtomicInteger();
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new);
@@ -279,6 +282,83 @@ class LateBeanAnnotationRegistrationTest {
 
             verify(context.getBean(Subscriptions.class), times(2))
                     .subscribe(eq("retried-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+        });
+    }
+
+    // The register step reads the bean's class again, and by then the bean exists, so that class can declare a
+    // handler the collecting pass never saw. Registering such a handler straight away would take its id without
+    // ever checking it, which is how a second method could quietly share a durable checkpoint key with the first.
+    @Test
+    void a_second_handler_on_the_concrete_class_reusing_the_interfaces_id_is_refused() {
+        runner.withUserConfiguration(SameIdAcrossMethodsConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(DuplicateSubscriptionIdException.class)
+                    .hasMessageContaining("shared-across-methods");
+        });
+    }
+
+    // The id that gets claimed is the one the registrar read from the method it registered, not one resolved
+    // earlier against a predicted type. An overriding method may declare a different id than the method it
+    // overrides, and claiming the wrong one lets something else take the real id.
+    @Test
+    void an_overriding_methods_own_id_is_the_one_that_gets_claimed() {
+        runner.withUserConfiguration(ProjectionCollaboratorsConfiguration.class, OverriddenIdConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(DuplicateSubscriptionIdException.class)
+                    .hasMessageContaining("class-declared-id");
+        });
+    }
+
+    // A descriptor registrar claims its id before the rest of its work, so a failure part way through would leave
+    // the id held by a registration that never happened and the bean's next creation attempt would be refused as a
+    // duplicate of itself.
+    @Test
+    void a_late_projection_whose_first_registration_threw_registers_on_the_retry() {
+        FAILING_PROJECTION_FACTORY_CALLS.set(0);
+        runner.withUserConfiguration(ProjectionCollaboratorsConfiguration.class, FailingFirstProjectionConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThatThrownBy(() -> context.getBean("failingProjectionHolder")).isNotNull();
+
+            context.getBean("failingProjectionHolder");
+
+            assertThat(FAILING_PROJECTION_FACTORY_CALLS).hasValue(2);
+        });
+    }
+
+    // Waiting for a replay inside the creation callback would deliver to the handler on an object the context has
+    // not published yet. A late registration therefore never waits, whatever startupMode says, and the replay runs
+    // once creation has finished instead.
+    @Test
+    void a_late_registration_does_not_wait_for_its_replay() {
+        runner.withUserConfiguration(ReplayingStartupModeConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            context.getBean("waitingSubscriber");
+
+            verify(context.getBean(Subscriptions.class))
+                    .subscribe(eq("late-waiting-handler"), any(AgnosticSubscriptionFilter.class), any(), eq(false), any(Function2.class));
+        });
+    }
+
+    // A CGLIB proxy added by a later BeanPostProcessor cannot override a final handler, so selecting the
+    // method succeeds while invoking it reaches the inherited method directly and every layer's advice is skipped.
+    // Registration cannot see that proxy, because it does not exist yet, so the guard runs again on the object the
+    // handler is actually invoked on.
+    @Test
+    void a_final_late_handler_wrapped_in_a_cglib_proxy_afterwards_is_refused_on_delivery() {
+        runner.withUserConfiguration(LateFinalHandlerConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Function2<EventMetadata, TestEvent, ?>> handler = ArgumentCaptor.forClass(Function2.class);
+            context.getBean("finalHandlerSubscriber");
+            verify(context.getBean(Subscriptions.class))
+                    .subscribe(eq("late-final-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), handler.capture());
+
+            assertThatThrownBy(() -> handler.getValue().invoke(null, new TestEvent()))
+                    .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
+                    .hasMessageContaining("is final");
         });
     }
 
@@ -793,6 +873,178 @@ class LateBeanAnnotationRegistrationTest {
         @Lazy
         Marker retriedSubscriber() {
             return new RetriedSubscriber();
+        }
+    }
+
+    interface SameIdMarker {
+        @Subscription(id = "shared-across-methods")
+        void onTheInterface(TestEvent event);
+    }
+
+    static class SameIdSubscriber implements SameIdMarker {
+        @Override
+        public void onTheInterface(TestEvent event) {
+        }
+
+        // Only the concrete class declares the second handler, so the collecting pass sees it a pass later than
+        // the first, and has to refuse the id it reuses.
+        @Subscription(id = "shared-across-methods")
+        void onTheClass(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class SameIdAcrossMethodsConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        @Lazy
+        SameIdMarker sameIdSubscriber() {
+            return new SameIdSubscriber();
+        }
+    }
+
+    interface DifferentIdMarker {
+        @Subscription(id = "interface-declared-id")
+        void handler(TestEvent event);
+    }
+
+    static class DifferentIdSubscriber implements DifferentIdMarker {
+        @Override
+        @Subscription(id = "class-declared-id")
+        public void handler(TestEvent event) {
+        }
+    }
+
+    static class ClassIdProjectionHolder {
+        @Projection(id = "class-declared-id", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class OverriddenIdConfiguration {
+        @Bean
+        @Lazy
+        DifferentIdMarker differentIdSubscriber() {
+            return new DifferentIdSubscriber();
+        }
+
+        @Bean
+        ClassIdProjectionHolder classIdProjectionHolder() {
+            return new ClassIdProjectionHolder();
+        }
+    }
+
+    static class FailingFirstProjectionHolder implements Marker {
+        // Throws the first time and succeeds the second, so the retry Spring performs after a failed bean creation
+        // is what this fixture exercises.
+        @Projection(id = "failing-first-projection", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            if (FAILING_PROJECTION_FACTORY_CALLS.incrementAndGet() == 1) {
+                throw new IllegalStateException("refused once");
+            }
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class FailingFirstProjectionConfiguration {
+        @Bean
+        @Lazy
+        Marker failingProjectionHolder() {
+            return new FailingFirstProjectionHolder();
+        }
+    }
+
+    static class WaitingSubscriber implements Marker {
+        @Subscription(id = "late-waiting-handler", startAt = org.occurrent.annotation.StartPosition.BEGINNING,
+                startupMode = org.occurrent.annotation.StartupMode.WAIT_UNTIL_STARTED)
+        void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class ReplayingStartupModeConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        @Lazy
+        Marker waitingSubscriber() {
+            return new WaitingSubscriber();
+        }
+    }
+
+    public static class LateFinalHandlerSubscriber implements Marker {
+        @Subscription(id = "late-final-handler")
+        public final void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class LateFinalHandlerConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        @Lazy
+        Marker finalHandlerSubscriber() {
+            return new LateFinalHandlerSubscriber();
+        }
+
+        // Wraps the bean only after this post processor's own callback has registered the handler, so the CGLIB
+        // proxy does not exist when the registration guards run.
+        @Bean
+        static BeanPostProcessor lateCglibPostProcessor() {
+            return new BeanPostProcessor() {
+                @Override
+                public Object postProcessAfterInitialization(Object bean, String beanName) {
+                    if (!(bean instanceof LateFinalHandlerSubscriber)) {
+                        return bean;
+                    }
+                    ProxyFactory proxyFactory = new ProxyFactory();
+                    proxyFactory.setTarget(bean);
+                    proxyFactory.setProxyTargetClass(true);
+                    proxyFactory.addAdvice((MethodInterceptor) MethodInvocation::proceed);
+                    return proxyFactory.getProxy();
+                }
+            };
         }
     }
 

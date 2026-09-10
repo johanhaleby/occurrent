@@ -152,6 +152,14 @@ class SubscriptionAnnotationRegistrar {
                 throw new SubscriptionHandlerNotInvocableException(declaredMethod,
                         "The proxy does not implement it. Either the method is private, so a CGLIB proxy cannot override it, or the bean is a JDK interface proxy implementing none of the interfaces the method is declared on. Make the method non-private, expose it on an interface, or set spring.aop.proxy-target-class=true so a CGLIB proxy is used instead.");
             }
+            // The same guard registration ran, against the object actually in hand. A CGLIB proxy added after
+            // registration cannot override a final method, so selecting one succeeds while invoking it reaches the
+            // inherited method directly and every layer's advice is skipped. Refusing here is the only place left
+            // to catch that, since the proxy did not exist when the guards first ran.
+            if (Modifier.isFinal(declaredMethod.getModifiers()) && SubscriptionAnnotations.anyProxyLayerIsCglib(target)) {
+                throw new SubscriptionHandlerNotInvocableException(declaredMethod,
+                        "The method is final, so a CGLIB proxy in the chain cannot override it. Remove final from the method.");
+            }
             resolved = method;
             resolvedFor = targetClass;
             return method;
@@ -164,7 +172,15 @@ class SubscriptionAnnotationRegistrar {
     // shouldRegister decides per method, so a bean scanned a second time (its real class revealing a handler the
     // first scan's predicted type did not declare) registers only what is new. The validation above every branch
     // still runs for every method, since a misconfigured handler must fail whether or not it registers.
-    void registerSubscriptions(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, Predicate<Method> shouldRegister, Consumer<Method> onRegistered) {
+    // mayBlockForReplay is false for a bean the container is still building. Waiting there would run the whole
+    // history replay inside that bean's creation callback, delivering to a handler on an object the context has not
+    // published yet, so advice a later BeanPostProcessor adds is not on it. Not waiting lets the replay run
+    // once creation has finished, where every delivery resolves the published bean. It also matches what
+    // WAIT_UNTIL_STARTED means, which is finishing before the application is up, and the application is already up
+    // by the time a lazily built bean is asked for.
+    void registerSubscriptions(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
+                               Predicate<Method> shouldRegister, Consumer<String> claimId, Consumer<String> releaseId,
+                               Consumer<Method> onRegistered) {
         for (Method method : userClass.getDeclaredMethods()) {
             StreamSubscription streamSubscription = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
             Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
@@ -177,23 +193,38 @@ class SubscriptionAnnotationRegistrar {
             if (annotationCount == 1 && !shouldRegister.test(method)) {
                 continue;
             }
-            if (streamSubscription != null) {
-                processSubscribeAnnotation(bean, method, handlerTarget, StreamSubscriptionDefinition.from(streamSubscription));
-            } else if (subscription != null) {
-                processAgnosticSubscribeAnnotation(bean, method, handlerTarget, subscription);
-            } else if (dcbSubscription != null) {
-                processDcbSubscribeAnnotation(bean, method, handlerTarget, dcbSubscription);
-            } else if (synchronousSubscription != null) {
-                processSynchronousSubscribeAnnotation(bean, method, handlerTarget, synchronousSubscription);
+            if (annotationCount == 0) {
+                continue;
             }
-            if (annotationCount == 1) {
-                onRegistered.accept(method);
+            // The id comes from the annotation this loop actually read, never from one a caller resolved earlier
+            // against a predicted type, because an overriding method may declare a different id than the one it
+            // overrides. It is claimed before the work and released if the work throws, so a bean whose creation
+            // failed can be built again and a nested scan cannot take the same id.
+            String id = streamSubscription != null ? streamSubscription.id()
+                    : subscription != null ? subscription.id()
+                    : dcbSubscription != null ? dcbSubscription.id()
+                    : synchronousSubscription.id();
+            claimId.accept(id);
+            try {
+                if (streamSubscription != null) {
+                    processSubscribeAnnotation(bean, method, handlerTarget, mayBlockForReplay, StreamSubscriptionDefinition.from(streamSubscription));
+                } else if (subscription != null) {
+                    processAgnosticSubscribeAnnotation(bean, method, handlerTarget, mayBlockForReplay, subscription);
+                } else if (dcbSubscription != null) {
+                    processDcbSubscribeAnnotation(bean, method, handlerTarget, mayBlockForReplay, dcbSubscription);
+                } else {
+                    processSynchronousSubscribeAnnotation(bean, method, handlerTarget, mayBlockForReplay, synchronousSubscription);
+                }
+            } catch (RuntimeException | Error e) {
+                releaseId.accept(id);
+                throw e;
             }
+            onRegistered.accept(method);
         }
     }
 
     @SuppressWarnings("unchecked")
-    private <E> void processSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, StreamSubscriptionDefinition subscription) {
+    private <E> void processSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, boolean mayBlockForReplay, StreamSubscriptionDefinition subscription) {
         String id = subscription.id();
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, subscription.eventTypes(), subscription.annotationName(), applicationContext.getBean(CloudEventConverter.class));
         List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
@@ -206,7 +237,7 @@ class SubscriptionAnnotationRegistrar {
         Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
                 invokeMono(invocation, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
 
-        boolean shouldWaitUntilStarted = subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(subscription.startAt() == StartPosition.BEGINNING_OF_TIME && streamHistoryReplaySupported, subscription.startupMode());
+        boolean shouldWaitUntilStarted = mayBlockForReplay && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(subscription.startAt() == StartPosition.BEGINNING_OF_TIME && streamHistoryReplaySupported, subscription.startupMode());
         StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
 
         startPositionSupport.applyStartupWorkarounds();
@@ -218,7 +249,7 @@ class SubscriptionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E> void processAgnosticSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, Subscription annotation) {
+    private <E> void processAgnosticSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, boolean mayBlockForReplay, Subscription annotation) {
         String id = annotation.id();
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@Subscription", applicationContext.getBean(CloudEventConverter.class));
         List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
@@ -238,7 +269,7 @@ class SubscriptionAnnotationRegistrar {
                     "position-based catch-up cannot replay. Use startAt = NOW or DEFAULT.").formatted(id));
         }
         StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), startAtGlobalPosition, annotation.resumeBehavior());
-        boolean shouldWaitUntilStarted = subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+        boolean shouldWaitUntilStarted = mayBlockForReplay && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
         Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
 
         startPositionSupport.applyStartupWorkarounds();
@@ -250,7 +281,7 @@ class SubscriptionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E> void processSynchronousSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, SynchronousSubscription annotation) {
+    private <E> void processSynchronousSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, boolean mayBlockForReplay, SynchronousSubscription annotation) {
         String id = annotation.id();
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@SynchronousSubscription", applicationContext.getBean(CloudEventConverter.class));
         List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
@@ -267,7 +298,7 @@ class SubscriptionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E> void processDcbSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, DcbSubscription annotation) {
+    private <E> void processDcbSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, boolean mayBlockForReplay, DcbSubscription annotation) {
         String id = annotation.id();
         final DcbCriteria criteria;
         final List<SubscriptionAnnotations.HandlerParameter> parameters;
@@ -303,7 +334,7 @@ class SubscriptionAnnotationRegistrar {
         }
         DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), startAtDcbPosition, annotation.resumeBehavior());
         boolean replaysHistory = startAtDcbPosition >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
-        boolean shouldWaitUntilStarted = subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+        boolean shouldWaitUntilStarted = mayBlockForReplay && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
         DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
 
         startPositionSupport.applyStartupWorkarounds();
