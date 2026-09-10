@@ -334,14 +334,12 @@ class ProjectionAnnotationRegistrar {
                 backgroundCatchUps.add(catchUp);
                 catchUp.subscribe(ignored -> {
                 }, error -> recordBackgroundFailure(pending.id(), error));
-                // Rechecked after the subscribe, since catchUpAll() is lazy and the replay starts there.
-                // stopCatchUp() runs whenever closing is set rather than only when this took the feed back,
-                // because close() may have stopped it before the subscribe and CatchupProjectionFeed.catchUp
-                // clears that stop. Stopping one close() already stopped only sets a flag that is set.
+                // Rechecked after the subscribe, since catchUpAll() is lazy and the replay starts there. close()
+                // may have stopped this feed before that subscribe, and CatchupProjectionFeed.catchUp clears that
+                // stop when it runs, which is why removeThenStop stops it whether or not the removal found it.
                 if (closing) {
                     backgroundCatchUps.remove(catchUp);
-                    backgroundFeeds.remove(pending.feed());
-                    pending.feed().stopCatchUp();
+                    removeThenStop(backgroundFeeds, pending.feed(), DomainEventFeed::stopCatchUp);
                 }
             }
         }
