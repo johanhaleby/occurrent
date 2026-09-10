@@ -212,6 +212,66 @@ class ProjectionAnnotationRegistrar {
         }
     }
 
+    // Take one entry out of a queue close() drains and stop it. Stopping happens whether or not the removal found
+    // it, because close() may have taken and stopped it before this registration activated anything, and an
+    // activation after that shutdown starts a replay nothing is left to stop. Every stop here is safe to call twice.
+    //
+    // Named rather than inlined because https://github.com/johanhaleby/occurrent/issues/987 needs this same undo of
+    // a single activation if it compensates rather than validating everything up front.
+    private static <T> void removeThenStop(Queue<T> entries, T entry, Consumer<T> stop) {
+        entries.remove(entry);
+        stop.accept(entry);
+    }
+
+    // Run a catch-up on the calling thread, tracked exactly as a background one is, so close() can stop it and wait
+    // for it to unwind instead of returning while it is still applying history to a store the context is disposing. Checking a flag
+    // and then starting an untracked replay narrows that window without closing it, because close() can set the flag
+    // and drain in between and never learn this replay exists.
+    private void runTrackedOnThisThread(Runnable work, Runnable stop) {
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            work.run();
+            return null;
+        });
+        BackgroundCatchUp tracked = new BackgroundCatchUp(task, stop);
+        backgroundCatchUps.add(tracked);
+        if (closing) {
+            removeThenStop(backgroundCatchUps, tracked, entry -> entry.stop().run());
+            return;
+        }
+        try {
+            task.run();
+        } finally {
+            backgroundCatchUps.remove(tracked);
+        }
+        // Rethrown rather than left in the task, since this is the WAIT path and its caller is what reports a
+        // catch-up that failed at startup.
+        try {
+            task.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        } catch (ExecutionException e) {
+            switch (e.getCause()) {
+                case RuntimeException runtime -> throw runtime;
+                case Error error -> throw error;
+                case null, default -> throw new IllegalStateException(e.getCause());
+            }
+        }
+    }
+
+    // Whether close() has begun, stopping this registration's own model on the way out when it has. Null when the
+    // projection takes its feed bare under catchup = NONE, where there is no model of ours to stop.
+    private boolean stopIfClosing(@Nullable ReplayAwareSubscriptions catchupModel) {
+        if (!closing) {
+            return false;
+        }
+        if (catchupModel instanceof CatchupThenPushSubscriptionModel model) {
+            removeThenStop(pushModels, model, CatchupThenPushSubscriptionModel::shutdown);
+        }
+        return true;
+    }
+
+
     // Catch up each domain-push feed once, after every projection is registered.
     void catchUpCollectedFeeds() {
         DomainFeedCatchUp polled;
@@ -219,7 +279,8 @@ class ProjectionAnnotationRegistrar {
         while ((polled = domainFeedsToCatchUp.poll()) != null) {
             DomainFeedCatchUp pending = polled;
             if (pending.waitUntilStarted()) {
-                recordingProgress(pending.id(), () -> pending.feed().catchUpAll()).run();
+                runTrackedOnThisThread(recordingProgress(pending.id(), () -> pending.feed().catchUpAll()),
+                        pending.feed()::stopCatchUp);
             } else {
                 // startupMode = BACKGROUND. The feed itself deliberately has no background overload, since a caller
                 // that wants the replay off its own thread can run catchUpAll() on a thread it owns. This is that
@@ -249,6 +310,11 @@ class ProjectionAnnotationRegistrar {
             }
             return null;
         });
+        // No recheck of closing here, unlike the other adds in this class, because an ordering already covers it.
+        // close() sets closing before it drains, this adds before it starts the thread, and the task reads closing
+        // first, so an add that happens after that drain belongs to a task that returns without replaying. The entry left
+        // behind holds a task that does nothing. Two changes break that, close() setting closing after a drain, and
+        // starting the thread before the add.
         backgroundCatchUps.add(new BackgroundCatchUp(task, stop));
         Thread.ofVirtual().name(threadName + "-" + id).start(task);
     }
@@ -607,6 +673,12 @@ class ProjectionAnnotationRegistrar {
             // With waitUntilStarted the catch-up replay finishes here before handing over to the live push feed;
             // without it the replay runs on its own thread and this returns straight away.
             Subscription subscription = runner.project(id, projection, materializedView, null, waitUntilStarted);
+            // Checked after project(), because that is what subscribes, and the model does not refuse a subscribe
+            // once close() has shut it down. It starts a replay instead, and by then the model is out of the queue
+            // and close() cannot stop it a second time.
+            if (stopIfClosing(catchupModel)) {
+                return;
+            }
             if (!waitUntilStarted) {
                 // Nobody is left to see this replay fail, so join it on a thread of this registrar's own purely to
                 // record the failure. Stopping it is close()'s job through the model, so this needs no stop of its own.
@@ -621,6 +693,10 @@ class ProjectionAnnotationRegistrar {
         // not watch a background replay for itself.
         applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
             Subscription deferred = runner.project(id, projection, materializedView, null, waitUntilStarted);
+            // Runs on whichever thread called ManualStartPushSources.start, so close() may have gone past long ago.
+            if (stopIfClosing(catchupModel)) {
+                return;
+            }
             if (!waitUntilStarted) {
                 runInBackground("occurrent-push-catchup-watch", id, deferred::waitUntilStarted, () -> {
                 });
@@ -693,7 +769,9 @@ class ProjectionAnnotationRegistrar {
                     feed.goLive(id);
                     withPushCatchupStatus(status -> status.recordLive(id));
                 } else if (waitUntilStarted) {
-                    recordingProgress(id, () -> feed.catchUp(id)).run();
+                    // Tracked the same way as catchUpCollectedFeeds, and this path is why it matters, since start(id) can
+                    // be called long after close() has returned.
+                    runTrackedOnThisThread(recordingProgress(id, () -> feed.catchUp(id)), feed::stopCatchUp);
                 } else {
                     // Same treatment as auto mode, or startAll() would block for a full replay on a projection that
                     // asked for BACKGROUND.

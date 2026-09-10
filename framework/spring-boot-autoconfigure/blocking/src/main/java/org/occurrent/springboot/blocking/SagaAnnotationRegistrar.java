@@ -86,12 +86,17 @@ class SagaAnnotationRegistrar {
     private final CompetingConsumerCheckpointWriteVersionSource writeVersionSource;
     // Registered sagas own a timer poller each, stop them when the context is destroyed so no poller thread leaks.
     // Concurrent because a push saga withheld by manual mode is added when the application starts it, on whichever
-    // thread that is, while close() may be reading the list.
+    // thread that is, while close() may be reading the queue.
     private final Queue<SagaSubscription> sagaSubscriptions = new ConcurrentLinkedQueue<>();
-    // Push catch-up models created here, kept so the context can stop their replay threads on the way down. Created
-    // during registration on the refresh thread, whether or not manual mode withholds the saga itself, so a plain list
-    // is enough where sagaSubscriptions needs a concurrent one.
+    // Push catch-up models created here, kept so the context can stop their replay threads on the way down.
+    // Concurrent for the same reason sagaSubscriptions is. This used to say a plain list was enough because these
+    // are created on the refresh thread, and a saga on a bean Spring Boot builds after startup falsified that. It
+    // registers from postProcessAfterInitialization, on whatever thread asked for the bean.
     private final Queue<CatchupThenPushSubscriptionModel> pushModels = new ConcurrentLinkedQueue<>();
+    // Set by close() before it drains either queue above. A registration that adds after that drain can then see
+    // that its own entry will never be taken, and stop it itself. Without this the registrar cannot tell a
+    // registration that shutdown has begun even in principle.
+    private volatile boolean closing = false;
 
     SagaAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, Set<String> registeredIds) {
         this.applicationContext = applicationContext;
@@ -186,6 +191,13 @@ class SagaAnnotationRegistrar {
                 refuseIfSagaSubscriptionBeanNameIsTaken(id);
                 SagaSubscription deferred = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
                 sagaSubscriptions.add(deferred);
+                // Runs on whichever thread called ManualStartPushSources.start, long after startup and possibly while
+                // the context is closing. Checked after run(), because that is what subscribes, and abandoned on the
+                // flag rather than on whether this stopped anything, since close() may have stopped it already.
+                if (closing) {
+                    stopOwnRegistration(deferred, subscribable);
+                    return;
+                }
                 registerSagaSubscriptionSingleton(id, deferred);
                 watchBackgroundCatchUpIfNobodyElseWill(annotation, id, deferred, waitUntilStarted);
             });
@@ -195,6 +207,12 @@ class SagaAnnotationRegistrar {
         refuseIfSagaSubscriptionBeanNameIsTaken(id);
         SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
         sagaSubscriptions.add(sagaSubscription);
+        // Reached on the refresh thread at startup, and from postProcessAfterInitialization for a saga on a bean
+        // Spring Boot builds later, which is the path that can overlap close().
+        if (closing) {
+            stopOwnRegistration(sagaSubscription, subscribable);
+            return;
+        }
         registerSagaSubscriptionSingleton(id, sagaSubscription);
         if (push) {
             watchBackgroundCatchUpIfNobodyElseWill(annotation, id, sagaSubscription, waitUntilStarted);
@@ -457,6 +475,10 @@ class SagaAnnotationRegistrar {
     }
 
     void close() {
+        // Set before either drain below, which is what lets a registration racing close() see that its own entry
+        // will never be taken. A registration that adds before this either goes into a queue this still drains, or
+        // reads the flag afterwards and stops its own entry. Never neither.
+        closing = true;
         // Stop each saga's timer poller so no poller thread survives context shutdown. Before the models, because
         // shutting one down waits for a replay still in flight, and a timer that fires during that wait dispatches a
         // command into a context that is already going down.
@@ -473,6 +495,27 @@ class SagaAnnotationRegistrar {
             pushModel.shutdown();
         }
     }
+
+    // Take one entry out of a queue close() drains and stop it. Stopping happens whether or not the removal found
+    // it, because close() may have taken and stopped it before this registration activated anything, and an
+    // activation after that shutdown starts a replay nothing is left to stop. Every stop here is safe to call twice.
+    //
+    // Named rather than inlined because https://github.com/johanhaleby/occurrent/issues/987 needs this same undo of
+    // a single activation if it compensates rather than validating everything up front.
+    private static <T> void removeThenStop(Queue<T> entries, T entry, Consumer<T> stop) {
+        entries.remove(entry);
+        stop.accept(entry);
+    }
+
+    // Stop everything one registration created, once close() has begun. The push model as well as the subscription,
+    // because closing a subscription stops only its timer poller, while the replay thread belongs to the model.
+    private void stopOwnRegistration(SagaSubscription subscription, Subscribable subscribable) {
+        removeThenStop(sagaSubscriptions, subscription, SagaSubscription::close);
+        if (subscribable instanceof CatchupThenPushSubscriptionModel model) {
+            removeThenStop(pushModels, model, CatchupThenPushSubscriptionModel::shutdown);
+        }
+    }
+
 
     // Resolve the SagaStateStore: by store()/storeName() reference, else the unique SagaStateStore bean, else the
     // store starter's zero-config default, whose state type is read from the factory return type.

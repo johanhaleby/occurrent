@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
@@ -76,6 +77,18 @@ class LateRegistrationConcurrencyContractTest {
         assertQueue(ProjectionAnnotationRegistrar.class, "backgroundCatchUps");
     }
 
+    // A queue drained by polling still loses an entry added after the drain has finished, which no drain style can
+    // fix, because by then there is nobody left to poll. The flag is what a registration reads to find that out, so it can
+    // stop its own entry instead. Volatile because the registration and close() are on different threads by
+    // definition, and a non-volatile read may never observe the write.
+    //
+    // Behaviour is covered by RegistrationRacingCloseTest, which closes the context and then starts a withheld push
+    // projection through ManualStartPushSources. This only catches the field being removed or weakened.
+    @Test
+    void every_registrar_that_owns_something_close_stops_can_tell_a_registration_that_shutdown_began() throws Exception {
+        assertVolatileClosingFlag(ProjectionAnnotationRegistrar.class);
+    }
+
     // Whether a registration may block for a replay and where a delivery is sent are the same question, and one
     // method answers it. Two copies of the condition is the regression, since changing one and not the other sends
     // a blocking replay to the instance captured on the way through. This only catches the copies being made, not
@@ -109,6 +122,16 @@ class LateRegistrationConcurrencyContractTest {
         Field field = owner.getDeclaredField(fieldName);
         assertThat(field.getType()).describedAs("%s.%s".formatted(owner.getSimpleName(), fieldName)).isEqualTo(Queue.class);
         assertThat(field.getType().isAssignableFrom(ArrayList.class)).isFalse();
+    }
+
+    // Declared, boolean, and volatile. A plain boolean compiles and passes every functional test, and fails only
+    // under the interleaving this whole protocol exists for, so the modifier is asserted rather than assumed.
+    private static void assertVolatileClosingFlag(Class<?> registrar) throws Exception {
+        Field field = registrar.getDeclaredField("closing");
+        assertThat(field.getType()).describedAs("%s.closing".formatted(registrar.getSimpleName())).isEqualTo(boolean.class);
+        assertThat(Modifier.isVolatile(field.getModifiers()))
+                .describedAs("%s.closing is volatile".formatted(registrar.getSimpleName()))
+                .isTrue();
     }
 
     private static Object valueOf(Object target, String fieldName) throws Exception {
