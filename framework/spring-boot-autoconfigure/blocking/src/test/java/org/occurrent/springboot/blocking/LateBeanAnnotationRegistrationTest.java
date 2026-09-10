@@ -504,6 +504,25 @@ class LateBeanAnnotationRegistrationTest {
         });
     }
 
+    // A refused late descriptor must not release the id either, and which claim is whose cannot be read off the
+    // exception type. A descriptor registrar claims the id itself and then calls the subscription model, which
+    // raises the same exception for a programmatic subscription already using that id, so the coordinator reads
+    // who holds the id before the attempt runs rather than inferring it afterwards.
+    @Test
+    void a_refused_late_projection_does_not_release_the_id_it_was_refused() {
+        runner.withUserConfiguration(ProjectionCollaboratorsConfiguration.class, TwoClashingLateProjectionsConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThatThrownBy(() -> context.getBean("firstClashingProjection"))
+                    .rootCause().isInstanceOf(DuplicateSubscriptionIdException.class);
+
+            // The subscription still owns the id, so the second is refused for the same reason rather than
+            // finding it free.
+            assertThatThrownBy(() -> context.getBean("secondClashingProjection"))
+                    .rootCause().isInstanceOf(DuplicateSubscriptionIdException.class);
+        });
+    }
+
     interface Marker {
     }
 
@@ -1449,6 +1468,52 @@ class LateBeanAnnotationRegistrationTest {
         @Lazy
         Marker secondClashingSubscriber() {
             return new SecondClashingSubscriber();
+        }
+    }
+
+    static class OwningSubscriber {
+        @Subscription(id = "owned-by-the-subscription")
+        void on(TestEvent event) {
+        }
+    }
+
+    static class FirstClashingProjection implements Marker {
+        @Projection(id = "owned-by-the-subscription", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    static class SecondClashingProjection implements Marker {
+        @Projection(id = "owned-by-the-subscription", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class TwoClashingLateProjectionsConfiguration {
+        @Bean
+        OwningSubscriber owningSubscriber() {
+            return new OwningSubscriber();
+        }
+
+        @Bean
+        @Lazy
+        Marker firstClashingProjection() {
+            return new FirstClashingProjection();
+        }
+
+        @Bean
+        @Lazy
+        Marker secondClashingProjection() {
+            return new SecondClashingProjection();
         }
     }
 

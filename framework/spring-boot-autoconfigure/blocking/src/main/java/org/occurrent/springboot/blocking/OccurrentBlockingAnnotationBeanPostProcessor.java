@@ -182,7 +182,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             // The class of the instance this callback received, never a second lookup by name. Two threads
             // building the same prototype share the recorded entry, so a lookup here can answer with the other
             // one's class and this bean would be scanned for methods its own class does not declare.
-            Class<?> userClass = userClassOf(bean);
+            ScanType userClass = new ScanType(userClassOf(bean), true);
             scan(new String[]{beanName}, name -> userClass, name -> bean,
                     (name, resolved) -> () -> singleton && !beanFactory.isCurrentlyInCreation(name) ? applicationContext.getBean(name) : resolved, false);
         }
@@ -248,7 +248,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // fencing check below runs, so one can already write a checkpoint before the check inspects idsToCheck.
     // Pre-existing, not introduced by this reorder. CheckpointStorageCannotFenceSubscriptionException's javadoc
     // covers it.
-    private boolean scan(String[] beanNames, Function<String, Class<?>> typeResolver, Function<String, Object> beanResolver, BiFunction<String, Object, Supplier<Object>> handlerTargets, boolean mayBlockForReplay) {
+    private boolean scan(String[] beanNames, Function<String, ScanType> typeResolver, Function<String, Object> beanResolver, BiFunction<String, Object, Supplier<Object>> handlerTargets, boolean mayBlockForReplay) {
         // Reflects over method signatures only, no store access or checkpoint write, so running it before any
         // registration is safe. Spring creates this bean before CheckpointFencingConfigurationCheck's own bean, so
         // a check that instead waited for its own SmartInitializingSingleton callback would run after a catch-up
@@ -267,20 +267,21 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // pass so the next one can read their real class.
         Set<String> beansToBuild = new LinkedHashSet<>();
         for (String beanName : beanNames) {
-            Class<?> type;
+            ScanType scanType;
             try {
-                type = typeResolver.apply(beanName);
+                scanType = typeResolver.apply(beanName);
             } catch (RuntimeException e) {
                 continue;
             }
-            if (type == null) {
+            if (scanType == null) {
                 continue;
             }
+            Class<?> type = scanType.type();
             // A predicted type is what the bean definition says, not what the container will build, so an
             // annotation read from it may be one the concrete class overrides with different settings. Nothing is
             // registered from it. Building the bean is what makes its class knowable, so a bean whose prediction
             // shows any annotation at all is built by this pass and collected by the next one, from its own class.
-            if (!isConcreteScanType(beanName)) {
+            if (!scanType.concrete()) {
                 if (declaresAnyOccurrentAnnotation(type) && !alreadyBuiltToBeScanned.contains(beanName)) {
                     beansToBuild.add(beanName);
                 }
@@ -337,7 +338,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         for (String beanName : subscriptionBeanNames) {
             Object bean = beanResolver.apply(beanName);
-            subscriptionRegistrar.registerSubscriptions(bean, typeResolver.apply(beanName), handlerTargets.apply(beanName, bean), mayBlockForReplay,
+            subscriptionRegistrar.registerSubscriptions(bean, typeResolver.apply(beanName).type(), handlerTargets.apply(beanName, bean), mayBlockForReplay,
                     method -> markRegistered(beanName, method),
                     this::claimSubscriptionId,
                     method -> registeredHandlers.remove(handlerKey(beanName, method)),
@@ -373,16 +374,6 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         return registeredAnything;
     }
 
-    // Concrete when the container has handed the object over and its class was recorded, and when the bean is
-    // already a singleton whose own class resolveScanType reads directly. Everything else is the bean definition's
-    // prediction, which cannot be registered from.
-    private boolean isConcreteScanType(String beanName) {
-        if (userClassByBeanName.containsKey(beanName)) {
-            return true;
-        }
-        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
-        return beanFactory.containsSingleton(beanName) && !beanFactory.isFactoryBean(beanName);
-    }
 
     private static boolean declaresAnyOccurrentAnnotation(Class<?> type) {
         for (Method method : type.getDeclaredMethods()) {
@@ -406,13 +397,19 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // A DuplicateSubscriptionIdException is the one failure that must not release, because the id it names belongs
     // to whoever claimed it first and releasing would hand it away.
     private void registerDescriptor(String beanName, Method method, String id, Runnable registration) {
+        // Whether this attempt is the one holding the id, read before it runs, rather than inferred afterwards from
+        // the exception. A descriptor registrar adds the id itself and then calls the subscription model, which can
+        // throw DuplicateSubscriptionIdException for a programmatic subscription already using that id, so the
+        // exception type says nothing about whose claim this is. Releasing on it regardless would hand away an id
+        // another registration owns, and never releasing would keep a claim this attempt made and leave the bean
+        // refused for ever once the real duplicate is gone.
+        boolean heldByAnother = registeredIds.contains(id);
         try {
             registration.run();
-        } catch (DuplicateSubscriptionIdException e) {
-            registeredHandlers.remove(handlerKey(beanName, method));
-            throw e;
         } catch (RuntimeException | Error e) {
-            registeredIds.remove(id);
+            if (!heldByAnother) {
+                registeredIds.remove(id);
+            }
             registeredHandlers.remove(handlerKey(beanName, method));
             throw e;
         }
@@ -472,17 +469,24 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // for a bean the container built before this post processor was registered as a BeanPostProcessor, which has no
     // recording of its own. A bean the container has not built has neither, and registers when it is built instead,
     // from postProcessAfterInitialization.
-    private Class<?> resolveScanType(String beanName) {
+    // The class and whether it is the one the container built come back together, from a single read of the
+    // recording. Asking twice lets another thread record the class in between, so a prediction returned by the
+    // first question is answered as concrete by the second, and an annotation the interface declares then registers
+    // with settings the real class overrides.
+    private ScanType resolveScanType(String beanName) {
         Class<?> recorded = userClassByBeanName.get(beanName);
         if (recorded != null) {
-            return recorded;
+            return new ScanType(recorded, true);
         }
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         if (beanFactory.containsSingleton(beanName) && !beanFactory.isFactoryBean(beanName)) {
-            return ClassUtils.getUserClass(SubscriptionAnnotations.ultimateTarget(applicationContext.getBean(beanName)).getClass());
+            return new ScanType(ClassUtils.getUserClass(SubscriptionAnnotations.ultimateTarget(applicationContext.getBean(beanName)).getClass()), true);
         }
         Class<?> type = applicationContext.getType(beanName);
-        return type == null ? null : ClassUtils.getUserClass(type);
+        return type == null ? null : new ScanType(ClassUtils.getUserClass(type), false);
+    }
+
+    private record ScanType(Class<?> type, boolean concrete) {
     }
 
     // Only the three that reach CheckpointStorage go into idsToCheck. @SynchronousSubscription writes no checkpoint
