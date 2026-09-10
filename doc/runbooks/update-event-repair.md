@@ -59,8 +59,9 @@ this cannot find" below before you stop. Otherwise the rest of this runbook does
 
 From 0.34.0 a store that writes position also runs the first of these itself when it starts, and logs a warning
 naming this runbook when it finds something. It runs only the first, because that is the one that costs nothing, so
-a silent startup rules out a damaged position rather than every kind of damage. Run the second query yourself. A
-store that writes no position runs neither query, so run both yourself there.
+a silent startup rules out a damaged position rather than every kind of damage. Run the second query yourself. By
+default a store that writes no position runs neither query, so run both yourself there unless you turn on the
+setting below.
 
 Set `EventStoreConfig.Builder.requireRepairedEvents(true)` if you would rather the store refused to start than kept
 accepting conditional appends against a damaged event until you have run the repair. It is off by default, and it
