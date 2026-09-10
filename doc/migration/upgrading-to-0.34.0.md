@@ -848,8 +848,15 @@ One query, which uses the `position` index and is cheap on a large collection:
 db.events.countDocuments({ position: { $type: "string" } })
 ```
 
-Replace `events` with your event collection name. From 0.34.0 the store runs the same check when it starts and logs
-a warning naming the repair when it finds something, so an affected store tells you on its next deploy.
+Replace `events` with your event collection name. From 0.34.0 a store that writes position runs the same check when
+it starts and logs a warning naming the repair when it finds something, so an affected store of that kind tells you
+on its next deploy. By default a store that writes no position does not run it, so run the query above yourself
+there unless you turn on the setting below.
+
+If you would rather that store refused to start than kept accepting conditional appends against a damaged event
+until the repair has run, set `EventStoreConfig.Builder.requireRepairedEvents(true)`. It is off by default on all
+three MongoDB stores, so upgrading on its own changes nothing here. It also covers the third message below, the
+store that turns position off and would otherwise run no damage check at all.
 
 An event whose position was dropped rather than turned into a string has no `position` field at all. Your store
 already warns about events without a position, but that warning names the position backfill, which is the wrong

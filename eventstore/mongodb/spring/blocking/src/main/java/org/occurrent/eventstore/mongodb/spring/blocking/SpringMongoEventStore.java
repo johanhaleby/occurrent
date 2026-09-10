@@ -139,12 +139,16 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.dcbStreamIdGenerator = config.dcbStreamIdGenerator;
         this.streamPositionEnabled = resolveStreamPositionEnabled(config, eventStoreCollectionName, mongoTemplate);
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, streamPositionEnabled, mongoTemplate);
+        // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
+        // position updateEvent dropped has no position field either, so that check would fail startup
+        // naming the position backfill, and backfilling such an event assigns a wrong position for good.
+        // requireRepairedEvents runs the damage check on a store that writes no position too, since the two ways
+        // that happens are withoutStreamPosition() and the resolver turning position off over unpositioned
+        // history, and an operator who asked to be refused meant both.
+        if (writesPosition() || config.requireRepairedEvents) {
+            warnOrFailOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate, config.requireRepairedEvents);
+        }
         if (writesPosition()) {
-
-            // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
-            // position updateEvent dropped has no position field either, so that check would fail startup
-            // naming the position backfill, and backfilling such an event assigns a wrong position for good.
-            warnOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate);
             checkForUnpositionedEvents(eventStoreCollectionName, mongoTemplate, config.requireBackfilledPosition);
         }
     }
@@ -971,18 +975,23 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     /**
-     * Warns when the collection holds events that {@code updateEvent} damaged before 0.34.0, which stored position as
-     * a string. Those events are missing from every position query and from the conflict query behind a conditional
-     * append. A string position sits in its own type range in the position index, so this reads no keys at all on a
-     * store that was never damaged.
+     * Warns, or fails when {@code requireRepairedEvents} is set, when the collection holds events that
+     * {@code updateEvent} damaged before 0.34.0, which stored position as a string. Those events are missing from
+     * every position query and from the conflict query behind a conditional append. A string position sits in its own
+     * type range in the position index, so where that index exists this reads no keys at all on a store that was
+     * never damaged. A store that writes no position has no such index, so {@code requireRepairedEvents} pays a
+     * collection scan there.
      */
-    private static void warnOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, MongoTemplate mongoTemplate) {
+    private static void warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, MongoTemplate mongoTemplate, boolean requireRepairedEvents) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
             return;
         }
         Query damagedQuery = new Query(where(OccurrentCloudEventExtension.POSITION).type(JsonSchemaObject.Type.STRING));
         if (!mongoTemplate.exists(damagedQuery, eventStoreCollectionName)) {
             return;
+        }
+        if (requireRepairedEvents) {
+            throw UpdateEventRepairValidator.damagedEventsExist(eventStoreCollectionName);
         }
         log.warn(UpdateEventRepairValidator.damagedEventsMessage(eventStoreCollectionName));
     }

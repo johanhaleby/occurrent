@@ -55,11 +55,14 @@ import java.util.function.UnaryOperator;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
- * The startup warning about events that {@code updateEvent} damaged before 0.34.0. A damaged event is missing from
- * every position query, so the warning is the only thing that tells anyone it is there.
+ * The startup check for events that {@code updateEvent} damaged before 0.34.0. A damaged event is missing from every
+ * position query, so this check is the only thing that tells anyone it is there, and
+ * {@code requireRepairedEvents(true)} turns its warning into a refusal to start.
  * <p>
  * The healthy case matters as much as the damaged one. This warning stays in the store for as long as anyone might
  * still be upgrading across the defect, so a version that cried wolf would put a scary line in the log of every
@@ -144,6 +147,70 @@ class SpringMongoEventStoreDamagedEventWarningTest {
                 .anySatisfy(message -> assertThat(message).contains("position-backfill", "update-event-repair.md"));
     }
 
+    @Test
+    void a_store_told_to_require_repaired_events_refuses_to_start_until_the_damage_is_gone() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        makePositionAString();
+
+        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                .as("an operator who asked for this must not get a store that accepts a conditional append against a damaged event")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged")
+                .hasMessageContaining("update-event-repair.md");
+
+        makePositionANumberAgain();
+
+        assertThatNoException()
+                .as("the same setting must let a repaired store start, otherwise it refuses on the setting rather than on the damage")
+                .isThrownBy(this::newStoreRequiringRepairedEvents);
+    }
+
+    @Test
+    void a_store_told_to_require_repaired_events_refuses_even_when_it_writes_no_position() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        makePositionAString();
+
+        assertThatThrownBy(() -> newEventStore(builder -> builder.withoutStreamPosition().requireRepairedEvents(true)))
+                .as("withoutStreamPosition() says the store wants no global position, not that the damage stopped mattering, so the refusal has to hold there too")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+    }
+
+    @Test
+    void a_store_whose_position_is_turned_off_over_unpositioned_history_still_refuses_when_it_was_told_to() {
+        newEventStore().write("stream:1", List.of(event("Defined"), event("Renamed")));
+        makeTheNewestEventsPositionAString();
+        // The resolver reads the oldest event only, and turns position off when that one has no position. That is
+        // the store ADR 136 says reaches neither ordered check, so it is the one an operator hears nothing from.
+        dropThePosition();
+
+        assertThatThrownBy(() -> newEventStore(builder -> builder.requireRepairedEvents(true)))
+                .as("this store turns position off at startup and so runs neither ordered check, which makes it the one an operator hears nothing from unless the refusal reaches it")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+    }
+
+    private void makeTheNewestEventsPositionAString() {
+        MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
+        Document newest = requireNonNull(events.find().sort(new Document("_id", -1)).first());
+        long position = requireNonNull(newest.getLong(OccurrentCloudEventExtension.POSITION));
+        events.updateOne(new Document("_id", newest.get("_id")),
+                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(position))));
+    }
+
+    private SpringMongoEventStore newStoreRequiringRepairedEvents() {
+        return newEventStore(builder -> builder.withStreamPosition().requireRepairedEvents(true));
+    }
+
+    private void makePositionANumberAgain() {
+        MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
+        Document damaged = requireNonNull(events.find(
+                new Document(OccurrentCloudEventExtension.POSITION, new Document("$type", "string"))).first());
+        long position = Long.parseLong(requireNonNull(damaged.getString(OccurrentCloudEventExtension.POSITION)));
+        events.updateOne(new Document("_id", damaged.get("_id")),
+                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, position)));
+    }
+
     private void makePositionAString() {
         MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
         Document stored = requireNonNull(events.find().first());
@@ -163,8 +230,8 @@ class SpringMongoEventStoreDamagedEventWarningTest {
     // event whose position updateEvent dropped is enough to put an otherwise healthy store on that path.
     private void dropThePosition() {
         MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
-        Document stored = requireNonNull(events.find().first());
-        events.updateOne(new Document("_id", stored.get("_id")),
+        Document oldest = requireNonNull(events.find().sort(new Document("_id", 1)).first());
+        events.updateOne(new Document("_id", oldest.get("_id")),
                 new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
     }
 
