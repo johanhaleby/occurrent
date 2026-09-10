@@ -104,7 +104,12 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // may already have passed its name and the callback that finished it may see startupScanComplete as false and
     // do nothing. The scan drains this once the flag is set. Only another thread's beans are recorded, since the
     // scan handles every bean it builds itself, which is what keeps this from collecting every bean in the context.
-    private final Queue<String> builtWhileScanning = new ConcurrentLinkedQueue<>();
+    //
+    // The instance goes in with the name. The two flag reads in that callback are not ordered against the write
+    // here, so a callback can read false and decline, and the drain must then register the bean itself rather than
+    // leave it to a second read that has already happened. Holding the instance is what lets it, since a name
+    // still in creation cannot be resolved but an instance in hand needs no resolving.
+    private final Queue<BuiltWhileScanning> builtWhileScanning = new ConcurrentLinkedQueue<>();
     private volatile Thread scanningThread;
     // Bean names this scan has built so a later pass can read their real class, so a build after which the class
     // is still unknown is not attempted for ever.
@@ -182,7 +187,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         Thread scanning = scanningThread;
         if (!startupScanComplete && scanning != null && scanning != Thread.currentThread()) {
-            builtWhileScanning.add(beanName);
+            builtWhileScanning.add(new BuiltWhileScanning(beanName, bean));
         }
         // Read again rather than reused, so a bean finishing as the scan ends is registered by whichever of the two
         // sees the flag set. Registering it twice is not possible, since both go through the same handler keys.
@@ -233,17 +238,32 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
     // A bean another thread finished during the scan may have been passed over, so each one is scanned again now
-    // that the flag is set. A name still being created is left alone, because reaching it means waiting for the
-    // thread creating it, which may be waiting for the lock this holds. That thread's own callback reads the flag
-    // once more after recording the name here, so it registers the bean itself.
+    // that the flag is set. Every entry is scanned, including one whose name is still in creation, because the
+    // callback that recorded it may have read startupScanComplete as false and declined before the flag was set.
+    // Dropping it on the expectation that the callback will come back to it loses the bean, since that read has
+    // already happened and there is no third.
+    //
+    // The instance recorded with the name is what makes this safe. Resolving the name would mean waiting for the
+    // thread creating it, which may be waiting for the lock this holds, so nothing here resolves anything. Both
+    // sides can reach the same bean, and the handler keys they both go through admit only the first.
+    //
+    // This runs on the startup thread inside afterSingletonsInstantiated, so it registers under the startup policy
+    // rather than the late one. A bean that happened to finish on another thread during the scan keeps the
+    // WAIT_UNTIL_STARTED guarantee it would have had a moment earlier.
     private void drainBeansBuiltWhileScanning() {
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
-        String beanName;
+        BuiltWhileScanning built;
         // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
-        while ((beanName = builtWhileScanning.poll()) != null) {
-            if (beanFactory.containsBeanDefinition(beanName) && !beanFactory.isCurrentlyInCreation(beanName)) {
-                scan(new String[]{beanName}, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, false);
+        while ((built = builtWhileScanning.poll()) != null) {
+            String beanName = built.beanName();
+            Object bean = built.bean();
+            if (!beanFactory.containsBeanDefinition(beanName)) {
+                continue;
             }
+            boolean singleton = beanFactory.isSingleton(beanName);
+            ScanType userClass = new ScanType(userClassOf(bean), true);
+            scan(new String[]{beanName}, name -> userClass, name -> bean,
+                    (name, resolved) -> () -> singleton && !beanFactory.isCurrentlyInCreation(name) ? applicationContext.getBean(name) : resolved, true);
         }
     }
 
@@ -501,6 +521,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         Class<?> type = applicationContext.getType(beanName);
         return type == null ? null : new ScanType(ClassUtils.getUserClass(type), false);
+    }
+
+    // The name and the instance travel together, so the drain never has to resolve a name that is still
+    // in creation.
+    private record BuiltWhileScanning(String beanName, Object bean) {
     }
 
     private record ScanType(Class<?> type, boolean concrete) {

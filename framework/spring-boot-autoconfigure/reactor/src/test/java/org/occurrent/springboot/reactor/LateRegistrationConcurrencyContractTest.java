@@ -21,6 +21,9 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.RecordComponent;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Queue;
 import java.util.Set;
@@ -39,10 +42,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * inside a bean factory serialises other singleton creation at the Spring level, so the two threads the hazard
  * needs never overlap.
  * <p>
- * It does not catch the drain style either, and the drain style is what actually went wrong. One of these collections shipped with the right type and a drain that still iterated and then
- * cleared, and this passed it. The reason each drain says so at the loop itself is that a sentence where the
- * cursor already is beats an assertion in another file. What is left here is somebody putting an
- * {@code ArrayList} or a {@code HashSet} back, which is a smaller regression than a drain that clears.
+ * It does not catch the drain style either, and the drain style is what actually went wrong. One of these
+ * collections shipped with the right type and a drain that still iterated and then cleared, and this passed it. The
+ * reason each drain says so at the loop itself is that a sentence where the cursor already is beats an assertion in
+ * another file. What is left here is somebody putting an {@code ArrayList} or a {@code HashSet} back, which is a
+ * smaller regression than a drain that clears.
+ * <p>
+ * The handoff assertion is a different shape. It reads a type rather than a style, and the type is the whole
+ * argument: a handoff carrying only names cannot register a bean whose thread is still creating it, so it has to
+ * drop it, and the bean is never scanned. Naming that here keeps the next reader from simplifying the record away.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class LateRegistrationConcurrencyContractTest {
@@ -64,6 +72,21 @@ class LateRegistrationConcurrencyContractTest {
         assertQueue(ProjectionAnnotationRegistrar.class, "pushModels");
         assertQueue(ProjectionAnnotationRegistrar.class, "backgroundFeeds");
         assertQueue(ProjectionAnnotationRegistrar.class, "backgroundCatchUps");
+    }
+
+    // The name and the instance travel together through the startup handoff. A queue of names alone leaves the
+    // drain with a name it cannot resolve while its thread is still creating it, and the only way out of that is
+    // to drop the entry, which loses the bean's annotations for the life of the context.
+    @Test
+    void the_startup_handoff_carries_the_instance_alongside_the_name() throws Exception {
+        Field field = OccurrentReactiveAnnotationBeanPostProcessor.class.getDeclaredField("builtWhileScanning");
+        Type element = ((ParameterizedType) field.getGenericType()).getActualTypeArguments()[0];
+
+        assertThat(element).describedAs("element of builtWhileScanning").isNotEqualTo(String.class);
+        assertThat(((Class<?>) element).getRecordComponents())
+                .describedAs("what the handoff carries")
+                .extracting(RecordComponent::getType)
+                .contains(String.class, Object.class);
     }
 
     // A Queue rather than any Collection, because ArrayList is a Collection and a List but never a Queue, so this
