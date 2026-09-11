@@ -85,6 +85,9 @@ class InMemoryDeadlineConsumerRegistryShutdownTest {
                             + "lifecycle flag holds every later shutdown step behind it")
                     .isFalse();
         } finally {
+            // The registry's polling thread is not a daemon, so an assertion that fails before the shutdown above
+            // has run would otherwise leave it alive for the rest of the test run.
+            registry.shutdown();
             scheduler.shutdown();
         }
     }

@@ -33,6 +33,8 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -81,6 +83,12 @@ class MongoLeaseCloseRetryTest {
 
     private MongoCollection<BsonDocument> locks;
 
+    /**
+     * Every support a test builds, shut down afterwards. {@code ScheduledRefresh} holds a scheduler thread that is
+     * not a daemon, so a test that fails before its own shutdown would leave one alive for the rest of the run.
+     */
+    private final List<MongoLeaseCompetingConsumerStrategySupport> supports = new ArrayList<>();
+
     @BeforeAll
     static void connect() {
         mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
@@ -98,7 +106,9 @@ class MongoLeaseCloseRetryTest {
     }
 
     @AfterEach
-    void dropTheLocks() {
+    void shutDownEverySupportAndDropTheLocks() {
+        supports.forEach(MongoLeaseCompetingConsumerStrategySupport::shutdown);
+        supports.clear();
         locks.drop();
     }
 
@@ -166,9 +176,9 @@ class MongoLeaseCloseRetryTest {
         AtomicReference<Runnable> round = new AtomicReference<>();
         ScheduledRefresh held = new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh()));
         CountDownLatch firstAttemptFailed = new CountDownLatch(1);
-        MongoLeaseCompetingConsumerStrategySupport support =
-                new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.retry().backoff(Backoff.fixed(10_000)), held)
-                        .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(starving(locks, firstAttemptFailed)));
+        MongoLeaseCompetingConsumerStrategySupport support = remembered(
+                new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.retry().backoff(Backoff.fixed(10_000)), held))
+                .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(starving(locks, firstAttemptFailed)));
 
         // Registers against the real collection, so the consumer holds the lease before the store starts failing.
         assertThat(support.registerCompetingConsumer(locks, SUBSCRIPTION, HOLDER)).isTrue();
@@ -187,13 +197,18 @@ class MongoLeaseCloseRetryTest {
                 .isFalse();
     }
 
+    private MongoLeaseCompetingConsumerStrategySupport remembered(MongoLeaseCompetingConsumerStrategySupport support) {
+        supports.add(support);
+        return support;
+    }
+
     /**
      * Never schedules the refresh, so nothing runs in the background while a test drives one call by hand.
      */
     private MongoLeaseCompetingConsumerStrategySupport supportWith(RetryStrategy retryStrategy) {
         ScheduledRefresh neverScheduled = new ScheduledRefresh((lease, scheduler) -> {
         });
-        return new MongoLeaseCompetingConsumerStrategySupport(LEASE, retryStrategy, neverScheduled);
+        return remembered(new MongoLeaseCompetingConsumerStrategySupport(LEASE, retryStrategy, neverScheduled));
     }
 
     /**
