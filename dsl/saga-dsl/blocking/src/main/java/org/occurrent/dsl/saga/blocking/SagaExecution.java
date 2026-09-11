@@ -274,8 +274,20 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * reaction stops the instance making progress exactly as a {@code RuntimeException} does, and an instance stopped by
      * one blocks the saga's other instances for exactly as long.
      * <p>
-     * Only the event path calls this. A failing timeout is already isolated per instance by the poller and blocks
-     * nothing, and a timeout carries no redelivery key of its own, so there would be nothing to quarantine it on.
+     * Only the event path calls this, and it is not because the timer path has nothing to gain from it. A timeout
+     * has no redelivery key of its own, so there is nothing to quarantine it on.
+     * <p>
+     * What the timer path does instead is retry for ever, and that is not free for the saga's other instances. A poll
+     * fires at most {@link SagaRunnerConfig#timerBatchLimit()} instances, and nothing in
+     * {@link SagaStateStore#findWithDueTimers} requires a store to give a different instance a turn, so once that many
+     * instances cannot fire their timers the saga can stop firing timers altogether. That many is enough, since a
+     * batch full of them leaves no place for anything else.
+     * <a href="https://github.com/johanhaleby/occurrent/issues/1003">#1003</a> is where that missing guarantee is
+     * being added.
+     * <p>
+     * So a failing timeout does not block the poller, and it is not isolated from the saga's other instances either.
+     * Earlier versions of this javadoc said it was, on an accounting that was true of one instance and false of the
+     * batch they share.
      */
     private boolean quarantine(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Duration quarantineAfter) {
         try {
@@ -400,9 +412,16 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 for (String timerName : dueTimerNames) {
                     try {
                         process(envelope.sagaId(), SagaInput.timeout(envelope.sagaId(), TimerName.parse(timerName)), EventMeta.NONE, timerName);
-                    } catch (RuntimeException e) {
-                        // Keep polling other timers/instances. This one stays due and is retried next poll unless consumed.
-                        log.warn("Failed to fire saga timer '{}' for instance '{}'", timerName, envelope.sagaId(), e);
+                    } catch (Throwable t) {
+                        // Throwable rather than RuntimeException, because a StackOverflowError out of a recursive
+                        // evolve or a NoClassDefFoundError out of a reaction used to unwind the loop into the catch
+                        // below, so every instance after this one in the batch lost its turn. An
+                        // OutOfMemoryError still does, because it is the JVM's condition and not this instance's.
+                        rethrowIfNotTheInstances(t);
+                        // Keep polling other timers/instances. This one stays due, so a later poll retries it unless
+                        // it is consumed first. Which poll is not promised, since nothing requires a store to give a
+                        // different instance a turn, see #1003.
+                        log.warn("Failed to fire saga timer '{}' for instance '{}'", timerName, envelope.sagaId(), t);
                     }
                 }
             }

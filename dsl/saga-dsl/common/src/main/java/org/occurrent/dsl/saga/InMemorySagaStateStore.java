@@ -87,8 +87,9 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
             throw new IllegalArgumentException("limit must be positive, was " + limit);
         }
         // Sort before truncating, so "the first limit" is the stalest instances the contract promises. Note that
-        // findWithDueTimers above breaks at limit mid-iteration and so returns an arbitrary subset; that is fine for a
-        // poller that will see the rest on its next tick, but it is not what this method promises.
+        // findWithDueTimers above breaks at limit mid-iteration and so returns an arbitrary subset, which this method
+        // may not do. That subset is also how an instance whose timer never fires can be returned every time while
+        // others wait, which nothing here prevents, see #1003.
         return store.values().stream()
                 .filter(envelope -> envelope.status() == status)
                 .filter(envelope -> {

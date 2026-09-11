@@ -102,11 +102,19 @@ public interface SagaStateStore<S extends @Nullable Object> {
 
     /**
      * {@link SagaStatus#ACTIVE} instances that have at least one timer due at or before {@code now}, at most
-     * {@code limit} of them. The executor's timer poller uses this to fire timeouts. A returned instance may have
-     * several due timers.
+     * {@code limit} of them. The executor's timer poller uses this to fire
+     * timeouts. A returned instance may have several due timers.
      * <p>
      * Active, not merely unfinished. A {@link SagaStatus#QUARANTINED} instance must not be returned. Its timers stay
      * armed rather than dropped, and firing one would advance its state across the input it stopped on.
+     * <p>
+     * There is no ordering requirement and no fairness requirement, and the second of those is a known defect rather
+     * than a design choice. This method places no limit on how often one instance is returned and asks no store to
+     * give a different instance a turn, so an instance whose timer reaction always throws can be returned on every
+     * poll, and once {@code limit} of them are in that state the saga can stop firing timers altogether, since a
+     * batch full of them leaves no place for anything else.
+     * <a href="https://github.com/johanhaleby/occurrent/issues/1003">#1003</a> is where that missing guarantee is
+     * being added.
      */
     List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit);
 

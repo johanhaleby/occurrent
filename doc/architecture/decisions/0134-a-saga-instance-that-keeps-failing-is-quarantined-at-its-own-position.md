@@ -7,6 +7,10 @@ Date: 2026-08-22
 Accepted at the design gate for #818, which this decides rather than closes, because the implementation is separate
 work. 0133 is the current maximum, re-audited across every remote branch at write time per the max-plus-one rule.
 
+Amended in place for [#998](https://github.com/johanhaleby/occurrent/issues/998), which found the Context's account
+of the timer path wrong in a way this decision was partly built on. This has not shipped in any release, so the
+amendment is in the Context section below rather than in a superseding record.
+
 The three questions this decision could not settle on its own were ruled at that gate and are recorded in
 **Rulings at the design gate** near the end of this file. One of them, the non-replayable source, ships as a
 narrowing rather than a closure, and [#918](https://github.com/johanhaleby/occurrent/issues/918) is its recorded
@@ -35,7 +39,41 @@ shipped event path breaks the first half of that. A fix must not buy it back by 
 
 The timer path is the model the issue points at, and it is the right one to start from. `SagaExecution.pollTimers`
 catches a failing timeout per instance, logs it, and the timer stays due for the next poll, so an instance that
-cannot fire its timer costs one stuck instance instead of the poller.
+cannot fire its timer keeps running its own process and never stops the poller.
+
+That sentence used to end "costs one stuck instance instead of the poller", and [#998](https://github.com/johanhaleby/occurrent/issues/998)
+showed it was wrong about everything except the poller. The accounting was per instance and the batch is shared. A
+poll takes at most `timerBatchLimit` instances, a hundred by default, and nothing in `findWithDueTimers` requires a
+store to give a different instance a turn, so once a hundred instances cannot fire their timers the saga can stop
+firing timers altogether. A hundred is enough rather than more than a hundred, since a batch full of them leaves no
+place for anything else. The defect is a missing guarantee rather than a described outcome, which matters
+because every attempt to describe the outcome asserted something about store ordering that the contract does not
+require. [#1003](https://github.com/johanhaleby/occurrent/issues/1003) is where the guarantee is being added.
+
+Two mechanisms, not one. The second was the per timer catch being `RuntimeException` while the catch around the
+whole poll was `Throwable`, so a `StackOverflowError` out of a recursive `evolve` or a `NoClassDefFoundError` out of
+a reaction unwound the rest of the batch, and every instance after the failing one lost its turn. That one needs a
+single bad instance rather than a hundred.
+
+**Only the second is fixed in 0.34.0.** The per timer catch now takes anything the reaction throws except an
+`OutOfMemoryError`, which is the JVM's condition rather than the instance's and so is not charged to whichever
+instance happened to be running.
+
+The first is not fixed, and this release does not narrow it either. Nothing requires a store to give a different
+instance a turn, so an instance that cannot fire its timer can occupy a place in the batch indefinitely, exactly as
+in 0.33.0.
+[#1003](https://github.com/johanhaleby/occurrent/issues/1003) is where it is being fixed, and it is a design question
+rather than a patch. A hold-off has to be attached to the timer that is failing rather than to the instance holding
+it. An instance-scoped record naming a timer cannot be made correct. The named timer can be cancelled and then
+nothing clears the record, the instance's other timers are delayed by a failure that is not theirs, and a later
+failure of a healthy timer inherits the dead one's clock. That was prototyped here, reviewed, and withdrawn rather
+than shipped half-decided.
+
+**The decision not to quarantine the timer path still stands, on a different reason than the one written above.** A
+timeout has no redelivery key, so there is nothing to quarantine it on. The reason it was safe to leave, that a
+failing timeout costs one instance, was the false accounting. What makes it still right is that a quarantine buys an
+acknowledgement, and a timer needs none, so quarantining would stop an instance for good without freeing its place
+in the batch for anyone else.
 
 ### Why the event path cannot copy it
 
@@ -48,8 +86,12 @@ An event is not the saga's to own. It arrives on one ordered channel shared by e
 only handle on that channel is the subscription's position. Skipping an event moves a position that belongs to all of
 those instances at once, and once it has moved the saga has no way to ask for that event a second time.
 
-So "catch it and move on" is a complete answer on the timer path and only half an answer on the event path. The
-missing half is a durable record of what was skipped and where the instance stopped.
+So "catch it and move on" preserves the input on the timer path and only half answers the event path. The missing
+half there is a durable record of what was skipped and where the instance stopped.
+
+Preserving the input is not the same as isolating the instance, and this section originally read as though it were.
+The timer survives, and nothing stops the instance occupying a place in the due-timer batch while it does, which is
+the amendment above and [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
 
 ### An input that will never succeed and a transient failure are the same exception
 
