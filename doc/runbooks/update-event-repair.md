@@ -183,11 +183,11 @@ not to DCB reads, and it silences the startup warning, which then tells you noth
 the same two numbers. A run that finishes deletes its checkpoint, so the next run starts with no range and reports
 only the positions it repaired itself. Step 7 needs the range of every run you ran.
 
-**Write down every position you set by hand as well, because only one of these reasons puts it back in a later run's
-range.** `POSITION_ALREADY_TAKEN` does, since the rejected update left the tag array alone and the event still looks
-damaged afterward. For `POSITION_LOST`, `POSITION_NOT_A_NUMBER`, `POSITION_NOT_POSITIVE` and `POSITION_ABOVE_COUNTER`
-the run rebuilt the tag array already, so once you set the position the event matches neither half of what the repair
-looks for, and no run will ever report it. Step 7 needs those positions from you.
+**Write down every position you set by hand as well, because the repair will usually never mention it again.**
+Setting a position by hand is itself what stops an event looking damaged, so after the fix it matches neither half of
+what the repair looks for and no later run reports it. A `POSITION_ALREADY_TAKEN` event with DCB tags can still come
+back, because the rejected update left its tag array unwritten too. Working out which of your fixes fall that way buys
+you nothing, so record every position you set. Step 7 needs them from you.
 
 ### 6. [you] Verify
 
@@ -247,15 +247,14 @@ What follows, up to and including the comparison against the lowest number, is f
 If one did not, pick up again at "Decide between replaying and reconciling", which applies either way.
 
 A position in one of those ranges can be one the repair restored, or one that was already correct on an event only its
-tag array needed rebuilding for, which is what a run after a hand-set `POSITION_ALREADY_TAKEN` fix (step 5) looks
-like.
+tag array needed rebuilding for, which is what a run after a hand-set fix on an event with DCB tags can look like.
 
 Both numbers are `null` when a run touched nothing with a readable position, whether because it found nothing to
 repair or because every event it touched had a position step 5 left you to deal with by hand.
 
-A `null` from every run says nothing about the positions you set by hand in step 5, and only one of those comes back
-into a later run's range. So a repair is clear of consumer work when every run reported `null` and you set no position
-by hand. If you set any, each one counts as a range of its own, covering that single position.
+A `null` from every run says nothing about the positions you set by hand in step 5, most of which no run ever reports.
+So a repair is clear of consumer work only when every run reported `null` and you set no position by hand. Each one you
+did set counts as a range of its own, covering that single position, whether or not a run happened to name it too.
 
 Otherwise, take the lowest number across every run's minimum and every position you set by hand. A consumer whose
 checkpoint sits below it has not reached a repaired event yet, so it will pick up every one of them on its own the next
