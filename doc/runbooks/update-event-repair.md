@@ -280,11 +280,17 @@ the restart point, not only the repaired one. Reconcile that consumer instead of
 
 Read each range directly, one query per range rather than one query spanning all of them, so you do not read the
 stretch between two of them that nothing touched. A position you set by hand is a range with the same number at both
-ends:
+ends.
+
+Take the ranges in ascending order of their lower bound, because sorting inside one query does not order the events
+across several of them. Cap each query at the consumer's current checkpoint too, since anything above it was never
+skipped and arrives through ordinary catch-up without your help. A range sitting wholly above that checkpoint then
+returns nothing, which is the right answer for it.
 
 ```javascript
-db.events.find({ position: { $gte: NumberLong(<minRepairedPosition>), $lte: NumberLong(<maxRepairedPosition>) } })
-       .sort({ position: 1 })
+db.events.find({ position: { $gte: NumberLong(<minRepairedPosition>),
+                             $lte: NumberLong(<maxRepairedPosition, or the checkpoint if that is lower>) } })
+         .sort({ position: 1 })
 ```
 
 If any run did not finish on its own there is no usable range, so read everything the consumer has already processed
@@ -298,8 +304,8 @@ These queries return candidates rather than only repaired events. A range is a f
 every event sitting between the two that the run left alone because nothing was wrong with it.
 
 The ranges can also overlap, since a position you set by hand can sit inside a run's range and two runs' ranges can
-cover the same stretch, so one event can come back from more than one query. The sort is there because a consumer's
-logic depends on position order and MongoDB returns no particular order without it.
+cover the same stretch, so one event can come back from more than one query. The sort and the ordering both matter
+because a consumer's logic depends on position order and MongoDB returns no particular order without being asked.
 
 Feed only the ones the consumer actually missed into its logic, once each however many queries returned them, by hand
 or with a targeted script, leaving its checkpoint where it is. `NumberLong` matters once a store's position passes

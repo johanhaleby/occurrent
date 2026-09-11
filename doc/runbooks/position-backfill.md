@@ -15,9 +15,9 @@ entirely, and an event with no position is exactly what the backfill below looks
 The backfill cannot tell those two apart. An event written before position existed and an event whose position
 `updateEvent` dropped both have no `position` field, so the backfill positions the second one too.
 
-The position it hands out is a fresh one, above everything the store had already assigned. So the event ends up
-reading as the newest in the collection instead of one from whenever it actually happened, and nothing afterwards
-distinguishes it from an event that was positioned correctly.
+The position it hands out comes from a block it reserves as it goes, so it sits above everything assigned before that
+block and bears no relation to where the event belongs. The event is read as having happened around whenever the
+backfill reached it, and nothing afterwards distinguishes it from an event that was positioned correctly.
 
 The repair runbook has the queries for the damage that can be detected. For the events nothing can detect, it tells
 you to decide from your own records which ones predate position. That is also where your store's own startup messages
