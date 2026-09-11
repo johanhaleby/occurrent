@@ -31,7 +31,6 @@ import java.time.Duration;
 import java.util.concurrent.TimeoutException;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * Publishes a {@link CloudEvent} to RabbitMQ, in the CloudEvents binary content mode
@@ -101,11 +100,9 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
     @Override
     public void publish(CloudEvent cloudEvent) {
         requireNonNull(cloudEvent, "cloudEvent cannot be null");
-        // executeWithRetry, not retryStrategy.execute: the latter hardcodes a shutdown predicate that never trips,
-        // so a persistent-but-retriable failure would retry forever with no way for close() to cut it short. The
-        // attempt count itself stays uncapped by design, the same choice NativeMongoCheckpointStorage makes for the
-        // same reason, but a retry started before close() is called must not outlive this sink.
-        executeWithRetry(() -> publishOnce(cloudEvent), __ -> !shutdown, retryStrategy).run();
+        // The attempt count stays uncapped by design, the same choice NativeMongoCheckpointStorage makes, so the
+        // shutdown predicate is what stops a retry started before close() from outliving this sink.
+        retryStrategy.execute(() -> publishOnce(cloudEvent), __ -> !shutdown);
     }
 
     private void publishOnce(CloudEvent cloudEvent) {
