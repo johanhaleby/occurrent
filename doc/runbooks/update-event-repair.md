@@ -205,17 +205,31 @@ DCB. Time-ordered legacy catch-up is unaffected, because the event's time was ne
 `result.minRepairedPosition()` and `result.maxRepairedPosition()`, the same two numbers the finished-run log line
 prints, bound the position of every event that one run repaired and could read a position for.
 
-A killed and resumed repair stores that range in its checkpoint the same way it stores the unrecoverable count, so
-the numbers a resumed run reports cover the segment the interrupted call walked as well as the one that finished it.
+A killed and resumed repair stores that range in its checkpoint the same way it stores the unrecoverable count, so the
+numbers a resumed run reports cover the batches the interrupted call checkpointed as well as the ones that finished it.
 
-They do not reach back past a run that finished. A run deletes its checkpoint once it has walked the collection, so
-the next run starts with no range and reports only the positions it repaired itself. That is what the second run in
-step 5 does. A first run repairs positions 100 to 5000, you hand-fix one event at 7000, and the second run reports
-7000 to 7000. If you only check consumers at or above 7000, every consumer that had already resumed past an event
-between 100 and 5000 keeps missing it permanently.
+The range has two limits, and both of them are why step 7 exists.
 
-So use the range of every run you ran, not only the last one. Each finished run prints its own in its finished-run log
-line, so a range you did not write down at the time is still in the logs.
+The first is that it does not reach past a run that finished. A run deletes its checkpoint once it has walked the
+collection, so the next run starts with no range and reports only the positions it repaired itself. That is what the
+second run in step 5 does. A first run repairs positions 100 to 5000, you hand-fix one event at 7000, and the second
+run reports 7000 to 7000. If you only check consumers at or above 7000, every consumer that had already resumed past an
+event between 100 and 5000 keeps missing it permanently. So use the range of every run you ran, not only the last one.
+Each finished run prints its own in its finished-run log line, so a range you did not write down at the time is still
+in the logs.
+
+The second is that it does not cover the batch a process died in. The checkpoint is written once per batch, after every
+event in that batch has already been updated, so a kill part way through one loses the positions it had just repaired.
+Those events no longer look damaged, so no resumed run and no later run finds them again, and nothing records where
+they were.
+
+**If any run was interrupted, stop here and skip the comparison below.** The range is then a floor rather than a bound,
+and no number the tool reports tells you which consumers are affected. The resuming run says it was one, in its log,
+`Resuming the repair of collection ... from an earlier run that did not finish`. Treat every consumer as possibly
+affected, and replay or reconcile from before the first repair started, using the guidance further down on which of
+the two is safe for a given consumer.
+
+The rest of this step is for a repair where no run was interrupted.
 
 A position in one of those ranges can be one the repair restored, or one that was already correct on an event only its
 tag array needed rebuilding for, which is what a run after a hand-set `POSITION_ALREADY_TAKEN` fix (step 5) looks
@@ -244,12 +258,16 @@ Replaying is not safe for a consumer that causes a side effect outside its own s
 an email, charging a card, calling another system, since rewinding it reruns that side effect for every event since
 the restart point, not only the repaired one. Reconcile that consumer instead of replaying it.
 
-Read the events each run repaired directly, one query per run's own range rather than one query spanning all of them,
-so you do not read a stretch between two runs that no run touched:
+Read each run's range directly, one query per range rather than one query spanning all of them, so you do not read the
+stretch between two runs that neither of them touched. After an interrupted repair there is no usable range, so read
+from where the consumer's checkpoint stood before the repair instead of from a minimum:
 
 ```javascript
 db.events.find({ position: { $gte: NumberLong(<minRepairedPosition>), $lte: NumberLong(<maxRepairedPosition>) } })
 ```
+
+That query returns candidates rather than only repaired events. A range is a floor and a ceiling, so it also returns
+every event sitting between the two that the run left alone because nothing was wrong with it.
 
 Feed only the ones the consumer actually missed into its logic once, by hand or with a targeted script, leaving its
 checkpoint where it is. `NumberLong` matters once a store's position passes 2^53, since mongosh reads a bare number as
