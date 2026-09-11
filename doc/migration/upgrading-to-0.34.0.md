@@ -646,6 +646,18 @@ instant and renames the record to whichever event failed last, so `SagaFailure.f
 instance's current run of failing and is not always the first time `SagaFailure.input()` failed. Reading it as an
 event-specific clock would under-report how long the instance has been stuck.
 
+The budget covers everything the executor does with an event, not the reaction alone. Reading the CloudEvent, working
+out which instance it belongs to, checking for a redelivery, `evolve`, `react`, the dispatcher and the store all count,
+and an `Error` counts like a `RuntimeException`. The one exclusion is `OutOfMemoryError`, which says the JVM ran out of
+heap while some instance held the thread rather than anything about that instance, and nothing in 0.34.0 brings an
+instance back out of quarantine.
+
+One case has no instance to quarantine. An event whose converter or id extractor throws never reaches an instance at
+all, so past the budget the subscription is let through with an error logged naming the event and what stopped it, and
+no row is written. `findByStatus(QUARANTINED, ..)` does not list it, so the log line is what you have. The event itself
+is untouched, and the runner confirms that before letting the subscription past, so repairing the converter or the id
+extractor and feeding the event to the saga again is how you recover it.
+
 A quarantined instance receives no further events and fires no timers, and its redelivery watermarks stop moving, so
 nothing it skipped is recorded as handled. What it stopped on stays on the record instead of being lost.
 

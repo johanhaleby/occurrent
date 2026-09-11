@@ -45,6 +45,35 @@ public final class SagaExecutionSupport {
     private SagaExecutionSupport() {
     }
 
+    /**
+     * Whether a failure is this instance's own, rather than a condition of the JVM that this instance happened to be
+     * running in when it struck. Both input paths ask this before charging a failure to an instance, so that the answer
+     * is one rule rather than two implementations of one rule.
+     * <p>
+     * Nearly everything is the instance's own, whatever its type. A {@code StackOverflowError} out of a recursive
+     * {@code evolve} is the instance's code failing, and so is the {@code NoClassDefFoundError} every later attempt
+     * raises once an {@code ExceptionInInitializerError} has left a class the reaction needs unusable. Neither is any
+     * less
+     * the instance's fault for being an {@code Error}, and neither stops being it on the next delivery.
+     * <p>
+     * {@link OutOfMemoryError} is the exclusion, and it is the only one. It says the JVM ran out of heap while this
+     * instance held the thread, which is a statement about the process rather than about the instance's work, and any
+     * other instance running at that moment would have met the same thing. Charging it to whichever instance was
+     * unlucky matters here more than it would elsewhere, because quarantine has no way out. Nothing in 0.34.0 releases
+     * an instance, so {@code SagaStateStore.delete(sagaId)} destroying its state is the only exit, and that would stop
+     * an instance for good over a heap exhaustion it had nothing to do with.
+     * <p>
+     * The test is on the failure itself and not on its causes. A reaction that catches an {@code OutOfMemoryError} and
+     * wraps it has decided the failure is its own, and this takes it at its word.
+     * <p>
+     * {@code VirtualMachineError} is deliberately not the line. {@code StackOverflowError} is one by hierarchy, and it
+     * is both the instance's own fault and among the likelier ways a saga fails, so excluding the supertype would
+     * exclude the case this most needs to catch.
+     */
+    public static boolean isAttributableToTheInstance(Throwable failure) {
+        return !(failure instanceof OutOfMemoryError);
+    }
+
     /** Delivery metadata used to deduplicate a redelivered event. All fields are {@code null} for a timer input. */
     public record EventMeta(@Nullable String streamId, @Nullable Long streamVersion, @Nullable Long position) {
         public static final EventMeta NONE = new EventMeta(null, null, null);
