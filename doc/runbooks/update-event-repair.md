@@ -186,9 +186,11 @@ what the repair looks for and no later run reports it. A `POSITION_ALREADY_TAKEN
 back, because the rejected update left its tag array unwritten too. Working out which of your fixes fall that way buys
 you nothing, so record every position you set. Step 7 needs them from you.
 
-**Then run the repair once more.** A `POSITION_ALREADY_TAKEN` event still has no tag array, because the rejected
-update covered both fields together. Setting its position by hand makes it visible to position queries but not to DCB
-reads, and it silences the startup warning, which then tells you nothing. A second run rebuilds the tag array.
+**Then run the repair once more.** A `POSITION_ALREADY_TAKEN` event with DCB tags still has no tag array, because the
+rejected update covered both fields together. Setting its position by hand makes it visible to position queries but
+not to DCB reads, and it silences the startup warning, which then tells you nothing. A second run rebuilds the tag
+array. A plain stream event has no tag array to rebuild, so the run does nothing for it and the position you recorded
+above is the only record of it.
 
 ### 6. [you] Verify
 
@@ -219,9 +221,10 @@ The range has two limits, and both of them are why step 7 exists.
 
 The first is that it does not reach past a run that finished. A run deletes its checkpoint once it has walked the
 collection, so the next run starts with no range and reports only the positions it repaired itself. That is what the
-second run in step 5 does. A first run repairs positions 100 to 5000, you hand-fix one event at 7000, and the second
-run reports 7000 to 7000. If you only check consumers at or above 7000, every consumer that had already resumed past an
-event between 100 and 5000 keeps missing it permanently. So use the range of every run you ran, not only the last one.
+second run in step 5 does. A first run repairs positions 100 to 5000, you hand-fix a DCB event at 7000, and the second
+run reports 7000 to 7000, because that event still has a tag array to rebuild. If you only check consumers at or above
+7000, every consumer that had already resumed past an event between 100 and 5000 keeps missing it permanently. So use
+the range of every run you ran, not only the last one.
 Each finished run logs its own outcome, either `Repaired positions ranged from X to Y` or `No position was repaired`,
 so a range you did not write down at the time is still in the logs.
 
