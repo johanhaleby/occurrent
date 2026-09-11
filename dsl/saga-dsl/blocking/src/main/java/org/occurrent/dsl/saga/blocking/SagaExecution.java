@@ -137,7 +137,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     void onCloudEvent(CloudEvent cloudEvent) {
         // The try opens on the first statement of the delivery and catches Throwable, so no step can fail outside it and
         // no kind of failure goes unseen. What a failure costs is then decided in one place, by the conditions in
-        // letTheSubscriptionPast, rather than by where it was thrown or what type it was. A saga whose id extractor
+        // letTheSubscriptionPast, rather than by where it was thrown or what type it was, bar the one exclusion those
+        // conditions name. A saga whose id extractor
         // throws on one event is the case that wrote this. It used to escape a try that opened after it, so nothing was
         // recorded, nothing was quarantined, and every other instance of the saga waited behind the redelivery forever.
         EventMeta meta = EventMeta.NONE;

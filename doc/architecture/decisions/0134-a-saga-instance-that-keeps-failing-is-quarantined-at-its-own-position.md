@@ -224,8 +224,8 @@ this decision never named. The failure had to be a `RuntimeException`, and it ha
 whose id extractor reads a correlation field that is null on one old event satisfies every condition written down here
 and was still never quarantined, because `sagaId` threw outside the `try`. Every other instance of that saga waited
 behind the redelivery forever, which is the outcome this decision exists to remove. The whole delivery now runs inside
-one `try` that catches `Throwable`, so what failed and where it was thrown decide nothing, and the conditions are the
-four this decision states and no others. [#997](https://github.com/johanhaleby/occurrent/issues/997) is where that was
+one `try` that catches `Throwable`, so where a failure was thrown decides nothing, what it was decides nothing beyond
+the single exclusion the next paragraph names, and the conditions are the four this decision states and no others. [#997](https://github.com/johanhaleby/occurrent/issues/997) is where that was
 found.
 
 **A failure is the instance's unless it is a condition of the process, and the test is on what was thrown rather than

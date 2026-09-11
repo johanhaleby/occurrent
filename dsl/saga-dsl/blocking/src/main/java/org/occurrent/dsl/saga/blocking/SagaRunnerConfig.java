@@ -42,9 +42,11 @@ import static java.util.Objects.requireNonNull;
  *                             failing on when the budget runs out, so that the subscription is allowed past that event,
  *                             or {@code null} to keep rethrowing forever, which is what every version up to 0.33.0 did.
  *                             The clock belongs to the instance rather than to one event, so a second event that starts
- *                             failing inherits the elapsed time instead of restarting the budget. It covers every way a
- *                             delivery can fail, from the converter reading the event through to the store saving the
- *                             result, and an {@code Error} counts like a {@code RuntimeException}. A delivery that fails
+ *                             failing inherits the elapsed time instead of restarting the budget. It covers the whole
+ *                             delivery, from the converter reading the event through to the store saving the
+ *                             result, and an {@code Error} counts like a {@code RuntimeException}, with
+ *                             {@link OutOfMemoryError} the one exclusion, since that is the process failing rather than
+ *                             this instance's work. A delivery that fails
  *                             before the saga can work out which instance it belongs to has no instance to
  *                             quarantine, so the subscription is let past it and the skip is logged rather than
  *                             recorded. A runner

@@ -722,8 +722,9 @@ public class OccurrentProperties {
          * a second event can reach the budget on its first failure. Defaults to five minutes, matching
          * {@code SagaRunnerConfig.defaults()}.
          * <p>
-         * It covers every way a delivery can fail, from the converter reading the event through to the store saving the
-         * result, and an {@code Error} counts like a {@code RuntimeException}. A delivery that fails before the saga can
+         * It covers the whole delivery, from the converter reading the event through to the store saving the
+         * result, and an {@code Error} counts like a {@code RuntimeException}. {@code OutOfMemoryError} is the one
+         * exclusion, since that is the process failing rather than the instance's work. A delivery that fails before the saga can
          * work out which instance it belongs to has no instance to quarantine, so the subscription is let past it once
          * it has been failing this long and the skip is logged rather than recorded.
          * <p>
