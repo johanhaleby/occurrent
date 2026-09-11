@@ -93,7 +93,7 @@ class InMemoryDeadlineConsumerRegistryShutdownTest {
     }
 
     @Test
-    void does_not_retry_an_exception_the_caller_excluded() throws InterruptedException {
+    void does_not_retry_an_exception_the_caller_excluded_and_keeps_polling_afterwards() throws InterruptedException {
         BlockingDeque<Object> queue = new LinkedBlockingDeque<>();
         AtomicInteger attempts = new AtomicInteger();
         CountDownLatch consumerCalled = new CountDownLatch(1);
@@ -116,6 +116,16 @@ class InMemoryDeadlineConsumerRegistryShutdownTest {
             await().during(Duration.ofMillis(500))
                     .atMost(Duration.ofSeconds(3))
                     .untilAtomic(attempts, equalTo(1));
+
+            // One thread serves every category, so a consumer nobody will retry has to leave the poller running.
+            // Without this a single bad deadline stops every other category for the life of the registry.
+            CountDownLatch anotherCategoryConsumed = new CountDownLatch(1);
+            registry.register("SomethingElse", (id, category, deadline, data) -> anotherCategoryConsumed.countDown());
+            scheduler.schedule(UUID.randomUUID(), "SomethingElse", Deadline.afterMillis(0), "some other data");
+
+            assertThat(anotherCategoryConsumed.await(MUST_FINISH_WITHIN.toMillis(), TimeUnit.MILLISECONDS))
+                    .as("the poller should still be running after a consumer failed terminally")
+                    .isTrue();
         } finally {
             registry.shutdown();
             scheduler.shutdown();

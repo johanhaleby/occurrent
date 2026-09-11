@@ -88,7 +88,17 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
                         if (deadlineConsumer == null) {
                             log.warn("Failed to find a deadline consumer for category {}, will try again later.", data.category);
                         } else {
-                            retryStrategyToUse.execute(() -> deadlineConsumer.accept(data.id, data.category, data.deadline, data.data), whileRunning);
+                            try {
+                                retryStrategyToUse.execute(() -> deadlineConsumer.accept(data.id, data.category, data.deadline, data.data), whileRunning);
+                            } catch (RuntimeException e) {
+                                // One thread serves every category and nothing restarts it, so a consumer the retry
+                                // strategy has given up on has to stop here rather than end the poller and leave
+                                // every other category unconsumed. Nothing is logged once running is false, since
+                                // then the throw is the shutdown predicate stopping the retry and not a failure.
+                                if (running) {
+                                    log.error("Deadline consumer for category {} failed and will not be retried again.", data.category, e);
+                                }
+                            }
                         }
                     }
                 } catch (InterruptedException e) {
