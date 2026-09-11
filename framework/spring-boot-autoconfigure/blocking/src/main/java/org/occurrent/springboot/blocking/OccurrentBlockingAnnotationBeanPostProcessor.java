@@ -356,8 +356,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         boolean registeredAnything = !subscriptionMethods.isEmpty() || !projectionMethods.isEmpty()
                 || !snapshotMethods.isEmpty() || !sagaMethods.isEmpty() || !beansToBuild.isEmpty();
         // Only a handler the loop above collected registers, which is what keeps every id going through
-        // claimSubscriptionId. The register step reads the bean's class again, and by then the bean exists, so that
-        // class can declare a handler the collecting pass never saw. Registering it here would take its id without
+        // claimSubscriptionId. The register step resolves the bean again, and the object it gets back can be of a
+        // class declaring a handler the collecting pass never saw. Registering that one would take its id without
         // checking it. It is left for the next pass instead, which collects it from the now recorded class.
         //
         // Marking happens after the registration it stands for, never before. A registration that throws while a
