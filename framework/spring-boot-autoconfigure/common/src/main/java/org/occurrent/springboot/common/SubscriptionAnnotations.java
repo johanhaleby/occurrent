@@ -32,6 +32,7 @@ import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
+import org.springframework.util.ClassUtils;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -290,12 +291,16 @@ public final class SubscriptionAnnotations {
      * <p>
      * A descriptor factory runs exactly once at startup to build a value, so there is no request for advice to
      * usefully observe, and invoking it through a proxy is a hazard rather than a feature. Every registrar records
-     * {@code method} by unwrapping the bean the same way {@link #ultimateTarget} does, so on a legitimate target
-     * {@code method}'s declaring class is always assignable from the target's own class. When it is, {@code method}
-     * runs directly on the unwrapped target, bypassing any advice. When it is not, the factory refuses instead of
-     * guessing which method to run, because the mismatch itself is the defect, either an interface proxy that could
-     * not be unwrapped to a fixed target, or a factory bean that built a different implementation than the one the
-     * scan recorded.
+     * {@code method} from the exact class the scan resolved, never a supertype, so on a legitimate target the
+     * unwrapped target's own user class, {@link ClassUtils#getUserClass}, equals {@code method}'s declaring class
+     * exactly, not merely a subtype of it, since a subtype could override {@code method} with a different
+     * implementation the scan never saw. When it does, {@code method} runs directly on the unwrapped target,
+     * bypassing any advice on a fixed target. When it does not, the factory refuses instead of guessing which
+     * method to run, because the mismatch itself is the defect, either an interface proxy that could not be
+     * unwrapped to a fixed target, or a factory bean that built a different implementation than the one the scan
+     * recorded. A CGLIB proxy left proxied by {@link #ultimateTarget}, because its target source is not a fixed
+     * singleton, still passes this check, since {@code getUserClass} of the proxy's own class equals the same
+     * declaring class, so a factory invoked through such a proxy still runs its advice.
      *
      * @param annotationName the annotation name for error messages, for example {@code "@Projection"}
      * @param bean           the (possibly proxied) bean the factory method was found on
@@ -304,8 +309,9 @@ public final class SubscriptionAnnotations {
      */
     public static Object invokeDescriptorFactory(String annotationName, Object bean, Method method) {
         Object target = ultimateTarget(bean);
-        if (!method.getDeclaringClass().isInstance(target)) {
-            throw new IllegalStateException("%s factory %s#%s cannot run because %s does not implement %s. This happens when the bean is an interface proxy whose target is not a fixed singleton, so it cannot be unwrapped safely (set spring.aop.proxy-target-class=true so this bean is proxied by subclassing instead of by interface, or move the factory method off the advised bean), or when the factory bean built a different implementation than the one the scan recorded (return the same implementation on every call).".formatted(annotationName, bean.getClass().getName(), method.getName(), bean.getClass().getName(), method.getDeclaringClass().getName()));
+        Class<?> targetUserClass = ClassUtils.getUserClass(target.getClass());
+        if (!method.getDeclaringClass().equals(targetUserClass)) {
+            throw new IllegalStateException("%s factory %s#%s cannot run because %s does not implement %s. This happens when the bean is an interface proxy whose target is not a fixed singleton, so it cannot be unwrapped safely (set spring.aop.proxy-target-class=true so this bean is proxied by subclassing instead of by interface, or move the factory method off the advised bean), or when the factory bean built a different implementation than the one the scan recorded (return the same implementation on every call).".formatted(annotationName, bean.getClass().getName(), method.getName(), targetUserClass.getName(), method.getDeclaringClass().getName()));
         }
         try {
             method.setAccessible(true);

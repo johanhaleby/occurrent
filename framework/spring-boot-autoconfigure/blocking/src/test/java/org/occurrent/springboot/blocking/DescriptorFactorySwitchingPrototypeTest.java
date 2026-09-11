@@ -62,6 +62,7 @@ class DescriptorFactorySwitchingPrototypeTest {
 
     private static final AtomicInteger CHECKED_INVOCATIONS = new AtomicInteger();
     private static final AtomicInteger UNCHECKED_INVOCATIONS = new AtomicInteger();
+    private static final AtomicInteger OVERRIDING_INVOCATIONS = new AtomicInteger();
 
     @Test
     void a_projection_factory_on_a_prototype_that_switches_implementation_refuses_instead_of_running_the_other_implementations_factory() {
@@ -81,6 +82,29 @@ class DescriptorFactorySwitchingPrototypeTest {
                     // Refused before either implementation's factory ran, since the mismatch is caught before invoking.
                     assertThat(CHECKED_INVOCATIONS).hasValue(0);
                     assertThat(UNCHECKED_INVOCATIONS).hasValue(0);
+                });
+    }
+
+    // A subclass overriding the recorded method is a different implementation too, even though it is assignable
+    // to the recorded class, so an isInstance-based check would run its override reflectively without ever
+    // detecting the switch.
+    @Test
+    void a_projection_factory_on_a_prototype_that_switches_to_a_subclass_refuses_instead_of_running_the_subclasss_override() {
+        CHECKED_INVOCATIONS.set(0);
+        OVERRIDING_INVOCATIONS.set(0);
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(DomainFeedConfiguration.class, SwitchingToSubclassPrototypeConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("@Projection")
+                            .hasMessageContaining(CheckedProjectionFactory.class.getName())
+                            .hasMessageContaining(OverridingProjectionFactory.class.getName())
+                            .hasMessageContaining("different implementation");
+                    assertThat(CHECKED_INVOCATIONS).hasValue(0);
+                    assertThat(OVERRIDING_INVOCATIONS).hasValue(0);
                 });
     }
 
@@ -105,6 +129,17 @@ class DescriptorFactorySwitchingPrototypeTest {
             return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
                     .id(event -> "k")
                     .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    static class OverridingProjectionFactory extends CheckedProjectionFactory {
+        @Override
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            OVERRIDING_INVOCATIONS.incrementAndGet();
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 100)
                     .build();
         }
     }
@@ -135,6 +170,30 @@ class DescriptorFactorySwitchingPrototypeTest {
         // A singleton depending on the prototype during startup is what creates an instance before the registrar's
         // scan runs, so the scan records a concrete class instead of predicting one from the factory method's
         // declared return type.
+        @Bean
+        HandlerHolder handlerHolder(ProjectionFactory factory) {
+            return new HandlerHolder(factory);
+        }
+    }
+
+    // Same shape as SwitchingPrototypeConfiguration, except the second call returns a subclass of the first
+    // instance's class rather than an unrelated one.
+    @Configuration(proxyBeanMethods = false)
+    static class SwitchingToSubclassPrototypeConfiguration {
+
+        private final AtomicInteger instances = new AtomicInteger();
+
+        @Bean
+        @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
+        ProjectionFactory projectionFactory() {
+            ProjectionFactory target = instances.getAndIncrement() == 0 ? new CheckedProjectionFactory() : new OverridingProjectionFactory();
+            ProxyFactory proxyFactory = new ProxyFactory();
+            proxyFactory.setTarget(target);
+            proxyFactory.setProxyTargetClass(true);
+            proxyFactory.addAdvice((MethodInterceptor) invocation -> invocation.proceed());
+            return (ProjectionFactory) proxyFactory.getProxy();
+        }
+
         @Bean
         HandlerHolder handlerHolder(ProjectionFactory factory) {
             return new HandlerHolder(factory);
