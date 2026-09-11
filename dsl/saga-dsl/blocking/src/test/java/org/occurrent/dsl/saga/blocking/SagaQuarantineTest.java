@@ -452,11 +452,6 @@ class SagaQuarantineTest {
         }
 
         /**
-         * One extension that cannot be read must not discard a redelivery key the event does carry. Reading the three
-         * together threw on the position before either stream value reached the record, so an event with a perfectly
-         * good stream id and version looked like one carrying no key at all and nothing could ever budget it.
-         */
-        /**
          * Every catch under the delivery's own swallows what it caught and rethrows the original failure, so an
          * {@code OutOfMemoryError} raised by a recovery step would be absorbed and the saga's own exception reported
          * instead. That is the carve-out defeated one level down, and it would let the instance's budget keep running
@@ -477,6 +472,11 @@ class SagaQuarantineTest {
             );
         }
 
+        /**
+         * One extension that cannot be read must not discard a redelivery key the event does carry. Reading the three
+         * together threw on the position before either stream value reached the record, so an event with a perfectly
+         * good stream id and version looked like one carrying no key at all and nothing could ever budget it.
+         */
         @Test
         void are_isolated_from_it_when_the_event_carries_a_position_that_is_not_a_number() {
             ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
@@ -659,19 +659,33 @@ class SagaQuarantineTest {
          * event delivered while it was out.
          */
         @Test
-        void is_not_skipped_when_the_saga_can_correlate_it_again_inside_the_budget() {
+        void is_not_skipped_when_the_saga_can_correlate_it_again_inside_the_budget() throws Exception {
             uncorrelatableEventId = "3";
-            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(model, CONFIG);
-            pushTheHealthyEventBehindTheUncorrelatableOne(model);
-            uncorrelatableEventId = null;
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+                SagaSubscription subscription = run(model, CONFIG);
+                pushTheHealthyEventBehindTheUncorrelatableOne(model);
 
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
-                    // The event nobody could correlate is handled rather than skipped, so POISON is shipped too.
-                    () -> assertThat(dispatched).containsExactlyInAnyOrder(new ShipOrder(POISON), new ShipOrder(HEALTHY)),
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
-                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
-            ));
+                // The routing has to have failed before the flag is cleared, or the correlation never failed at all and
+                // this passes whatever the runner does with a delivery it could not route.
+                await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(appender.list)
+                        .anyMatch(event -> event.getFormattedMessage().contains("could not work out which instance")));
+                uncorrelatableEventId = null;
+
+                await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                        // The event nobody could correlate is handled rather than skipped, so POISON is shipped too.
+                        () -> assertThat(dispatched).containsExactlyInAnyOrder(new ShipOrder(POISON), new ShipOrder(HEALTHY)),
+                        () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
+                        () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
+                ));
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
         }
 
         /**

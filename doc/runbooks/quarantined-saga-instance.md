@@ -38,9 +38,11 @@ the same budget, but past the budget it lets the subscription through without qu
 
 Nothing is written for that, so `findByStatus(QUARANTINED, ..)` does not list it and the rest of this runbook does not
 apply. What you get is one `ERROR` from `SagaExecution` saying the saga could not work out which instance the event
-belongs to, naming the event by its redelivery key and logging what stopped it. The event itself is untouched, and the
-runner confirms that before letting the subscription past, so repair the converter or the id extractor and feed the
-event to the saga again.
+belongs to, naming the event by its redelivery key and logging what stopped it. Letting the subscription past is not
+what removes the event, and the runner confirms that before it does so, so wherever your source still has the event,
+repair the converter or the id extractor and feed it to the saga again. That check asks what the acknowledgement costs
+rather than what the source holds right now, so it does not promise the event is there, and an event somebody erased
+through `EventStoreOperations` is gone by that erasure rather than by this.
 
 `OutOfMemoryError` is the other thing that never quarantines. It says the JVM ran out of heap while some instance held
 the thread rather than anything about that instance, so it is rethrown and the instance keeps its state. Every other

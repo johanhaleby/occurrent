@@ -245,9 +245,11 @@ extractor run before the saga knows which instance an event belongs to, so a fai
 quarantine and nothing to write a record on. The budget is the delivery's own in that case, and past it the
 subscription is let through with an error logged rather than a row written. That is weaker than a quarantine, and it is
 the weaker half, so it is stated rather than implied. `findByStatus(QUARANTINED, ..)` does not list a skipped delivery,
-so the log line is all an operator gets. What it keeps is the part that makes quarantine safe, which is that the event is untouched and
-the retention check has confirmed it is still obtainable, so repairing the converter or the extractor and feeding the
-event back is the recovery. A budget rather than an immediate skip, because a converter can fail for a while and stop:
+so the log line is all an operator gets. What it keeps is the part that makes quarantine safe, which is that the
+retention check has confirmed that letting the subscription past is not what would destroy the last copy, so wherever
+the source still has the event, repairing the converter or the extractor and feeding it back is the recovery. That check
+answers what the acknowledgement costs rather than what the source holds at this instant, and by its own contract it
+answers yes for an event an operator has already erased, so it is not a promise that the event is there. A budget rather than an immediate skip, because a converter can fail for a while and stop:
 a schema registry down for thirty seconds would otherwise permanently skip every event delivered while it was out,
 which trades a blocked saga for a saga that has lost events. The budget is held in memory, which is enough rather than
 a compromise, since a skipped delivery moves the subscription's checkpoint past it and it is never offered again, so

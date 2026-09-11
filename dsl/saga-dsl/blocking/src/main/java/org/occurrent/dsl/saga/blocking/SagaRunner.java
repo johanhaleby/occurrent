@@ -85,8 +85,11 @@ import static java.util.Objects.requireNonNull;
  *       at {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. The budget has to be set. The
  *       subscription model has to guarantee it holds every event it delivers. The event has to arrive with a stream id
  *       and version or a global position, since nothing tells one delivery of an event carrying neither from the next.
- *       And the model has to confirm, for that one event, that it is still obtainable, which catches a guarantee made
- *       wrongly before the event is acknowledged away. Where any of those is missing the wait is the one every version
+ *       And the model has to confirm, for that one event, that acknowledging it is not what would destroy the last
+ *       copy of it, which catches a guarantee made wrongly before the event is acknowledged away. That is a question
+ *       about what the acknowledgement costs rather than about what the source holds at this instant, so it answers yes
+ *       for an event an operator has already erased, since saying no would strand an instance on an event nobody can
+ *       supply. Where any of those is missing the wait is the one every version
  *       up to 0.33.0 had, which is unbounded.
  *       <p>
  *       What is <em>not</em> among them is what failed or where it was thrown. Every failure of a delivery counts,
@@ -107,9 +110,9 @@ import static java.util.Objects.requireNonNull;
  *       An event the saga could <em>not</em> correlate, because the converter or the id extractor threw, belongs to no
  *       instance, so there is nothing to quarantine and the subscription is let past it. That case is logged at ERROR
  *       naming the event and the exception that stopped it, and no row is written, so
- *       {@code findByStatus(QUARANTINED, ..)} does not list it. The event itself is untouched, which is what the
- *       retention check above is for, so repairing the converter or the id extractor and feeding the event to the saga
- *       again is the recovery.
+ *       {@code findByStatus(QUARANTINED, ..)} does not list it. Acknowledging the event is not what removes it, which
+ *       is what the retention check above establishes, so wherever the source still has it, repairing the converter or
+ *       the id extractor and feeding the event to the saga again is the recovery.
  *       <p>
  *       Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of blocking indefinitely instead,
  *       which is also what a subscription model that does not guarantee it holds every event it delivers gets, since

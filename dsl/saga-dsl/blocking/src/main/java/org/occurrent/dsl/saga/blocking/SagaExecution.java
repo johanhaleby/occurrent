@@ -184,8 +184,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * model that cannot guarantee it holds every event it delivers, so a budget that is set also means the model made
      * that guarantee. The failing delivery has to have been failing for at least that budget. The event has to
      * carry a redelivery key, meaning a stream id with its version or a global position, since without one nothing tells
-     * one delivery of it from the next and the budget could never elapse. And the failing event has to be confirmed
-     * still obtainable, so that acknowledging it does not destroy the last copy.
+     * one delivery of it from the next and the budget could never elapse. And the model has to confirm, for that one
+     * event, that acknowledging it is not what would destroy the last copy of it.
      * <p>
      * Only what the delivery costs past the budget differs, and that turns on whether the event reached an instance at
      * all. An event the saga routed is charged to that instance, which is quarantined. An event it could not route,
@@ -216,9 +216,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * There is no instance here, so there is nothing to quarantine and nothing to write the failure on. That is the one
      * way this differs from {@link #quarantine}, and it is the weaker half, so it is stated rather than implied. A
      * skipped delivery is logged rather than recorded, so {@code findByStatus(QUARANTINED, ..)} does not list it and
-     * nothing brings it back. What it shares with quarantine is the part that keeps it safe. The event stays where it
-     * is, the runner refuses to let the subscription past unless it has confirmed the event is still obtainable, and the
-     * error names the redelivery key, so an operator who reads it can go and get the event.
+     * nothing brings it back. What it shares with quarantine is the part that keeps it safe. The runner refuses to let
+     * the subscription past unless the model has confirmed that acknowledging the event is not what would destroy the
+     * last copy of it, and the error names the redelivery key, so wherever the source still has the event an operator
+     * who reads that line can go and get it.
+     * <p>
+     * That is weaker than the event being there, and deliberately so.
+     * {@link org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions#retains} answers what the
+     * acknowledgement costs rather than what the source holds at this instant, and it answers yes for an event an
+     * operator has already erased, because saying no would strand an instance on an event nobody can supply.
      * <p>
      * The budget is a budget rather than an immediate skip because a converter can fail for a while and then stop. One
      * backed by a schema registry is the plain example. A thirty second outage would otherwise permanently skip every
@@ -247,13 +253,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // Said once rather than on every redelivery, the same way a refused quarantine is, because the source keeps
             // offering the event for as long as it is refused and the warning would otherwise repeat at that cadence.
             if (existing.refusalAnnounced.compareAndSet(false, true)) {
-                log.warn("Saga '{}' has been unable to work out which instance the event '{}' belongs to for {}, which is past its budget of {}, and the subscription is not being let past it, because the subscription could not confirm that the event is still obtainable from what it reads. Either it is gone, or the check could not be completed, and letting the subscription past acknowledges the event, which might drop the only copy of it. Every instance of this saga keeps waiting behind it instead. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+                log.warn("Saga '{}' has been unable to work out which instance the event '{}' belongs to for {}, which is past its budget of {}, and the subscription is not being let past it, because the subscription could not confirm that acknowledging the event is safe to do. Either acknowledging is what would drop the only copy of it, or the check could not be completed, and letting the subscription past acknowledges the event. Every instance of this saga keeps waiting behind it instead. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                         subscriptionId, redeliveryKey, failingFor, quarantineAfter, failure);
             }
             return false;
         }
         unroutableDeliveries.remove(redeliveryKey);
-        log.error("Saga '{}' has been unable to work out which instance the event '{}' belongs to for {}, past its budget of {}, and the subscription is now being let past it so the saga's instances are no longer waiting behind it. No instance is quarantined and nothing is recorded, because the event reached none. The event is still in what the subscription reads, so read this failure, repair the converter or the id extractor, and feed the event to the saga again.",
+        log.error("Saga '{}' has been unable to work out which instance the event '{}' belongs to for {}, past its budget of {}, and the subscription is now being let past it so the saga's instances are no longer waiting behind it. No instance is quarantined and nothing is recorded, because the event reached none. Letting the subscription past is not what removes the event, so wherever the source still has it, repair the converter or the id extractor and feed the event to the saga again.",
                 subscriptionId, redeliveryKey, failingFor, quarantineAfter, failure);
         return true;
     }
@@ -292,7 +298,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 // record the earlier attempts wrote and lets the next redelivery ask again. Retention is rechecked
                 // every time so a store coming back is noticed, while the warning is said once per instance.
                 if (firstRefusalForThisInstance) {
-                    log.warn("Saga '{}' instance '{}' has been failing for {}, which is past its budget of {}, and is stopped on the event '{}', and it is not quarantined, because the subscription could not confirm that the event is still obtainable from what it reads. Either it is gone, or the check could not be completed, and quarantining acknowledges the event, which might drop the only copy of it. This instance keeps blocking the saga's other instances instead. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+                    log.warn("Saga '{}' instance '{}' has been failing for {}, which is past its budget of {}, and is stopped on the event '{}', and it is not quarantined, because the subscription could not confirm that acknowledging the event is safe to do. Either acknowledging is what would drop the only copy of it, or the check could not be completed, and quarantining acknowledges the event. This instance keeps blocking the saga's other instances instead. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                             subscriptionId, sagaId, failingFor, quarantineAfter, meta.redeliveryKey(), failure);
                 }
                 return false;
