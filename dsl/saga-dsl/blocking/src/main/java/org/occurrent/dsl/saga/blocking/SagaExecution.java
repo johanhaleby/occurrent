@@ -37,11 +37,14 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * Drives one saga against one subscription and its own timer poller: it loads the instance, runs the pure
@@ -112,6 +115,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // event keeps being offered. It is dropped as soon as that event routes, or as soon as the subscription is let past
     // it, and the checkpoint then moves so it is never offered again.
     private final ConcurrentHashMap<String, UnroutableDelivery> unroutableDeliveries = new ConcurrentHashMap<>();
+    // The extension names already reported as unreadable, so the warning is said once per name rather than per event.
+    private final Set<String> unreadableExtensionsWarned = ConcurrentHashMap.newKeySet();
 
     SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
                   CloudEventConverter<E> converter, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable) {
@@ -143,6 +148,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             meta = extractMeta(cloudEvent);
             E event = converter.toDomainEvent(cloudEvent);
             sagaId = saga.sagaId(event);
+            // Routing worked, so the routing budget for this event is over whatever the id turned out to be. Cleared
+            // here rather than after the delivery, because an event that correlates to no instance returns below and a
+            // quarantining one returns normally, and both used to leave the entry behind. A stale entry is worse than
+            // a leak. The same event replayed later would inherit an elapsed budget and be skipped on its first
+            // failure.
+            forgetRoutingFailure(meta);
             if (sagaId == null) {
                 return;
             }
@@ -151,7 +162,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // input so reactions can read it. The separate EventMeta drives redelivery dedup and is derived
             // independently above, so its null-tolerant watermark behaviour is unchanged.
             process(sagaId, SagaInput.event(event, EventMetadata.from(cloudEvent)), meta, null);
-            stopWaitingOn(sagaId, meta);
+            refusalAnnounced.remove(sagaId);
         } catch (Throwable failure) {
             if (!letTheSubscriptionPast(sagaId, cloudEvent, meta, failure)) {
                 throw failure;
@@ -191,11 +202,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 : quarantine(sagaId, cloudEvent, meta, failure, quarantineAfter);
     }
 
-    // A delivery getting through clears the instance's refusal warning and the routing budget for this event, which
-    // are the two things that were waiting on it. Kept apart rather than in one collection, because a saga id and a
-    // redelivery key name different things and a collection holding both would mix two namespaces.
-    private void stopWaitingOn(String sagaId, EventMeta meta) {
-        refusalAnnounced.remove(sagaId);
+    private void forgetRoutingFailure(EventMeta meta) {
         String redeliveryKey = meta.redeliveryKey();
         if (redeliveryKey != null) {
             unroutableDeliveries.remove(redeliveryKey);
@@ -222,14 +229,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * restart partway through one costs another budget of waiting and nothing else.
      */
     private boolean skipUnroutableDelivery(CloudEvent cloudEvent, EventMeta meta, Throwable failure, Duration quarantineAfter) {
-        String redeliveryKey = meta.redeliveryKey();
-        if (redeliveryKey == null) {
-            return false;
-        }
+        // Never null here, because letTheSubscriptionPast has already refused a delivery carrying no redelivery key.
+        // Asserted rather than branched on, since a branch would say the case is reachable and handled.
+        String redeliveryKey = requireNonNull(meta.redeliveryKey());
         Instant now = Instant.now();
         UnroutableDelivery existing = unroutableDeliveries.putIfAbsent(redeliveryKey, new UnroutableDelivery(now));
         if (existing == null) {
-            log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, and the subscription is offering it again. Every instance of this saga waits behind it while that lasts, so the subscription is let past it once it has been failing for {}. Nothing is quarantined when that happens, because an event that reached no instance leaves nothing to quarantine.",
+            log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, and the subscription is offering it again. Every instance of this saga waits behind it while that lasts, so the subscription is let past it once it has been failing for {}. Nothing is quarantined when that happens, because an event that reached no instance gives nothing to quarantine.",
                     subscriptionId, redeliveryKey, quarantineAfter, failure);
             return false;
         }
@@ -317,6 +323,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // because a saga that cannot read its own instance cannot make progress on it either way. The retention
             // check no longer reaches here, because a check that cannot answer is a refused quarantine with a warning
             // rather than a silent one.
+            rethrowIfNotTheInstances(storeFailure);
             if (storeFailure != failure) {
                 // Java refuses to suppress an exception under itself, and a store that rethrows the very object that
                 // reached us here would otherwise replace the real failure with IllegalArgumentException.
@@ -324,6 +331,27 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             return false;
         }
+    }
+
+    /**
+     * Let a failure of the JVM out of a recovery step instead of absorbing it, because every catch below this class's
+     * main one swallows what it caught and rethrows the original delivery failure instead.
+     * <p>
+     * {@link SagaExecutionSupport#isAttributableToTheInstance} keeps an {@link OutOfMemoryError} from quarantining the
+     * instance that happened to be running, and a store read or a retention check raising one is the same condition
+     * arriving one level down. Absorbing it there would report the saga's own exception to the subscription while the
+     * process is out of heap, and would let the instance's budget keep running on that basis.
+     */
+    private static void rethrowIfNotTheInstances(Throwable recoveryFailure) {
+        if (SagaExecutionSupport.isAttributableToTheInstance(recoveryFailure)) {
+            return;
+        }
+        // Both shapes rather than a cast to Error, so this keeps working if the predicate ever excludes something that
+        // is not one.
+        if (recoveryFailure instanceof Error error) {
+            throw error;
+        }
+        throw (RuntimeException) recoveryFailure;
     }
 
     // How long the instance has actually been failing, taken from the record rather than from the budget, because a
@@ -340,6 +368,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         try {
             return stillObtainable.test(cloudEvent);
         } catch (Throwable checkFailure) {
+            rethrowIfNotTheInstances(checkFailure);
             if (checkFailure != failure) {
                 // Guarded like the catch above, because a check that rethrows the very object that reached us here would
                 // otherwise have addSuppressed throw IllegalArgumentException and skip the refusal warning below.
@@ -434,6 +463,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             return withoutState.isCompleted() || withoutState.isQuarantined()
                    || SagaExecutionSupport.isRedelivery(withoutState, meta);
         } catch (Throwable secondFailure) {
+            rethrowIfNotTheInstances(secondFailure);
             if (secondFailure != loadFailure) {
                 loadFailure.addSuppressed(secondFailure);
             }
@@ -499,12 +529,33 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
     }
 
+    // Each extension is read on its own, because one that cannot be read must not take the others with it. An event
+    // carrying a good streamid and streamversion beside a position that is not a number has a redelivery key, and
+    // reading the three together threw before either of the first two reached the record, so the event looked like one
+    // carrying no key at all and blocked the channel with nothing able to budget it.
     private EventMeta extractMeta(CloudEvent cloudEvent) {
         Set<String> extensions = cloudEvent.getExtensionNames();
-        String streamId = extensions.contains(OccurrentCloudEventExtension.STREAM_ID) ? OccurrentExtensionGetter.getStreamId(cloudEvent) : null;
-        Long streamVersion = extensions.contains(OccurrentCloudEventExtension.STREAM_VERSION) ? OccurrentExtensionGetter.getStreamVersion(cloudEvent) : null;
+        String streamId = readExtension(cloudEvent, extensions, OccurrentCloudEventExtension.STREAM_ID, OccurrentExtensionGetter::getStreamId);
+        Long streamVersion = readExtension(cloudEvent, extensions, OccurrentCloudEventExtension.STREAM_VERSION, OccurrentExtensionGetter::getStreamVersion);
         // Use the framework's own position accessor, which accepts a Number or String, rather than narrowing to Long.
-        Long position = extensions.contains(OccurrentCloudEventExtension.POSITION) ? OccurrentCloudEventExtension.getPosition(cloudEvent) : null;
+        Long position = readExtension(cloudEvent, extensions, OccurrentCloudEventExtension.POSITION, OccurrentCloudEventExtension::getPosition);
         return new EventMeta(streamId, streamVersion, position);
+    }
+
+    // An extension that is absent and one that cannot be read both answer null, and the difference is said once per
+    // runner rather than per event, because a feed writing one badly writes every one of them badly.
+    private <T> @Nullable T readExtension(CloudEvent cloudEvent, Set<String> extensions, String name, Function<CloudEvent, @Nullable T> read) {
+        if (!extensions.contains(name)) {
+            return null;
+        }
+        try {
+            return read.apply(cloudEvent);
+        } catch (RuntimeException e) {
+            if (unreadableExtensionsWarned.add(name)) {
+                log.warn("Saga subscription '{}' received an event whose '{}' extension could not be read, so it is treated as absent. A redelivery is still recognised from whichever of streamid with streamversion, or position, this event does carry, and the event is refused or warned about as one carrying nothing if it carries neither.",
+                        subscriptionId, name, e);
+            }
+            return null;
+        }
     }
 }
