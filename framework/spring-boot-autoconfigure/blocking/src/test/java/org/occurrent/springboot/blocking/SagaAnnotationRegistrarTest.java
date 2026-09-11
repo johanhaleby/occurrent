@@ -39,7 +39,6 @@ import org.springframework.context.ConfigurableApplicationContext;
 
 import java.lang.reflect.Method;
 import java.net.URI;
-import java.util.HashSet;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -107,7 +106,7 @@ class SagaAnnotationRegistrarTest {
         when(applicationContext.getBeanProvider(CompetingConsumerStrategy.class)).thenReturn(strategyProvider);
 
         StartPositionSupport startPositionSupport = new StartPositionSupport(applicationContext);
-        SagaAnnotationRegistrar registrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport, new HashSet<>());
+        SagaAnnotationRegistrar registrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport);
 
         Method factoryMethod = SagaHolder.class.getDeclaredMethod("saga");
         org.occurrent.annotation.Saga annotation = factoryMethod.getAnnotation(org.occurrent.annotation.Saga.class);

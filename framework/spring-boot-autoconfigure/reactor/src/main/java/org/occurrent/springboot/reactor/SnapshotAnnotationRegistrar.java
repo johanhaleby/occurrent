@@ -39,7 +39,6 @@ import org.occurrent.filter.internal.EventTypeExpansion;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
-import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
@@ -51,7 +50,6 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWaitUntilStarted;
 import static org.occurrent.springboot.common.SubscriptionAnnotations.subscriptionsStartOnTheirOwn;
@@ -64,12 +62,10 @@ import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 class SnapshotAnnotationRegistrar {
 
     private final ApplicationContext applicationContext;
-    private final Set<String> registeredIds;
     private final StartPositionSupport startPositionSupport;
 
-    SnapshotAnnotationRegistrar(ApplicationContext applicationContext, Set<String> registeredIds, StartPositionSupport startPositionSupport) {
+    SnapshotAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
         this.applicationContext = applicationContext;
-        this.registeredIds = registeredIds;
         this.startPositionSupport = startPositionSupport;
     }
 
@@ -80,9 +76,6 @@ class SnapshotAnnotationRegistrar {
     @SuppressWarnings("unchecked")
     <E, S> void processSnapshotAnnotation(Object bean, Method method, org.occurrent.annotation.Snapshot annotation) {
         String id = annotation.id();
-        if (!registeredIds.add(id)) {
-            throw new DuplicateSubscriptionIdException(id, "Duplicate subscription/projection/snapshot id '%s' (used by @Snapshot on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(id, bean.getClass().getName(), method.getName()));
-        }
         if (method.getParameterCount() != 0) {
             throw new IllegalArgumentException("@Snapshot factory method %s#%s must take no parameters and return a SnapshotView.".formatted(bean.getClass().getName(), method.getName()));
         }

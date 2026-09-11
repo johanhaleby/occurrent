@@ -34,7 +34,6 @@ import org.occurrent.springboot.common.AsynchronousSubscribables;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
-import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
@@ -60,7 +59,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.Queue;
-import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.function.BooleanSupplier;
@@ -78,7 +76,6 @@ class SagaAnnotationRegistrar {
 
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
-    private final Set<String> registeredIds;
     // Resolves the competing-consumer strategy lazily, on the first checkpoint write a catch-up-then-push saga makes,
     // so this registrar does not force the strategy bean into existence while singletons are still being instantiated
     // (ADR 116). Separate from resolveSagaCompetingConsumerStrategy below, which gates the saga timer poller and is
@@ -98,10 +95,9 @@ class SagaAnnotationRegistrar {
     // registration that shutdown has begun even in principle.
     private volatile boolean closing = false;
 
-    SagaAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, Set<String> registeredIds) {
+    SagaAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
-        this.registeredIds = registeredIds;
         this.writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(applicationContext.getBeanProvider(CompetingConsumerStrategy.class),
                 () -> CheckpointFencingConfigurationCheck.fenceCheckpoints(applicationContext.getBeanProvider(OccurrentProperties.class)));
     }
@@ -112,9 +108,6 @@ class SagaAnnotationRegistrar {
     @SuppressWarnings("unchecked")
     <E, S, C> void processSagaAnnotation(Object bean, Method method, org.occurrent.annotation.Saga annotation) {
         String id = annotation.id();
-        if (!registeredIds.add(id)) {
-            throw new DuplicateSubscriptionIdException(id, "Duplicate subscription/projection/snapshot/saga id '%s' (used by @Saga on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(id, bean.getClass().getName(), method.getName()));
-        }
         if (method.getParameterCount() != 0) {
             throw new IllegalArgumentException("@Saga factory method %s#%s must take no parameters and return a Saga.".formatted(bean.getClass().getName(), method.getName()));
         }
