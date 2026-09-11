@@ -95,7 +95,10 @@ public final class SagaSubscription implements AutoCloseable {
             // the lease expires on its own, so it must not stop the poller from shutting down.
             try {
                 competingConsumerStrategy.unregisterCompetingConsumer(leaseKey, holderId);
-            } catch (RuntimeException e) {
+            } catch (Exception e) {
+                // Exception rather than RuntimeException because a RetryStrategy configured with mapError can map a
+                // failure to a checked exception, which the retry loop rethrows unwrapped. One of those escaping here
+                // would skip the poller shutdown below, which is the whole thing this catch exists to prevent.
                 log.warn("Failed to release the timer lease '{}' for saga subscription '{}'", leaseKey, subscription.id(), e);
             }
         }

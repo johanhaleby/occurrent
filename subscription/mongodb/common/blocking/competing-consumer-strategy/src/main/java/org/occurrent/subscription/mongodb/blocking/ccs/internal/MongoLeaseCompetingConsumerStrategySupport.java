@@ -134,6 +134,10 @@ public class MongoLeaseCompetingConsumerStrategySupport {
 
         this.retryStrategy = retryStrategy;
         this.cappedRetryStrategy = allowingAtMost(retryStrategy, CAPPED_MAX_ATTEMPTS);
+        if (!(retryStrategy instanceof RetryImpl) && !(retryStrategy instanceof RetryStrategy.DontRetry)) {
+            log.warn("{} runs its own retry loop, so shutdown() cannot stop a MongoDB call that is between attempts "
+                    + "and neither the attempt cap nor the shutdown check below applies to it.", retryStrategy.getClass().getName());
+        }
     }
 
 

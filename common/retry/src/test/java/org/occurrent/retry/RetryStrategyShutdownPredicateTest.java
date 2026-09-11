@@ -111,6 +111,34 @@ class RetryStrategyShutdownPredicateTest {
     }
 
     @Test
+    void runs_a_strategy_implemented_outside_this_module_exactly_as_it_runs_itself() {
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicInteger predicateReads = new AtomicInteger();
+        RetryStrategy ownLoop = new RetryStrategy() {
+            @Override
+            public void execute(Runnable runnable) {
+                // Stands in for any RetryStrategy a user implements. The retry loop in this module reads a
+                // RetryImpl's own settings, so it cannot drive this one and must not try.
+                attempts.incrementAndGet();
+                runnable.run();
+            }
+        };
+
+        ownLoop.execute(() -> {
+        }, __ -> {
+            predicateReads.incrementAndGet();
+            return true;
+        });
+
+        assertThat(attempts)
+                .as("the implementation's own execute should run, rather than this module's retry loop failing on a cast")
+                .hasValue(1);
+        assertThat(predicateReads)
+                .as("there is no loop here to stop, so the predicate is never read")
+                .hasValue(0);
+    }
+
+    @Test
     void rejects_a_null_predicate() {
         assertThatThrownBy(() -> RETRY_UP_TO_FIVE_TIMES.execute(() -> {
         }, null)).isInstanceOf(NullPointerException.class);

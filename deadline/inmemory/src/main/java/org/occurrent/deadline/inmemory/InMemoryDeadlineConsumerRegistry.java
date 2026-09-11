@@ -22,6 +22,7 @@ import org.occurrent.deadline.api.blocking.DeadlineConsumer;
 import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
 import org.occurrent.deadline.inmemory.internal.DeadlineData;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.retry.internal.RetryImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,6 +80,10 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
         // predicate the configured strategy already had, and it is only read between attempts, so a shutdown
         // during a backoff waits out the rest of it before join() returns.
         Predicate<Throwable> whileRunning = __ -> running;
+        if (!(config.retryStrategy instanceof RetryImpl) && !(config.retryStrategy instanceof RetryStrategy.DontRetry)) {
+            log.warn("{} runs its own retry loop, so shutdown() cannot stop a consumer that is between attempts and "
+                    + "will wait for it to finish retrying.", config.retryStrategy.getClass().getName());
+        }
         thread = new Thread(() -> {
             while (running) {
                 try {
@@ -90,11 +95,14 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
                         } else {
                             try {
                                 retryStrategyToUse.execute(() -> deadlineConsumer.accept(data.id, data.category, data.deadline, data.data), whileRunning);
-                            } catch (RuntimeException e) {
+                            } catch (Exception e) {
                                 // One thread serves every category and nothing restarts it, so a consumer the retry
                                 // strategy has given up on has to stop here rather than end the poller and leave
-                                // every other category unconsumed. Nothing is logged once running is false, since
-                                // then the throw is the shutdown predicate stopping the retry and not a failure.
+                                // every other category unconsumed. Exception rather than RuntimeException because
+                                // mapError takes a Function<Throwable, Throwable> and the retry loop rethrows what
+                                // it returns unwrapped, so a mapped checked exception arrives here too. Error still
+                                // propagates. Nothing is logged once running is false, since then the throw is the
+                                // shutdown predicate stopping the retry and not a failure.
                                 if (running) {
                                     log.error("Deadline consumer for category {} failed and will not be retried again.", data.category, e);
                                 }

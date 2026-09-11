@@ -122,7 +122,8 @@ public interface RetryStrategy {
      * @return The result of the function, if successful.
      */
     default <T extends @Nullable Object> T execute(Function<RetryInfo, T> function) {
-        return execute(function, __ -> true);
+        Objects.requireNonNull(function, Function.class.getSimpleName() + " cannot be null");
+        return executeWithRetry(function, __ -> true, this).apply(firstAttemptRetryInfo());
     }
 
     /**
@@ -138,6 +139,11 @@ public interface RetryStrategy {
      * <p>
      * This is the overload to use for a lifecycle flag. Putting the same flag in {@link Retry#retryIf(Predicate)}
      * instead stops the loop only between attempts, never during a backoff.
+     * <p>
+     * One limitation. A {@code RetryStrategy} you implement yourself, rather than one built from {@link #retry()}
+     * or {@link #none()}, runs a retry loop this module cannot reach into, so the predicate is ignored and the
+     * action runs exactly as {@link #execute(Function)} would run it. A component that needs a shutdown to stop
+     * its retries should say so when it is given such a strategy.
      *
      * @param function          A function that takes {@link RetryInfo} and returns the result
      * @param shutdownPredicate {@code true} while retrying is still wanted, {@code false} to stop and rethrow the
@@ -147,7 +153,19 @@ public interface RetryStrategy {
     default <T extends @Nullable Object> T execute(Function<RetryInfo, T> function, Predicate<Throwable> shutdownPredicate) {
         Objects.requireNonNull(function, Function.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(shutdownPredicate, "Shutdown predicate cannot be null");
+        if (!canObserveShutdown(this)) {
+            return execute(function);
+        }
         return executeWithRetry(function, shutdownPredicate, this).apply(firstAttemptRetryInfo());
+    }
+
+    /**
+     * Whether {@code retryStrategy} is one this module drives itself, and can therefore be given a shutdown
+     * predicate. The retry loop reads a {@link RetryImpl}'s own settings to run it, so a {@code RetryStrategy}
+     * implemented elsewhere runs a loop nothing here can reach into.
+     */
+    private static boolean canObserveShutdown(RetryStrategy retryStrategy) {
+        return retryStrategy instanceof RetryImpl || retryStrategy instanceof DontRetry;
     }
 
     private static RetryInfo firstAttemptRetryInfo() {
@@ -202,7 +220,8 @@ public interface RetryStrategy {
      * @return The result of the supplier, if successful.
      */
     default <T extends @Nullable Object> T execute(Supplier<T> supplier) {
-        return execute(supplier, __ -> true);
+        Objects.requireNonNull(supplier, Supplier.class.getSimpleName() + " cannot be null");
+        return executeWithRetry(supplier, __ -> true, this).get();
     }
 
     /**
@@ -218,6 +237,9 @@ public interface RetryStrategy {
     default <T extends @Nullable Object> T execute(Supplier<T> supplier, Predicate<Throwable> shutdownPredicate) {
         Objects.requireNonNull(supplier, Supplier.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(shutdownPredicate, "Shutdown predicate cannot be null");
+        if (!canObserveShutdown(this)) {
+            return execute(supplier);
+        }
         return executeWithRetry(supplier, shutdownPredicate, this).get();
     }
 
@@ -228,7 +250,8 @@ public interface RetryStrategy {
      * @param runnable The runnable to execute
      */
     default void execute(Runnable runnable) {
-        execute(runnable, __ -> true);
+        Objects.requireNonNull(runnable, Runnable.class.getSimpleName() + " cannot be null");
+        executeWithRetry(runnable, __ -> true, this).run();
     }
 
     /**
@@ -243,6 +266,10 @@ public interface RetryStrategy {
     default void execute(Runnable runnable, Predicate<Throwable> shutdownPredicate) {
         Objects.requireNonNull(runnable, Runnable.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(shutdownPredicate, "Shutdown predicate cannot be null");
+        if (!canObserveShutdown(this)) {
+            execute(runnable);
+            return;
+        }
         executeWithRetry(runnable, shutdownPredicate, this).run();
     }
 

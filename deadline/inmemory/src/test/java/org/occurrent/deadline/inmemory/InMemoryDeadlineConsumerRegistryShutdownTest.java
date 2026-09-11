@@ -25,6 +25,7 @@ import org.occurrent.deadline.api.blocking.Deadline;
 import org.occurrent.deadline.inmemory.InMemoryDeadlineConsumerRegistry.Config;
 import org.occurrent.retry.RetryStrategy;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.BlockingDeque;
@@ -87,6 +88,39 @@ class InMemoryDeadlineConsumerRegistryShutdownTest {
         } finally {
             // The registry's polling thread is not a daemon, so an assertion that fails before the shutdown above
             // has run would otherwise leave it alive for the rest of the test run.
+            registry.shutdown();
+            scheduler.shutdown();
+        }
+    }
+
+    @Test
+    void keeps_polling_when_the_configured_error_mapper_produces_a_checked_exception() throws InterruptedException {
+        BlockingDeque<Object> queue = new LinkedBlockingDeque<>();
+        CountDownLatch consumerCalled = new CountDownLatch(1);
+        // mapError takes a Function<Throwable, Throwable> and the retry loop rethrows what it returns without
+        // wrapping it, so a checked exception reaches the polling thread. One that escapes ends the only thread
+        // serving every category.
+        InMemoryDeadlineConsumerRegistry registry = new InMemoryDeadlineConsumerRegistry(queue,
+                new Config().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(10))
+                        .maxAttempts(1)
+                        .mapError(throwable -> new IOException("mapped to a checked exception"))));
+        InMemoryDeadlineScheduler scheduler = new InMemoryDeadlineScheduler(queue);
+        try {
+            registry.register("Something", (id, category, deadline, data) -> {
+                consumerCalled.countDown();
+                throw new IllegalStateException("this consumer never succeeds");
+            });
+            scheduler.schedule(UUID.randomUUID(), "Something", Deadline.afterMillis(0), "some data");
+            assertThat(consumerCalled.await(MUST_FINISH_WITHIN.toMillis(), TimeUnit.MILLISECONDS)).isTrue();
+
+            CountDownLatch anotherCategoryConsumed = new CountDownLatch(1);
+            registry.register("SomethingElse", (id, category, deadline, data) -> anotherCategoryConsumed.countDown());
+            scheduler.schedule(UUID.randomUUID(), "SomethingElse", Deadline.afterMillis(0), "some other data");
+
+            assertThat(anotherCategoryConsumed.await(MUST_FINISH_WITHIN.toMillis(), TimeUnit.MILLISECONDS))
+                    .as("a mapped checked exception should be caught the same way an unchecked one is")
+                    .isTrue();
+        } finally {
             registry.shutdown();
             scheduler.shutdown();
         }
