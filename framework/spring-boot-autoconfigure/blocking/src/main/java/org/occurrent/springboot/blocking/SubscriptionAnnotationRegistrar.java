@@ -164,12 +164,12 @@ class SubscriptionAnnotationRegistrar {
         }
     }
 
-    // userClass, not bean.getClass(): bean is already the resolved proxy, and a JDK interface proxy's class
-    // implements only interfaces, so scanning it here would miss a method declared on the concrete class.
+    // The methods are the ones the caller read the annotations from and validated, handed over rather than read
+    // again here. The object the caller resolved may be of another class than the one it read them from, so
+    // scanning that object would take in a method that went through no duplicate check and no refusal.
     //
-    // shouldRegister decides per method, so a bean scanned a second time (its real class revealing a handler the
-    // first scan's predicted type did not declare) registers only what is new. The validation above every branch
-    // still runs for every method, since a misconfigured handler must fail whether or not it registers.
+    // reserveHandler decides per method, so a bean scanned a second time (its real class revealing a handler the
+    // first scan's predicted type did not declare) registers only what is new.
     // mayBlockForReplay is false for a bean the container is still building. Waiting there would run the whole
     // history replay inside that bean's creation callback, delivering to a handler on an object the context has not
     // published yet, so advice a later BeanPostProcessor adds is not on it. Not waiting lets creation finish
@@ -177,7 +177,7 @@ class SubscriptionAnnotationRegistrar {
     // A replay on its own thread can still deliver before creation finishes, which is the race the coordinator and
     // ADR 127 both describe. It also matches what WAIT_UNTIL_STARTED means, which is finishing before the
     // application is up, and the application is already up by the time a lazily built bean is asked for.
-    void registerSubscriptions(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
+    void registerSubscriptions(Object bean, List<Method> methods, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
                                Predicate<Method> reserveHandler, Consumer<String> claimId,
                                Consumer<Method> releaseHandler, Consumer<String> releaseId) {
         // Tracked apart, because a call can hold a handler reservation without holding the id. claimId throws when
@@ -188,7 +188,7 @@ class SubscriptionAnnotationRegistrar {
         List<PendingRegistration> claimedIds = new ArrayList<>();
         List<PendingRegistration> pending = new ArrayList<>();
         try {
-            claimAndValidate(bean, userClass, handlerTarget, reserveHandler, claimId, pending, reservedHandlers, claimedIds);
+            claimAndValidate(bean, methods, handlerTarget, reserveHandler, claimId, pending, reservedHandlers, claimedIds);
         } catch (RuntimeException | Error e) {
             claimedIds.forEach(h -> releaseId.accept(h.id()));
             reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
@@ -219,17 +219,17 @@ class SubscriptionAnnotationRegistrar {
     // cannot be registered means the first one never subscribes, rather than being live against a bean whose
     // creation is about to fail. What stays outside this is a failure from subscribe itself, a store refusing for
     // example, since undoing that one needs the subscription cancelled rather than never started.
-    private void claimAndValidate(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, Predicate<Method> reserveHandler,
+    private void claimAndValidate(Object bean, List<Method> methods, Supplier<Object> handlerTarget, Predicate<Method> reserveHandler,
                                   Consumer<String> claimId, List<PendingRegistration> pending,
                                   List<PendingRegistration> reservedHandlers, List<PendingRegistration> claimedIds) {
-        for (Method method : userClass.getDeclaredMethods()) {
+        for (Method method : methods) {
             StreamSubscription streamSubscription = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
             Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
             DcbSubscription dcbSubscription = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
             SynchronousSubscription synchronousSubscription = AnnotationUtils.findAnnotation(method, SynchronousSubscription.class);
             long annotationCount = Stream.of(streamSubscription, subscription, dcbSubscription, synchronousSubscription).filter(Objects::nonNull).count();
             if (annotationCount > 1) {
-                throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @Subscription, @StreamSubscription, @DcbSubscription and @SynchronousSubscription, use only one.".formatted(userClass.getName(), method.getName()));
+                throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @Subscription, @StreamSubscription, @DcbSubscription and @SynchronousSubscription, use only one.".formatted(method.getDeclaringClass().getName(), method.getName()));
             }
             // Reserving is a single atomic add rather than a check followed by an add, so two threads building
             // the same prototype cannot both find the handler free. The one that loses the reservation skips it

@@ -49,7 +49,6 @@ import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
-import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
@@ -74,7 +73,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.Queue;
-import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -98,7 +96,6 @@ class ProjectionAnnotationRegistrar {
 
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
-    private final Set<String> registeredIds;
     // Resolves the competing-consumer strategy lazily, on the first checkpoint write a catch-up-then-push projection
     // makes, so this registrar does not force the strategy bean into existence while singletons are still being
     // instantiated (ADR 116).
@@ -142,10 +139,9 @@ class ProjectionAnnotationRegistrar {
     private record BackgroundCatchUp(Future<?> task, Runnable stop) {
     }
 
-    ProjectionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, Set<String> registeredIds) {
+    ProjectionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
-        this.registeredIds = registeredIds;
         this.writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(applicationContext.getBeanProvider(CompetingConsumerStrategy.class),
                 () -> CheckpointFencingConfigurationCheck.fenceCheckpoints(applicationContext.getBeanProvider(OccurrentProperties.class)));
     }
@@ -508,9 +504,6 @@ class ProjectionAnnotationRegistrar {
     @SuppressWarnings("unchecked")
     <E, S, ID> void processProjectionAnnotation(Object bean, Method method, org.occurrent.annotation.Projection annotation) {
         String id = annotation.id();
-        if (!registeredIds.add(id)) {
-            throw new DuplicateSubscriptionIdException(id, "Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(id, bean.getClass().getName(), method.getName()));
-        }
         if (method.getParameterCount() != 0) {
             throw new IllegalArgumentException("@Projection factory method %s#%s must take no parameters and return a Projection or DcbProjection.".formatted(bean.getClass().getName(), method.getName()));
         }

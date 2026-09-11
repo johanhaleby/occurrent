@@ -45,7 +45,6 @@ import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
-import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
@@ -74,7 +73,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.Queue;
 import java.util.Optional;
-import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -97,7 +95,6 @@ class ProjectionAnnotationRegistrar {
     private static final Duration SHUTDOWN_CATCHUP_TIMEOUT = Duration.ofSeconds(5);
 
     private final ApplicationContext applicationContext;
-    private final Set<String> registeredIds;
     private final StartPositionSupport startPositionSupport;
 
     // Domain-push feeds collected during projection registration, caught up once after every projection is
@@ -131,9 +128,8 @@ class ProjectionAnnotationRegistrar {
     private record DomainFeedCatchUp(String id, DomainEventFeed<?> feed, boolean waitUntilStarted) {
     }
 
-    ProjectionAnnotationRegistrar(ApplicationContext applicationContext, Set<String> registeredIds, StartPositionSupport startPositionSupport) {
+    ProjectionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
         this.applicationContext = applicationContext;
-        this.registeredIds = registeredIds;
         this.startPositionSupport = startPositionSupport;
     }
 
@@ -194,9 +190,6 @@ class ProjectionAnnotationRegistrar {
     @SuppressWarnings("unchecked")
     <E, S, ID> void processProjectionAnnotation(Object bean, Method method, org.occurrent.annotation.Projection annotation) {
         String id = annotation.id();
-        if (!registeredIds.add(id)) {
-            throw new DuplicateSubscriptionIdException(id, "Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(id, bean.getClass().getName(), method.getName()));
-        }
         if (method.getParameterCount() != 0) {
             throw new IllegalArgumentException("@Projection factory method %s#%s must take no parameters and return a Projection or DcbProjection.".formatted(bean.getClass().getName(), method.getName()));
         }
