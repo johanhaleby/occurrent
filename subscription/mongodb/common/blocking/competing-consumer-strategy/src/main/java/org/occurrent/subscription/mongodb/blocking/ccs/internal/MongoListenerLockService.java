@@ -35,6 +35,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 import static com.mongodb.ErrorCategory.DUPLICATE_KEY;
 import static com.mongodb.client.model.Filters.*;
@@ -65,7 +66,7 @@ class MongoListenerLockService {
      * @return {@code Optional} with a {@link ListenerLock} if the lock is held by this subscriber,
      * otherwise an empty optional if the lock is held by a different subscriber.
      */
-    static Optional<ListenerLock> acquireOrRefreshFor(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) {
+    static Optional<ListenerLock> acquireOrRefreshFor(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, Predicate<Throwable> shutdownPredicate, Duration leaseTime, String subscriptionId, String subscriberId) {
         return retryStrategy.execute(() -> {
             try {
                 logDebug("acquireOrRefreshFor (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
@@ -116,7 +117,7 @@ class MongoListenerLockService {
 
                 throw e;
             }
-        });
+        }, shutdownPredicate);
     }
 
     /**
@@ -158,16 +159,16 @@ class MongoListenerLockService {
      * shutdown path and majority acknowledgement has no timeout, so a replica set that lost majority would hold the
      * process open until it is killed.
      */
-    static UpdateResult remove(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, String subscriptionId, String subscriberId) {
+    static UpdateResult remove(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, Predicate<Throwable> shutdownPredicate, String subscriptionId, String subscriberId) {
         return retryStrategy.execute(() -> {
             logDebug("Before releasing lock (subscriptionId={})", subscriptionId);
             return collection.updateOne(
                     and(eq("_id", subscriptionId), eq("subscriberId", subscriberId)),
                     combine(unset("subscriberId"), unset("expiresAt")));
-        });
+        }, shutdownPredicate);
     }
 
-    static boolean commit(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {
+    static boolean commit(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, Predicate<Throwable> shutdownPredicate, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {
         return retryStrategy.execute(() -> {
             logDebug("Before commit (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             UpdateResult result = collection
@@ -181,7 +182,7 @@ class MongoListenerLockService {
             boolean gotLock = result.getMatchedCount() != 0;
             logDebug("After commit gotLock={} (subscriberId={}, subscriptionId={})", gotLock, subscriberId, subscriptionId);
             return gotLock;
-        });
+        }, shutdownPredicate);
     }
 
     /**

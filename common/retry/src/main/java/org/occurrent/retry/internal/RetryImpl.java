@@ -91,6 +91,14 @@ public final class RetryImpl implements RetryStrategy.Retry {
         return new RetryImpl(backoff, infinite(), errorMapper, retryPredicate, errorListener, onBeforeRetryListener, onAfterRetryListener, onRetryableErrorListener);
     }
 
+    /**
+     * The max number of attempts this strategy is configured with, so a caller that wants to lower a limit without
+     * raising one can compare before calling {@link #maxAttempts(int)}.
+     */
+    public MaxAttempts configuredMaxAttempts() {
+        return maxAttempts;
+    }
+
     @Override
     public Retry maxAttempts(int maxAttempts) {
         return new RetryImpl(backoff, new MaxAttempts.Limit(maxAttempts), errorMapper, retryPredicate, errorListener, onBeforeRetryListener, onAfterRetryListener, onRetryableErrorListener);
