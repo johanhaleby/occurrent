@@ -418,6 +418,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     try {
                         current = stateStore.find(sagaId).orElse(null);
                     } catch (Throwable loadFailure) {
+                        // Asked before the skip, because a skip returns normally and that acknowledges the event. A
+                        // load that failed because the process is out of heap says nothing about whether this input
+                        // would have been skipped, and answering yes on that basis would acknowledge it silently.
+                        rethrowIfNotTheInstances(loadFailure);
                         if (wouldHaveSkippedThisInput(sagaId, meta, loadFailure)) {
                             return null;
                         }
@@ -544,6 +548,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
 
     // An extension that is absent and one that cannot be read both answer null, and the difference is said once per
     // runner rather than per event, because a feed writing one badly writes every one of them badly.
+    // RuntimeException rather than Throwable on purpose. This is the one catch on the delivery path that is meant to
+    // absorb what it caught, since an unreadable extension is a fact about the event rather than a failure to deliver
+    // it, and keeping it narrow is what lets a failure of the process reach the delivery's own catch.
     private <T> @Nullable T readExtension(CloudEvent cloudEvent, Set<String> extensions, String name, Function<CloudEvent, @Nullable T> read) {
         if (!extensions.contains(name)) {
             return null;

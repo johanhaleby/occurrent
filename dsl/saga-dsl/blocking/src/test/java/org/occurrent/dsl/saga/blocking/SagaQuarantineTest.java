@@ -903,6 +903,37 @@ class SagaQuarantineTest {
             stateStore = store;
         }
 
+        /**
+         * The load-failure catch inside {@code process} answers whether this input would have been skipped anyway, and a
+         * yes there returns normally, which acknowledges the event. A load that failed because the process is out of
+         * heap says nothing about whether the input would have been skipped, so answering on that basis would
+         * acknowledge the event with no sign anything went wrong. This is the fourth place a recovery step could
+         * absorb a failure of the JVM, and it was found by listing every catch in the file rather than by reading.
+         */
+        @Test
+        void an_out_of_memory_error_loading_a_quarantined_instance_is_not_swallowed_by_the_skip_it_would_have_taken() throws Exception {
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            await().atMost(Duration.ofSeconds(10)).until(() -> subscription.instances().find(POISON).isPresent());
+
+            // Quarantine it first, so wouldHaveSkippedThisInput would answer yes for whatever comes next.
+            reactionFails = true;
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("2", POISON)));
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED));
+
+            // Now the load itself runs out of heap for that instance.
+            reactionFails = false;
+            store.failsToLoadWith(() -> new OutOfMemoryError("Java heap space"));
+            store.cannotDecodeTheStateOf(POISON);
+            model.push(cloudEvent(POISON, 3, new PaymentReserved("3", POISON)));
+
+            TimeUnit.SECONDS.sleep(2);
+
+            assertThat(model.lastDeliveryFailure).isInstanceOf(OutOfMemoryError.class);
+        }
+
         @Test
         void the_instance_is_quarantined_and_the_other_instances_keep_going() {
             ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
@@ -1042,8 +1073,14 @@ class SagaQuarantineTest {
         private final SagaStateStore<OrderState> delegate = SagaStateStore.inMemory();
         private final Set<String> undecodable = ConcurrentHashMap.newKeySet();
 
+        private volatile Supplier<? extends Throwable> loadFailure = () -> new IllegalStateException("the state can no longer be decoded");
+
         void cannotDecodeTheStateOf(String sagaId) {
             undecodable.add(sagaId);
+        }
+
+        void failsToLoadWith(Supplier<? extends Throwable> failure) {
+            loadFailure = failure;
         }
 
         @Nullable OrderState theStoredStateOf(String sagaId) {
@@ -1054,7 +1091,7 @@ class SagaQuarantineTest {
         public Optional<SagaEnvelope<OrderState>> find(String sagaId) {
             Optional<SagaEnvelope<OrderState>> found = delegate.find(sagaId);
             if (found.isPresent() && undecodable.contains(sagaId)) {
-                throw new IllegalStateException("the state of '" + sagaId + "' can no longer be decoded");
+                throw raise(loadFailure.get());
             }
             return found;
         }
