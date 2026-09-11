@@ -183,6 +183,12 @@ not to DCB reads, and it silences the startup warning, which then tells you noth
 the same two numbers. A run that finishes deletes its checkpoint, so the next run starts with no range and reports
 only the positions it repaired itself. Step 7 needs the range of every run you ran.
 
+**Write down every position you set by hand as well, because only one of these reasons puts it back in a later run's
+range.** `POSITION_ALREADY_TAKEN` does, since the rejected update left the tag array alone and the event still looks
+damaged afterward. For `POSITION_LOST`, `POSITION_NOT_A_NUMBER`, `POSITION_NOT_POSITIVE` and `POSITION_ABOVE_COUNTER`
+the run rebuilt the tag array already, so once you set the position the event matches neither half of what the repair
+looks for, and no run will ever report it. Step 7 needs those positions from you.
+
 ### 6. [you] Verify
 
 ```javascript
@@ -237,7 +243,7 @@ so neither that minimum nor the consumer's position at the time of the repair na
 consumer has already read is a candidate, so replay it from the beginning, or reconcile over its whole positioned
 history up to its current checkpoint. The guidance further down says which of the two is safe for a given consumer.
 
-What follows, up to and including the comparison against the lowest minimum, is for a repair where every run finished.
+What follows, up to and including the comparison against the lowest number, is for a repair where every run finished.
 If one did not, pick up again at "Decide between replaying and reconciling", which applies either way.
 
 A position in one of those ranges can be one the repair restored, or one that was already correct on an event only its
@@ -245,34 +251,46 @@ tag array needed rebuilding for, which is what a run after a hand-set `POSITION_
 like.
 
 Both numbers are `null` when a run touched nothing with a readable position, whether because it found nothing to
-repair or because every event it touched had a position step 5 left you to deal with by hand. A `null` from every run
-you ran means no consumer needs anything from you.
+repair or because every event it touched had a position step 5 left you to deal with by hand.
 
-Otherwise, take the lowest minimum across those runs. A consumer whose checkpoint sits below it has not reached a
-repaired event yet, so it will pick up every one of them on its own the next time it resumes and needs nothing from
-you. One whose checkpoint sits at or above it may already have skipped one, and that is the one to check next.
+A `null` from every run says nothing about the positions you set by hand in step 5, and only one of those comes back
+into a later run's range. So a repair is clear of consumer work when every run reported `null` and you set no position
+by hand. If you set any, each one counts as a range of its own, covering that single position.
+
+Otherwise, take the lowest number across every run's minimum and every position you set by hand. A consumer whose
+checkpoint sits below it has not reached a repaired event yet, so it will pick up every one of them on its own the next
+time it resumes and needs nothing from you. One whose checkpoint sits at or above it may already have skipped one, and
+that is the one to check next.
 
 Read that checkpoint the way you would for any other purpose, a durable subscription's checkpoint storage collection,
-or wherever a hand-rolled consumer keeps the position it last processed, and compare it to that lowest minimum.
+or wherever a hand-rolled consumer keeps the position it last processed, and compare it to that lowest number.
 
 Decide between replaying and reconciling before you touch anything, because a side effect a replay reruns cannot be
 taken back afterward. Replaying a consumer redelivers every event from its restart point onward, not only the
 repaired one.
 
 Replaying is safe for a consumer that only overwrites or upserts its own state on each delivery, since writing the
-same value twice produces the same document as writing it once. Rewind its checkpoint to below the lowest minimum, or
-restart it from the beginning if that is simpler, and let it catch up.
+same value twice produces the same document as writing it once. Rewind its checkpoint to below that lowest number, or
+restart it from the beginning if that is simpler, and let it catch up. A repair where a run did not finish needs the
+restart from the beginning rather than the rewind.
 
 Replaying is not safe for a consumer that causes a side effect outside its own state which cannot run twice, sending
 an email, charging a card, calling another system, since rewinding it reruns that side effect for every event since
 the restart point, not only the repaired one. Reconcile that consumer instead of replaying it.
 
-Read each run's range directly, one query per range rather than one query spanning all of them, so you do not read the
-stretch between two runs that neither of them touched. If any run did not finish on its own there is no usable range at
-all, so read everything up to the consumer's current checkpoint rather than a range:
+Read each range directly, one query per range rather than one query spanning all of them, so you do not read the
+stretch between two of them that nothing touched. A position you set by hand is a range with the same number at both
+ends:
 
 ```javascript
 db.events.find({ position: { $gte: NumberLong(<minRepairedPosition>), $lte: NumberLong(<maxRepairedPosition>) } })
+```
+
+If any run did not finish on its own there is no usable range, so read everything the consumer has already processed
+instead:
+
+```javascript
+db.events.find({ position: { $lte: NumberLong(<the consumer's current checkpoint>) } })
 ```
 
 That query returns candidates rather than only repaired events. A range is a floor and a ceiling, so it also returns
