@@ -27,6 +27,7 @@ import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaInstance;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -48,6 +49,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * Docker-based. Every test here injects exactly one transient {@link DataAccessResourceFailureException} into a named
@@ -95,6 +97,23 @@ class SpringMongoSagaStateStoreRetryTest {
         InvocationHandler handler = (proxy, method, args) -> {
             if (method.getName().equals(methodName) && remaining.getAndDecrement() > 0) {
                 throw new DataAccessResourceFailureException("simulated transient MongoDB failure in " + methodName);
+            }
+            try {
+                return method.invoke(real, args);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+        };
+        return (MongoOperations) Proxy.newProxyInstance(MongoOperations.class.getClassLoader(),
+                new Class<?>[]{MongoOperations.class}, handler);
+    }
+
+    /** Wraps {@code real}, throwing on every call to {@code methodName} and counting how many of them reached it. */
+    private static MongoOperations alwaysFailing(MongoOperations real, String methodName, AtomicInteger calls) {
+        InvocationHandler handler = (proxy, method, args) -> {
+            if (method.getName().equals(methodName)) {
+                calls.incrementAndGet();
+                throw new DataAccessResourceFailureException("simulated sustained MongoDB outage in " + methodName);
             }
             try {
                 return method.invoke(real, args);
@@ -170,6 +189,28 @@ class SpringMongoSagaStateStoreRetryTest {
         SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class);
 
         assertThat(store.compareAndSave("order-6", payment("order-6"), 0)).isTrue();
+    }
+
+    @Test
+    void an_outage_that_never_clears_stops_after_the_shipped_number_of_attempts_instead_of_calling_mongodb_forever() {
+        // The shipped policy with its backoff swapped for a fast one, so this exercises the attempt limit the store
+        // actually ships rather than a limit the test invented. The limit is what keeps a sustained outage from
+        // retrying without end, since this store has no shutdown flag to stop one.
+        AtomicInteger calls = new AtomicInteger();
+        MongoOperations mongoOperations = alwaysFailing(mongoOperations(), "findById", calls);
+        SagaStateStore<Payment> store = new SpringMongoSagaStateStore<>(mongoOperations, COLLECTION, Payment.class, null,
+                SpringMongoSagaStateStore.defaultRetryStrategy().backoff(Backoff.fixed(1)));
+
+        Throwable thrown = catchThrowable(() -> store.find("order-8"));
+
+        assertAll(
+                () -> assertThat(calls)
+                        .as("the shipped default must give up after exactly %s attempts, so an outage that never clears cannot retry without end", SpringMongoSagaStateStore.DEFAULT_MAX_ATTEMPTS)
+                        .hasValue(SpringMongoSagaStateStore.DEFAULT_MAX_ATTEMPTS),
+                () -> assertThat(thrown)
+                        .as("the failure that exhausted the attempts must reach the caller rather than being swallowed")
+                        .isInstanceOf(DataAccessResourceFailureException.class)
+        );
     }
 
     @Test

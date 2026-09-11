@@ -185,7 +185,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * each spend the driver's own server selection timeout, 30 seconds by default. Set a timeout on the client when
      * the wall clock is what matters.
      */
-    private static final int DEFAULT_MAX_ATTEMPTS = 10;
+    static final int DEFAULT_MAX_ATTEMPTS = 10;
 
     private final MongoOperations mongoOperations;
     private final String collectionName;
@@ -256,7 +256,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         });
     }
 
-    private static RetryStrategy defaultRetryStrategy() {
+    /**
+     * Package private and returning {@link RetryStrategy.Retry} so a test can swap the backoff for a fast one and
+     * still exercise the attempt limit this store actually ships with, the same reason
+     * {@code MongoAppliedAppendStore.defaultRetryStrategy} is.
+     */
+    static RetryStrategy.Retry defaultRetryStrategy() {
         return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).maxAttempts(DEFAULT_MAX_ATTEMPTS);
     }
 
