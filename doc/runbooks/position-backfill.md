@@ -6,6 +6,25 @@ Anyone upgrading an existing Occurrent MongoDB event store deployment to a versi
 Stream position is optional but on by default, and this only matters for a deployment that already has events in
 its collection. A store with no events, or a brand-new deployment, needs no backfill.
 
+## Read this before you start
+
+**If this application ever called `EventStoreOperations.updateEvent` while running Occurrent 0.33.0 or earlier, read
+[the `updateEvent` repair runbook](update-event-repair.md) first.** That defect could drop an event's position
+entirely, and an event with no position is exactly what the backfill below looks for.
+
+The backfill cannot tell those two apart. An event written before position existed and an event whose position
+`updateEvent` dropped both have no `position` field, so the backfill positions the second one too.
+
+The position it hands out comes from a block it reserves as it goes, so it sits above everything assigned before that
+block and bears no relation to where the event belongs. The event is read as having happened around whenever the
+backfill reached it, and nothing afterwards distinguishes it from an event that was positioned correctly.
+
+The repair runbook has the queries for the damage that can be detected. For the events nothing can detect, it tells
+you to decide from your own records which ones predate position. That is also where your store's own startup messages
+point when they warn about events without a position.
+
+Do this before step 1 below, not after step 4. By step 4 the positions are assigned.
+
 ## Why this is needed
 
 `position` is a global, monotonically increasing integer on every event. It replaces the wall-clock/`$natural`
@@ -72,6 +91,9 @@ position left on its default. Once every event has a `position` the default stor
 the explicit setting is not needed in that case.
 
 ### 4. Run the backfill
+
+This is the step that cannot be undone. If you skipped "Read this before you start" and this application ever called
+`updateEvent` on Occurrent 0.33.0 or earlier, go back to it now.
 
 Run the throttled, resumable, idempotent backfill against the same collection:
 

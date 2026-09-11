@@ -7,6 +7,12 @@ Maven coordinates: `org.occurrent:occurrent-eventstore-mongodb-position-backfill
 
 Upgrading to 0.30.0? Start with the [upgrade guide](../../../doc/migration/upgrading-to-0.30.0.md) and the [operational runbook](../../../doc/runbooks/position-backfill.md), which place this tool in the full upgrade sequence (create the index, seed, deploy, backfill, verify).
 
+**If this application ever called `EventStoreOperations.updateEvent` while running Occurrent 0.33.0 or earlier, read
+[the `updateEvent` repair runbook](../../../doc/runbooks/update-event-repair.md) before you run this tool.** That
+defect could drop an event's position entirely, and an event with no position is exactly what this tool looks for. It
+cannot tell such an event apart from one written before position existed, so it gives it a position it never had,
+above everything the store had already assigned, and nothing undoes that.
+
 ## The problem
 
 Occurrent gives every event a global, always-increasing `position`. Position is what lets catch-up
