@@ -174,14 +174,10 @@ ceiling to compare against and this is never reported.
 **`UNREADABLE`.** The tool could not read the event well enough to repair it, which means its `dcbtags` was edited
 outside Occurrent. The run continues past it, so one such event does not hold up the rest.
 
-**Run the repair once more after any hand fix.** A `POSITION_ALREADY_TAKEN` event still has no tag array, because
-the rejected update covered both fields together. Setting its position by hand makes it visible to position queries but
-not to DCB reads, and it silences the startup warning, which then tells you nothing. A second run rebuilds the tag array.
-
-**Write down the range this run reported before you start another one.** The finished-run log line names it,
+**Write down the range this run reported before you do anything else.** The finished-run log line names it,
 `Repaired positions ranged from X to Y`, or says `No position was repaired` when the run restored none it could read.
 `result.minRepairedPosition()` and `result.maxRepairedPosition()` hold the same two numbers, or both `null`. A run that
-finishes deletes its checkpoint, so the next run starts with no range and reports only the positions it repaired
+finishes deletes its checkpoint, so any further run starts with no range and reports only the positions it repaired
 itself. Step 7 needs the range of every run you ran.
 
 **Write down every position you set by hand as well, because the repair will usually never mention it again.**
@@ -189,6 +185,10 @@ Setting a position by hand is itself what stops an event looking damaged, so aft
 what the repair looks for and no later run reports it. A `POSITION_ALREADY_TAKEN` event with DCB tags can still come
 back, because the rejected update left its tag array unwritten too. Working out which of your fixes fall that way buys
 you nothing, so record every position you set. Step 7 needs them from you.
+
+**Then run the repair once more.** A `POSITION_ALREADY_TAKEN` event still has no tag array, because the rejected
+update covered both fields together. Setting its position by hand makes it visible to position queries but not to DCB
+reads, and it silences the startup warning, which then tells you nothing. A second run rebuilds the tag array.
 
 ### 6. [you] Verify
 
