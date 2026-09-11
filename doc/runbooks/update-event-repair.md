@@ -179,9 +179,10 @@ the rejected update covered both fields together. Setting its position by hand m
 not to DCB reads, and it silences the startup warning, which then tells you nothing. A second run rebuilds the tag array.
 
 **Write down the range this run reported before you start another one.** The finished-run log line names it,
-`Repaired positions ranged from X to Y`, and `result.minRepairedPosition()` and `result.maxRepairedPosition()` hold
-the same two numbers. A run that finishes deletes its checkpoint, so the next run starts with no range and reports
-only the positions it repaired itself. Step 7 needs the range of every run you ran.
+`Repaired positions ranged from X to Y`, or says `No position was repaired` when the run restored none it could read.
+`result.minRepairedPosition()` and `result.maxRepairedPosition()` hold the same two numbers, or both `null`. A run that
+finishes deletes its checkpoint, so the next run starts with no range and reports only the positions it repaired
+itself. Step 7 needs the range of every run you ran.
 
 **Write down every position you set by hand as well, because the repair will usually never mention it again.**
 Setting a position by hand is itself what stops an event looking damaged, so after the fix it matches neither half of
@@ -221,8 +222,8 @@ collection, so the next run starts with no range and reports only the positions 
 second run in step 5 does. A first run repairs positions 100 to 5000, you hand-fix one event at 7000, and the second
 run reports 7000 to 7000. If you only check consumers at or above 7000, every consumer that had already resumed past an
 event between 100 and 5000 keeps missing it permanently. So use the range of every run you ran, not only the last one.
-Each finished run prints its own in its finished-run log line, so a range you did not write down at the time is still
-in the logs.
+Each finished run logs its own outcome, either `Repaired positions ranged from X to Y` or `No position was repaired`,
+so a range you did not write down at the time is still in the logs.
 
 The second is that it does not cover the batch a process died in. The checkpoint is written once per batch, after every
 event in that batch has already been updated, so a kill part way through one loses the positions it had just repaired.
