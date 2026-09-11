@@ -35,6 +35,7 @@ import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.StepConditionProgress;
+import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
@@ -45,8 +46,10 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.function.Supplier;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 
@@ -175,14 +178,26 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
     };
 
+    /**
+     * How many times a read or a write calls MongoDB before it gives up, 10, the same number
+     * {@code MongoAppliedAppendStore} uses. This is a count of attempts and not a length of time. Ten failures that
+     * come back at once take about 11 seconds on the backoff below, while ten against a server that is not answering
+     * each spend the driver's own server selection timeout, 30 seconds by default. Set a timeout on the client when
+     * the wall clock is what matters.
+     */
+    static final int DEFAULT_MAX_ATTEMPTS = 10;
+
     private final MongoOperations mongoOperations;
     private final String collectionName;
     private final Class<S> stateType;
     // Non-null only for a flow saga: used to serialize FlowState.received as CloudEvents (stable types, package-independent).
     private final @Nullable CloudEventConverter<Object> cloudEventConverter;
+    private final RetryStrategy retryStrategy;
 
     /**
      * Creates a store for a core saga, whose state serializes with the application's {@code MongoConverter}.
+     * A failing call to MongoDB is retried with exponential backoff from 100 ms up to 2 seconds, giving up after
+     * {@value #DEFAULT_MAX_ATTEMPTS} attempts.
      *
      * @param mongoOperations the {@link MongoOperations} used to read and write instance documents
      * @param collectionName  the collection the instances are stored in
@@ -202,8 +217,23 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
      * @param stateType           the user state type, needed to read the stored state back into an object
      * @param cloudEventConverter the converter used to (de)serialize a flow saga's received events, or {@code null}
      */
-    @SuppressWarnings("unchecked")
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter) {
+        this(mongoOperations, collectionName, stateType, cloudEventConverter, defaultRetryStrategy());
+    }
+
+    /**
+     * Creates a store that retries a failing call to MongoDB with {@code retryStrategy} instead of the default.
+     * Pass {@link RetryStrategy#none()} to have every failure reach the caller on the first attempt.
+     *
+     * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
+     * @param collectionName      the collection the instances are stored in
+     * @param stateType           the user state type, needed to read the stored state back into an object
+     * @param cloudEventConverter the converter used to (de)serialize a flow saga's received events, or {@code null} for a core saga
+     * @param retryStrategy       the strategy used when a read or a write fails
+     */
+    @SuppressWarnings("unchecked")
+    public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter, RetryStrategy retryStrategy) {
+        this.retryStrategy = Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collectionName = Objects.requireNonNull(collectionName, "collectionName cannot be null");
         this.stateType = Objects.requireNonNull(stateType, "stateType cannot be null");
@@ -216,15 +246,32 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         // Safe: the converter only ever sees domain events read out of a FlowState, whose element type is erased anyway.
         this.cloudEventConverter = (CloudEventConverter<Object>) cloudEventConverter;
-        mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));
-        mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(UPDATED_AT)));
+        // Retried like every other call this store makes, so a MongoDB error that a second attempt would clear does not
+        // fail the saga's registration while an application is starting. Neither index has options, so nothing a user
+        // configures can make MongoDB refuse one permanently, and an index an operator has already created with
+        // different options fails the constructor after the attempt limit rather than being retried forever.
+        retryStrategy.execute(() -> {
+            mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));
+            mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(UPDATED_AT)));
+        });
+    }
+
+    /**
+     * Package private and returning {@link RetryStrategy.Retry} so a test can swap the backoff for a fast one and
+     * still exercise the attempt limit this store actually ships with, the same reason
+     * {@code MongoAppliedAppendStore.defaultRetryStrategy} is.
+     */
+    static RetryStrategy.Retry defaultRetryStrategy() {
+        return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).maxAttempts(DEFAULT_MAX_ATTEMPTS);
     }
 
     @Override
     public Optional<SagaEnvelope<S>> find(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        Document document = mongoOperations.findById(sagaId, Document.class, collectionName);
-        return Optional.ofNullable(document).map(this::toEnvelope);
+        // Decoding happens outside the retried supplier, so a stored state that no longer reads back throws once
+        // instead of being attempted ten times.
+        Supplier<@Nullable Document> read = () -> mongoOperations.findById(sagaId, Document.class, collectionName);
+        return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
     }
 
     @Override
@@ -233,16 +280,26 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Objects.requireNonNull(envelope, "envelope cannot be null");
         Document document = toDocument(sagaId, envelope);
         if (expectedVersion == 0) {
-            try {
-                mongoOperations.insert(document, collectionName);
-                return true;
-            } catch (DuplicateKeyException e) {
-                return false;
-            }
+            // Caught inside the retried supplier, because another writer getting there first is an outcome and
+            // retrying it would lose the same race nine more times. A failure arriving after MongoDB already stored
+            // the document hits this catch on the next attempt and reports the save as lost, which the caller answers
+            // by re-reading and skipping an input its watermarks already cover. An input that has no redelivery key
+            // has no watermark, so it re-dispatches, which is the multiplicity a lost compare-and-set already has.
+            Supplier<Boolean> insert = () -> {
+                try {
+                    mongoOperations.insert(document, collectionName);
+                    return true;
+                } catch (DuplicateKeyException e) {
+                    return false;
+                }
+            };
+            return retryStrategy.execute(insert);
         }
         Query query = Query.query(where(ID).is(sagaId).and(VERSION).is(expectedVersion));
-        Document replaced = mongoOperations.findAndReplace(query, document, collectionName);
-        return replaced != null;
+        // A lost compare-and-set is a null document rather than an exception, so the retry never sees it and the
+        // answer is read outside the supplier.
+        Supplier<@Nullable Document> replace = () -> mongoOperations.findAndReplace(query, document, collectionName);
+        return retryStrategy.execute(replace) != null;
     }
 
     @Override
@@ -255,7 +312,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // record it writes carries them over untouched, so projecting them away would quarantine the instance and
         // drop them at the same time.
         query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK);
-        return Optional.ofNullable(mongoOperations.findOne(query, Document.class, collectionName)).map(this::toEnvelope);
+        Supplier<@Nullable Document> read = () -> mongoOperations.findOne(query, Document.class, collectionName);
+        return Optional.ofNullable(retryStrategy.execute(read)).map(this::toEnvelope);
     }
 
     @Override
@@ -283,7 +341,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             }
         }
         Query query = Query.query(where(ID).is(sagaId).and(VERSION).is(expectedVersion));
-        return mongoOperations.findAndModify(query, update, Document.class, collectionName) != null;
+        Supplier<@Nullable Document> modify = () -> mongoOperations.findAndModify(query, update, Document.class, collectionName);
+        return retryStrategy.execute(modify) != null;
     }
 
     @Override
@@ -298,7 +357,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // SagaInstance, and every member of that view must be populated on any envelope a store hands back. They are
         // three longs and a string, and decode no state, so the cost the exclusion above protects against is untouched.
         projectEverySagaInstanceMember(query);
-        return mongoOperations.find(query, Document.class, collectionName).stream().map(this::toEnvelope).toList();
+        Supplier<List<Document>> read = () -> mongoOperations.find(query, Document.class, collectionName);
+        return retryStrategy.execute(read).stream().map(this::toEnvelope).toList();
     }
 
     @Override
@@ -317,7 +377,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // field, so observing a flow saga never decodes its received log. That also means this query cannot fail on an
         // instance whose state no longer decodes, because it never decodes any.
         projectEverySagaInstanceMember(query);
-        return mongoOperations.find(query, Document.class, collectionName).stream().map(this::toEnvelope).toList();
+        Supplier<List<Document>> read = () -> mongoOperations.find(query, Document.class, collectionName);
+        return retryStrategy.execute(read).stream().map(this::toEnvelope).toList();
     }
 
     // The fields backing SagaInstance, which is the whole observable surface of an instance: enough for both enumeration
@@ -332,7 +393,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public void delete(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
-        mongoOperations.remove(Query.query(where(ID).is(sagaId)), collectionName);
+        retryStrategy.execute(() -> mongoOperations.remove(Query.query(where(ID).is(sagaId)), collectionName));
         synchronized (retainedEventWarningLatch) {
             retainedEventWarningLatch.remove(sagaId);
         }
