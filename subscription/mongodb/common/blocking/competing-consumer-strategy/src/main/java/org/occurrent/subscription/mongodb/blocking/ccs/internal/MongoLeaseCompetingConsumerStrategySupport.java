@@ -23,7 +23,6 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;
-import org.occurrent.retry.internal.RetryImpl;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +39,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /**
@@ -58,17 +58,24 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private static final int CONSUMER_LOCKS = 16;
 
     /**
-     * How many attempts a single MongoDB call on the refresh path gets before the round it is part of gives up on
-     * it. {@code scheduleRefresh} runs on a single-thread scheduler that starts the next round only once the current
+     * How many attempts a single MongoDB call gets on the two paths where giving up on it is safe.
+     * <p>
+     * {@code scheduleRefresh} runs on a single-thread scheduler that starts the next round only once the current
      * one returns, so a call that retries without limit, against a strategy configured with the default
      * {@link Retry#infiniteAttempts()}, never lets a later round run at all, and a subscriber that would otherwise
-     * have taken over the lease by then never gets the chance. 5 attempts matches the cap this codebase already uses
-     * elsewhere for a MongoDB call that is expected to occasionally fail and recover (see {@code
-     * MongoEventStore.reservePositions}), and is small next to the half-a-lease-time gap before the next round runs
-     * regardless of the backoff configured. Registering and unregistering a consumer are user-driven calls with no
-     * next round to fall back on, so they keep retrying exactly as configured.
+     * have taken over the lease by then never gets the chance.
+     * <p>
+     * Unregistering and releasing a consumer give up a lease this node has stopped refreshing, and that lease
+     * expires on its own after {@code leaseTime} whether or not the call gets through, after which any node can
+     * take the subscription over. Retrying that removal keeps a closing application waiting for a database it
+     * cannot reach, to delete a document that is about to stop mattering anyway.
+     * <p>
+     * Registering is the one call with nothing covering a failure, so it keeps retrying exactly as configured.
+     * 5 attempts matches the cap this codebase already uses elsewhere for a MongoDB call that is expected to
+     * occasionally fail and recover (see {@code MongoEventStore.reservePositions}), and is small next to the
+     * half-a-lease-time gap before the next refresh round runs regardless of the backoff configured.
      */
-    private static final int REFRESH_MAX_ATTEMPTS = 5;
+    private static final int CAPPED_MAX_ATTEMPTS = 5;
 
     private final Duration leaseTime;
     private final ScheduledRefresh scheduledRefresh;
@@ -76,11 +83,11 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private final Set<CompetingConsumerListener> competingConsumerListeners;
     private final RetryStrategy retryStrategy;
     /**
-     * {@link #retryStrategy}, capped at {@link #REFRESH_MAX_ATTEMPTS} attempts per MongoDB call when it would
-     * otherwise retry without limit. Used only by {@link #scheduleRefresh} and the calls a refresh round makes
-     * through {@link #refreshOne}, never by registration or unregistration.
+     * {@link #retryStrategy}, capped at {@link #CAPPED_MAX_ATTEMPTS} attempts per MongoDB call when it would
+     * otherwise retry without limit. Used by {@link #scheduleRefresh}, by the calls a refresh round makes through
+     * {@link #refreshOne}, and by {@link #giveUpLease}. Registering uses {@link #retryStrategy} itself.
      */
-    private final RetryStrategy refreshRetryStrategy;
+    private final RetryStrategy cappedRetryStrategy;
     // Reading a consumer's status, making the MongoDB call that status decides, and writing the result back is one
     // step per consumer, and this is what makes it one. Striped rather than a map from consumer to lock, which has no
     // safe moment to drop an entry from, and rather than one lock for the whole instance, which would make
@@ -92,6 +99,11 @@ public class MongoLeaseCompetingConsumerStrategySupport {
 
     private volatile boolean running;
 
+    /**
+     * Handed to every retried MongoDB call as its shutdown predicate, so a call that is backing off between
+     * attempts stops as soon as {@link #shutdown()} runs instead of sleeping out the rest of its backoff first.
+     */
+    private final Predicate<Throwable> whileRunning = __ -> running;
 
     public MongoLeaseCompetingConsumerStrategySupport(Duration leaseTime, RetryStrategy retryStrategy) {
         this(leaseTime, retryStrategy, ScheduledRefresh.auto());
@@ -117,18 +129,14 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             this.consumerLocks[i] = new ReentrantLock();
         }
 
-        if (retryStrategy instanceof RetryImpl retry) {
-            this.retryStrategy = retry.mapRetryPredicate(currentPredicate -> currentPredicate.and(__ -> running));
-        } else {
-            this.retryStrategy = retryStrategy;
-        }
-        this.refreshRetryStrategy = this.retryStrategy instanceof Retry retry ? retry.maxAttempts(REFRESH_MAX_ATTEMPTS) : this.retryStrategy;
+        this.retryStrategy = retryStrategy;
+        this.cappedRetryStrategy = retryStrategy instanceof Retry retry ? retry.maxAttempts(CAPPED_MAX_ATTEMPTS) : retryStrategy;
     }
 
 
     public MongoLeaseCompetingConsumerStrategySupport scheduleRefresh(Function<Consumer<MongoCollection<BsonDocument>>, Runnable> fn) {
         final RetryStrategy retryStrategyToUse;
-        if (refreshRetryStrategy instanceof Retry retry) {
+        if (cappedRetryStrategy instanceof Retry retry) {
             retryStrategyToUse = retry.onError((info, t) -> {
                 final String retryMessage;
                 if (info.isRetryable()) {
@@ -140,15 +148,15 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 logDebug("Failed to execute scheduleRefresh due to {} - {} ({})", t.getClass().getName(), t.getMessage(), retryMessage, t);
             });
         } else {
-            retryStrategyToUse = refreshRetryStrategy;
+            retryStrategyToUse = cappedRetryStrategy;
         }
 
         scheduledRefresh.scheduleInBackground(() -> {
             try {
-                retryStrategyToUse.execute(() -> fn.apply(this::refreshOrAcquireLease).run());
+                retryStrategyToUse.execute(() -> fn.apply(this::refreshOrAcquireLease).run(), whileRunning);
             } catch (Exception e) {
                 // scheduleAtFixedRate cancels every later execution once one throws, so a round that exhausted
-                // refreshRetryStrategy is caught here instead of taking the whole schedule down with it.
+                // cappedRetryStrategy is caught here instead of taking the whole schedule down with it.
                 log.warn("Refresh round gave up due to {} - {}. The next scheduled round will try again.",
                         e.getClass().getName(), e.getMessage(), e);
             }
@@ -209,13 +217,13 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     /**
      * Take the lease, or refresh one already held, and work out what that changed. The status the consumer had comes
      * from the caller, which has already read it under the same lock. {@code retryStrategyToUse} is
-     * {@link #retryStrategy} from {@link #registerCompetingConsumer} and {@link #refreshRetryStrategy} from a
+     * {@link #retryStrategy} from {@link #registerCompetingConsumer} and {@link #cappedRetryStrategy} from a
      * refresh round competing for a lease nobody holds yet, since the two callers keep different retry behaviour.
      */
     private Outcome acquireLease(MongoCollection<BsonDocument> collection, CompetingConsumer competingConsumer, @Nullable Status oldStatus, RetryStrategy retryStrategyToUse) {
         String subscriptionId = competingConsumer.subscriptionId;
         String subscriberId = competingConsumer.subscriberId;
-        Optional<ListenerLock> lock = MongoListenerLockService.acquireOrRefreshFor(collection, retryStrategyToUse, leaseTime, subscriptionId, subscriberId);
+        Optional<ListenerLock> lock = MongoListenerLockService.acquireOrRefreshFor(collection, retryStrategyToUse, whileRunning, leaseTime, subscriptionId, subscriberId);
         boolean acquired = lock.isPresent();
         boolean oldStatusWasAcquired = oldStatus != null && oldStatus.isLockAcquired();
         logDebug("acquireLease: oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
@@ -231,6 +239,9 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     /**
      * Drop the lease in MongoDB and work out what that changed. What happens to the consumer's own entry differs
      * between unregistering and releasing and has been decided by the caller.
+     * <p>
+     * Uses {@link #cappedRetryStrategy}, so a removal that keeps failing gives up instead of holding the caller
+     * open. That constant says why giving up is safe here.
      */
     private Outcome giveUpLease(MongoCollection<BsonDocument> collection, CompetingConsumer competingConsumer, @Nullable Status status) {
         String subscriptionId = competingConsumer.subscriptionId;
@@ -239,7 +250,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             logDebug("Failed to find consumer status (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             return Outcome.NOTHING;
         }
-        MongoListenerLockService.remove(collection, retryStrategy, subscriptionId, subscriberId);
+        MongoListenerLockService.remove(collection, cappedRetryStrategy, whileRunning, subscriptionId, subscriberId);
         if (status.isLockAcquired()) {
             logDebug("Lock status was {}, will invoke onConsumeProhibited for listeners (subscriberId={}, subscriptionId={})", status, subscriberId, subscriptionId);
             return new Outcome(false, Notification.PROHIBITED);
@@ -318,10 +329,10 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         }
         return switch (status.kind()) {
             case LOCK_ACQUIRED -> {
-                // Uses refreshRetryStrategy, so a commit that keeps failing gives up here instead of holding this
+                // Uses cappedRetryStrategy, so a commit that keeps failing gives up here instead of holding this
                 // round open until MongoDB answers again. The lock document is untouched by a call that never got
                 // through, so the consumer keeps its lease and the next round commits what it missed.
-                boolean stillHasLock = MongoListenerLockService.commit(collection, refreshRetryStrategy, leaseTime, cc.subscriptionId, cc.subscriberId);
+                boolean stillHasLock = MongoListenerLockService.commit(collection, cappedRetryStrategy, whileRunning, leaseTime, cc.subscriptionId, cc.subscriberId);
                 if (stillHasLock) {
                     yield Outcome.NOTHING;
                 }
@@ -337,7 +348,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
                 yield Outcome.NOTHING;
             }
-            case LOCK_NOT_ACQUIRED -> acquireLease(collection, cc, status, refreshRetryStrategy);
+            case LOCK_NOT_ACQUIRED -> acquireLease(collection, cc, status, cappedRetryStrategy);
         };
     }
 

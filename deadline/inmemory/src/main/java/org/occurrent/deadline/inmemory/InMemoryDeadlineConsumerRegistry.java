@@ -22,8 +22,6 @@ import org.occurrent.deadline.api.blocking.DeadlineConsumer;
 import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
 import org.occurrent.deadline.inmemory.internal.DeadlineData;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.retry.RetryStrategy.Retry;
-import org.occurrent.retry.internal.RetryImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,6 +33,7 @@ import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 
 /**
  * An in-memory implementation of a {@link DeadlineConsumerRegistry}. It uses a {@link BlockingDeque} to communicate with
@@ -75,12 +74,11 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
     public InMemoryDeadlineConsumerRegistry(BlockingDeque<Object> deadlineQueue, Config config) {
         Objects.requireNonNull(deadlineQueue, "Deadline queue cannot be null");
         Objects.requireNonNull(config, "Config cannot be null");
-        final RetryStrategy retryStrategyToUse;
-        if (config.retryStrategy instanceof RetryImpl) {
-            retryStrategyToUse = ((Retry) config.retryStrategy).retryIf(__ -> running);
-        } else {
-            retryStrategyToUse = config.retryStrategy;
-        }
+        RetryStrategy retryStrategyToUse = config.retryStrategy;
+        // The lifecycle flag goes in the shutdown predicate rather than in retryIf. retryIf replaces whatever
+        // predicate the configured strategy already had, and it is only read between attempts, so a shutdown
+        // during a backoff waits out the rest of it before join() returns.
+        Predicate<Throwable> whileRunning = __ -> running;
         thread = new Thread(() -> {
             while (running) {
                 try {
@@ -90,7 +88,7 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
                         if (deadlineConsumer == null) {
                             log.warn("Failed to find a deadline consumer for category {}, will try again later.", data.category);
                         } else {
-                            retryStrategyToUse.execute(() -> deadlineConsumer.accept(data.id, data.category, data.deadline, data.data));
+                            retryStrategyToUse.execute(() -> deadlineConsumer.accept(data.id, data.category, data.deadline, data.data), whileRunning);
                         }
                     }
                 } catch (InterruptedException e) {

@@ -82,12 +82,12 @@ class MongoListenerLockServiceTest {
     }
 
     private ListenerLock acquire(String subscriberId) {
-        return MongoListenerLockService.acquireOrRefreshFor(locks, RetryStrategy.none(), LEASE, SUBSCRIPTION, subscriberId)
+        return MongoListenerLockService.acquireOrRefreshFor(locks, RetryStrategy.none(), __ -> true, LEASE, SUBSCRIPTION, subscriberId)
                 .orElseThrow(() -> new IllegalStateException("Expected " + subscriberId + " to acquire the lock"));
     }
 
     private void release(String subscriberId) {
-        MongoListenerLockService.remove(locks, RetryStrategy.none(), SUBSCRIPTION, subscriberId);
+        MongoListenerLockService.remove(locks, RetryStrategy.none(), __ -> true, SUBSCRIPTION, subscriberId);
     }
 
     private BsonDocument readLockDocument() {
