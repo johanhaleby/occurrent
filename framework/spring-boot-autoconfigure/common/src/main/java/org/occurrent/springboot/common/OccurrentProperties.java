@@ -716,10 +716,17 @@ public class OccurrentProperties {
         private Duration timerPollInterval = Duration.ofSeconds(15);
 
         /**
-         * How long one event may keep failing for one saga instance before that instance is quarantined and the
-         * subscription moves past the event, so the saga's other instances stop waiting behind it. The instance is
-         * quarantined once the failing has lasted at least this long. Defaults to five minutes, matching
+         * How long one saga instance may keep failing before it is quarantined and the subscription moves past the
+         * event it stopped on, so the saga's other instances stop waiting behind it. The clock belongs to the instance
+         * rather than to one event, so an instance where two events both fail keeps the instant it started failing and
+         * a second event can reach the budget on its first failure. Defaults to five minutes, matching
          * {@code SagaRunnerConfig.defaults()}.
+         * <p>
+         * It covers the whole delivery, from the converter reading the event through to the store saving the
+         * result, and an {@code Error} counts like a {@code RuntimeException}. {@code OutOfMemoryError} is the one
+         * exclusion, since that is the process failing rather than the instance's work. A delivery that fails before the saga can
+         * work out which instance it belongs to has no instance to quarantine, so the subscription is let past it once
+         * it has been failing this long and the skip is logged rather than recorded.
          * <p>
          * Set it to zero to keep the pre-0.34.0 behaviour, where the event is retried forever and every other instance
          * of that saga waits behind it. A negative value is rejected at startup rather than read as zero. Quarantine is switched off on its own,

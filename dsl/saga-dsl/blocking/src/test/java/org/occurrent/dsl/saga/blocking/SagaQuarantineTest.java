@@ -56,16 +56,20 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * The behaviour <a href="https://github.com/johanhaleby/occurrent/issues/818">#818</a> asked for: one saga instance
- * that cannot handle its event must not stop every other instance sharing the saga's single subscription.
+ * The behaviour <a href="https://github.com/johanhaleby/occurrent/issues/818">#818</a> asked for: one event a saga
+ * cannot get through must not stop every other instance sharing the saga's single subscription. That covers an event
+ * one instance cannot handle, and, since
+ * <a href="https://github.com/johanhaleby/occurrent/issues/997">#997</a>, an event the saga cannot even work out an
+ * instance for.
  */
-@DisplayName("A saga instance that keeps failing")
+@DisplayName("A saga delivery that keeps failing")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaQuarantineTest {
 
@@ -109,8 +113,20 @@ class SagaQuarantineTest {
     record Shipped(String orderId) implements OrderState {
     }
 
-    // Reading this inside react keeps the saga a single definition rather than two that could drift apart.
+    // Reading these inside the saga keeps it a single definition rather than several that could drift apart.
     private volatile boolean reactionFails = true;
+
+    /** What reacting to {@link PaymentReserved} throws for {@link #POISON}. The type is what each test is about. */
+    private volatile Supplier<? extends Throwable> reactionFailure = () -> new IllegalStateException("this instance can never handle its payment");
+
+    /** The event id the saga cannot correlate, or {@code null} when it correlates every event, which is most tests. */
+    private volatile @Nullable String uncorrelatableEventId;
+
+    /** What correlating {@link #uncorrelatableEventId} throws. */
+    private volatile Supplier<? extends Throwable> correlationFailure = () -> new IllegalStateException("this event carries no correlation id");
+
+    /** The event id the saga correlates to no instance, which the contract says is skipped rather than failed. */
+    private volatile @Nullable String correlatesToNoInstance;
 
     // Long enough that a timer never fires during a test that is not about timers. The one that is shortens it.
     private volatile Duration paymentTimeout = Duration.ofMinutes(30);
@@ -118,20 +134,41 @@ class SagaQuarantineTest {
     /** Reacting to {@link PaymentReserved} throws for {@link #POISON} and only for it, for as long as it is broken. */
     private Saga<OrderEvent, OrderState, OrderCommand> orderFulfillment() {
         return Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
-                .correlateAll(OrderEvent::orderId)
+                .correlateAll(this::correlate)
                 .startsOn(OrderPlaced.class)
                 .evolve(OrderPlaced.class, (state, e) -> new AwaitingPayment(e.orderId()))
                 .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.startTimeout(PAYMENT_TIMER, paymentTimeout)))
                 .evolve(PaymentReserved.class, (state, e) -> new Shipped(e.orderId()))
                 .react(PaymentReserved.class, (state, e) -> {
                     if (e.orderId().equals(POISON) && reactionFails) {
-                        throw new IllegalStateException("this instance can never handle its payment");
+                        throw raise(reactionFailure.get());
                     }
                     return List.of(SagaEffect.issue(new ShipOrder(e.orderId())), SagaEffect.cancelTimeout(PAYMENT_TIMER));
                 })
                 .reactOnTimeout(PAYMENT_TIMER, (state, t) -> List.of(SagaEffect.issue(new CancelOrder(t.sagaId()))))
                 .isTerminal(state -> state instanceof Shipped)
                 .build();
+    }
+
+    /**
+     * The saga's correlation function, which is what {@code Saga.sagaId} calls on every event before anything else
+     * happens to it. It throws for one event id and only for it, which is the shape of a saga whose id extractor reads
+     * a correlation field that is null on one old event.
+     */
+    private String correlate(OrderEvent event) {
+        if (event.eventId().equals(uncorrelatableEventId)) {
+            throw raise(correlationFailure.get());
+        }
+        return event.eventId().equals(correlatesToNoInstance) ? null : event.orderId();
+    }
+
+    // Throws whatever it is handed, so a test can choose between a RuntimeException and an Error without the saga
+    // needing two definitions. Declared as returning so the call site reads as the throw it is.
+    private static RuntimeException raise(Throwable failure) {
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        throw (RuntimeException) failure;
     }
 
     private InMemorySubscriptionModel subscriptionModel;
@@ -414,6 +451,123 @@ class SagaQuarantineTest {
             ));
         }
 
+        /**
+         * Every catch under the delivery's own swallows what it caught and rethrows the original failure, so an
+         * {@code OutOfMemoryError} raised by a recovery step would be absorbed and the saga's own exception reported
+         * instead. That is the carve-out defeated one level down, and it would let the instance's budget keep running
+         * while the process is out of heap.
+         */
+        @Test
+        void lets_an_out_of_memory_error_out_of_the_retention_check_rather_than_absorbing_it() throws Exception {
+            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(new ThrowsWhenAskedAboutAnEvent(feed, Integer.MAX_VALUE, () -> new OutOfMemoryError("Java heap space")), CONFIG);
+            feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+
+            TimeUnit.SECONDS.sleep(2);
+
+            assertAll(
+                    () -> assertThat(feed.lastDeliveryFailure).isInstanceOf(OutOfMemoryError.class),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE)
+            );
+        }
+
+        /**
+         * One extension that cannot be read must not discard a redelivery key the event does carry. Reading the three
+         * together threw on the position before either stream value reached the record, so an event with a perfectly
+         * good stream id and version looked like one carrying no key at all and nothing could ever budget it.
+         */
+        @Test
+        void are_isolated_from_it_when_the_event_carries_a_position_that_is_not_a_number() {
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(unreadablePositionCloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            model.push(unreadablePositionCloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            model.push(unreadablePositionCloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            model.push(unreadablePositionCloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    // The stream key, since the position written beside it could not be read.
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure().input()).isEqualTo(POISON + "@2"),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure().position()).isNull(),
+                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
+            ));
+        }
+
+        /**
+         * An {@code Error} out of a reaction stops the instance for exactly as long as a {@code RuntimeException} does,
+         * so it is the instance's failure in the only sense that matters here. A recursive {@code evolve} raising
+         * {@link StackOverflowError} is the likeliest way a saga produces one.
+         */
+        @Test
+        void are_isolated_from_it_when_its_reaction_throws_an_error_rather_than_an_exception() {
+            reactionFailure = StackOverflowError::new;
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            model.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure().failureType()).isEqualTo(StackOverflowError.class.getName()),
+                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
+            ));
+        }
+
+        /**
+         * Running out of heap says something about the process, not about the instance holding the thread when it
+         * happened, and any other instance running then would have met the same thing. Nothing in 0.34.0 releases an
+         * instance from quarantine, so charging it would cost an arbitrary instance its state for a condition it had
+         * nothing to do with.
+         */
+        @Test
+        void blocks_them_exactly_as_before_when_the_jvm_ran_out_of_memory() throws Exception {
+            reactionFailure = () -> new OutOfMemoryError("Java heap space");
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            model.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            TimeUnit.SECONDS.sleep(2);
+
+            assertAll(
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure()).isNull(),
+                    () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY))
+            );
+        }
+
+        /**
+         * The carve-out reads what was thrown rather than what it wraps, and this test is what would fail if that were
+         * changed, so the next reader can tell it was decided. Walking the cause chain is the alternative and it is
+         * worse. An unrelated {@code OutOfMemoryError} buried under a genuinely broken instance's own failure would
+         * exempt that instance forever, and a cause chain has no length limit and can be cyclic. A reaction that catches
+         * one and wraps it has said the failure is its own, and it is taken at its word.
+         */
+        @Test
+        void are_isolated_from_it_when_its_reaction_wraps_the_out_of_memory_error_in_its_own_exception() {
+            reactionFailure = () -> new IllegalStateException("could not build the shipment", new OutOfMemoryError("Java heap space"));
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            model.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
+            ));
+        }
+
         @Test
         void blocks_them_exactly_as_before_on_a_feed_that_retains_nothing() throws Exception {
             ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
@@ -430,6 +584,269 @@ class SagaQuarantineTest {
                     () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure()).isNull(),
                     () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY))
             );
+        }
+    }
+
+    /**
+     * <a href="https://github.com/johanhaleby/occurrent/issues/997">#997</a>. The saga asks for the instance id before
+     * anything else happens to an event, so an id extractor that throws used to take the whole delivery down with
+     * nothing recorded and nothing quarantined, and every instance of the saga waited behind the redelivery forever.
+     * There is no instance to quarantine here, since the event reached none, so the budget is the delivery's own and
+     * the subscription is let past it when that runs out.
+     */
+    @Nested
+    @DisplayName("that the saga cannot work out an instance for")
+    class ThatTheSagaCannotWorkOutAnInstanceFor {
+
+        @BeforeEach
+        void letTheReactionsSucceed() {
+            // Nothing but the routing fails in these, so an outcome can only be about the routing.
+            reactionFails = false;
+        }
+
+        private void pushTheHealthyEventBehindTheUncorrelatableOne(ReplayableSubscriptionModel model) {
+            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("1", HEALTHY)));
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("2", POISON)));
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            model.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+        }
+
+        @Test
+        void does_not_stop_the_instances_whose_events_are_queued_behind_it() {
+            uncorrelatableEventId = "3";
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            pushTheHealthyEventBehindTheUncorrelatableOne(model);
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)),
+                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
+                    // Nothing is quarantined and nothing is recorded, because the event reached no instance. The one
+                    // that exists is the one the saga could correlate earlier, and it is untouched by this.
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure()).isNull()
+            ));
+        }
+
+        @Test
+        void does_not_stop_them_either_when_the_id_extractor_throws_an_error_rather_than_an_exception() {
+            uncorrelatableEventId = "3";
+            correlationFailure = StackOverflowError::new;
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            pushTheHealthyEventBehindTheUncorrelatableOne(model);
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED));
+        }
+
+        @Test
+        void does_not_stop_them_either_when_it_is_the_converter_that_cannot_read_the_event() {
+            converter = new CannotRead<>(converter, "3");
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            pushTheHealthyEventBehindTheUncorrelatableOne(model);
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)),
+                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
+            ));
+        }
+
+        /**
+         * The budget is what separates a converter that is briefly unwell from one that will never read this event. A
+         * schema registry down for thirty seconds is the plain case, and skipping on the first failure would drop every
+         * event delivered while it was out.
+         */
+        @Test
+        void is_not_skipped_when_the_saga_can_correlate_it_again_inside_the_budget() throws Exception {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+                SagaSubscription subscription = run(model, CONFIG);
+                pushTheHealthyEventBehindTheUncorrelatableOne(model);
+
+                // The routing has to have failed before the flag is cleared, or the correlation never failed at all and
+                // this passes whatever the runner does with a delivery it could not route.
+                await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(appender.list)
+                        .anyMatch(event -> event.getFormattedMessage().contains("could not work out which instance")));
+                uncorrelatableEventId = null;
+
+                await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                        // The event nobody could correlate is handled rather than skipped, so POISON is shipped too.
+                        () -> assertThat(dispatched).containsExactlyInAnyOrder(new ShipOrder(POISON), new ShipOrder(HEALTHY)),
+                        () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
+                        () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
+                ));
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        /**
+         * The routing budget ends when routing works, whatever the id turns out to be, so a later failure of the same
+         * event starts a fresh one. Clearing it only after the whole delivery succeeded left the entry behind for an
+         * event that correlated to no instance and for one whose instance quarantined, and a replay of that event then
+         * inherited an elapsed budget and was skipped on its first failure with no budget at all.
+         */
+        @Test
+        void is_given_a_fresh_budget_rather_than_an_elapsed_one_when_the_same_event_fails_to_correlate_again() throws Exception {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+                run(model, CONFIG);
+                model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("1", HEALTHY)));
+                model.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+
+                // The budget only exists once the routing has actually failed once, which the first-failure warning is
+                // the signal for. Flipping the flag before that means no entry was ever written to go stale.
+                await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(appender.list)
+                        .anyMatch(event -> event.getFormattedMessage().contains("could not work out which instance")));
+
+                // Correlates again, to no instance, which returns rather than processing anything. That is the case
+                // that used to leave the entry behind, since only a delivery that got all the way through cleared it.
+                uncorrelatableEventId = null;
+                correlatesToNoInstance = "3";
+                await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(model.acknowledged()).isEqualTo(2));
+
+                // Past the budget before the event is offered again, which is what makes a surviving entry an elapsed
+                // one rather than merely a stale one. Nothing is failing during this wait.
+                TimeUnit.MILLISECONDS.sleep(BUDGET.toMillis() * 3);
+
+                uncorrelatableEventId = "3";
+                correlatesToNoInstance = null;
+                model.rewindTo(1);
+                model.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+                // Well inside a fresh budget, so the event is still being offered and everything behind it still waits.
+                // An entry that survived would already be past its budget and the event would be skipped at once.
+                TimeUnit.MILLISECONDS.sleep(BUDGET.toMillis() / 2);
+                assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY));
+
+                // And the fresh budget does run out, so this is a delay rather than a block.
+                await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)));
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        @Test
+        void blocks_them_exactly_as_before_when_the_quarantine_budget_is_switched_off() throws Exception {
+            uncorrelatableEventId = "3";
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            run(model, CONFIG.withQuarantineAfter(null));
+            pushTheHealthyEventBehindTheUncorrelatableOne(model);
+
+            TimeUnit.SECONDS.sleep(2);
+
+            assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY));
+        }
+
+        @Test
+        void blocks_them_exactly_as_before_on_a_feed_that_retains_nothing() throws Exception {
+            uncorrelatableEventId = "3";
+            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
+            run(new RetainsNothing(feed), CONFIG);
+            pushTheHealthyEventBehindTheUncorrelatableOne(feed);
+
+            TimeUnit.SECONDS.sleep(2);
+
+            assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY));
+        }
+
+        /**
+         * Letting the subscription past acknowledges the event, so a model that guaranteed retention and then says no
+         * for this event is refused, exactly as it is for a quarantine. The refusal is said once rather than at the
+         * cadence the feed re-offers it.
+         */
+        @Test
+        void blocks_them_exactly_as_before_when_the_event_cannot_be_obtained_again_and_says_why_once() throws Exception {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
+                run(new GuaranteesMoreThanItHolds(feed), CONFIG);
+                pushTheHealthyEventBehindTheUncorrelatableOne(feed);
+
+                TimeUnit.SECONDS.sleep(3);
+
+                long refusals = appender.list.stream()
+                        .map(ILoggingEvent::getFormattedMessage)
+                        .filter(message -> message.contains("is not being let past it"))
+                        .count();
+                assertAll(
+                        () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY)),
+                        () -> assertThat(refusals).isEqualTo(1)
+                );
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        /**
+         * A skipped delivery is logged rather than recorded, because there is no instance to write a row on, so the log
+         * line is all an operator gets. It names the event and the exception that stopped it.
+         */
+        @Test
+        void says_what_it_skipped_and_what_stopped_it() {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+                SagaSubscription subscription = run(model, CONFIG);
+                pushTheHealthyEventBehindTheUncorrelatableOne(model);
+
+                await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                        assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED));
+
+                List<ILoggingEvent> skips = appender.list.stream()
+                        .filter(event -> event.getFormattedMessage().contains("is now being let past it"))
+                        .toList();
+                assertAll(
+                        () -> assertThat(skips).hasSize(1),
+                        () -> assertThat(skips.getFirst().getFormattedMessage()).contains(POISON + "@2"),
+                        () -> assertThat(skips.getFirst().getThrowableProxy().getClassName()).isEqualTo(IllegalStateException.class.getName())
+                );
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        /**
+         * Without a stream id and version or a global position there is nothing to tell one delivery of this event from
+         * the next, so the budget can never elapse and the delivery keeps blocking. That is the same condition an
+         * instance's quarantine turns on, which is the point. The conditions do not change with what failed.
+         */
+        @Test
+        void blocks_them_exactly_as_before_when_the_event_carries_no_redelivery_key() throws Exception {
+            uncorrelatableEventId = "3";
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            run(model, CONFIG.withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT));
+            model.push(converter.toCloudEvent(new OrderPlaced("1", HEALTHY)));
+            model.push(converter.toCloudEvent(new PaymentReserved("3", POISON)));
+            model.push(converter.toCloudEvent(new PaymentReserved("4", HEALTHY)));
+
+            TimeUnit.SECONDS.sleep(2);
+
+            assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY));
         }
     }
 
@@ -498,6 +915,37 @@ class SagaQuarantineTest {
             // used to leave no failure record behind, so the budget never ran out and the instance blocked forever.
             reactionFails = false;
             stateStore = store;
+        }
+
+        /**
+         * The load-failure catch inside {@code process} answers whether this input would have been skipped anyway, and a
+         * yes there returns normally, which acknowledges the event. A load that failed because the process is out of
+         * heap says nothing about whether the input would have been skipped, so answering on that basis would
+         * acknowledge the event with no sign anything went wrong. This is the fourth place a recovery step could
+         * absorb a failure of the JVM, and it was found by listing every catch in the file rather than by reading.
+         */
+        @Test
+        void an_out_of_memory_error_loading_a_quarantined_instance_is_not_swallowed_by_the_skip_it_would_have_taken() throws Exception {
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            await().atMost(Duration.ofSeconds(10)).until(() -> subscription.instances().find(POISON).isPresent());
+
+            // Quarantine it first, so wouldHaveSkippedThisInput would answer yes for whatever comes next.
+            reactionFails = true;
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("2", POISON)));
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED));
+
+            // Now the load itself runs out of heap for that instance.
+            reactionFails = false;
+            store.failsToLoadWith(() -> new OutOfMemoryError("Java heap space"));
+            store.cannotDecodeTheStateOf(POISON);
+            model.push(cloudEvent(POISON, 3, new PaymentReserved("3", POISON)));
+
+            TimeUnit.SECONDS.sleep(2);
+
+            assertThat(model.lastDeliveryFailure).isInstanceOf(OutOfMemoryError.class);
         }
 
         @Test
@@ -639,8 +1087,14 @@ class SagaQuarantineTest {
         private final SagaStateStore<OrderState> delegate = SagaStateStore.inMemory();
         private final Set<String> undecodable = ConcurrentHashMap.newKeySet();
 
+        private volatile Supplier<? extends Throwable> loadFailure = () -> new IllegalStateException("the state can no longer be decoded");
+
         void cannotDecodeTheStateOf(String sagaId) {
             undecodable.add(sagaId);
+        }
+
+        void failsToLoadWith(Supplier<? extends Throwable> failure) {
+            loadFailure = failure;
         }
 
         @Nullable OrderState theStoredStateOf(String sagaId) {
@@ -651,7 +1105,7 @@ class SagaQuarantineTest {
         public Optional<SagaEnvelope<OrderState>> find(String sagaId) {
             Optional<SagaEnvelope<OrderState>> found = delegate.find(sagaId);
             if (found.isPresent() && undecodable.contains(sagaId)) {
-                throw new IllegalStateException("the state of '" + sagaId + "' can no longer be decoded");
+                throw raise(loadFailure.get());
             }
             return found;
         }
@@ -778,9 +1232,16 @@ class SagaQuarantineTest {
         private final int throwForTheFirst;
         private final AtomicInteger asked = new AtomicInteger();
 
+        private final Supplier<? extends Throwable> checkFailure;
+
         private ThrowsWhenAskedAboutAnEvent(ReplayableSubscriptionModel delegate, int throwForTheFirst) {
+            this(delegate, throwForTheFirst, () -> new IllegalStateException("the retention read is broken"));
+        }
+
+        private ThrowsWhenAskedAboutAnEvent(ReplayableSubscriptionModel delegate, int throwForTheFirst, Supplier<? extends Throwable> checkFailure) {
             this.delegate = delegate;
             this.throwForTheFirst = throwForTheFirst;
+            this.checkFailure = checkFailure;
         }
 
         @Override
@@ -791,7 +1252,7 @@ class SagaQuarantineTest {
         @Override
         public boolean retains(CloudEvent event) {
             if (asked.incrementAndGet() <= throwForTheFirst) {
-                throw new IllegalStateException("the retention read is broken");
+                throw raise(checkFailure.get());
             }
             return true;
         }
@@ -812,6 +1273,31 @@ class SagaQuarantineTest {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             return delegate.subscribe(subscriptionId, filter, startAt, action);
+        }
+    }
+
+    /**
+     * A converter that cannot read one event, which is what a renamed event class, or a payload its mapper chokes on,
+     * looks like from the runner's side. Everything else goes through untouched.
+     */
+    private record CannotRead<T>(CloudEventConverter<T> delegate, String unreadableCloudEventId) implements CloudEventConverter<T> {
+
+        @Override
+        public CloudEvent toCloudEvent(T domainEvent) {
+            return delegate.toCloudEvent(domainEvent);
+        }
+
+        @Override
+        public T toDomainEvent(CloudEvent cloudEvent) {
+            if (cloudEvent.getId().equals(unreadableCloudEventId)) {
+                throw new IllegalStateException("no class is registered for this event type any more");
+            }
+            return delegate.toDomainEvent(cloudEvent);
+        }
+
+        @Override
+        public String getCloudEventType(Class<? extends T> type) {
+            return delegate.getCloudEventType(type);
         }
     }
 
@@ -837,6 +1323,16 @@ class SagaQuarantineTest {
                 .build();
     }
 
+    /**
+     * What a feed that writes the stream extensions correctly and the position badly delivers. The event still has a
+     * redelivery key, its stream id with its version, so reading the position must not take that key with it.
+     */
+    private CloudEvent unreadablePositionCloudEvent(String streamId, long streamVersion, OrderEvent event) {
+        return CloudEventBuilder.v1(streamOnlyCloudEvent(streamId, streamVersion, event))
+                .withExtension(OccurrentCloudEventExtension.POSITION, "not-a-number")
+                .build();
+    }
+
     private final java.util.concurrent.atomic.AtomicLong position = new java.util.concurrent.atomic.AtomicLong();
 
     /**
@@ -858,6 +1354,9 @@ class SagaQuarantineTest {
         }
 
 
+        // What the handler last threw back at the feed, which is what the transport sees and decides on.
+        private volatile @Nullable Throwable lastDeliveryFailure;
+
         private final List<CloudEvent> log = new CopyOnWriteArrayList<>();
         private volatile @Nullable Consumer<CloudEvent> action;
         private volatile @Nullable String subscriptionId;
@@ -876,6 +1375,15 @@ class SagaQuarantineTest {
 
         void push(CloudEvent event) {
             log.add(event);
+        }
+
+        int acknowledged() {
+            return nextIndex;
+        }
+
+        // Offer an event the feed has already moved past, which is what a repositioned subscription or a catch-up does.
+        void rewindTo(int index) {
+            nextIndex = index;
         }
 
         @Override
@@ -902,9 +1410,12 @@ class SagaQuarantineTest {
                 try {
                     current.accept(log.get(nextIndex));
                     nextIndex++;
-                } catch (RuntimeException e) {
+                } catch (Throwable e) {
+                    lastDeliveryFailure = e;
                     // Left where it is, so the same event is offered again. That is what every transport this design
-                    // works on does, and it is what lets a failure last long enough to reach the budget.
+                    // works on does, and it is what lets a failure last long enough to reach the budget. Throwable
+                    // rather than RuntimeException because RetryExecution, which is what the MongoDB models re-offer
+                    // through, catches Throwable, so a feed that died on an Error would be a feed no model is.
                     sleepBriefly();
                 }
             }

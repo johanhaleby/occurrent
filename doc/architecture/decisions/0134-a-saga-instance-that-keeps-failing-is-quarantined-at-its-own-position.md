@@ -217,6 +217,46 @@ subscription model holds what it delivered is a question about the model and not
 arrive with. The recorded
 position is therefore nullable, and it is a convenience beside the key rather than the thing that identifies the event.
 
+**The budget covers the whole delivery, and the first implementation gave it only a slice of one.** The executor
+converted the CloudEvent, asked the saga for the instance id, read the delivery metadata and ran the redelivery check
+before opening the `try`, and caught `RuntimeException` rather than `Throwable`. So two conditions were enforced that
+this decision never named. The failure had to be a `RuntimeException`, and it had to come from inside `process`. A saga
+whose id extractor reads a correlation field that is null on one old event satisfies every condition written down here
+and was still never quarantined, because `sagaId` threw outside the `try`. Every other instance of that saga waited
+behind the redelivery forever, which is the outcome this decision exists to remove. The whole delivery now runs inside
+one `try` that catches `Throwable`, so where a failure was thrown decides nothing, what it was decides nothing beyond
+the single exclusion the next paragraph names, and the conditions are the four this decision states and no others. [#997](https://github.com/johanhaleby/occurrent/issues/997) is where that was
+found.
+
+**A failure is the instance's unless it is a condition of the process, and the test is on what was thrown rather than
+on what it wraps.** Widening to `Throwable` needs a boundary, because quarantine has no exit in 0.34.0: decision point
+7 ships no release operation, so `SagaStateStore.delete(sagaId)` destroying the instance's state is the only way out.
+An `OutOfMemoryError` says the JVM ran out of heap while some instance held the thread, and any instance running then
+would have met the same thing, so charging it would cost an arbitrary instance its state for something it had nothing
+to do with. That is the exclusion, and it is the only one. `VirtualMachineError` is deliberately not the line, because
+`StackOverflowError` is one by hierarchy and a recursive `evolve` raising it is the instance's own fault and among the
+likelier ways a saga fails. A reaction that catches an `OutOfMemoryError` and wraps it has said the failure is its own
+and is taken at its word, because the alternative is worse. An unrelated `OutOfMemoryError` buried under a genuinely
+broken instance's failure would exempt that instance forever, and a cause chain has no length limit and can be cyclic,
+while a rule about the thing actually thrown is one line and checkable.
+
+**A delivery that fails before it reaches an instance is skipped rather than quarantined.** The converter and the id
+extractor run before the saga knows which instance an event belongs to, so a failure in either gives nothing to
+quarantine and nothing to write a record on. The budget is the delivery's own in that case, and past it the
+subscription is let through with an error logged rather than a row written. That is weaker than a quarantine, and it is
+the weaker half, so it is stated rather than implied. `findByStatus(QUARANTINED, ..)` does not list a skipped delivery,
+so the log line is all an operator gets. What it keeps is the part that makes quarantine safe, which is that the
+retention check has confirmed that letting the subscription past is not what would destroy the last copy, so wherever
+the source still has the event, repairing the converter or the extractor and feeding it back is the recovery. That check
+answers what the acknowledgement costs rather than what the source holds at this instant, and by its own contract it
+answers yes for an event an operator has already erased, so it is not a promise that the event is there. A budget rather than an immediate skip, because a converter can fail for a while and stop:
+a schema registry down for thirty seconds would otherwise permanently skip every event delivered while it was out,
+which trades a blocked saga for a saga that has lost events. The budget is held in memory, which is enough rather than
+a compromise, since a skipped delivery moves the subscription's checkpoint past it and it is never offered again, so
+the budget only has to outlive the redelivery loop. Recording a skip durably would need a store row keyed by something
+that is not a saga id, and putting rows that are not instances into the instance space is a worse answer than a stated
+gap.
+
 ### 4. An instance that has never started needs start detection to stop keying on document existence
 
 A start event whose `evolve` or `onStart` throws has no envelope to record anything against, so the first failure
