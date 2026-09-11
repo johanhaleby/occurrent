@@ -226,8 +226,13 @@ they were.
 **If any run was interrupted, stop here and skip the comparison below.** The range is then a floor rather than a bound,
 and no number the tool reports tells you which consumers are affected. The resuming run says it was one, in its log,
 `Resuming the repair of collection ... from an earlier run that did not finish`. Treat every consumer as possibly
-affected, and replay or reconcile from before the first repair started, using the guidance further down on which of
-the two is safe for a given consumer.
+affected.
+
+A repair walks `_id` order, which is not position order, so an event the lost batch repaired can sit anywhere in
+history. It can sit far below where a consumer had already read, which is why starting from that consumer's position
+at the time of the repair is not good enough either. Everything the consumer has already read is a candidate, so
+replay it from the beginning, or reconcile over its whole positioned history up to its current checkpoint. The
+guidance further down says which of the two is safe for a given consumer.
 
 The rest of this step is for a repair where no run was interrupted.
 
@@ -259,8 +264,8 @@ an email, charging a card, calling another system, since rewinding it reruns tha
 the restart point, not only the repaired one. Reconcile that consumer instead of replaying it.
 
 Read each run's range directly, one query per range rather than one query spanning all of them, so you do not read the
-stretch between two runs that neither of them touched. After an interrupted repair there is no usable range, so read
-from where the consumer's checkpoint stood before the repair instead of from a minimum:
+stretch between two runs that neither of them touched. After an interrupted repair there is no usable range at all, so
+read everything up to the consumer's current checkpoint rather than a range:
 
 ```javascript
 db.events.find({ position: { $gte: NumberLong(<minRepairedPosition>), $lte: NumberLong(<maxRepairedPosition>) } })
