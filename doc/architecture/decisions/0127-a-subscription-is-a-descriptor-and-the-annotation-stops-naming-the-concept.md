@@ -325,14 +325,20 @@ which is why `@Projection`, `@Snapshot` and `@Saga` have not tripped over it. It
 than anything this design introduces, and the epic inherits it rather than widening it. Fixing it means unwrapping to
 the target before invoking a factory, for all four descriptor annotations at once, and that is its own issue.
 
-> **Amended on 2026-09-10, for #981.** The paragraph above describes a defect that has since been fixed and shipped.
-> [#836](https://github.com/johanhaleby/occurrent/issues/836) was the issue it says fixing this needs, and it closed
-> in 0.34.0. `SubscriptionAnnotations.invokeDescriptorFactory` unwraps a bean to its ultimate AOP target and
-> re-resolves the factory method there, shared by all five registrar paths that make this call, so a JDK interface
-> proxy no longer fails. A proxy backed by a prototype- or pool-scoped target source is left proxied and still
-> fails, now naming the annotation, the factory and the fix. Corrected here because the changelog entry for #836
-> links to this section, so a reader arriving from the release notes would otherwise be told that what they had
-> just read was fixed is still broken.
+> **Amended on 2026-09-10, for #981, corrected on 2026-09-11 for #990.** The paragraph above describes a defect
+> that has since been fixed and shipped. [#836](https://github.com/johanhaleby/occurrent/issues/836) was the issue
+> it says fixing this needs, and it closed in 0.34.0. `SubscriptionAnnotations.invokeDescriptorFactory` unwraps a
+> bean to its ultimate AOP target and runs the recorded factory method there directly, but only when that target is
+> an instance of the class the scan found the method on, shared by all five registrar paths that make this call, so
+> a JDK interface proxy no longer fails. When the target is not such an instance, the factory refuses instead of
+> guessing which method to run, naming the annotation, the factory, and both causes that can produce that mismatch.
+> A proxy backed by a prototype- or pool-scoped target source that cannot be unwrapped safely is one. A
+> prototype-scoped factory bean that built a different implementation on a later call than the one the scan
+> recorded is the other, closed by #990 after an earlier version of this fix re-resolved the method by name on
+> whatever class the target turned out to be, which matched a same-named method on that other implementation
+> instead of refusing. Corrected here because the changelog entry for #836 links to this section, so a reader
+> arriving from the release notes would otherwise be told that what they had just read was fixed is still broken,
+> or would read a description of the fix that no longer matches what it does.
 
 This also closes something the current code calls out as a wart. Its comment notes that a `@Subscription` method
 registers per bean before the checkpoint fencing check runs, so one can write a checkpoint before that check happens,

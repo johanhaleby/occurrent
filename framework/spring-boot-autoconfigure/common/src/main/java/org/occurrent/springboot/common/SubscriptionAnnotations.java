@@ -32,7 +32,6 @@ import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
-import org.springframework.util.ReflectionUtils;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -289,18 +288,14 @@ public final class SubscriptionAnnotations {
      * {@code bean} to its ultimate AOP target first. Shared by every registrar that invokes one of these factories, on
      * both stacks, so the unwrap only has to be right in one place.
      * <p>
-     * A descriptor factory runs exactly once at startup to build a value; there is no request for advice to usefully
-     * observe, so invoking it through a proxy is a hazard rather than a feature. A CGLIB proxy happens to survive it,
-     * since the proxy subclasses the target and {@code method} (found by scanning the bean's declared or predicted
-     * type) is inherited on it either way. A JDK interface proxy does not survive it: for a bean not yet a singleton
-     * when its type was scanned (a {@code @Lazy} bean, most commonly), the scan can predict the concrete class the
-     * bean declares before that bean is ever proxied, and the proxy created afterwards implements only its interfaces,
-     * not that class, so invoking a method declared on it throws {@link IllegalArgumentException}. Unwrapping to the
-     * target and re-resolving {@code method} against the target's own class first makes both proxy kinds behave the
-     * same way when the proxy has a fixed singleton target: the factory runs once, directly, with no advice and no
-     * exception. A proxy backed by a prototype- or pool-scoped target source is left proxied by {@link #ultimateTarget},
-     * so a JDK interface proxy of that kind still cannot run the factory, and fails with a clear message instead of a
-     * bare reflection error.
+     * A descriptor factory runs exactly once at startup to build a value, so there is no request for advice to
+     * usefully observe, and invoking it through a proxy is a hazard rather than a feature. Every registrar records
+     * {@code method} by unwrapping the bean the same way {@link #ultimateTarget} does, so on a legitimate target
+     * {@code method}'s declaring class is always assignable from the target's own class. When it is, {@code method}
+     * runs directly on the unwrapped target, bypassing any advice. When it is not, the factory refuses instead of
+     * guessing which method to run, because the mismatch itself is the defect, either an interface proxy that could
+     * not be unwrapped to a fixed target, or a factory bean that built a different implementation than the one the
+     * scan recorded.
      *
      * @param annotationName the annotation name for error messages, for example {@code "@Projection"}
      * @param bean           the (possibly proxied) bean the factory method was found on
@@ -309,22 +304,12 @@ public final class SubscriptionAnnotations {
      */
     public static Object invokeDescriptorFactory(String annotationName, Object bean, Method method) {
         Object target = ultimateTarget(bean);
-        Method targetMethod = method;
-        if (target != bean) {
-            targetMethod = ReflectionUtils.findMethod(target.getClass(), method.getName());
-            if (targetMethod == null) {
-                throw new IllegalStateException("%s factory %s#%s could not be resolved on the unwrapped proxy target %s.".formatted(annotationName, bean.getClass().getName(), method.getName(), target.getClass().getName()));
-            }
-        } else if (!targetMethod.getDeclaringClass().isInstance(target)) {
-            // ultimateTarget leaves a proxy alone when its TargetSource is not a fixed singleton (prototype- or
-            // pool-scoped), so a JDK interface proxy backed by one still cannot run a factory declared on the
-            // concrete class. Without this check, Method.invoke fails with a bare "object is not an instance of
-            // declaring class", naming neither the annotation nor a way out.
-            throw new IllegalStateException("%s factory %s#%s cannot run: %s does not implement %s, and its target is not a fixed singleton, so it cannot be unwrapped safely. Set spring.aop.proxy-target-class=true so this bean is proxied by subclassing instead of by interface, or move the factory method off the advised bean.".formatted(annotationName, bean.getClass().getName(), method.getName(), bean.getClass().getName(), targetMethod.getDeclaringClass().getName()));
+        if (!method.getDeclaringClass().isInstance(target)) {
+            throw new IllegalStateException("%s factory %s#%s cannot run because %s does not implement %s. This happens when the bean is an interface proxy whose target is not a fixed singleton, so it cannot be unwrapped safely (set spring.aop.proxy-target-class=true so this bean is proxied by subclassing instead of by interface, or move the factory method off the advised bean), or when the factory bean built a different implementation than the one the scan recorded (return the same implementation on every call).".formatted(annotationName, bean.getClass().getName(), method.getName(), bean.getClass().getName(), method.getDeclaringClass().getName()));
         }
         try {
-            targetMethod.setAccessible(true);
-            Object result = targetMethod.invoke(target);
+            method.setAccessible(true);
+            Object result = method.invoke(target);
             if (result == null) {
                 throw new IllegalStateException("%s factory %s#%s returned null.".formatted(annotationName, target.getClass().getName(), method.getName()));
             }
