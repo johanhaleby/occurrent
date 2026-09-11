@@ -29,6 +29,24 @@ the instance before skipping each one, which step 5 comes back to.
 Nothing in 0.34.0 brings an instance out of quarantine. Deleting it is the only ending this release offers, and step 5
 is what that costs.
 
+### When no instance stopped at all
+
+One thing that looks like a quarantine is not one. The saga reads the CloudEvent and asks its id extractor which
+instance the event belongs to before anything else happens, so a converter or an id extractor that throws gives the
+runner no instance to stop. That event still blocks the subscription the same way, and the runner still gives it
+the same budget, but past the budget it lets the subscription through without quarantining anything.
+
+Nothing is written for that, so `findByStatus(QUARANTINED, ..)` does not list it and the rest of this runbook does not
+apply. What you get is one `ERROR` from `SagaExecution` saying the saga could not work out which instance the event
+belongs to, naming the event by its redelivery key and logging what stopped it. The event itself is untouched, and the
+runner confirms that before letting the subscription past, so repair the converter or the id extractor and feed the
+event to the saga again.
+
+`OutOfMemoryError` is the other thing that never quarantines. It says the JVM ran out of heap while some instance held
+the thread rather than anything about that instance, so it is rethrown and the instance keeps its state. Every other
+failure counts, including an `Error`, so a recursive `evolve` raising `StackOverflowError` quarantines like any other
+failure does.
+
 ## How you find out
 
 Three log lines from `org.occurrent.dsl.saga.blocking.SagaExecution`, all naming the saga's subscription id and the

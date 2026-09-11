@@ -141,12 +141,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // NONE until this returns, so an event whose extensions cannot be read is an event carrying no redelivery
             // key, which is what the conditions below already say about an event nothing can tell a redelivery of.
             meta = extractMeta(cloudEvent);
-            refuseOrWarnIfRedeliveryCannotBeDetected(meta);
             E event = converter.toDomainEvent(cloudEvent);
             sagaId = saga.sagaId(event);
             if (sagaId == null) {
                 return;
             }
+            refuseOrWarnIfRedeliveryCannotBeDetected(meta);
             // The full delivery metadata (stream id and version, position, and any CloudEvent extensions) rides on the
             // input so reactions can read it. The separate EventMeta drives redelivery dedup and is derived
             // independently above, so its null-tolerant watermark behaviour is unchanged.
@@ -168,6 +168,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * also the same four whatever the failure was, with the one exclusion
      * {@link SagaExecutionSupport#isAttributableToTheInstance} names, which is a failure of the JVM rather than of this
      * instance's work.
+     * <p>
      * {@link SagaRunnerConfig#quarantineAfter()} has to be set, and {@code SagaRunner} switches it off at startup for a
      * model that cannot guarantee it holds every event it delivers, so a budget that is set also means the model made
      * that guarantee. The failing delivery has to have been failing for at least that budget. The event has to
@@ -182,7 +183,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      */
     private boolean letTheSubscriptionPast(@Nullable String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure) {
         Duration quarantineAfter = config.quarantineAfter();
-        if (quarantineAfter == null || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
+        if (quarantineAfter == null || !meta.carriesRedeliveryKey() || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
             return false;
         }
         return sagaId == null
