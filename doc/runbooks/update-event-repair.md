@@ -284,21 +284,27 @@ ends:
 
 ```javascript
 db.events.find({ position: { $gte: NumberLong(<minRepairedPosition>), $lte: NumberLong(<maxRepairedPosition>) } })
+       .sort({ position: 1 })
 ```
 
 If any run did not finish on its own there is no usable range, so read everything the consumer has already processed
 instead:
 
 ```javascript
-db.events.find({ position: { $lte: NumberLong(<the consumer's current checkpoint>) } })
+db.events.find({ position: { $lte: NumberLong(<the consumer's current checkpoint>) } }).sort({ position: 1 })
 ```
 
-That query returns candidates rather than only repaired events. A range is a floor and a ceiling, so it also returns
+These queries return candidates rather than only repaired events. A range is a floor and a ceiling, so it also returns
 every event sitting between the two that the run left alone because nothing was wrong with it.
 
-Feed only the ones the consumer actually missed into its logic once, by hand or with a targeted script, leaving its
-checkpoint where it is. `NumberLong` matters once a store's position passes 2^53, since mongosh reads a bare number as
-a JavaScript double and a comparison against a `position` that large silently rounds.
+The ranges can also overlap, since a position you set by hand can sit inside a run's range and two runs' ranges can
+cover the same stretch, so one event can come back from more than one query. The sort is there because a consumer's
+logic depends on position order and MongoDB returns no particular order without it.
+
+Feed only the ones the consumer actually missed into its logic, once each however many queries returned them, by hand
+or with a targeted script, leaving its checkpoint where it is. `NumberLong` matters once a store's position passes
+2^53, since mongosh reads a bare number as a JavaScript double and a comparison against a `position` that large
+silently rounds.
 
 ## The damage this cannot find
 
