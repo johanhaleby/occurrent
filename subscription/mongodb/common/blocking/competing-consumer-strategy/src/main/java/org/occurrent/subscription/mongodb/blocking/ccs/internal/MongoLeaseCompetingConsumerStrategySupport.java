@@ -21,8 +21,10 @@ import com.mongodb.client.MongoCollection;
 import org.bson.BsonDocument;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.retry.MaxAttempts;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;
+import org.occurrent.retry.internal.RetryImpl;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -83,9 +85,10 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private final Set<CompetingConsumerListener> competingConsumerListeners;
     private final RetryStrategy retryStrategy;
     /**
-     * {@link #retryStrategy}, capped at {@link #CAPPED_MAX_ATTEMPTS} attempts per MongoDB call when it would
-     * otherwise retry without limit. Used by {@link #scheduleRefresh}, by the calls a refresh round makes through
-     * {@link #refreshOne}, and by {@link #giveUpLease}. Registering uses {@link #retryStrategy} itself.
+     * {@link #retryStrategy}, allowing at most {@link #CAPPED_MAX_ATTEMPTS} attempts per MongoDB call. A strategy
+     * already configured with fewer keeps its own limit, since this lowers a limit and never raises one. Used by
+     * {@link #scheduleRefresh}, by the calls a refresh round makes through {@link #refreshOne}, and by
+     * {@link #giveUpLease}. Registering uses {@link #retryStrategy} itself.
      */
     private final RetryStrategy cappedRetryStrategy;
     // Reading a consumer's status, making the MongoDB call that status decides, and writing the result back is one
@@ -130,9 +133,22 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         }
 
         this.retryStrategy = retryStrategy;
-        this.cappedRetryStrategy = retryStrategy instanceof Retry retry ? retry.maxAttempts(CAPPED_MAX_ATTEMPTS) : retryStrategy;
+        this.cappedRetryStrategy = allowingAtMost(retryStrategy, CAPPED_MAX_ATTEMPTS);
     }
 
+
+    /**
+     * {@code retryStrategy} allowing at most {@code maxAttempts} attempts, or {@code retryStrategy} unchanged when
+     * it already allows fewer. Calling {@code maxAttempts} outright would raise a caller's own lower limit, which
+     * would make a shutdown wait for attempts the caller asked not to make.
+     */
+    private static RetryStrategy allowingAtMost(RetryStrategy retryStrategy, int maxAttempts) {
+        if (!(retryStrategy instanceof RetryImpl retry)) {
+            return retryStrategy;
+        }
+        boolean alreadyLower = retry.configuredMaxAttempts() instanceof MaxAttempts.Limit limit && limit.limit() <= maxAttempts;
+        return alreadyLower ? retryStrategy : retry.maxAttempts(maxAttempts);
+    }
 
     public MongoLeaseCompetingConsumerStrategySupport scheduleRefresh(Function<Consumer<MongoCollection<BsonDocument>>, Runnable> fn) {
         final RetryStrategy retryStrategyToUse;

@@ -37,6 +37,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -118,15 +120,34 @@ class MongoLeaseCloseRetryTest {
     }
 
     @Test
+    void unregistering_keeps_a_lower_attempt_limit_the_caller_configured() throws InterruptedException {
+        AtomicInteger callsToTheServer = new AtomicInteger();
+        // Two attempts, fewer than the cap the unregister path applies. Capping has to lower a limit and never
+        // raise one, otherwise a caller asking for one quick try waits out four more while the store is down.
+        MongoLeaseCompetingConsumerStrategySupport support =
+                supportWith(RetryStrategy.retry().backoff(Backoff.fixed(10)).maxAttempts(2));
+        assertThat(support.registerCompetingConsumer(locks, SUBSCRIPTION, HOLDER)).isTrue();
+
+        Thread close = runInBackground(
+                () -> support.unregisterCompetingConsumer(counting(starving(locks), callsToTheServer), SUBSCRIPTION, HOLDER));
+        close.join(MUST_FINISH_WITHIN.toMillis());
+
+        assertThat(close.isAlive()).isFalse();
+        assertThat(callsToTheServer)
+                .as("the caller configured two attempts, so the removal makes two calls rather than the cap's five")
+                .hasValue(2);
+    }
+
+    @Test
     void shutting_down_stops_a_registration_that_is_between_attempts() throws InterruptedException {
         CountDownLatch firstAttemptFailed = new CountDownLatch(1);
         // A 10 second backoff between attempts, far longer than this test is willing to wait. Shutdown is signaled
         // while the first backoff is being slept out, so a strategy that only reads the flag between attempts sits
         // out the whole 10 seconds first.
-        MongoLeaseCompetingConsumerStrategySupport support = supportWith(
-                RetryStrategy.retry().backoff(Backoff.fixed(10_000)).onError(__ -> firstAttemptFailed.countDown()));
+        MongoLeaseCompetingConsumerStrategySupport support = supportWith(RetryStrategy.retry().backoff(Backoff.fixed(10_000)));
 
-        Thread registration = runInBackground(() -> support.registerCompetingConsumer(starving(locks), SUBSCRIPTION, HOLDER));
+        Thread registration = runInBackground(
+                () -> support.registerCompetingConsumer(starving(locks, firstAttemptFailed), SUBSCRIPTION, HOLDER));
         assertThat(firstAttemptFailed.await(MUST_FINISH_WITHIN.toMillis(), TimeUnit.MILLISECONDS))
                 .as("the first attempt should have failed and the backoff started")
                 .isTrue();
@@ -137,6 +158,32 @@ class MongoLeaseCloseRetryTest {
         assertThat(registration.isAlive())
                 .as("a shutdown signaled while a registration is backing off should stop it at the next check, not "
                         + "after the rest of the backoff")
+                .isFalse();
+    }
+
+    @Test
+    void shutting_down_stops_a_refresh_round_that_is_between_attempts() throws InterruptedException {
+        AtomicReference<Runnable> round = new AtomicReference<>();
+        ScheduledRefresh held = new ScheduledRefresh((lease, scheduler) -> round.set(scheduler.refresh()));
+        CountDownLatch firstAttemptFailed = new CountDownLatch(1);
+        MongoLeaseCompetingConsumerStrategySupport support =
+                new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.retry().backoff(Backoff.fixed(10_000)), held)
+                        .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(starving(locks, firstAttemptFailed)));
+
+        // Registers against the real collection, so the consumer holds the lease before the store starts failing.
+        assertThat(support.registerCompetingConsumer(locks, SUBSCRIPTION, HOLDER)).isTrue();
+
+        Thread refreshRound = runInBackground(round.get());
+        assertThat(firstAttemptFailed.await(MUST_FINISH_WITHIN.toMillis(), TimeUnit.MILLISECONDS))
+                .as("the commit should have failed and the backoff started")
+                .isTrue();
+
+        support.shutdown();
+        refreshRound.join(MUST_FINISH_WITHIN.toMillis());
+
+        assertThat(refreshRound.isAlive())
+                .as("a refresh round backing off holds the scheduler thread, so a shutdown waiting for the rest of "
+                        + "the backoff waits once per consumer in the round")
                 .isFalse();
     }
 
@@ -168,25 +215,53 @@ class MongoLeaseCloseRetryTest {
     }
 
     /**
+     * Counts the calls that reach the server, so a test can assert how many attempts a removal actually made.
+     */
+    @SuppressWarnings("unchecked")
+    private static MongoCollection<BsonDocument> counting(MongoCollection<BsonDocument> delegate, AtomicInteger calls) {
+        return (MongoCollection<BsonDocument>) Proxy.newProxyInstance(
+                MongoCollection.class.getClassLoader(),
+                new Class<?>[]{MongoCollection.class},
+                (proxy, method, args) -> {
+                    if (CALLS_TO_THE_SERVER.contains(method.getName())) {
+                        calls.incrementAndGet();
+                    }
+                    try {
+                        Object result = method.invoke(delegate, args);
+                        return result instanceof MongoCollection<?> another
+                                ? counting((MongoCollection<BsonDocument>) another, calls)
+                                : result;
+                    } catch (InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+    }
+
+    /**
      * A collection that throws for every call that would reach the server, standing in for a MongoDB outage.
      * Everything else is forwarded, since the calls under test still use {@code withWriteConcern} before the write
      * that actually fails.
      */
     private static final Set<String> CALLS_TO_THE_SERVER = Set.of("findOneAndUpdate", "deleteOne", "updateOne");
 
-    @SuppressWarnings("unchecked")
     private static MongoCollection<BsonDocument> starving(MongoCollection<BsonDocument> delegate) {
+        return starving(delegate, new CountDownLatch(1));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static MongoCollection<BsonDocument> starving(MongoCollection<BsonDocument> delegate, CountDownLatch refusedOnce) {
         return (MongoCollection<BsonDocument>) Proxy.newProxyInstance(
                 MongoCollection.class.getClassLoader(),
                 new Class<?>[]{MongoCollection.class},
                 (proxy, method, args) -> {
                     if (CALLS_TO_THE_SERVER.contains(method.getName())) {
+                        refusedOnce.countDown();
                         throw new IllegalStateException("MongoDB is not answering");
                     }
                     try {
                         Object result = method.invoke(delegate, args);
                         return result instanceof MongoCollection<?> another
-                                ? starving((MongoCollection<BsonDocument>) another)
+                                ? starving((MongoCollection<BsonDocument>) another, refusedOnce)
                                 : result;
                     } catch (InvocationTargetException e) {
                         throw e.getCause();
