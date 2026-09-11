@@ -480,6 +480,32 @@ class SagaRunnerTest {
             await().untilAsserted(() -> assertThat(issued).containsExactly(new ShipOrder(goodOrderId)));
             assertThat(stateStore.find("")).isEmpty();
         }
+
+        /**
+         * The redelivery refusal comes after the saga has said which instance an event belongs to, so an event it
+         * correlates to no instance returns before reaching that check. Nothing said so until this test, and a change
+         * that put the check ahead of the correlation made every such event refuse under REQUIRED instead. A push feed
+         * is what makes the case reachable, since an event store always writes the extensions the check looks for.
+         */
+        @Test
+        void an_event_that_correlates_to_no_instance_is_ignored_even_when_it_carries_nothing_to_detect_a_redelivery_with() {
+            PushSubscriptionModel pushModel = new PushSubscriptionModel();
+            SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
+            CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
+            SagaSubscription subscription = SagaRunner.<OrderEvent, OrderCommand>agnostic(pushModel, converter)
+                    .run("uncorrelated-without-dedup", orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, issued::add, null, FAST_POLL_CONFIG);
+            subscriptionsToClose.add(subscription);
+
+            // None of the Occurrent extensions, which is what a listener forwarding a converter-produced CloudEvent
+            // delivers, and a blank order id, which correlateAll answers null for.
+            Throwable refusal = catchThrowable(() -> pushModel.accept(converter.toCloudEvent(new OrderPlaced("e1", ""))));
+
+            assertAll(
+                    () -> assertThat(refusal).isNull(),
+                    () -> assertThat(issued).isEmpty(),
+                    () -> assertThat(stateStore.find("")).isEmpty()
+            );
+        }
     }
 
     @Nested
