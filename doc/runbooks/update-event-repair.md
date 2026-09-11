@@ -237,7 +237,8 @@ so neither that minimum nor the consumer's position at the time of the repair na
 consumer has already read is a candidate, so replay it from the beginning, or reconcile over its whole positioned
 history up to its current checkpoint. The guidance further down says which of the two is safe for a given consumer.
 
-The rest of this step is for a repair where no run was interrupted.
+What follows, up to and including the comparison against the lowest minimum, is for a repair where every run finished.
+If one did not, pick up again at "Decide between replaying and reconciling", which applies either way.
 
 A position in one of those ranges can be one the repair restored, or one that was already correct on an event only its
 tag array needed rebuilding for, which is what a run after a hand-set `POSITION_ALREADY_TAKEN` fix (step 5) looks
