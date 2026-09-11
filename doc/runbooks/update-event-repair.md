@@ -223,16 +223,19 @@ event in that batch has already been updated, so a kill part way through one los
 Those events no longer look damaged, so no resumed run and no later run finds them again, and nothing records where
 they were.
 
-**If any run was interrupted, stop here and skip the comparison below.** The range is then a floor rather than a bound,
-and no number the tool reports tells you which consumers are affected. The resuming run says it was one, in its log,
-`Resuming the repair of collection ... from an earlier run that did not finish`. Treat every consumer as possibly
-affected.
+**If any run did not finish on its own, stop here and skip the comparison below.** The range it reports is then
+incomplete in a way no number tells you about, so treat every consumer as possibly affected.
+
+The criterion is a run you had to start again, not anything in the log. A run interrupted during its first batch wrote
+no checkpoint at all, so the next one loads nothing and prints no `Resuming the repair of collection ...` line, while
+still having lost the positions that first batch repaired. Silence there means the checkpoint was gone, not that
+nothing was lost. You are the only record of which runs completed, so note it when one does not.
 
 A repair walks `_id` order, which is not position order, so an event the lost batch repaired can sit anywhere in
-history. It can sit far below where a consumer had already read, which is why starting from that consumer's position
-at the time of the repair is not good enough either. Everything the consumer has already read is a candidate, so
-replay it from the beginning, or reconcile over its whole positioned history up to its current checkpoint. The
-guidance further down says which of the two is safe for a given consumer.
+history. It can sit below the minimum the run did report, and it can sit far below where a consumer had already read,
+so neither that minimum nor the consumer's position at the time of the repair narrows anything. Everything the
+consumer has already read is a candidate, so replay it from the beginning, or reconcile over its whole positioned
+history up to its current checkpoint. The guidance further down says which of the two is safe for a given consumer.
 
 The rest of this step is for a repair where no run was interrupted.
 
@@ -264,8 +267,8 @@ an email, charging a card, calling another system, since rewinding it reruns tha
 the restart point, not only the repaired one. Reconcile that consumer instead of replaying it.
 
 Read each run's range directly, one query per range rather than one query spanning all of them, so you do not read the
-stretch between two runs that neither of them touched. After an interrupted repair there is no usable range at all, so
-read everything up to the consumer's current checkpoint rather than a range:
+stretch between two runs that neither of them touched. If any run did not finish on its own there is no usable range at
+all, so read everything up to the consumer's current checkpoint rather than a range:
 
 ```javascript
 db.events.find({ position: { $gte: NumberLong(<minRepairedPosition>), $lte: NumberLong(<maxRepairedPosition>) } })
