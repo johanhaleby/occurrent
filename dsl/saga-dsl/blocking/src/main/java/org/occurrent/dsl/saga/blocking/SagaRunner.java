@@ -117,9 +117,26 @@ import static java.util.Objects.requireNonNull;
  *       Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of blocking indefinitely instead,
  *       which is also what a subscription model that does not guarantee it holds every event it delivers gets, since
  *       the event could not be obtained again there.</li>
- *   <li><strong>Timer path.</strong> A failing timeout is caught per instance, logged, and left due, so the next poll
- *       retries it while the other instances keep going. A timeout failure does not block the poller and does not
- *       propagate anywhere else, so only the poller ever retries it, never a subscription redelivery.</li>
+ *   <li><strong>Timer path.</strong> A failing timeout is caught per instance, logged, and left due, so it stays
+ *       eligible for a later poll to retry. Which poll is not promised, for the reason below. It does not propagate
+ *       anywhere, so only the poller ever retries it, never a subscription redelivery. The catch takes anything the reaction throws, an {@link Error} from a class that will not load as
+ *       much as a {@link RuntimeException}, so that one instance costs its own turn rather than the rest of the
+ *       batch's. An {@link OutOfMemoryError} is the exception and abandons the poll, because it says nothing about the
+ *       instance that happened to be running.
+ *       <p>
+ *       <strong>Nothing isolates an instance that keeps failing from the saga's other instances.</strong> A poll
+ *       fires at most {@link SagaRunnerConfig#timerBatchLimit()} instances, a hundred by default, and nothing in
+ *       {@link org.occurrent.dsl.saga.SagaStateStore#findWithDueTimers} requires a store to give a different instance
+ *       a turn, so once that many instances cannot fire their timers the saga can stop firing timers altogether.
+ *       That many is enough rather than more than that many, since a batch full of them leaves no place for anything
+ *       else. A downstream
+ *       that every timer reaction calls being down for an afternoon is enough to produce that.
+ *       <p>
+ *       Nothing in 0.34.0 bounds that. <a href="https://github.com/johanhaleby/occurrent/issues/1003">#1003</a> is
+ *       where it is being fixed. Until then, find the instances it is happening to with
+ *       {@link org.occurrent.dsl.saga.SagaInstances#findByStatus} and the warning each failed fire logs, and raise
+ *       {@code timerBatchLimit} above the number of stuck instances, since one healthy instance is starved by a batch
+ *       that is already full whatever the healthy count is. Why it happens is in #1003 rather than here.</li>
  * </ul>
  * Commands are dispatched before the save, and a lost compare-and-set retries the step, so a single input can
  * re-dispatch its whole command list several times (up to {@code maxCasAttempts}). Receivers must be idempotent and

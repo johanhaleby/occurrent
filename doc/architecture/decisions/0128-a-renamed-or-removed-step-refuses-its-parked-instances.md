@@ -48,9 +48,15 @@ that an exception on the event path propagates to the subscription model, which 
 one instance parked on a gone step blocks every other instance sharing that subscription until somebody
 intervenes. That is not a new failure mode this decision introduces, it is the same accepted architecture ADR
 123's own refusal already lives with. The timer path is different. `SagaExecution.pollTimers` catches a failing
-timeout per instance, logs it, and leaves it due for the next poll, without touching anything else. A missing step
-firing a timer costs one stuck instance. A missing step reached by an event can cost the whole subscription until
-fixed.
+timeout per instance, logs it, and leaves it due for the next poll. A missing step reached by an event can cost the
+whole subscription until fixed.
+
+**Amended for [#998](https://github.com/johanhaleby/occurrent/issues/998).** This paragraph used to end "A missing
+step firing a timer costs one stuck instance", which was wrong in the same way ADR 134's Context was. The timer
+survives, and nothing in `findWithDueTimers` requires a store to give a different instance a turn, so once
+`timerBatchLimit` instances are in that state the saga can stop firing timers altogether. The decision below is unaffected, since
+it rests on the event path.
+See [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
 
 ## Decision
 
