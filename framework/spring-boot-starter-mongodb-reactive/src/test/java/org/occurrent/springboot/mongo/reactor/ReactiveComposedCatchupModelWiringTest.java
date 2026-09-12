@@ -25,6 +25,8 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.reactor.ComposedCatchupModel;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.api.reactor.Subscribable;
+import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 
@@ -37,7 +39,9 @@ import static org.mockito.Mockito.*;
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>
  * decision 8), so whenever a catch-up layer is composed the holder hands out the model that owns it, and whenever
  * none is, the holder still counts as filled, which is what tells a caller that the absence is a known fact about
- * this composition rather than an unresolved question.
+ * this composition rather than an unresolved question. Both answers are bound to the durable model the bean method
+ * returns, the bean a projection resolves and subscribes through, so a projection running on some other model the
+ * context holds gets neither (<a href="https://github.com/johanhaleby/occurrent/issues/996">#996</a>).
  * <p>
  * Calls the real {@code occurrentDurableSubscriptionModel} bean method rather than reproducing its composition and
  * calling {@code suppliedBy} directly, so a regression that stops the bean method from filling the holder fails
@@ -55,10 +59,11 @@ class ReactiveComposedCatchupModelWiringTest {
             applicationContext.registerBean("userEventStore", EventStore.class, () -> positionOrderedEventStore(true));
             applicationContext.refresh();
 
-            ComposedCatchupModel holder = fillHolderThroughTheBeanMethod(applicationContext);
+            ComposedCatchupModel holder = new ComposedCatchupModel();
+            ReactorDurableSubscriptionModel durableModel = fillHolderThroughTheBeanMethod(applicationContext, holder);
 
-            assertThat(holder.isSupplied()).isTrue();
-            assertThat(holder.catchupModel()).isPresent();
+            assertThat(holder.isSuppliedFor(durableModel)).isTrue();
+            assertThat(holder.catchupModelFor(durableModel)).isPresent();
         }
     }
 
@@ -68,24 +73,43 @@ class ReactiveComposedCatchupModelWiringTest {
             applicationContext.registerBean("userEventStore", EventStore.class, () -> positionOrderedEventStore(false));
             applicationContext.refresh();
 
-            ComposedCatchupModel holder = fillHolderThroughTheBeanMethod(applicationContext);
+            ComposedCatchupModel holder = new ComposedCatchupModel();
+            ReactorDurableSubscriptionModel durableModel = fillHolderThroughTheBeanMethod(applicationContext, holder);
 
             // Filled, so the absence is this composition's own known fact, which is what separates it from a
             // composition nothing here can see into.
-            assertThat(holder.isSupplied()).isTrue();
-            assertThat(holder.catchupModel()).isEmpty();
+            assertThat(holder.isSuppliedFor(durableModel)).isTrue();
+            assertThat(holder.catchupModelFor(durableModel)).isEmpty();
+        }
+    }
+
+    @Test
+    void the_holder_answers_for_the_durable_model_the_bean_method_returns_and_for_no_other() {
+        // The bean method hands the holder the catch-up layer hidden inside the composition, but a projection
+        // resolves and subscribes through the durable model wrapping it, so that is the identity the holder has to
+        // answer for. A second model the context happens to hold gets nothing, which is what keeps a projection
+        // from being told about catch-ups by a composition it does not run on (#996).
+        try (GenericApplicationContext applicationContext = new GenericApplicationContext()) {
+            applicationContext.registerBean("userEventStore", EventStore.class, () -> positionOrderedEventStore(true));
+            applicationContext.refresh();
+
+            ComposedCatchupModel holder = new ComposedCatchupModel();
+            fillHolderThroughTheBeanMethod(applicationContext, holder);
+            Subscribable someOtherModel = mock(Subscribable.class);
+
+            assertThat(holder.isSuppliedFor(someOtherModel)).isFalse();
+            assertThat(holder.catchupModelFor(someOtherModel)).isEmpty();
+            assertThat(holder.isDefaultKnownLiveOnlyFor(someOtherModel)).isFalse();
         }
     }
 
     // Calls OccurrentReactiveMongoAutoConfiguration.occurrentDurableSubscriptionModel(..) itself, the production
     // bean method, rather than reproducing its composeCatchupLayer(..) call and filling the holder by hand, so a
     // regression that stops the bean method from calling suppliedBy fails this test instead of passing it.
-    private static ComposedCatchupModel fillHolderThroughTheBeanMethod(GenericApplicationContext applicationContext) {
-        ComposedCatchupModel holder = new ComposedCatchupModel();
+    private static ReactorDurableSubscriptionModel fillHolderThroughTheBeanMethod(GenericApplicationContext applicationContext, ComposedCatchupModel holder) {
         OccurrentReactiveMongoAutoConfiguration<Object> autoConfiguration = new OccurrentReactiveMongoAutoConfiguration<>();
-        autoConfiguration.occurrentDurableSubscriptionModel(mock(ReactiveMongoOperations.class), mock(CheckpointStorage.class),
+        return autoConfiguration.occurrentDurableSubscriptionModel(mock(ReactiveMongoOperations.class), mock(CheckpointStorage.class),
                 new OccurrentProperties(), applicationContext.getBeanProvider(DcbEventStore.class), applicationContext, holder);
-        return holder;
     }
 
     private static EventStore positionOrderedEventStore(boolean writesPosition) {

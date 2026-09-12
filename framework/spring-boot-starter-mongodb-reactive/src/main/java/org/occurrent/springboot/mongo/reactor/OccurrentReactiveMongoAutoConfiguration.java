@@ -223,16 +223,18 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         ReactorDurableSubscriptionModelConfig durableConfig = new ReactorDurableSubscriptionModelConfig(EveryN.everyEvent())
                 .startWhenNoStartPositionCanBeRecorded(occurrentProperties.getSubscription().isStartWhenNoStartPositionCanBeRecorded());
         CheckpointAwareSubscriptionModel catchupLayer = composeCatchupLayer(mongoSubscriptionModel, eventStoreProperties, dcbEventStore, applicationContext);
-        // Handed to the holder before it disappears inside the durable wrapper below: ReplayAwareSubscriptions is
+        ReactorDurableSubscriptionModel durableSubscriptionModel = new ReactorDurableSubscriptionModel(catchupLayer, storage, durableConfig);
+        // catchupLayer is handed over because it disappears inside the durable wrapper: ReplayAwareSubscriptions is
         // findable on catchupLayer itself, a ReactorCatchupSubscriptionModel when one composed, but not on the
         // ReactorDurableSubscriptionModel wrapping it, since this stack's capability lookup does not unwrap
-        // (ADR 132 decision 8, #842).
-        composedCatchupModel.suppliedBy(catchupLayer);
+        // (ADR 132 decision 8, #842). durableSubscriptionModel is handed over alongside it because that is the bean
+        // a projection resolves and subscribes through, so it is how the registrar tells a projection running on
+        // this composition from one running on some other model the context holds (#996).
+        composedCatchupModel.suppliedBy(durableSubscriptionModel, catchupLayer);
         // A default StartAt resolves to StartAt.subscriptionModelDefault() (see StartPositionSupport), which both
         // the stream and DCB catch-up layers composeCatchupLayer can build classify as live, the same as a
         // checkpoint that is neither global nor time-based, so a wiped checkpoint changes nothing for it either.
         composedCatchupModel.defaultBypassesCatchup();
-        ReactorDurableSubscriptionModel durableSubscriptionModel = new ReactorDurableSubscriptionModel(catchupLayer, storage, durableConfig);
         if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
             // Stopped here rather than after the annotations are scanned, so every subscription is registered on a
             // model that is already stopped and none of them delivers anything until the application starts it. No

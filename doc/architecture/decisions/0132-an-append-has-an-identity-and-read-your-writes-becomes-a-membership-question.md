@@ -492,6 +492,21 @@ subscription model that replays. A third-party model that replays and answers `f
 puts its projections on the polled fallback, with the two costs decision 6 names. A subscription-TCK assertion
 for it is a candidate this ADR notes and does not build.
 
+> **Amended on 2026-09-11, before 0.34.0 shipped, for
+> [#996](https://github.com/johanhaleby/occurrent/issues/996).** This decision says whoever composed a projection's
+> subscription says which model the recorder registers with, and it never says which projections that answer
+> covers. The `ComposedCatchupModel` bean is context-wide, so the reactive registrar read it for every recording
+> projection, including one running on some other subscription model the context holds. That catch-up layer has
+> never heard of the subscription id, so it answers that the subscription is not catching up, the projection's
+> whole replay is recorded as live appends, and no clear follows, because the clear happens at a catch-up boundary
+> the recorder never learns about. `waitUntilApplied` then answers true for an append the rebuilt read model has
+> not applied. So the holder is told the composed model as well as the catch-up layer inside it, and every answer
+> it gives is bound to that model's identity. A projection running on anything else falls back to its own
+> capability lookup, and failing that to the warning decision 2 requires. The blocking stack's
+> `ComposedDefaultStartPosition` already worked this way for the `DEFAULT` fact, under
+> [#871](https://github.com/johanhaleby/occurrent/issues/871), and the reactive `isDefaultKnownLiveOnlyFor` matches
+> it.
+
 ### 9. A composition that never replays records, with no automatic clear
 
 Some compositions have no replay to observe at all, and it matters that "no replay" and "cannot say" are treated
