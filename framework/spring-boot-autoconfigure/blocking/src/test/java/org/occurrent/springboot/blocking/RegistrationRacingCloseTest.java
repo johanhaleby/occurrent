@@ -80,10 +80,12 @@ class RegistrationRacingCloseTest {
     private static final String SAGA_ID = "closing-push-saga";
     private static final String PROJECTION_ID = "closing-domain-push-projection";
     private static final String NO_CATCHUP_PROJECTION_ID = "closing-domain-push-projection-without-catchup";
+    private static final String MODEL_PROJECTION_ID = "closing-model-push-projection";
 
     private final ApplicationContextRunner runner = runnerWith(ManualPushSagaConfiguration.class);
     private final ApplicationContextRunner catchingUpRunner = domainFeedRunnerWith(CatchingUpProjectionConfiguration.class);
     private final ApplicationContextRunner noCatchupRunner = domainFeedRunnerWith(NoCatchupProjectionConfiguration.class);
+    private final ApplicationContextRunner pushModelRunner = runnerWith(ManualPushModelProjectionConfiguration.class);
 
     private static ApplicationContextRunner runnerWith(Class<?>... configurations) {
         return new ApplicationContextRunner()
@@ -136,10 +138,11 @@ class RegistrationRacingCloseTest {
             PushSubscriptionModel feed = context.getBean(PushSubscriptionModel.class);
             RecordingDispatcher dispatcher = context.getBean(RecordingDispatcher.class);
 
-            context.getBean(ManualStartPushSources.class).startAll();
+            List<String> started = context.getBean(ManualStartPushSources.class).startAll();
             feed.accept(orderPlaced("e1", "order-1", 1L));
 
             assertThat(dispatcher.issued).containsExactly(new ShipOrder("order-1"));
+            assertThat(started).describedAs("the ids startAll reported as started").containsExactly(SAGA_ID);
         });
     }
 
@@ -204,10 +207,11 @@ class RegistrationRacingCloseTest {
             AtomicInteger historyReads = context.getBean(HistoryReads.class).count;
             DomainEventFeed<?> feed = context.getBean(DomainEventFeed.class);
 
-            pushSources.startAll();
+            List<String> started = pushSources.startAll();
 
             assertThat(historyReads).describedAs("history reads while the context is open").hasValue(1);
             assertThat(feed.hasProjection()).describedAs("a projection registered on the feed").isTrue();
+            assertThat(started).describedAs("the ids startAll reported as started").containsExactly(PROJECTION_ID);
         });
     }
 
@@ -218,13 +222,119 @@ class RegistrationRacingCloseTest {
             DomainEventFeed<?> feed = context.getBean(DomainEventFeed.class);
             PushCatchupStatus status = context.getBean(PushCatchupStatusImpl.class);
 
-            pushSources.startAll();
+            List<String> started = pushSources.startAll();
 
             assertThat(feed.hasProjection()).describedAs("a projection registered on the feed").isTrue();
             assertThat(feed.isReadyForLiveDelivery()).describedAs("a feed taking live events").isTrue();
             assertThat(status.of(NO_CATCHUP_PROJECTION_ID))
                     .describedAs("the reported status of a projection that started")
                     .isEqualTo(new PushCatchupStatus.Live(NO_CATCHUP_PROJECTION_ID));
+            assertThat(started).describedAs("the ids startAll reported as started").containsExactly(NO_CATCHUP_PROJECTION_ID);
+        });
+    }
+
+    // What startAll() answers, rather than what the registration did. The two are separate invariants: everything
+    // above checks that a refused registration built and left nothing, and these check that the list does not claim
+    // it started anyway. Reporting on having found an entry to remove made a closing context tell a readiness probe
+    // that every push source came up.
+    @Test
+    void a_push_saga_started_after_the_context_closed_is_not_reported_as_started() {
+        runner.run(context -> {
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+
+            ((ConfigurableApplicationContext) context).close();
+
+            assertThat(pushSources.startAll()).describedAs("the ids startAll reported as started").isEmpty();
+        });
+    }
+
+    @Test
+    void a_push_projection_started_after_the_context_closed_is_not_reported_as_started() {
+        catchingUpRunner.run(context -> {
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+
+            ((ConfigurableApplicationContext) context).close();
+
+            assertThat(pushSources.startAll()).describedAs("the ids startAll reported as started").isEmpty();
+        });
+    }
+
+    @Test
+    void a_push_projection_that_does_not_catch_up_and_is_started_after_the_context_closed_is_not_reported_as_started() {
+        noCatchupRunner.run(context -> {
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+
+            ((ConfigurableApplicationContext) context).close();
+
+            assertThat(pushSources.startAll()).describedAs("the ids startAll reported as started").isEmpty();
+        });
+    }
+
+    // The subscription-model path rather than the DomainEventFeed one, and the ordering is why it earns its own
+    // fixture. project() subscribes before the closing check runs, so this is the refusal taken with real work
+    // already done, and the one a list built from what was claimed could least afford to get wrong.
+    @Test
+    void a_push_projection_on_a_subscription_model_started_after_the_context_closed_is_not_reported_as_started() {
+        pushModelRunner.run(context -> {
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+
+            ((ConfigurableApplicationContext) context).close();
+
+            assertThat(pushSources.startAll()).describedAs("the ids startAll reported as started").isEmpty();
+        });
+    }
+
+    // Being left out of the list is only half of it. Under catchup = NONE the projection subscribes straight onto the
+    // application's own PushSubscriptionModel, which nothing in the context shuts down, so a registration left behind
+    // there goes on handling pushed events while startAll() reports the id as never started.
+    @Test
+    void a_push_projection_on_a_subscription_model_started_after_the_context_closed_takes_no_live_events() {
+        pushModelRunner.run(context -> {
+            PushSubscriptionModel feed = context.getBean(PushSubscriptionModel.class);
+            @SuppressWarnings("unchecked")
+            ViewStateRepository<Integer, String> store = context.getBean(ViewStateRepository.class);
+
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+
+            ((ConfigurableApplicationContext) context).close();
+            pushSources.startAll();
+            feed.accept(orderPlaced("e1", "order-1", 1L));
+
+            assertThat(feed.isRunning(MODEL_PROJECTION_ID)).describedAs("subscribed after close").isFalse();
+            assertThat(store.findById("k")).describedAs("state updated after close").isEmpty();
+        });
+    }
+
+    // The saga half, and the worse one, since a saga that is still subscribed issues commands rather than only
+    // updating a read model. SagaSubscription.close() releases the lease and stops the timer poller and leaves the
+    // event subscription alone, so nothing else cancels it.
+    @Test
+    void a_push_saga_started_after_the_context_closed_issues_no_commands() {
+        runner.run(context -> {
+            PushSubscriptionModel feed = context.getBean(PushSubscriptionModel.class);
+            RecordingDispatcher dispatcher = context.getBean(RecordingDispatcher.class);
+
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+
+            ((ConfigurableApplicationContext) context).close();
+            pushSources.startAll();
+            feed.accept(orderPlaced("e1", "order-1", 1L));
+
+            assertThat(dispatcher.issued).describedAs("commands issued after close").isEmpty();
+        });
+    }
+
+    // The ordinary path for that fixture, so the test above cannot pass by the projection never starting at all.
+    @Test
+    void a_push_projection_on_a_subscription_model_started_while_the_context_is_open_is_reported_as_started() {
+        pushModelRunner.run(context -> {
+            PushSubscriptionModel feed = context.getBean(PushSubscriptionModel.class);
+
+            List<String> started = context.getBean(ManualStartPushSources.class).startAll();
+            feed.accept(orderPlaced("e1", "order-1", 1L));
+
+            assertThat(started).describedAs("the ids startAll reported as started").containsExactly(MODEL_PROJECTION_ID);
+            assertThat(feed.isRunning(MODEL_PROJECTION_ID)).describedAs("a projection subscribed to the push model").isTrue();
         });
     }
 
@@ -314,7 +424,9 @@ class RegistrationRacingCloseTest {
             return new SagaInstancesRegistryImpl();
         }
 
-        @Bean
+        // destroyMethod = "" for the reason the projection fixture gives below, so a registration the registrar
+        // failed to cancel stays visible rather than being cleared by the model's own shutdown.
+        @Bean(destroyMethod = "")
         PushSubscriptionModel pushModel() {
             return new PushSubscriptionModel();
         }
@@ -396,6 +508,55 @@ class RegistrationRacingCloseTest {
                 }
             };
             return new DomainEventFeed<>(reader, converter, OrderEvent::eventId);
+        }
+    }
+
+    // The subscription-model half of the fixtures. Kept apart from the DomainEventFeed configuration because a
+    // DomainEventFeed bean in the same context sends the registration down the other path entirely.
+    @Configuration(proxyBeanMethods = false)
+    static class ManualPushModelProjectionConfiguration {
+
+        @Bean
+        OccurrentProperties occurrentProperties() {
+            OccurrentProperties properties = new OccurrentProperties();
+            properties.getSubscription().setMode(SubscriptionMode.MANUAL);
+            return properties;
+        }
+
+        @Bean
+        CloudEventConverter<OrderEvent> cloudEventConverter() {
+            return TestConverter.INSTANCE;
+        }
+
+        // destroyMethod = "" because the point of these tests is a feed that outlives the context. Spring would
+        // otherwise call the model's own shutdown() as an inferred destroy method, which drops every registration and
+        // hides whether the registrar cancelled its own.
+        @Bean(destroyMethod = "")
+        PushSubscriptionModel pushModel() {
+            return new PushSubscriptionModel();
+        }
+
+        @Bean
+        PushCatchupStatusImpl pushCatchupStatus() {
+            return new PushCatchupStatusImpl();
+        }
+
+        @Bean
+        ViewStateRepository<Integer, String> viewStateRepository() {
+            Map<String, Integer> store = new ConcurrentHashMap<>();
+            return ViewStateRepository.create(store::get, store::put);
+        }
+
+        @Bean
+        ModelBackedPushProjection modelBackedPushProjection() {
+            return new ModelBackedPushProjection();
+        }
+    }
+
+    static class ModelBackedPushProjection {
+        @Projection(id = MODEL_PROJECTION_ID, source = Source.PUSH, catchup = Catchup.NONE)
+        org.occurrent.dsl.projection.Projection<Integer, OrderEvent, String> projection() {
+            return countProjection();
         }
     }
 
