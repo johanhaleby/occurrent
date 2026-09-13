@@ -71,10 +71,10 @@ record no longer asserts is that the wait always runs until somebody intervenes.
 
 **The decision below still stands, on a reason neither amendment touches.** It never rested on how long an
 event-path refusal blocks, only on that refusal costing what any other event-path exception in this architecture
-already costs. `SagaExecutionSupport.process` gives an `IllegalStateException` out of `evolve` the same path as a
-throwing `react` or a throwing dispatcher, so refusing here adds no failure mode ADR 123's refusal did not already
-accept. Both amendments change how large that shared cost is. Neither makes it this decision's cost rather than
-the architecture's.
+already costs. An `IllegalStateException` out of `evolve` travels the same route as a throwing `react` or a throwing
+dispatcher, because nothing on the event path treats it differently from any other failure of a delivery, so refusing
+here adds no failure mode ADR 123's refusal did not already accept. Both amendments change how large that shared
+cost is. Neither makes it this decision's cost rather than the architecture's.
 
 ## Decision
 
