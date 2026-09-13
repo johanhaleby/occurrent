@@ -20,6 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 
 import java.util.*;
+import java.util.function.BooleanSupplier;
 
 /**
  * Holds the startup work a {@code source = PUSH} registration would otherwise have run at boot, withheld because
@@ -37,19 +38,26 @@ import java.util.*;
  * Starting an id a second time, or one that was never withheld (for example because {@code occurrent.subscription.mode}
  * is {@code auto} and it already ran at boot), is a no-op rather than an error, so a caller does not need to track what
  * it already started.
+ * <p>
+ * A push source refused because the application context has begun closing is left out of {@link #startAll()} and is
+ * gone from {@link #pendingIds()} too. It is dropped rather than put back for a later {@link #start(String)}, since
+ * such a context never reopens and the withheld work may already have subscribed or registered before it read the
+ * flag, so a retry would repeat that work rather than resume it.
  */
 @NullMarked
 public final class ManualStartPushSources {
 
-    private final Map<String, Runnable> pending = new LinkedHashMap<>();
+    private final Map<String, BooleanSupplier> pending = new LinkedHashMap<>();
 
     /**
      * Record the startup work for {@code id}, to run once {@link #start(String)} or {@link #startAll()} is called.
-     * Called by the annotation processor while registering a withheld push source, not normally by application code.
+     * The work reports whether it brought the push source up, and answers false when it refused because the
+     * application context has begun closing. Called by the annotation processor while registering a withheld push
+     * source, not normally by application code.
      *
      * @throws DuplicateSubscriptionIdException if {@code id} is already registered
      */
-    void register(String id, Runnable startup) {
+    void register(String id, BooleanSupplier startup) {
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(startup, "startup cannot be null");
         synchronized (pending) {
@@ -73,7 +81,8 @@ public final class ManualStartPushSources {
      * Start every push source still withheld, in the order each was registered.
      *
      * @return the ids this call started, in that order, empty if none were withheld. An id another caller claimed
-     * first is left out, so the list says what happened rather than what was pending when the call began
+     * first is left out, as is one refused because the application context has begun closing, so the list says what
+     * happened rather than what was pending when the call began
      */
     public List<String> startAll() {
         List<String> started = new ArrayList<>();
@@ -85,21 +94,19 @@ public final class ManualStartPushSources {
         return List.copyOf(started);
     }
 
-    // True when this call was the one that claimed the id, false when it was already started or never withheld.
+    // True when this call claimed the id and the work it ran brought the push source up. False when the id was
+    // already started, was never withheld, or the work refused because the context is closing.
     private boolean startAndReport(String id) {
-        final Runnable startup;
+        final BooleanSupplier startup;
         synchronized (pending) {
             startup = pending.remove(id);
         }
-        if (startup == null) {
-            return false;
-        }
-        startup.run();
-        return true;
+        return startup != null && startup.getAsBoolean();
     }
 
     /**
-     * The ids still withheld, awaiting {@link #start(String)}, in registration order.
+     * The ids still withheld, awaiting {@link #start(String)}, in registration order. One refused because the
+     * application context has begun closing is not among them, since a retry would be refused too.
      */
     public List<String> pendingIds() {
         synchronized (pending) {

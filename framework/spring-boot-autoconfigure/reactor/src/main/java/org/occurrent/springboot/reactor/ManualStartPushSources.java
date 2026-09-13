@@ -39,6 +39,11 @@ import java.util.function.Supplier;
  * is {@code auto} and the projection already ran at boot), completes without doing anything rather than failing, so a
  * caller does not need to track what it already started.
  * <p>
+ * A projection refused because the application context has begun closing is left out of {@link #startAll()} and is
+ * gone from {@link #pendingIds()} too. It is dropped rather than put back for a later {@link #start(String)}, since
+ * such a context never reopens and the withheld work may already have subscribed or registered before it read the
+ * flag, so a retry would repeat that work rather than resume it.
+ * <p>
  * The reactor twin of the blocking {@code ManualStartPushSources}, differing in that the startup work runs when the
  * returned {@link Mono} is subscribed rather than when the method is called. The blocking one also withholds a
  * {@code @Saga(source = PUSH)}, which this one has no equivalent of because {@code @Saga} is blocking-only. The name is
@@ -47,16 +52,17 @@ import java.util.function.Supplier;
 @NullMarked
 public final class ManualStartPushSources {
 
-    private final Map<String, Supplier<Mono<Void>>> pending = new LinkedHashMap<>();
+    private final Map<String, Supplier<Mono<Boolean>>> pending = new LinkedHashMap<>();
 
     /**
      * Record the startup work for {@code id}, to run once {@link #start(String)} or {@link #startAll()} is called and
-     * subscribed. Called by the annotation processor while registering a withheld projection, not normally by
-     * application code.
+     * subscribed. The work reports whether it brought the projection up, and emits false when it refused because the
+     * application context has begun closing. Called by the annotation processor while registering a withheld
+     * projection, not normally by application code.
      *
      * @throws DuplicateSubscriptionIdException if {@code id} is already registered
      */
-    void register(String id, Supplier<Mono<Void>> startup) {
+    void register(String id, Supplier<Mono<Boolean>> startup) {
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(startup, "startup cannot be null");
         synchronized (pending) {
@@ -81,7 +87,8 @@ public final class ManualStartPushSources {
      * Start every projection still withheld, one after another, in the order each was registered.
      *
      * @return The ids this call started, in that order, empty if none were withheld. An id another caller claimed
-     * first is left out, so the list says what happened rather than what was pending when the call began.
+     * first is left out, as is one refused because the application context has begun closing, so the list says what
+     * happened rather than what was pending when the call began.
      */
     public Mono<List<String>> startAll() {
         return Flux.defer(() -> Flux.fromIterable(pendingIds()))
@@ -89,21 +96,23 @@ public final class ManualStartPushSources {
                 .collectList();
     }
 
-    // Emits the id when this call was the one that claimed it, and nothing when it was already started or was never
-    // withheld. Claimed on subscribe rather than when the Mono is built, so one that is built and never subscribed
-    // leaves the projection withheld instead of dropping its startup work.
+    // Emits the id when this call claimed it and the work it ran brought the projection up, and nothing when it was
+    // already started, was never withheld, or the work refused because the context is closing. Claimed on subscribe
+    // rather than when the Mono is built, so one that is built and never subscribed leaves the projection withheld
+    // instead of dropping its startup work.
     private Mono<String> startAndReport(String id) {
         return Mono.defer(() -> {
-            final Supplier<Mono<Void>> startup;
+            final Supplier<Mono<Boolean>> startup;
             synchronized (pending) {
                 startup = pending.remove(id);
             }
-            return startup == null ? Mono.empty() : startup.get().then(Mono.just(id));
+            return startup == null ? Mono.empty() : startup.get().filter(Boolean::booleanValue).map(ignored -> id);
         });
     }
 
     /**
-     * The ids still withheld, awaiting {@link #start(String)}, in registration order.
+     * The ids still withheld, awaiting {@link #start(String)}, in registration order. One refused because the
+     * application context has begun closing is not among them, since a retry would be refused too.
      */
     public List<String> pendingIds() {
         synchronized (pending) {

@@ -316,19 +316,21 @@ class ProjectionAnnotationRegistrar {
     // instead of returning while it is still applying history to a store the context is disposing. Checking a flag and then starting
     // an untracked replay narrows that window without closing it, because close() can set the flag and drain in
     // between and never learn this replay exists. Answers empty when close() has already begun.
-    private Mono<Void> trackedCatchUp(DomainEventFeed<?> feed, Mono<Void> catchUp) {
+    // Emits whether the catch-up ran, so a caller that has to report what it started can tell an abandoned catch-up
+    // from a finished one.
+    private Mono<Boolean> trackedCatchUp(DomainEventFeed<?> feed, Mono<Void> catchUp) {
         Mono<Void> cached = catchUp.cache();
         backgroundFeeds.add(feed);
         backgroundCatchUps.add(cached);
         if (closing) {
             backgroundCatchUps.remove(cached);
             removeThenStop(backgroundFeeds, feed, DomainEventFeed::stopCatchUp);
-            return Mono.empty();
+            return Mono.just(false);
         }
         return cached.doFinally(ignored -> {
             backgroundCatchUps.remove(cached);
             backgroundFeeds.remove(feed);
-        });
+        }).thenReturn(true);
     }
 
     // Whether close() has begun, stopping this registration's own model on the way out when it has. Null when the
@@ -657,7 +659,9 @@ class ProjectionAnnotationRegistrar {
             applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
                 var deferred = projectAgnosticOrStream(runner, id, annotation, projection, store, null, resolution);
                 // Runs on whichever thread called ManualStartPushSources.start, so close() may have gone past long ago.
-                return stopIfClosing(pushCatchupModel) ? Mono.<Void>empty() : deferred.waitUntilStarted();
+                // Checked after the call that subscribes, so a refusal here is taken with the subscribe already
+                // done.
+                return stopIfClosing(pushCatchupModel) ? Mono.just(false) : deferred.waitUntilStarted().thenReturn(true);
             });
         }
     }
@@ -723,12 +727,12 @@ class ProjectionAnnotationRegistrar {
                 // has no unregister, so a start(id) arriving after the context closed would leave it buffering for the
                 // life of the bean.
                 if (closing) {
-                    return Mono.<Void>empty();
+                    return Mono.just(false);
                 }
                 registerOnFeed.run();
                 if (!catchesUp) {
                     // goLive starts no replay, so there is nothing to track and stop the way a catch-up needs.
-                    return feed.goLive(id).doOnSuccess(ignored -> withPushCatchupStatus(status -> status.recordLive(id)));
+                    return feed.goLive(id).doOnSuccess(ignored -> withPushCatchupStatus(status -> status.recordLive(id))).thenReturn(true);
                 }
                 // Tracked the same way as catchUpCollectedFeeds, and this path is why it matters, since start(id) can be
                 // called long after close() has returned.

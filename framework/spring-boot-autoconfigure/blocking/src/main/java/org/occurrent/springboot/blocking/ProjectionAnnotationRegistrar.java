@@ -223,7 +223,9 @@ class ProjectionAnnotationRegistrar {
     // for it to unwind instead of returning while it is still applying history to a store the context is disposing. Checking a flag
     // and then starting an untracked replay narrows that window without closing it, because close() can set the flag
     // and drain in between and never learn this replay exists.
-    private void runTrackedOnThisThread(Runnable work, Runnable stop) {
+    // Answers whether the work ran, so a caller that has to report what it started can tell an abandoned catch-up
+    // from a finished one.
+    private boolean runTrackedOnThisThread(Runnable work, Runnable stop) {
         FutureTask<Void> task = new FutureTask<>(() -> {
             work.run();
             return null;
@@ -232,7 +234,7 @@ class ProjectionAnnotationRegistrar {
         backgroundCatchUps.add(tracked);
         if (closing) {
             removeThenStop(backgroundCatchUps, tracked, entry -> entry.stop().run());
-            return;
+            return false;
         }
         try {
             task.run();
@@ -253,6 +255,7 @@ class ProjectionAnnotationRegistrar {
                 case null, default -> throw new IllegalStateException(e.getCause());
             }
         }
+        return true;
     }
 
     // Whether close() has begun, stopping this registration's own model on the way out when it has. Null when the
@@ -687,13 +690,16 @@ class ProjectionAnnotationRegistrar {
         applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
             Subscription deferred = runner.project(id, projection, materializedView, null, waitUntilStarted);
             // Runs on whichever thread called ManualStartPushSources.start, so close() may have gone past long ago.
+            // Checked after project(), which is what subscribes, so a refusal here is taken with the subscribe
+            // already done.
             if (stopIfClosing(catchupModel)) {
-                return;
+                return false;
             }
             if (!waitUntilStarted) {
                 runInBackground("occurrent-push-catchup-watch", id, deferred::waitUntilStarted, () -> {
                 });
             }
+            return true;
         });
     }
 
@@ -761,20 +767,23 @@ class ProjectionAnnotationRegistrar {
                 // has no unregister, so a start(id) arriving after the context closed would leave it buffering for the
                 // life of the bean.
                 if (closing) {
-                    return;
+                    return false;
                 }
                 feed.register(id, materializedView, eventFilter);
                 if (!catchesUp) {
                     feed.goLive(id);
                     withPushCatchupStatus(status -> status.recordLive(id));
+                    return true;
                 } else if (waitUntilStarted) {
                     // Tracked the same way as catchUpCollectedFeeds, and this path is why it matters, since start(id) can
                     // be called long after close() has returned.
-                    runTrackedOnThisThread(recordingProgress(id, () -> feed.catchUp(id)), feed::stopCatchUp);
+                    return runTrackedOnThisThread(recordingProgress(id, () -> feed.catchUp(id)), feed::stopCatchUp);
                 } else {
                     // Same treatment as auto mode, or startAll() would block for a full replay on a projection that
-                    // asked for BACKGROUND.
+                    // asked for BACKGROUND. Reported as started once the replay is launched, which is what BACKGROUND
+                    // asks for.
                     runInBackground("occurrent-domain-feed-catchup", id, recordingProgress(id, () -> feed.catchUp(id)), feed::stopCatchUp);
+                    return true;
                 }
             });
         }

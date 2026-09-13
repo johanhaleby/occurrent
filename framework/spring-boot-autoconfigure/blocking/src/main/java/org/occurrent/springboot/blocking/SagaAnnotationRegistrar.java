@@ -189,10 +189,11 @@ class SagaAnnotationRegistrar {
                 // flag rather than on whether this stopped anything, since close() may have stopped it already.
                 if (closing) {
                     stopOwnRegistration(deferred, subscribable);
-                    return;
+                    return false;
                 }
                 registerSagaSubscriptionSingleton(id, deferred);
                 watchBackgroundCatchUpIfNobodyElseWill(annotation, id, deferred, waitUntilStarted);
+                return true;
             });
             return;
         }
