@@ -284,6 +284,46 @@ class RegistrationRacingCloseTest {
         });
     }
 
+    // Being left out of the list is only half of it. Under catchup = NONE the projection subscribes straight onto the
+    // application's own PushSubscriptionModel, which nothing in the context shuts down, so a registration left behind
+    // there goes on handling pushed events while startAll() reports the id as never started.
+    @Test
+    void a_push_projection_on_a_subscription_model_started_after_the_context_closed_takes_no_live_events() {
+        pushModelRunner.run(context -> {
+            PushSubscriptionModel feed = context.getBean(PushSubscriptionModel.class);
+            @SuppressWarnings("unchecked")
+            ViewStateRepository<Integer, String> store = context.getBean(ViewStateRepository.class);
+
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+
+            ((ConfigurableApplicationContext) context).close();
+            pushSources.startAll();
+            feed.accept(orderPlaced("e1", "order-1", 1L));
+
+            assertThat(feed.isRunning(MODEL_PROJECTION_ID)).describedAs("subscribed after close").isFalse();
+            assertThat(store.findById("k")).describedAs("state updated after close").isEmpty();
+        });
+    }
+
+    // The saga half, and the worse one, since a saga that is still subscribed issues commands rather than only
+    // updating a read model. SagaSubscription.close() releases the lease and stops the timer poller and leaves the
+    // event subscription alone, so nothing else cancels it.
+    @Test
+    void a_push_saga_started_after_the_context_closed_issues_no_commands() {
+        runner.run(context -> {
+            PushSubscriptionModel feed = context.getBean(PushSubscriptionModel.class);
+            RecordingDispatcher dispatcher = context.getBean(RecordingDispatcher.class);
+
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+
+            ((ConfigurableApplicationContext) context).close();
+            pushSources.startAll();
+            feed.accept(orderPlaced("e1", "order-1", 1L));
+
+            assertThat(dispatcher.issued).describedAs("commands issued after close").isEmpty();
+        });
+    }
+
     // The ordinary path for that fixture, so the test above cannot pass by the projection never starting at all.
     @Test
     void a_push_projection_on_a_subscription_model_started_while_the_context_is_open_is_reported_as_started() {
@@ -384,7 +424,9 @@ class RegistrationRacingCloseTest {
             return new SagaInstancesRegistryImpl();
         }
 
-        @Bean
+        // destroyMethod = "" for the reason the projection fixture gives below, so a registration the registrar
+        // failed to cancel stays visible rather than being cleared by the model's own shutdown.
+        @Bean(destroyMethod = "")
         PushSubscriptionModel pushModel() {
             return new PushSubscriptionModel();
         }
@@ -486,7 +528,10 @@ class RegistrationRacingCloseTest {
             return TestConverter.INSTANCE;
         }
 
-        @Bean
+        // destroyMethod = "" because the point of these tests is a feed that outlives the context. Spring would
+        // otherwise call the model's own shutdown() as an inferred destroy method, which drops every registration and
+        // hides whether the registrar cancelled its own.
+        @Bean(destroyMethod = "")
         PushSubscriptionModel pushModel() {
             return new PushSubscriptionModel();
         }

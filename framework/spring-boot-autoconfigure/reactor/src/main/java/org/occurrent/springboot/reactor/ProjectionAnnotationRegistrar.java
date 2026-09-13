@@ -46,6 +46,7 @@ import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
@@ -315,9 +316,8 @@ class ProjectionAnnotationRegistrar {
     // Track a catch-up the same way a background one is tracked, so close() can stop it and wait for it to unwind
     // instead of returning while it is still applying history to a store the context is disposing. Checking a flag and then starting
     // an untracked replay narrows that window without closing it, because close() can set the flag and drain in
-    // between and never learn this replay exists. Answers empty when close() has already begun.
-    // Emits whether the catch-up ran, so a caller that has to report what it started can tell an abandoned catch-up
-    // from a finished one.
+    // between and never learn this replay exists. Emits whether the catch-up ran, so a caller that has to report
+    // what it started can tell an abandoned catch-up from a finished one.
     private Mono<Boolean> trackedCatchUp(DomainEventFeed<?> feed, Mono<Void> catchUp) {
         Mono<Void> cached = catchUp.cache();
         backgroundFeeds.add(feed);
@@ -333,14 +333,19 @@ class ProjectionAnnotationRegistrar {
         }).thenReturn(true);
     }
 
-    // Whether close() has begun, stopping this registration's own model on the way out when it has. Null when the
-    // projection takes its feed bare under catchup = NONE, where there is no model of ours to stop.
-    private boolean stopIfClosing(@Nullable CatchupThenPushSubscriptionModel model) {
+    // Whether close() has begun, undoing what this registration built on the way out when it has. A catch-up model
+    // is this registrar's own, so it is shut down whole. Under catchup = NONE the feed is a bean the application
+    // supplied and may keep running past the context, so only the subscription this registration added is cancelled.
+    // Cancelling rather than leaving it is what keeps the refusal honest, since a registration left on a feed that
+    // outlives the context goes on handling pushed events while startAll() reports the id as never started.
+    private boolean stopIfClosing(@Nullable CatchupThenPushSubscriptionModel model, Subscribable subscribable, String id) {
         if (!closing) {
             return false;
         }
         if (model != null) {
             removeThenStop(pushModels, model, CatchupThenPushSubscriptionModel::shutdown);
+        } else if (subscribable instanceof CancellableSubscriptions cancellable) {
+            cancellable.cancelSubscription(id);
         }
         return true;
     }
@@ -643,7 +648,7 @@ class ProjectionAnnotationRegistrar {
             // Checked after the call that subscribes, because the model does not refuse a subscribe once close() has
             // shut it down. It starts a replay instead, and by then the model is out of the queue and close() cannot
             // stop it a second time.
-            if (stopIfClosing(pushCatchupModel)) {
+            if (stopIfClosing(pushCatchupModel, subscribable, id)) {
                 return;
             }
             if (SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode())) {
@@ -661,7 +666,7 @@ class ProjectionAnnotationRegistrar {
                 // Runs on whichever thread called ManualStartPushSources.start, so close() may have gone past long ago.
                 // Checked after the call that subscribes, so a refusal here is taken with the subscribe already
                 // done.
-                return stopIfClosing(pushCatchupModel) ? Mono.just(false) : deferred.waitUntilStarted().thenReturn(true);
+                return stopIfClosing(pushCatchupModel, subscribable, id) ? Mono.just(false) : deferred.waitUntilStarted().thenReturn(true);
             });
         }
     }

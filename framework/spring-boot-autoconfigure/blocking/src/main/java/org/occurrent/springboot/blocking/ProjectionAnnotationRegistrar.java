@@ -50,6 +50,7 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.CancellableSubscriptions;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
@@ -258,14 +259,19 @@ class ProjectionAnnotationRegistrar {
         return true;
     }
 
-    // Whether close() has begun, stopping this registration's own model on the way out when it has. Null when the
-    // projection takes its feed bare under catchup = NONE, where there is no model of ours to stop.
-    private boolean stopIfClosing(@Nullable ReplayAwareSubscriptions catchupModel) {
+    // Whether close() has begun, undoing what this registration built on the way out when it has. A catch-up model
+    // is this registrar's own, so it is shut down whole. Under catchup = NONE the feed is a bean the application
+    // supplied and may keep running past the context, so only the subscription this registration added is cancelled.
+    // Cancelling rather than leaving it is what keeps the refusal honest, since a registration left on a feed that
+    // outlives the context goes on handling pushed events while startAll() reports the id as never started.
+    private boolean stopIfClosing(@Nullable ReplayAwareSubscriptions catchupModel, Subscribable subscribable, String id) {
         if (!closing) {
             return false;
         }
         if (catchupModel instanceof CatchupThenPushSubscriptionModel model) {
             removeThenStop(pushModels, model, CatchupThenPushSubscriptionModel::shutdown);
+        } else if (subscribable instanceof CancellableSubscriptions cancellable) {
+            cancellable.cancelSubscription(id);
         }
         return true;
     }
@@ -672,7 +678,7 @@ class ProjectionAnnotationRegistrar {
             // Checked after project(), because that is what subscribes, and the model does not refuse a subscribe
             // once close() has shut it down. It starts a replay instead, and by then the model is out of the queue
             // and close() cannot stop it a second time.
-            if (stopIfClosing(catchupModel)) {
+            if (stopIfClosing(catchupModel, subscribable, id)) {
                 return;
             }
             if (!waitUntilStarted) {
@@ -692,7 +698,7 @@ class ProjectionAnnotationRegistrar {
             // Runs on whichever thread called ManualStartPushSources.start, so close() may have gone past long ago.
             // Checked after project(), which is what subscribes, so a refusal here is taken with the subscribe
             // already done.
-            if (stopIfClosing(catchupModel)) {
+            if (stopIfClosing(catchupModel, subscribable, id)) {
                 return false;
             }
             if (!waitUntilStarted) {

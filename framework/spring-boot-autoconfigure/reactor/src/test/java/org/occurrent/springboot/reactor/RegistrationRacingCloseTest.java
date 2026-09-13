@@ -207,6 +207,26 @@ class RegistrationRacingCloseTest {
         });
     }
 
+    // Being left out of the list is only half of it. Under catchup = NONE the projection subscribes straight onto the
+    // application's own PushSubscriptionModel, which nothing in the context shuts down, so a registration left behind
+    // there goes on handling pushed events while startAll() reports the id as never started.
+    @SuppressWarnings("unchecked")
+    @Test
+    void a_push_projection_on_a_subscription_model_started_after_the_context_closed_takes_no_live_events() {
+        pushModelRunner.run(context -> {
+            PushSubscriptionModel feed = context.getBean(PushSubscriptionModel.class);
+            ViewStateRepository<Integer, String> store = context.getBean(ViewStateRepository.class);
+
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+
+            ((ConfigurableApplicationContext) context).close();
+            pushSources.startAll().block();
+            feed.accept(cloudEvent("live")).block();
+
+            assertThat(store.findById("k")).describedAs("state updated after close").isEmpty();
+        });
+    }
+
     // The ordinary paths, so none of the three above can pass by the projection never starting at all.
     @Test
     void a_push_projection_started_while_the_context_is_open_is_reported_as_started() {
@@ -279,8 +299,10 @@ class RegistrationRacingCloseTest {
         }
 
         // A PushSubscriptionModel is itself a Subscribable, unlike a DomainEventFeed, so this is the only feed bean
-        // the configuration needs.
-        @Bean
+        // the configuration needs. destroyMethod = "" because these tests are about a feed that outlives the context.
+        // Spring would otherwise call the model's own shutdown() as an inferred destroy method, which drops every
+        // registration and hides whether the registrar cancelled its own.
+        @Bean(destroyMethod = "")
         PushSubscriptionModel pushModel() {
             return new PushSubscriptionModel();
         }

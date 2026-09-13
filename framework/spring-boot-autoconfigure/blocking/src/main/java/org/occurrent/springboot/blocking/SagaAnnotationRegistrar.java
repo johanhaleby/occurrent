@@ -35,6 +35,7 @@ import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.CancellableSubscriptions;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
@@ -507,6 +508,11 @@ class SagaAnnotationRegistrar {
         removeThenStop(sagaSubscriptions, subscription, SagaSubscription::close);
         if (subscribable instanceof CatchupThenPushSubscriptionModel model) {
             removeThenStop(pushModels, model, CatchupThenPushSubscriptionModel::shutdown);
+        } else if (subscribable instanceof CancellableSubscriptions cancellable) {
+            // close() releases the lease and stops the timer poller, and leaves the event subscription alone. On a
+            // feed the application supplied and may keep running past the context, that subscription goes on issuing
+            // commands, so it is cancelled here.
+            cancellable.cancelSubscription(subscription.id());
         }
     }
 
