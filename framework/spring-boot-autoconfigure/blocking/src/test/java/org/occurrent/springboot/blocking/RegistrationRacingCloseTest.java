@@ -22,15 +22,23 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.Catchup;
+import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.Saga;
 import org.occurrent.annotation.Source;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.command.CommandDispatcher;
+import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
+import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.springboot.common.PushCatchupStatus;
+import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.SubscriptionMode;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -40,8 +48,12 @@ import org.springframework.context.annotation.Configuration;
 
 import java.net.URI;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -66,11 +78,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RegistrationRacingCloseTest {
 
     private static final String SAGA_ID = "closing-push-saga";
+    private static final String PROJECTION_ID = "closing-domain-push-projection";
+    private static final String NO_CATCHUP_PROJECTION_ID = "closing-domain-push-projection-without-catchup";
 
-    private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-            .withBean(ManualStartPushSources.class, ManualStartPushSources::new)
-            .withUserConfiguration(ManualPushSagaConfiguration.class);
+    private final ApplicationContextRunner runner = runnerWith(ManualPushSagaConfiguration.class);
+    private final ApplicationContextRunner catchingUpRunner = domainFeedRunnerWith(CatchingUpProjectionConfiguration.class);
+    private final ApplicationContextRunner noCatchupRunner = domainFeedRunnerWith(NoCatchupProjectionConfiguration.class);
+
+    private static ApplicationContextRunner runnerWith(Class<?>... configurations) {
+        return new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withBean(ManualStartPushSources.class, ManualStartPushSources::new)
+                .withUserConfiguration(configurations);
+    }
+
+    private static ApplicationContextRunner domainFeedRunnerWith(Class<?> projectionConfiguration) {
+        return runnerWith(ManualDomainFeedConfiguration.class, projectionConfiguration);
+    }
 
     // The symptom the issue names is a timer poller that outlives the context that owns it. The poller runs on a thread
     // named after its subscription, so a surviving one is visible by name rather than through the registrar's state.
@@ -116,6 +140,91 @@ class RegistrationRacingCloseTest {
             feed.accept(orderPlaced("e1", "order-1", 1L));
 
             assertThat(dispatcher.issued).containsExactly(new ShipOrder("order-1"));
+        });
+    }
+
+    // The second arm again, on the DomainEventFeed path rather than the saga one. Reading history is what a replay
+    // does first, so a reader nobody asked is a replay that never started.
+    @Test
+    void a_push_projection_started_after_the_context_closed_starts_no_replay() {
+        catchingUpRunner.run(context -> {
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+            AtomicInteger historyReads = context.getBean(HistoryReads.class).count;
+
+            ((ConfigurableApplicationContext) context).close();
+            pushSources.startAll();
+
+            assertThat(historyReads).describedAs("history reads after the context closed").hasValue(0);
+        });
+    }
+
+    // Starting no replay was never the whole invariant. register(...) on its own puts the feed into buffering mode,
+    // and a feed has no unregister, so a registration that survives a refused start leaves the feed buffering into a
+    // bounded buffer that nothing will ever drain, until it overflows into the application's own publish path.
+    @Test
+    void a_push_projection_started_after_the_context_closed_leaves_the_feed_unregistered() {
+        catchingUpRunner.run(context -> {
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+            DomainEventFeed<?> feed = context.getBean(DomainEventFeed.class);
+
+            ((ConfigurableApplicationContext) context).close();
+            pushSources.startAll();
+
+            assertThat(feed.hasProjection()).describedAs("a projection registered on the feed after the context closed").isFalse();
+        });
+    }
+
+    // catchup = NONE goes live instead of replaying, so a reader that was never asked for history says nothing about
+    // it. Three assertions because the branch leaves three traces, the registration, the handover goLive drives, and
+    // the status a readiness probe reads. All three fail at the check the deferred block opens with, one level up
+    // from the branch they name, which checks nothing itself.
+    @Test
+    void a_push_projection_that_does_not_catch_up_and_is_started_after_the_context_closed_neither_registers_nor_goes_live() {
+        noCatchupRunner.run(context -> {
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+            DomainEventFeed<?> feed = context.getBean(DomainEventFeed.class);
+            PushCatchupStatus status = context.getBean(PushCatchupStatusImpl.class);
+
+            ((ConfigurableApplicationContext) context).close();
+            pushSources.startAll();
+
+            assertThat(feed.hasProjection()).describedAs("a projection registered on the feed after the context closed").isFalse();
+            assertThat(feed.isReadyForLiveDelivery()).describedAs("a feed taking live events after the context closed").isFalse();
+            assertThat(status.of(NO_CATCHUP_PROJECTION_ID))
+                    .describedAs("the reported status of a projection that was refused")
+                    .isEqualTo(new PushCatchupStatus.Unknown(NO_CATCHUP_PROJECTION_ID));
+        });
+    }
+
+    // The ordinary paths, so neither refusal above can pass by the projection never starting at all.
+    @Test
+    void a_push_projection_started_while_the_context_is_open_does_replay() {
+        catchingUpRunner.run(context -> {
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+            AtomicInteger historyReads = context.getBean(HistoryReads.class).count;
+            DomainEventFeed<?> feed = context.getBean(DomainEventFeed.class);
+
+            pushSources.startAll();
+
+            assertThat(historyReads).describedAs("history reads while the context is open").hasValue(1);
+            assertThat(feed.hasProjection()).describedAs("a projection registered on the feed").isTrue();
+        });
+    }
+
+    @Test
+    void a_push_projection_that_does_not_catch_up_and_is_started_while_the_context_is_open_registers_and_goes_live() {
+        noCatchupRunner.run(context -> {
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+            DomainEventFeed<?> feed = context.getBean(DomainEventFeed.class);
+            PushCatchupStatus status = context.getBean(PushCatchupStatusImpl.class);
+
+            pushSources.startAll();
+
+            assertThat(feed.hasProjection()).describedAs("a projection registered on the feed").isTrue();
+            assertThat(feed.isReadyForLiveDelivery()).describedAs("a feed taking live events").isTrue();
+            assertThat(status.of(NO_CATCHUP_PROJECTION_ID))
+                    .describedAs("the reported status of a projection that started")
+                    .isEqualTo(new PushCatchupStatus.Live(NO_CATCHUP_PROJECTION_ID));
         });
     }
 
@@ -224,6 +333,107 @@ class RegistrationRacingCloseTest {
         ClosingPushSaga closingPushSaga() {
             return new ClosingPushSaga();
         }
+    }
+
+    static final class HistoryReads {
+        final AtomicInteger count = new AtomicInteger();
+    }
+
+    // The DomainEventFeed half of the fixtures. Separate from the saga configuration above because the two paths share
+    // nothing but the manual mode that withholds them, and one feed feeds one projection, so a second projection here
+    // would need a second feed bean the registrar could not choose between.
+    @Configuration(proxyBeanMethods = false)
+    static class ManualDomainFeedConfiguration {
+
+        @Bean
+        OccurrentProperties occurrentProperties() {
+            OccurrentProperties properties = new OccurrentProperties();
+            properties.getSubscription().setMode(SubscriptionMode.MANUAL);
+            return properties;
+        }
+
+        @Bean
+        HistoryReads historyReads() {
+            return new HistoryReads();
+        }
+
+        // Declared so a refused registration can be asked what it reported. The registrar resolves the status bean
+        // through getIfAvailable, so without it every recordLive is a call into nothing and the assertion cannot
+        // tell the two outcomes apart.
+        @Bean
+        PushCatchupStatusImpl pushCatchupStatus() {
+            return new PushCatchupStatusImpl();
+        }
+
+        @Bean
+        ViewStateRepository<Integer, String> viewStateRepository() {
+            Map<String, Integer> store = new ConcurrentHashMap<>();
+            return ViewStateRepository.create(store::get, store::put);
+        }
+
+        @Bean
+        CloudEventConverter<OrderEvent> domainFeedConverter() {
+            return TestConverter.INSTANCE;
+        }
+
+        @Bean
+        DomainEventFeed<OrderEvent> domainEventFeed(CloudEventConverter<OrderEvent> converter, HistoryReads reads) {
+            PositionOrderedReader reader = new PositionOrderedReader() {
+                @Override
+                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    reads.count.incrementAndGet();
+                    return Stream.of(orderPlaced("history", "order-1", 1L));
+                }
+
+                @Override
+                public long currentPosition() {
+                    return 1;
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+            return new DomainEventFeed<>(reader, converter, OrderEvent::eventId);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class CatchingUpProjectionConfiguration {
+        @Bean
+        ClosingPushProjection closingPushProjection() {
+            return new ClosingPushProjection();
+        }
+    }
+
+    static class ClosingPushProjection {
+        @Projection(id = PROJECTION_ID, source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, OrderEvent, String> projection() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class NoCatchupProjectionConfiguration {
+        @Bean
+        ClosingPushProjectionWithoutCatchup closingPushProjectionWithoutCatchup() {
+            return new ClosingPushProjectionWithoutCatchup();
+        }
+    }
+
+    static class ClosingPushProjectionWithoutCatchup {
+        @Projection(id = NO_CATCHUP_PROJECTION_ID, source = Source.PUSH, catchup = Catchup.NONE)
+        org.occurrent.dsl.projection.Projection<Integer, OrderEvent, String> projection() {
+            return countProjection();
+        }
+    }
+
+    private static org.occurrent.dsl.projection.Projection<Integer, OrderEvent, String> countProjection() {
+        return org.occurrent.dsl.projection.Projection.<Integer, OrderEvent, String>builder(0)
+                .id(event -> "k")
+                .on(OrderPlaced.class, (state, event) -> state + 1)
+                .build();
     }
 
     static class ClosingPushSaga {

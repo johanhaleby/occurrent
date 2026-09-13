@@ -719,17 +719,19 @@ class ProjectionAnnotationRegistrar {
             // together, so nothing about this projection reaches the feed until the application starts it, and
             // running the deferred work leaves the feed in the same state registering it under auto mode would.
             applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
-                // Tracked the same way as catchUpCollectedFeeds, and this path is why it matters, since start(id) can be
-                // called long after close() has returned. goLive starts no replay, so it only needs the flag.
-                if (!catchesUp) {
-                    return closing
-                            ? Mono.<Void>empty()
-                            : Mono.defer(() -> {
-                                registerOnFeed.run();
-                                return feed.goLive(id).doOnSuccess(ignored -> withPushCatchupStatus(status -> status.recordLive(id)));
-                            });
+                // Refused once close() has begun. register(...) is what puts the feed into buffering mode, and a feed
+                // has no unregister, so a start(id) arriving after the context closed would leave it buffering for the
+                // life of the bean.
+                if (closing) {
+                    return Mono.<Void>empty();
                 }
                 registerOnFeed.run();
+                if (!catchesUp) {
+                    // goLive starts no replay, so there is nothing to track and stop the way a catch-up needs.
+                    return feed.goLive(id).doOnSuccess(ignored -> withPushCatchupStatus(status -> status.recordLive(id)));
+                }
+                // Tracked the same way as catchUpCollectedFeeds, and this path is why it matters, since start(id) can be
+                // called long after close() has returned.
                 return trackedCatchUp(feed, recordingProgress(id, feed.catchUp(id)));
             });
         }
