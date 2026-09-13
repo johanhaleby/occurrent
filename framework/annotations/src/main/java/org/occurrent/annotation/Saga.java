@@ -43,12 +43,30 @@ import java.lang.annotation.*;
  * The method may live on any Spring bean: a {@code @Bean} in a {@code @Configuration}, or a method on a
  * {@code @Component}. This is a blocking-stack feature, the reactive starter does not register {@code @Saga}.
  * <p>
- * The two input paths fail differently. A failing event propagates to the subscription, which redelivers and retries,
- * since that subscription is a single ordered channel shared by every instance of this saga, an event that keeps failing
- * blocks the events behind it (head-of-line blocking) until it clears. A failing timeout is caught per instance, logged,
- * and left due for the next poll, so it never blocks other instances. Commands are dispatched before the state is saved
- * and a lost save retries the step, so a receiver must be idempotent and tolerate the same command arriving more than once
- * per input.
+ * The two input paths fail differently. A failing event propagates to the subscription, which redelivers the event and
+ * retries the whole step. That subscription is a single ordered channel shared by every instance of this saga, so while
+ * one event keeps failing the events behind it wait, which is head-of-line blocking.
+ * <p>
+ * Four things have to hold for that wait to end at the quarantine budget, five minutes by default and set by
+ * {@code occurrent.saga.quarantine-after} on this path. The budget has to be set. The subscription model has to
+ * guarantee it holds every event it delivers. The event has to arrive with a stream id and version or a global position.
+ * And the model has to confirm, for that one event, that acknowledging it is not what would destroy the last copy of it.
+ * Where all four hold, the instance is marked {@code QUARANTINED} on whichever event it stopped on, and the subscription
+ * moves past that event so the saga's other instances keep going. Where any of them is missing the wait is the one every
+ * version up to 0.33.0 had, which is unbounded. The javadoc on {@code SagaRunner}, the executor the framework builds
+ * for this saga, and
+ * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0134-a-saga-instance-that-keeps-failing-is-quarantined-at-its-own-position.md">ADR 134</a>
+ * have the rest, including what a quarantined instance does afterwards and how to find one.
+ * <p>
+ * A failing timeout is caught per instance, logged, and left due for the next poll. Nothing isolates an instance that
+ * keeps failing from the saga's other instances. A poll fires at most {@code SagaRunnerConfig.timerBatchLimit()}
+ * instances, a hundred by default, and nothing in {@code SagaStateStore.findWithDueTimers} requires a store to give a
+ * different instance a turn, so once that many instances cannot fire their timers the saga can stop firing timers
+ * altogether. Nothing in 0.34.0 bounds that.
+ * <a href="https://github.com/johanhaleby/occurrent/issues/1003">Issue 1003</a> is where it is being fixed.
+ * <p>
+ * Commands are dispatched before the state is saved and a lost save retries the step, so a receiver must be idempotent
+ * and tolerate the same command arriving more than once per input.
  *
  * <h4>State store</h4>
  * <p>
