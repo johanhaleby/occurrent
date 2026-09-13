@@ -44,19 +44,37 @@ Guard the lookup, and `reactToBranch`, `reactToJoin` and `armTimeoutIfAny` can n
 name or a branch index the current build does not have. There is nothing left for a second fix to do there.
 
 **The two guarded call sites do not carry the same cost when they refuse.** `SagaRunner`'s own javadoc documents
-that an exception on the event path propagates to the subscription model, which retries the same event forever, so
-one instance parked on a gone step blocks every other instance sharing that subscription until somebody
-intervenes. That is not a new failure mode this decision introduces, it is the same accepted architecture ADR
+that an exception on the event path propagates to the subscription model, which redelivers the event and retries
+the whole step, and that the subscription is a single ordered channel shared by every instance the saga handles, so
+while one event keeps failing the events behind it wait. One instance parked on a gone step is what holds that
+channel. That is not a new failure mode this decision introduces, it is the same accepted architecture ADR
 123's own refusal already lives with. The timer path is different. `SagaExecution.pollTimers` catches a failing
-timeout per instance, logs it, and leaves it due for the next poll. A missing step reached by an event can cost the
-whole subscription until fixed.
+timeout per instance, logs it, and leaves it due for the next poll.
 
 **Amended for [#998](https://github.com/johanhaleby/occurrent/issues/998).** This paragraph used to end "A missing
 step firing a timer costs one stuck instance", which was wrong in the same way ADR 134's Context was. The timer
 survives, and nothing in `findWithDueTimers` requires a store to give a different instance a turn, so once
-`timerBatchLimit` instances are in that state the saga can stop firing timers altogether. The decision below is unaffected, since
-it rests on the event path.
+`timerBatchLimit` instances are in that state the saga can stop firing timers altogether.
 See [#1003](https://github.com/johanhaleby/occurrent/issues/1003).
+
+**Amended for [#1028](https://github.com/johanhaleby/occurrent/issues/1028).** Two more of the paragraph's claims
+have gone. It used to attribute to `SagaRunner`'s javadoc that the subscription model "retries the same event
+forever", and that attribution was wrong on the day it was written. On 2026-08-16 the javadoc said the events
+behind a failing one wait "until it succeeds or someone intervenes", and the file has never contained the word
+"forever" or the phrase "retries the same event". The paragraph also used to end "A missing step reached by an
+event can cost the whole subscription until fixed", which 0.34.0 superseded. An instance that keeps failing is
+quarantined at `quarantineAfter` wherever four conditions hold, and `SagaRunner`'s Event path section and
+[ADR 134](0134-a-saga-instance-that-keeps-failing-is-quarantined-at-its-own-position.md) list them. Whether they
+hold for an instance parked on a renamed step is a separate question neither record answers, and one configuration
+where the budget elapses and the instance is quarantined instead is enough to falsify an "until fixed". What this
+record no longer asserts is that the wait always runs until somebody intervenes.
+
+**The decision below still stands, on a reason neither amendment touches.** It never rested on how long an
+event-path refusal blocks, only on that refusal costing what any other event-path exception in this architecture
+already costs. An `IllegalStateException` out of `evolve` travels the same route as a throwing `react` or a throwing
+dispatcher, because nothing on the event path treats it differently from any other failure of a delivery, so refusing
+here adds no failure mode ADR 123's refusal did not already accept. Both amendments change how large that shared
+cost is. Neither makes it this decision's cost rather than the architecture's.
 
 ## Decision
 
