@@ -51,9 +51,16 @@ import java.lang.annotation.*;
  * {@code occurrent.saga.quarantine-after} on this path. The budget has to be set. The subscription model has to
  * guarantee it holds every event it delivers. The event has to arrive with a stream id and version or a global position.
  * And the model has to confirm, for that one event, that acknowledging it is not what would destroy the last copy of it.
- * Where all four hold, the instance is marked {@code QUARANTINED} on whichever event it stopped on, and the subscription
- * moves past that event so the saga's other instances keep going. Where any of them is missing the wait is the one every
- * version up to 0.33.0 had, which is unbounded. The javadoc on {@code SagaRunner}, the executor the framework builds
+ * Where any of them is missing the wait is the one every version up to 0.33.0 had, which is unbounded. Every failure of
+ * a delivery spends the budget, the converter, {@code evolve}, {@code react}, the dispatcher and the store alike, with
+ * {@code OutOfMemoryError} the one exclusion, since that says the JVM ran out of heap rather than anything about the
+ * saga's work.
+ * <p>
+ * What happens then turns on whether the event reached an instance at all. One the saga routed is
+ * charged to that instance, which is marked {@code QUARANTINED} on whichever event it stopped on. One it could not
+ * route, because the converter or the id extractor threw, belongs to no instance, so nothing is quarantined and no row
+ * is written, and the skip is logged at ERROR naming the event. Either way the subscription moves past the event and
+ * the saga's other instances keep going. The javadoc on {@code SagaRunner}, the executor the framework builds
  * for this saga, and
  * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0134-a-saga-instance-that-keeps-failing-is-quarantined-at-its-own-position.md">ADR 134</a>
  * have the rest, including what a quarantined instance does afterwards and how to find one.
