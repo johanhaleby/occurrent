@@ -202,9 +202,10 @@ class ProjectionAnnotationRegistrar {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
-            } catch (TimeoutException | ExecutionException e) {
+            } catch (CancellationException | TimeoutException | ExecutionException e) {
                 // A failure was already recorded and logged where it happened, and a shutdown has nowhere useful to
-                // put either that or a timeout. Keep unwinding the rest.
+                // put either that or a timeout. A cancellation is a registration that refused itself after this drain
+                // had taken its entry, which is the outcome this loop wanted anyway. Keep unwinding the rest.
             }
         }
     }
@@ -235,6 +236,10 @@ class ProjectionAnnotationRegistrar {
         backgroundCatchUps.add(tracked);
         if (closing) {
             removeThenStop(backgroundCatchUps, tracked, entry -> entry.stop().run());
+            // Cancelled rather than left unstarted, because a close() that drained this entry between the add and
+            // this read is already waiting on it and would otherwise sit out the whole shutdown budget for a task
+            // nothing is going to run. Cancelling releases that wait at once.
+            task.cancel(false);
             return false;
         }
         try {
@@ -332,6 +337,9 @@ class ProjectionAnnotationRegistrar {
         backgroundCatchUps.add(tracked);
         if (closing) {
             removeThenStop(backgroundCatchUps, tracked, entry -> entry.stop().run());
+            // Cancelled for the same reason runTrackedOnThisThread cancels, a close() that drained this entry
+            // between the add and this read waiting out the shutdown budget on a task no thread was ever started for.
+            task.cancel(false);
             return false;
         }
         Thread.ofVirtual().name(threadName + "-" + id).start(task);
