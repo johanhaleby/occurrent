@@ -299,9 +299,16 @@ class ProjectionAnnotationRegistrar {
     // Run catch-up work on a virtual thread this registrar owns, recording a failure where the application can see it.
     // Nobody joins the task except close(), which is the whole point of BACKGROUND, so the failure has to be put
     // somewhere rather than thrown.
-    private void runInBackground(String threadName, String id, Runnable work, Runnable stop) {
+    // Answers whether the thread was started, so a caller that has to report what it started can tell a catch-up
+    // close() refused at launch from one that is running. It cannot answer more than that, because startAll() returns
+    // before the task has run.
+    private boolean runInBackground(String threadName, String id, Runnable work, Runnable stop) {
         FutureTask<Void> task = new FutureTask<>(() -> {
             try {
+                // Read again here, and not only before the thread was started, because stopCatchUp() only takes effect
+                // on a replay that is already running. close() can stop this entry while the thread is still waiting to
+                // be scheduled, and catchUp() sets that stop back to false before it replays, so the whole history
+                // would replay into a closing store.
                 if (closing) {
                     return null;
                 }
@@ -315,13 +322,20 @@ class ProjectionAnnotationRegistrar {
             }
             return null;
         });
-        // No recheck of closing here, unlike the other adds in this class, because an ordering already covers it.
-        // close() sets closing before it drains, this adds before it starts the thread, and the task reads closing
-        // first, so an add that happens after that drain belongs to a task that returns without replaying. The entry left
-        // behind holds a task that does nothing. Two changes break that, close() setting closing after a drain, and
-        // starting the thread before the add.
-        backgroundCatchUps.add(new BackgroundCatchUp(task, stop));
+        // Rechecked after the add, the same order runTrackedOnThisThread uses. close() sets closing before it drains,
+        // so an add that happens after that drain is one close() never sees. Such an entry used to stay in the queue
+        // holding a task that returns without replaying, while its caller had already reported the id as started.
+        // Removing and stopping it instead answers false, so the caller reports only the catch-ups it got running. Two
+        // changes break the rest of that ordering, close() setting closing after a drain, and starting the thread
+        // before the add.
+        BackgroundCatchUp tracked = new BackgroundCatchUp(task, stop);
+        backgroundCatchUps.add(tracked);
+        if (closing) {
+            removeThenStop(backgroundCatchUps, tracked, entry -> entry.stop().run());
+            return false;
+        }
         Thread.ofVirtual().name(threadName + "-" + id).start(task);
+        return true;
     }
 
     // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the post
@@ -702,6 +716,8 @@ class ProjectionAnnotationRegistrar {
                 return false;
             }
             if (!waitUntilStarted) {
+                // Answer ignored. This watches a replay the project() above already started, so a watcher close()
+                // refused says nothing about whether the projection itself started.
                 runInBackground("occurrent-push-catchup-watch", id, deferred::waitUntilStarted, () -> {
                 });
             }
@@ -786,10 +802,9 @@ class ProjectionAnnotationRegistrar {
                     return runTrackedOnThisThread(recordingProgress(id, () -> feed.catchUp(id)), feed::stopCatchUp);
                 } else {
                     // Same treatment as auto mode, or startAll() would block for a full replay on a projection that
-                    // asked for BACKGROUND. Reported as started once the replay is launched, which is what BACKGROUND
-                    // asks for.
-                    runInBackground("occurrent-domain-feed-catchup", id, recordingProgress(id, () -> feed.catchUp(id)), feed::stopCatchUp);
-                    return true;
+                    // asked for BACKGROUND. Reported as started once the replay thread is running, which is what
+                    // BACKGROUND asks for, and not reported at all when close() refused that thread.
+                    return runInBackground("occurrent-domain-feed-catchup", id, recordingProgress(id, () -> feed.catchUp(id)), feed::stopCatchUp);
                 }
             });
         }
