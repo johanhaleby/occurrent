@@ -63,8 +63,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Testcontainers
 class CatchupThenPushReadinessAmbiguousIdTest {
 
+    // Retries a start that fails before the broker is up, which would otherwise fail every test in this class.
     @Container
-    private static final KafkaContainer kafkaContainer = new KafkaContainer("apache/kafka:" + kafkaVersion()).withReuse(true);
+    private static final KafkaContainer kafkaContainer = new KafkaContainer("apache/kafka:" + kafkaVersion())
+            .withStartupAttempts(3)
+            .withReuse(true);
 
     @Test
     void a_healthy_models_bridge_still_consumes_even_though_a_different_models_wrapper_sharing_its_subscription_id_has_permanently_failed() throws Exception {
