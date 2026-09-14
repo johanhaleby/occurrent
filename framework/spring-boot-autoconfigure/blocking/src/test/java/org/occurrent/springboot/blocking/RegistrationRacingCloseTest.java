@@ -25,6 +25,7 @@ import org.occurrent.annotation.Catchup;
 import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.Saga;
 import org.occurrent.annotation.Source;
+import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.command.CommandDispatcher;
@@ -52,6 +53,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
@@ -81,10 +85,12 @@ class RegistrationRacingCloseTest {
     private static final String PROJECTION_ID = "closing-domain-push-projection";
     private static final String NO_CATCHUP_PROJECTION_ID = "closing-domain-push-projection-without-catchup";
     private static final String MODEL_PROJECTION_ID = "closing-model-push-projection";
+    private static final String BACKGROUND_PROJECTION_ID = "closing-background-domain-push-projection";
 
     private final ApplicationContextRunner runner = runnerWith(ManualPushSagaConfiguration.class);
     private final ApplicationContextRunner catchingUpRunner = domainFeedRunnerWith(CatchingUpProjectionConfiguration.class);
     private final ApplicationContextRunner noCatchupRunner = domainFeedRunnerWith(NoCatchupProjectionConfiguration.class);
+    private final ApplicationContextRunner backgroundRunner = domainFeedRunnerWith(BackgroundCatchUpProjectionConfiguration.class);
     private final ApplicationContextRunner pushModelRunner = runnerWith(ManualPushModelProjectionConfiguration.class);
 
     private static ApplicationContextRunner runnerWith(Class<?>... configurations) {
@@ -338,6 +344,44 @@ class RegistrationRacingCloseTest {
         });
     }
 
+    // startupMode = BACKGROUND is the one branch whose report is decided before the work it reports on has run, so
+    // the close has to arrive after the check the deferred block opens with and before the catch-up thread starts.
+    // register(...) is the only call in that window, and it builds a CatchupProjectionFeed whose constructor asks the
+    // reader whether it writes positions, so a reader that closes the context there sets closing on the same thread,
+    // with nothing interleaved.
+    @Test
+    void a_push_projection_catching_up_in_the_background_that_the_context_closes_while_it_registers_is_not_reported_as_started() {
+        backgroundRunner.run(context -> {
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+            HistoryReads reads = context.getBean(HistoryReads.class);
+            // Held in a local, since getBean() throws once the close below has run.
+            CloseWhileRegistering closeWhileRegistering = context.getBean(CloseWhileRegistering.class);
+            closeWhileRegistering.armWith((ConfigurableApplicationContext) context);
+
+            List<String> started = pushSources.startAll();
+
+            assertThat(closeWhileRegistering.hasClosed())
+                    .describedAs("the close staged inside register(...)")
+                    .isTrue();
+            assertThat(started).describedAs("the ids startAll reported as started").isEmpty();
+            assertThat(reads.count).describedAs("history reads after the context closed").hasValue(0);
+        });
+    }
+
+    // The ordinary path for that fixture, so the test above cannot pass by BACKGROUND never starting a replay at all.
+    @Test
+    void a_push_projection_catching_up_in_the_background_while_the_context_is_open_is_reported_as_started_and_replays() {
+        backgroundRunner.run(context -> {
+            ManualStartPushSources pushSources = context.getBean(ManualStartPushSources.class);
+            HistoryReads reads = context.getBean(HistoryReads.class);
+
+            List<String> started = pushSources.startAll();
+
+            assertThat(started).describedAs("the ids startAll reported as started").containsExactly(BACKGROUND_PROJECTION_ID);
+            assertThat(reads.replayed.await(10, TimeUnit.SECONDS)).describedAs("the background replay reading history").isTrue();
+        });
+    }
+
     private static List<String> liveTimerPollerThreads() {
         return Thread.getAllStackTraces().keySet().stream()
                 .filter(Thread::isAlive)
@@ -449,6 +493,32 @@ class RegistrationRacingCloseTest {
 
     static final class HistoryReads {
         final AtomicInteger count = new AtomicInteger();
+        // A background catch-up reads history on a thread of the registrar's own, so a test that wants to see the
+        // replay happen has to wait for it rather than read the count straight after startAll().
+        final CountDownLatch replayed = new CountDownLatch(1);
+    }
+
+    // Closes the context from inside DomainEventFeed.register(...), which is what the deferred BACKGROUND block runs
+    // between its own closing check and the catch-up thread. Unarmed in every other test using this feed, where
+    // closeIfArmed() does nothing.
+    static final class CloseWhileRegistering {
+        private final AtomicBoolean closed = new AtomicBoolean();
+        private volatile ConfigurableApplicationContext armed;
+
+        void armWith(ConfigurableApplicationContext context) {
+            this.armed = context;
+        }
+
+        void closeIfArmed() {
+            ConfigurableApplicationContext context = this.armed;
+            if (context != null && closed.compareAndSet(false, true)) {
+                context.close();
+            }
+        }
+
+        boolean hasClosed() {
+            return closed.get();
+        }
     }
 
     // The DomainEventFeed half of the fixtures. Separate from the saga configuration above because the two paths share
@@ -467,6 +537,11 @@ class RegistrationRacingCloseTest {
         @Bean
         HistoryReads historyReads() {
             return new HistoryReads();
+        }
+
+        @Bean
+        CloseWhileRegistering closeWhileRegistering() {
+            return new CloseWhileRegistering();
         }
 
         // Declared so a refused registration can be asked what it reported. The registrar resolves the status bean
@@ -489,11 +564,12 @@ class RegistrationRacingCloseTest {
         }
 
         @Bean
-        DomainEventFeed<OrderEvent> domainEventFeed(CloudEventConverter<OrderEvent> converter, HistoryReads reads) {
+        DomainEventFeed<OrderEvent> domainEventFeed(CloudEventConverter<OrderEvent> converter, HistoryReads reads, CloseWhileRegistering closeWhileRegistering) {
             PositionOrderedReader reader = new PositionOrderedReader() {
                 @Override
                 public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
                     reads.count.incrementAndGet();
+                    reads.replayed.countDown();
                     return Stream.of(orderPlaced("history", "order-1", 1L));
                 }
 
@@ -502,8 +578,11 @@ class RegistrationRacingCloseTest {
                     return 1;
                 }
 
+                // Asked once, by the CatchupProjectionFeed that register(...) builds, which is the only call the
+                // deferred block makes between its closing check and the catch-up thread.
                 @Override
                 public boolean writesPosition() {
+                    closeWhileRegistering.closeIfArmed();
                     return true;
                 }
             };
@@ -570,6 +649,21 @@ class RegistrationRacingCloseTest {
 
     static class ClosingPushProjection {
         @Projection(id = PROJECTION_ID, source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, OrderEvent, String> projection() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class BackgroundCatchUpProjectionConfiguration {
+        @Bean
+        BackgroundCatchUpPushProjection backgroundCatchUpPushProjection() {
+            return new BackgroundCatchUpPushProjection();
+        }
+    }
+
+    static class BackgroundCatchUpPushProjection {
+        @Projection(id = BACKGROUND_PROJECTION_ID, source = Source.PUSH, startupMode = StartupMode.BACKGROUND)
         org.occurrent.dsl.projection.Projection<Integer, OrderEvent, String> projection() {
             return countProjection();
         }
