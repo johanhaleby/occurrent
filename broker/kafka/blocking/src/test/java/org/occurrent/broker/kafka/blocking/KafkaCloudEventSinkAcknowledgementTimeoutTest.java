@@ -50,12 +50,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * <p>
  * This container is a JUnit-managed, per-method instance field rather than the shared static one
  * {@link KafkaTestSupport} declares, since it is stopped mid-test and must not affect any other test.
+ * <p>
+ * It also skips {@code withReuse(true)}, which the other Kafka containers here set, because reuse hands back a
+ * running container matching the same configuration, and this test stops the container it is given.
  */
 @Testcontainers
 class KafkaCloudEventSinkAcknowledgementTimeoutTest {
 
+    // Retries a start that fails before the broker is up, which would otherwise fail every test in this class.
     @Container
-    private final KafkaContainer kafkaContainer = new KafkaContainer("apache/kafka:" + KafkaTestSupport.kafkaVersion());
+    private final KafkaContainer kafkaContainer = new KafkaContainer("apache/kafka:" + KafkaTestSupport.kafkaVersion())
+            .withStartupAttempts(3);
 
     @Test
     @Timeout(20)

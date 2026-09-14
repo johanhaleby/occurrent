@@ -66,8 +66,14 @@ import static org.awaitility.Awaitility.await;
 @Testcontainers
 public abstract class KafkaTestSupport {
 
+    // Testcontainers makes one start attempt by default, and a failed start fails every test in the class from
+    // beforeAll. The one seen on CI was the Kafka image's shell reaching the starter script the host copies in
+    // while that copy still had it open, so the container exited 126 with "Text file busy". A retry covers
+    // create, start and the readiness wait, on a container created fresh each attempt.
     @Container
-    private static final KafkaContainer kafkaContainer = new KafkaContainer("apache/kafka:" + kafkaVersion()).withReuse(true);
+    private static final KafkaContainer kafkaContainer = new KafkaContainer("apache/kafka:" + kafkaVersion())
+            .withStartupAttempts(3)
+            .withReuse(true);
 
     private AdminClient adminClient;
 

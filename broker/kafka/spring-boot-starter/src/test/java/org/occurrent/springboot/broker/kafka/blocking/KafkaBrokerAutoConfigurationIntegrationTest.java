@@ -54,8 +54,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 class KafkaBrokerAutoConfigurationIntegrationTest {
 
+    // Retries a start that fails before the broker is up, which would otherwise fail every test in this class.
     @Container
-    private static final KafkaContainer kafkaContainer = new KafkaContainer("apache/kafka:" + kafkaVersion()).withReuse(true);
+    private static final KafkaContainer kafkaContainer = new KafkaContainer("apache/kafka:" + kafkaVersion())
+            .withStartupAttempts(3)
+            .withReuse(true);
 
     @Test
     void cloud_event_level_round_trip_through_the_auto_configured_sink_and_bridge() {
