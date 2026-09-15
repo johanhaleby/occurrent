@@ -1264,15 +1264,19 @@ poll thread already took when it released a held tag.
 
 One thread per bridge keeps deliveries handled one at a time and in the order the broker sent them, which is what the
 callback gave each channel before. The worker's queue holds at most `prefetchCount` deliveries from the current
-channel, since the broker sends no more than that many unacknowledged ones to a consumer and a recovery drops the
+channel. The broker sends no more than that many unacknowledged deliveries to one consumer, but it counts them per
+consumer, and a bridge cancels its consumer and starts a new one whenever the subscription pauses and resumes. So a
+bridge starts a new consumer only once the worker has finished everything the previous one sent. A recovery drops the
 rest, as described below.
 
 **Shutdown.** `close()` cancels the consumer, then stops the worker without starting any delivery still queued for
 it, and waits up to a new `closeTimeout(Duration)` on both builders for the one being handled. Thirty seconds is the
 default, the same as the Kafka bridges, and both starters set it from `occurrent.broker.rabbitmq.bridge.close-timeout`.
 A handler still running after that is interrupted and logged at `warn`, and from then on nothing it does
-acknowledges or parks its delivery, so closing the channel puts that delivery back on the queue. A permanent stop
-runs on the worker itself, so it stops the worker the same way but without waiting.
+acknowledges or parks its delivery, so closing the channel puts that delivery back on the queue. Every step of
+`close()` shares that one deadline, since the worker holds the bridge's lock while a park waits up to five seconds for
+its confirm, and closing the channel cancels the consumer and requeues whatever a skipped step would have released. A
+permanent stop runs on the worker itself, so it stops the worker the same way but without waiting.
 
 **A connection recovery drops what the dead channel left waiting.** The amendment above that removed the
 channel-generation fence still holds, and the fence stays gone. The client ignores an acknowledgement for a tag from a

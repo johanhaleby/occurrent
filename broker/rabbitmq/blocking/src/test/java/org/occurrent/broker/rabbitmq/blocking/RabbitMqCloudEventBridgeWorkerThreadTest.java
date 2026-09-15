@@ -207,6 +207,47 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(3));
     }
 
+    /**
+     * RabbitMQ applies the prefetch count to each consumer separately, so a consumer started again while the handler
+     * is still blocked would be sent a delivery of its own, which would wait behind the blocked one.
+     */
+    @Test
+    void a_consumer_is_not_started_again_while_the_worker_still_has_a_delivery_from_the_previous_one() throws Exception {
+        String queue = declareAndBindQueue("restarted");
+        AtomicBoolean ready = new AtomicBoolean(true);
+        CountDownLatch firstCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirstCall = new CountDownLatch(1);
+        List<String> handledIds = new CopyOnWriteArrayList<>();
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        model.subscribe("restarted", cloudEvent -> {
+            handledIds.add(cloudEvent.getId());
+            if (handledIds.size() == 1) {
+                firstCallEntered.countDown();
+                awaitQuietly(releaseFirstCall);
+            }
+        });
+
+        try (RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue).readinessSource(subscriptionId -> ready.get()).build()) {
+            publish("restarted", "id-1");
+            assertThat(firstCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            ready.set(false);
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(adminChannel.queueDeclarePassive(queue).getConsumerCount()).isZero());
+            ready.set(true);
+            publish("restarted", "id-2");
+            // Several polls, each of which would start a consumer if nothing held it back.
+            Thread.sleep(POLL_INTERVAL.toMillis() * 10);
+
+            assertThat(queueMessageCount(queue)).as("id-2 is still ready on the queue").isOne();
+            releaseFirstCall.countDown();
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handledIds).containsExactly("id-1", "id-2"));
+        } finally {
+            releaseFirstCall.countDown();
+        }
+        assertAcknowledged(queue);
+    }
+
     @Test
     void close_neither_parks_nor_acknowledges_a_delivery_whose_handler_it_interrupted() throws Exception {
         String queue = declareAndBindQueue("parking-at-close");

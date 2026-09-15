@@ -25,10 +25,12 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 
 import java.time.Duration;
+import java.util.Iterator;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 
@@ -44,10 +46,11 @@ import static java.util.Objects.requireNonNull;
  * whatever the handler does.
  * <p>
  * One thread per bridge keeps deliveries handled one at a time, in the order the broker sent them. The broker sends
- * no more than the bridge's {@code prefetchCount} unacknowledged deliveries to one consumer, and once an automatic
- * connection recovery starts, {@link #discardOnRecovery(Channel)} makes sure no delivery from the channel that died
- * is started. So the queue in front of the thread holds at most {@code prefetchCount} deliveries from the current
- * channel, however many recoveries happen while a handler is blocked.
+ * no more than the bridge's {@code prefetchCount} unacknowledged deliveries to one consumer, the bridge starts a new
+ * consumer only once {@link #isIdle()}, and once an automatic connection recovery starts,
+ * {@link #discardOnRecovery(Channel)} makes sure no delivery from the channel that died is started. So the queue in
+ * front of the thread holds at most {@code prefetchCount} deliveries from the current channel, however many pauses or
+ * recoveries happen while a handler is blocked.
  * <p>
  * A delivery this worker never starts, because {@link #stopAcceptingWork()} or {@link #stop(Duration)} ran first or a
  * recovery dropped it, is left unacknowledged. RabbitMQ puts every unacknowledged delivery on a closed channel back on
@@ -58,6 +61,7 @@ public final class RabbitMqDeliveryWorker {
     private final String queue;
     private final Logger log;
     private final ThreadPoolExecutor executor;
+    private final AtomicInteger unfinishedDeliveries = new AtomicInteger();
     private final Object deliveryTagLock = new Object();
     private long highestSubmittedDeliveryTag;
     private volatile long discardUpToDeliveryTag;
@@ -92,9 +96,11 @@ public final class RabbitMqDeliveryWorker {
         synchronized (deliveryTagLock) {
             highestSubmittedDeliveryTag = Math.max(highestSubmittedDeliveryTag, deliveryTag);
         }
+        unfinishedDeliveries.incrementAndGet();
         try {
             executor.execute(new DeliveryTask(deliveryTag, work));
         } catch (RejectedExecutionException e) {
+            unfinishedDeliveries.decrementAndGet();
             // Throwing back into the client would make its exception handler close the channel.
             log.debug("Delivery tag {} on queue \"{}\" arrived after the bridge stopped. It stays unacknowledged, " +
                     "and closing the channel puts it back on the queue.", deliveryTag, queue);
@@ -143,8 +149,15 @@ public final class RabbitMqDeliveryWorker {
         synchronized (deliveryTagLock) {
             discardUpToDeliveryTag = Math.max(discardUpToDeliveryTag, deliveryTag);
         }
-        boolean discarded = executor.getQueue().removeIf(task -> ((DeliveryTask) task).deliveryTag <= deliveryTag);
-        if (discarded) {
+        int discarded = 0;
+        for (Iterator<Runnable> tasks = executor.getQueue().iterator(); tasks.hasNext(); ) {
+            if (((DeliveryTask) tasks.next()).deliveryTag <= deliveryTag) {
+                tasks.remove();
+                discarded++;
+            }
+        }
+        unfinishedDeliveries.addAndGet(-discarded);
+        if (discarded > 0) {
             log.debug("Dropped the deliveries on queue \"{}\" still waiting for the worker when the connection " +
                     "dropped. RabbitMQ delivers them again on the recovered channel.", queue);
         }
@@ -161,6 +174,15 @@ public final class RabbitMqDeliveryWorker {
                     "most likely while acknowledging it. The delivery stays unacknowledged until the channel closes.",
                     deliveryTag, queue, e);
         }
+    }
+
+    /**
+     * Whether every delivery submitted so far has finished or been dropped. RabbitMQ applies {@code prefetchCount} to
+     * each consumer separately, so a bridge starts a new consumer only once this is true. Otherwise a consumer started
+     * after a pause would add a second window of deliveries behind a handler that is still blocked.
+     */
+    public boolean isIdle() {
+        return unfinishedDeliveries.get() == 0;
     }
 
     /**
@@ -221,7 +243,11 @@ public final class RabbitMqDeliveryWorker {
 
         @Override
         public void run() {
-            RabbitMqDeliveryWorker.this.run(deliveryTag, work);
+            try {
+                RabbitMqDeliveryWorker.this.run(deliveryTag, work);
+            } finally {
+                unfinishedDeliveries.decrementAndGet();
+            }
         }
     }
 }

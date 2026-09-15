@@ -216,9 +216,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     // pace it, so it still applies immediately, through failureAction, from the point of failure.
     private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
-    // Set under consumeLock once close() stops waiting for a projection, so nothing that projection does afterwards
-    // acknowledges or parks its delivery before the channel close puts it back on the queue.
-    private boolean inFlightDeliveryAbandoned;
+    // Set once close() stops waiting for a projection, so nothing that projection does afterwards acknowledges or parks
+    // its delivery before the channel close puts it back on the queue. Read under consumeLock.
+    private volatile boolean inFlightDeliveryAbandoned;
     // Tracks whether this bridge has ever seen feed.isReadyForLiveDelivery() answer true, so reconcileConsumption
     // can tell a feed that has never gone live (still replaying, or nothing registered yet, both ordinary startup
     // states) apart from one that reached live and then stopped, which DomainEventFeed's own contract says only
@@ -302,7 +302,8 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                             "stopped consuming for good.", queue);
                 }
                 boolean shouldConsume = feed.hasProjection() && readyForLiveDelivery;
-                if (shouldConsume && consumerTag == null) {
+                // Waits for the worker to finish what an earlier consumer sent it, see RabbitMqDeliveryWorker#isIdle.
+                if (shouldConsume && consumerTag == null && worker.isIdle()) {
                     consumerTag = consumeChannel.basicConsume(queue, false, this::submitDelivery, this::handleCancel);
                 } else if (!shouldConsume && consumerTag != null) {
                     consumeChannel.basicCancel(consumerTag);
@@ -586,47 +587,47 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
      */
     @Override
     public void close() {
+        long deadline = System.nanoTime() + closeTimeout.toNanos();
         scheduler.shutdownNow();
-        consumeLock.lock();
-        try {
-            // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
-            permanentlyStopped = true;
-            if (consumerTag != null) {
-                try {
-                    consumeChannel.basicCancel(consumerTag);
-                } catch (IOException ignored) {
-                    // Best effort: the channel is about to be closed either way.
-                }
-                consumerTag = null;
-            }
-        } finally {
-            consumeLock.unlock();
-        }
-        // Outside consumeLock, since a projection finishing acknowledges under it.
-        if (!worker.stop(closeTimeout)) {
-            consumeLock.lock();
+        // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
+        permanentlyStopped = true;
+        // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that lock
+        // while a park waits for its confirm. Closing the channel below cancels the consumer and requeues the rest.
+        if (lockBefore(deadline)) {
             try {
-                inFlightDeliveryAbandoned = true;
+                if (consumerTag != null) {
+                    try {
+                        consumeChannel.basicCancel(consumerTag);
+                    } catch (IOException ignored) {
+                        // Best effort: the channel is about to be closed either way.
+                    }
+                    consumerTag = null;
+                }
             } finally {
                 consumeLock.unlock();
             }
+        }
+        if (!worker.stop(remainingUntil(deadline))) {
+            // Set before the interrupt, so a projection that returns because of it neither acknowledges nor parks.
+            inFlightDeliveryAbandoned = true;
             worker.interruptRunningWork(closeTimeout);
         }
-        consumeLock.lock();
-        try {
+        if (lockBefore(deadline)) {
             try {
-                releaseHeldDeferredDelivery();
-            } catch (RuntimeException ignored) {
-                // Best effort, matching basicCancel above: the channel is about to be closed either way, and
-                // closing it requeues whatever is left held regardless.
+                try {
+                    releaseHeldDeferredDelivery();
+                } catch (RuntimeException ignored) {
+                    // Best effort, matching basicCancel above: the channel is about to be closed either way, and
+                    // closing it requeues whatever is left held regardless.
+                }
+                try {
+                    releaseHeldFailedDelivery();
+                } catch (RuntimeException ignored) {
+                    // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
+                }
+            } finally {
+                consumeLock.unlock();
             }
-            try {
-                releaseHeldFailedDelivery();
-            } catch (RuntimeException ignored) {
-                // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
-            }
-        } finally {
-            consumeLock.unlock();
         }
         try {
             consumeChannel.close();
@@ -634,6 +635,19 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             // Best effort, mirroring RabbitMqCloudEventSink#close's own channel teardown.
         }
         failureAction.close();
+    }
+
+    private boolean lockBefore(long deadlineNanos) {
+        try {
+            return consumeLock.tryLock(Math.max(0, deadlineNanos - System.nanoTime()), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private static Duration remainingUntil(long deadlineNanos) {
+        return Duration.ofNanos(Math.max(0, deadlineNanos - System.nanoTime()));
     }
 
     public static final class Builder<E> {
