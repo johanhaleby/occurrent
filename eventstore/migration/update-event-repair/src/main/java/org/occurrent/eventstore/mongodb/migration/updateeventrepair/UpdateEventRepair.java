@@ -23,6 +23,7 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.Sorts;
@@ -43,14 +44,17 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
 import static com.mongodb.client.model.Filters.exists;
 import static com.mongodb.client.model.Filters.gt;
-import static com.mongodb.client.model.Filters.ne;
 import static com.mongodb.client.model.Filters.or;
 import static com.mongodb.client.model.Filters.type;
 import static java.util.Objects.requireNonNull;
@@ -217,15 +221,10 @@ public final class UpdateEventRepair {
             }
 
             // Widen the range to every position this batch could modify before touching any of it, so a checkpoint
-            // covering what was written already exists even if a kill skips the post-batch checkpoint below. Read
-            // the same way repairEvent reads a stored position, so a position repairEvent would leave unrepaired,
-            // a forged or hand-typed one for instance, never widens this range either.
-            for (Document event : batch) {
-                Long readablePosition = readablePositionOf(event, positionCeiling);
-                if (readablePosition != null) {
-                    minRepairedPosition = minRepairedPosition == null ? readablePosition : Math.min(minRepairedPosition, readablePosition);
-                    maxRepairedPosition = maxRepairedPosition == null ? readablePosition : Math.max(maxRepairedPosition, readablePosition);
-                }
+            // covering what was written already exists even if a kill skips the post-batch checkpoint below.
+            for (long readablePosition : readablePositionsOf(batch, positionCeiling)) {
+                minRepairedPosition = minRepairedPosition == null ? readablePosition : Math.min(minRepairedPosition, readablePosition);
+                maxRepairedPosition = maxRepairedPosition == null ? readablePosition : Math.max(maxRepairedPosition, readablePosition);
             }
             checkpointRepairedRange(minRepairedPosition, maxRepairedPosition);
 
@@ -490,23 +489,40 @@ public final class UpdateEventRepair {
         return lastProcessedId == null ? new Document() : gt(ID, lastProcessedId);
     }
 
-    // The position repairEvent would end up recording for this event, using the same plan repairEvent itself writes
-    // from, so a plan with no update in it, an unreadable tag encoding on an otherwise already-correct position for
-    // instance, never widens this range either. planRepair cannot see the one
-    // rejection that only shows up at write time, another document already holding the same position, so that is
-    // checked here directly against the same unique index, excluding this document itself since an already-correct
-    // position matches its own document without being taken by anyone. Widening for a position the plan would not
-    // reach, or that write-time check would reject, would claim a position no document ends up holding, contrary to
-    // what minRepairedPosition and maxRepairedPosition promise.
-    private @Nullable Long readablePositionOf(Document event, long positionCeiling) {
+    // The positions repairEvent would end up recording for this batch, using the same plan repairEvent itself
+    // writes from, so an event whose plan has no update in it, an unreadable tag encoding on an otherwise
+    // already-correct position for instance, never widens the range either. planRepair cannot see the one rejection
+    // that only shows up at write time, another document already holding the same position, so that is checked here
+    // directly against the same unique index, in one query for every candidate in the batch rather than one round
+    // trip per event. An event whose candidate is its own already-correct position owns it in that query too, which
+    // is not a conflict, so it is matched by id rather than excluded along with a real owner.
+    private List<Long> readablePositionsOf(List<Document> batch, long positionCeiling) {
         List<UnrecoverableEvent> discarded = new ArrayList<>(1);
-        RepairPlan plan = planRepair(event, positionCeiling, discarded);
-        if (plan.updates().isEmpty() || plan.readablePosition() == null) {
-            return null;
+        Map<Object, Long> candidates = new LinkedHashMap<>();
+        for (Document event : batch) {
+            RepairPlan plan = planRepair(event, positionCeiling, discarded);
+            if (!plan.updates().isEmpty() && plan.readablePosition() != null) {
+                candidates.put(event.get(ID), plan.readablePosition());
+            }
         }
-        Object eventId = event.get(ID);
-        long owner = withRetry(() -> eventCollection.countDocuments(and(eq(POSITION, plan.readablePosition()), ne(ID, eventId))));
-        return owner > 0 ? null : plan.readablePosition();
+        if (candidates.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, Object> ownerOfPosition = new HashMap<>();
+        withRetry(() -> eventCollection.find(Filters.in(POSITION, new ArrayList<>(new LinkedHashSet<>(candidates.values()))))
+                .projection(Projections.include(ID, POSITION))
+                .into(new ArrayList<>()))
+                .forEach(owned -> ownerOfPosition.put(((Number) owned.get(POSITION)).longValue(), owned.get(ID)));
+
+        List<Long> readable = new ArrayList<>(candidates.size());
+        candidates.forEach((eventId, position) -> {
+            Object owner = ownerOfPosition.get(position);
+            if (owner == null || owner.equals(eventId)) {
+                readable.add(position);
+            }
+        });
+        return readable;
     }
 
     // Upserts only the repaired-range fields, leaving lastProcessedId, unrecoverableCount and processedCount alone
