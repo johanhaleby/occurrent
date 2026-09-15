@@ -33,7 +33,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
@@ -928,6 +930,52 @@ class ReactiveHandoverTest {
         assertThat(delivered).containsExactly("1");
         assertThat(replayed.alreadyDeliveredByReplay).containsExactly("1");
         assertThat(goLive.alreadyDeliveredByReplay).isEmpty();
+    }
+
+    // The blocking engine has the same test. The live pipeline delivers on its own thread here, so the replay pauses
+    // after R1 for long enough that a live payload delivered mid-replay would reach the log before the abandon does.
+    @Test
+    void a_live_payload_accepted_while_a_replay_runs_on_a_live_handover_is_delivered_after_that_replay_is_stopped() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<CompletableFuture<Boolean>> liveAcks = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        AtomicBoolean offered = new AtomicBoolean();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.defer(() -> {
+            log.add(payload);
+            if (payload.equals("R1") && offered.compareAndSet(false, true)) {
+                liveAcks.add(self.get().acceptReportingDelivery("R1").toFuture());
+                liveAcks.add(self.get().acceptReportingDelivery("L1").toFuture());
+                return Mono.delay(Duration.ofMillis(300)).then();
+            }
+            return Mono.empty();
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        FakeSource replaying = source(List.of("R1", "R2"), false);
+        replaying.stopAfter(1);
+        replaying.onReplayAbandoned = () -> log.add("abandoned");
+
+        StepVerifier.create(handover.catchUp(replaying)).expectNext(false).verifyComplete();
+        for (CompletableFuture<Boolean> ack : liveAcks) {
+            assertThat(ack.get(5, TimeUnit.SECONDS)).isTrue();
+        }
+
+        assertThat(log).containsExactly("R1", "abandoned", "R1", "L1");
+    }
+
+    // A stop ends the replay, not the live delivery the handover already had, so a payload fed after it is delivered,
+    // the same as on the blocking engine.
+    @Test
+    void a_live_handover_keeps_delivering_after_a_replay_on_it_is_stopped() {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String, String> handover = handover(delivered);
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        FakeSource replaying = source(List.of("R1", "R2"), false);
+        replaying.stopAfter(1);
+        StepVerifier.create(handover.catchUp(replaying)).expectNext(false).verifyComplete();
+
+        StepVerifier.create(handover.acceptReportingDelivery("L1")).expectNext(true).verifyComplete();
+        assertThat(delivered).containsExactly("R1", "L1");
     }
 
     @Test

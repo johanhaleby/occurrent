@@ -92,8 +92,9 @@ public final class BlockingHandover<T, K> {
          * <p>
          * A stop is not a failure. Nothing is drained, the handover does not go live, {@link #markCaughtUp()} is not
          * called, and no failure is recorded, so the next catch-up replays the whole history and the handover stays
-         * usable. Live payloads arriving after a stop are dropped rather than buffered, the same dropped-not-deferred
-         * contract a stopped subscription model has (ADR 85). The final, post-loop check exists because the
+         * usable. On a handover that had not gone live, live payloads arriving after a stop are dropped rather than
+         * buffered, the same dropped-not-deferred contract a stopped subscription model has (ADR 85). A handover that
+         * was live before the replay started goes on delivering after the stop, see {@link BlockingHandover#catchUp}. The final, post-loop check exists because the
          * per-payload one only ever runs before a fold, never after the last one: an attempt whose ownership lapses
          * while that last fold is still running would otherwise reach {@link #markCaughtUp()} for a history its
          * current owner never actually folded.
@@ -226,6 +227,14 @@ public final class BlockingHandover<T, K> {
     private final Set<K> inFlight = new HashSet<>();
     private boolean live = false;
     private boolean stopped = false;
+    // While a replay runs, live payloads buffer even on a handover that was already live, because a view that buffers
+    // during a replay throws that buffer away if the replay is stopped.
+    private boolean replayRunning = false;
+    // Whether a stop of the running replay goes live rather than leaving the handover stopped. True when the handover
+    // was live before that replay started, or when a catch-up with nothing to replay arrived while it ran.
+    private boolean liveWhenReplayStops = false;
+    // Source.alreadyDeliveredByReplay(..) calls running outside the lock, waited for before a replay starts.
+    private int replayCallbacksRunning = 0;
     private @Nullable Throwable catchUpFailure = null;
     // The source whose replay filled replayedIds, so a live payload that replay already delivered can reach it, since
     // accept(..) is handed no source of its own. Written when a replay starts rather than by every catchUp(Source), so
@@ -308,6 +317,9 @@ public final class BlockingHandover<T, K> {
                     // The replay delivered this key, so the payload is applied and must not be applied again. The
                     // source is still owed the call below, outside the lock.
                     replayedBy = source;
+                    if (replayedBy != null) {
+                        replayCallbacksRunning++;
+                    }
                 } else if (!inFlight.add(key)) {
                     // A concurrent delivery of the same key is running right now, outside this lock, and its own
                     // success or failure is what decides deliveredIds (see the inFlight field javadoc). This call
@@ -332,7 +344,7 @@ public final class BlockingHandover<T, K> {
         if (deliverKey != null) {
             deliverOutsideLock(payload, deliverKey);
         } else if (replayedBy != null) {
-            replayedBy.alreadyDeliveredByReplay(payload);
+            reportAlreadyDeliveredByReplay(replayedBy, payload);
         }
         return !dropped;
     }
@@ -376,6 +388,9 @@ public final class BlockingHandover<T, K> {
                     landed = true;
                 } else if (replayedIds.contains(key)) {
                     replayedBy = source;
+                    if (replayedBy != null) {
+                        replayCallbacksRunning++;
+                    }
                     landed = true;
                 } else if (!inFlight.add(key)) {
                     landed = false;
@@ -388,7 +403,7 @@ public final class BlockingHandover<T, K> {
         if (deliverKey != null) {
             deliverOutsideLock(payload, deliverKey);
         } else if (replayedBy != null) {
-            replayedBy.alreadyDeliveredByReplay(payload);
+            reportAlreadyDeliveredByReplay(replayedBy, payload);
         }
         return landed;
     }
@@ -433,6 +448,12 @@ public final class BlockingHandover<T, K> {
     /**
      * Run the one-time catch-up: replay the source's history (unless already caught up), then drain the buffered live
      * payloads and go live, then mark the catch-up complete.
+     * <p>
+     * A replay on a handover that is already live, a feed's {@code catchUp()} after its {@code goLive()}, waits for any
+     * live delivery still running and then buffers live payloads until it ends, the same as before a first catch-up.
+     * They are delivered when it ends, whether it completes or is stopped, since a view that buffers during a replay
+     * throws that buffer away on a stop. A catch-up with nothing to replay that arrives while a replay runs does not
+     * drain the buffer itself. The running replay drains it, and goes live even if it is stopped.
      *
      * @return {@code true} when the catch-up finished and the handover is live, {@code false} when
      * {@link Source#keepReplaying()} stopped it partway. A failure throws rather than returning either.
@@ -450,12 +471,23 @@ public final class BlockingHandover<T, K> {
         boolean replayOpen = false;
         try {
             if (source.isAlreadyCaughtUp()) {
+                synchronized (lock) {
+                    if (replayRunning) {
+                        // The running replay delivers the buffer when it ends, and goes live even if it is stopped.
+                        liveWhenReplayStops = true;
+                        return true;
+                    }
+                }
                 drainBufferAndGoLive(source);
                 return true;
             }
             boolean stoppedMidReplay = false;
             synchronized (lock) {
                 this.source = source;
+                replayRunning = true;
+                liveWhenReplayStops = live;
+                live = false;
+                awaitLiveDeliveriesUnderLock();
             }
             source.replayStarted();
             replayOpen = true;
@@ -491,8 +523,17 @@ public final class BlockingHandover<T, K> {
                 // No drain, no going live, and no marker. Recording completion here is the one thing that would make
                 // the next start skip a history it never finished folding.
                 abandonReplayWithoutMasking(source);
+                boolean goLive;
                 synchronized (lock) {
-                    stopped = true;
+                    replayRunning = false;
+                    goLive = liveWhenReplayStops;
+                    if (!goLive) {
+                        stopped = true;
+                    }
+                }
+                if (goLive) {
+                    // What buffered while the replay ran reaches the view now that it has thrown its replay batch away.
+                    deliverBufferAndGoLive();
                 }
                 return false;
             }
@@ -517,6 +558,7 @@ public final class BlockingHandover<T, K> {
             }
             synchronized (lock) {
                 catchUpFailure = e;
+                replayRunning = false;
             }
             throw e;
         }
@@ -539,10 +581,41 @@ public final class BlockingHandover<T, K> {
         }
     }
 
+    // Assumes lock is held. Releases it while it waits for every live delivery and replay callback already running, so
+    // the replay about to start is the only thing writing to the view. None starts meanwhile, since live is false.
+    private void awaitLiveDeliveriesUnderLock() {
+        boolean interrupted = false;
+        while (!inFlight.isEmpty() || replayCallbacksRunning > 0) {
+            try {
+                lock.wait();
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void reportAlreadyDeliveredByReplay(Source<T> replayedBy, T payload) {
+        try {
+            replayedBy.alreadyDeliveredByReplay(payload);
+        } finally {
+            synchronized (lock) {
+                replayCallbacksRunning--;
+                lock.notifyAll();
+            }
+        }
+    }
+
     private void drainBufferAndGoLive(Source<T> source) {
         // Every drain runs through here, including the one for a source that was already caught up and ran no replay
         // at all, which is why the signal sits here rather than beside replayCompleted().
         source.historyDone();
+        deliverBufferAndGoLive();
+    }
+
+    private void deliverBufferAndGoLive() {
         List<T> toDeliver;
         List<K> keysToDeliver;
         List<T> alreadyReplayed;
@@ -572,6 +645,7 @@ public final class BlockingHandover<T, K> {
                 }
             }
             buffer.clear();
+            replayRunning = false;
             live = true;
         }
         // Ahead of the drained deliveries, so a payload the replay already applied is reported before any payload
@@ -611,6 +685,7 @@ public final class BlockingHandover<T, K> {
         }
         synchronized (lock) {
             inFlight.removeAll(keys);
+            lock.notifyAll();
         }
     }
 
@@ -638,6 +713,7 @@ public final class BlockingHandover<T, K> {
                 if (succeeded) {
                     deliveredIds.add(key);
                 }
+                lock.notifyAll();
             }
         }
     }

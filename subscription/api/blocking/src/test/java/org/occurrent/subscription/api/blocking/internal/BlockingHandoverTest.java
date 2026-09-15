@@ -32,6 +32,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.*;
@@ -576,6 +577,48 @@ class BlockingHandoverTest {
         assertThat(delivered).containsExactly("1");
         assertThat(replayed.alreadyDeliveredByReplay).containsExactly("1");
         assertThat(goLive.alreadyDeliveredByReplay).isEmpty();
+    }
+
+    // catchUp() on a handover that is already live, a feed's catchUp() after its goLive(), runs a replay while live
+    // payloads keep arriving. A view that buffers during a replay throws that buffer away when the replay is stopped,
+    // so a live payload handed to it mid-replay would be lost. The live payloads wait instead and are delivered once
+    // the replay has ended, stopped or not, including one that shares its key with a payload the replay delivered.
+    @Test
+    void a_live_payload_accepted_while_a_replay_runs_on_a_live_handover_is_delivered_after_that_replay_is_stopped() {
+        List<String> log = new ArrayList<>();
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
+        AtomicBoolean offered = new AtomicBoolean();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("R1") && offered.compareAndSet(false, true)) {
+                self.get().accept("R1");
+                self.get().accept("L1");
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        self.set(handover);
+        handover.catchUp(source(List.of(), true));
+        FakeSource replaying = source(List.of("R1", "R2"), false);
+        replaying.stopAfter(1);
+        replaying.onReplayAbandoned = () -> log.add("abandoned");
+
+        boolean caughtUp = handover.catchUp(replaying);
+
+        assertThat(caughtUp).isFalse();
+        assertThat(log).containsExactly("R1", "abandoned", "R1", "L1");
+    }
+
+    // A stop ends the replay, not the live delivery the handover already had, so a payload fed after it is delivered.
+    @Test
+    void a_live_handover_keeps_delivering_after_a_replay_on_it_is_stopped() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String, String> handover = handover(delivered);
+        handover.catchUp(source(List.of(), true));
+        FakeSource replaying = source(List.of("R1", "R2"), false);
+        replaying.stopAfter(1);
+        handover.catchUp(replaying);
+
+        assertThat(handover.acceptReportingDelivery("L1")).isTrue();
+        assertThat(delivered).containsExactly("R1", "L1");
     }
 
     @Test

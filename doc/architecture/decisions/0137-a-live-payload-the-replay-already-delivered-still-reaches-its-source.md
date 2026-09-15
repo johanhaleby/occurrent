@@ -119,6 +119,13 @@ long as the handover. A view that writes through applied every event the replay 
 reaches it a second time. `goLive()` already promises at-least-once delivery, so the duplicate is allowed, and a lost
 event is not.
 
+Clearing the keys is not enough when the replay runs on a handover that is already live, a feed's `catchUp()` after
+its `goLive()`. A live payload delivered while that replay runs goes into the same buffer the stop throws away, whether
+or not its key was suppressed. So a replay holds live payloads back until it ends, the same as before a first
+catch-up, after waiting for any live delivery or replay callback still running. They are delivered when it ends,
+completed or stopped, and a handover that was live before the replay stays live after a stop rather than dropping
+later payloads.
+
 This also settles the reactive engine's second catch-up. Its live sink accepts one subscriber ever, so a catch-up on
 a handover that is already live does not subscribe it again and keeps the pipeline that is already running.
 Subscribing again was refused by the sink, recorded as a failed catch-up, and made the handover refuse every later

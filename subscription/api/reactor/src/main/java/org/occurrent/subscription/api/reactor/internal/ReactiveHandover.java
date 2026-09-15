@@ -100,8 +100,10 @@ public final class ReactiveHandover<T, K> {
          * <p>
          * A stop is not a failure. Nothing is drained, the handover does not go live, {@link #markCaughtUp()} is not
          * called, and no terminal error is recorded, so the next catch-up replays the whole history and the handover
-         * stays usable. Live payloads arriving after a stop are dropped and their acks complete rather than hang, the
-         * same dropped-not-deferred contract a stopped subscription model has (ADR 85).
+         * stays usable. On a handover that had not gone live, live payloads arriving after a stop are dropped and
+         * their acks complete rather than hang, the same dropped-not-deferred contract a stopped subscription model
+         * has (ADR 85). A handover that was live before the replay started goes on delivering after the stop, see
+         * {@link ReactiveHandover#catchUp}.
          */
         default boolean keepReplaying() {
             return true;
@@ -254,6 +256,13 @@ public final class ReactiveHandover<T, K> {
     // after its catchUp(), leaves the running pipeline alone instead of subscribing again, which the sink would
     // refuse and the error handler would record as a failed catch-up.
     private final AtomicBoolean liveSinkSubscribed = new AtomicBoolean();
+    // Guards the three fields below. Live payloads wait at livePaused while a replay runs, even on a handover that is
+    // already live, because a view that buffers during a replay throws that buffer away if the replay is stopped.
+    private final Object liveGate = new Object();
+    private Sinks.@Nullable Empty<Void> livePaused = null;
+    // Whether the live pipeline is delivering a payload right now, so a replay can wait for it before it starts.
+    private boolean liveDelivering = false;
+    private Sinks.@Nullable Empty<Void> liveIdle = null;
     // Acks of live payloads buffered but not yet folded, so a catch-up failure fails them rather than leaving the
     // caller's accept Monos hanging forever. The Boolean each carries is whether the payload was genuinely
     // delivered, not just whether the ack completed without error, see acceptReportingDelivery(..).
@@ -563,6 +572,11 @@ public final class ReactiveHandover<T, K> {
      * live feed. The returned {@link Mono} completes when the replay and marker are done (see the class javadoc for
      * how that relates to the buffered live payloads), emitting {@code true} when the catch-up finished and
      * {@code false} when {@link Source#keepReplaying()} stopped it partway. A failure errors it instead.
+     * <p>
+     * A replay waits for a live payload still being delivered and then holds the live payloads back until it ends,
+     * which matters on a handover that is already live, a feed's {@code catchUp()} after its {@code goLive()}. They are
+     * delivered when it ends, whether it completes or is stopped, since a view that buffers during a replay throws that
+     * buffer away on a stop.
      */
     public Mono<Boolean> catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
@@ -587,20 +601,25 @@ public final class ReactiveHandover<T, K> {
             if (done) {
                 return Mono.empty();
             }
-            replaySource.set(source);
-            source.replayStarted();
-            replayOpen.set(true);
-            return source.replay().map(this::replayedItem)
-                    // Checked inside the concatMap function rather than upstream of it. An upstream takeWhile would run
-                    // at emission, and concatMap prefetches, so it could race far ahead of the folds. This is
-                    // serialized per payload with the fold itself, which is the same reason the phases here are
-                    // sequential.
-                    .concatMap(item -> source.keepReplaying() ? deliver(item) : Mono.error(CatchupStopped.INSTANCE))
-                    .then()
-                    // Ordered before the marker and before the live buffer drain, so anything a replay-aware view
-                    // buffered is durable before either runs.
-                    .then(Mono.defer(source::replayCompleted))
-                    .doOnSuccess(ignored -> replayOpen.set(false));
+            return pauseLiveDelivery().then(Mono.defer(() -> {
+                replaySource.set(source);
+                source.replayStarted();
+                replayOpen.set(true);
+                return source.replay().map(this::replayedItem)
+                        // Checked inside the concatMap function rather than upstream of it. An upstream takeWhile would
+                        // run at emission, and concatMap prefetches, so it could race far ahead of the folds. This is
+                        // serialized per payload with the fold itself, which is the same reason the phases here are
+                        // sequential.
+                        .concatMap(item -> source.keepReplaying() ? deliver(item) : Mono.error(CatchupStopped.INSTANCE))
+                        .then()
+                        // Ordered before the marker and before the live buffer drain, so anything a replay-aware view
+                        // buffered is durable before either runs.
+                        .then(Mono.defer(source::replayCompleted))
+                        .doOnSuccess(ignored -> {
+                            replayOpen.set(false);
+                            resumeLiveDelivery();
+                        });
+            }));
         });
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : source.markCaughtUp());
 
@@ -647,12 +666,19 @@ public final class ReactiveHandover<T, K> {
                 }, error -> {
                     if (error == CatchupStopped.INSTANCE) {
                         // Stopped, not failed. No marker, no drain, and no terminal error, so the handover stays
-                        // usable. The buffered acks still have to be resolved or their callers hang forever; they
-                        // complete rather than fail, because the payload was dropped rather than rejected.
-                        stopped = true;
+                        // usable. A handover that never went live drops what it buffered, and the acks of those
+                        // payloads complete rather than fail, because each was dropped rather than rejected. One that
+                        // was already live goes on delivering them, the same as the blocking engine.
+                        boolean wasLive = live;
+                        if (!wasLive) {
+                            stopped = true;
+                        }
                         abandonReplayWithoutMasking(source, replayOpen);
+                        resumeLiveDelivery();
                         catchupDone.tryEmitValue(false);
-                        pendingLiveAcks.forEach(sink -> sink.success(false));
+                        if (!wasLive) {
+                            pendingLiveAcks.forEach(sink -> sink.success(false));
+                        }
                         return;
                     }
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.
@@ -672,6 +698,7 @@ public final class ReactiveHandover<T, K> {
                     // here is what to do" message whichever side of the failure its payload arrived on. The catch-up
                     // signal above still carries the raw cause, since that caller asked about the catch-up itself.
                     pendingLiveAcks.forEach(sink -> sink.error(catchUpFailed(error)));
+                    resumeLiveDelivery();
                 });
 
         return catchupDone.asMono();
@@ -730,12 +757,69 @@ public final class ReactiveHandover<T, K> {
     // Counted after the payload has been delivered rather than before it, so the last buffered one is still part of
     // the drain while it is being handled.
     private Mono<Void> deliver(Item<K> item) {
-        return deliverItem(item).doFinally(signal -> {
+        Mono<Void> delivery = item.ack() == null ? deliverItem(item) : deliverWhenNoReplayRuns(item);
+        return delivery.doFinally(signal -> {
             if (item.ack() != null) {
                 liveBacklog.decrementAndGet();
             }
             countTowardsDrain(item);
         });
+    }
+
+    // A live payload waits here while a replay runs, and is delivered once that replay has ended, completed or stopped.
+    private Mono<Void> deliverWhenNoReplayRuns(Item<K> item) {
+        return Mono.defer(() -> {
+            Sinks.Empty<Void> paused;
+            synchronized (liveGate) {
+                paused = livePaused;
+                if (paused == null) {
+                    liveDelivering = true;
+                }
+            }
+            if (paused != null) {
+                return paused.asMono().then(deliverWhenNoReplayRuns(item));
+            }
+            return deliverItem(item).doFinally(signal -> liveDeliveryEnded());
+        });
+    }
+
+    // Completes once no live payload is being delivered, and none starts until resumeLiveDelivery().
+    private Mono<Void> pauseLiveDelivery() {
+        synchronized (liveGate) {
+            if (livePaused == null) {
+                livePaused = Sinks.empty();
+            }
+            if (!liveDelivering) {
+                return Mono.empty();
+            }
+            if (liveIdle == null) {
+                liveIdle = Sinks.empty();
+            }
+            return liveIdle.asMono();
+        }
+    }
+
+    private void liveDeliveryEnded() {
+        Sinks.Empty<Void> idle;
+        synchronized (liveGate) {
+            liveDelivering = false;
+            idle = liveIdle;
+            liveIdle = null;
+        }
+        if (idle != null) {
+            idle.tryEmitEmpty();
+        }
+    }
+
+    private void resumeLiveDelivery() {
+        Sinks.Empty<Void> paused;
+        synchronized (liveGate) {
+            paused = livePaused;
+            livePaused = null;
+        }
+        if (paused != null) {
+            paused.tryEmitEmpty();
+        }
     }
 
     private Mono<Void> deliverItem(Item<K> item) {
