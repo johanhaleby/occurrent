@@ -125,7 +125,13 @@ its `goLive()`. A live payload delivered while that replay runs goes into the sa
 or not its key was suppressed. So a replay holds live payloads back until it ends, the same as before a first
 catch-up, after waiting for any live delivery or replay callback still running. They are delivered when it ends,
 completed or stopped, and a handover that was live before the replay stays live after a stop rather than dropping
-later payloads.
+later payloads. While the replay runs, `acceptIfLive` refuses on both engines, so a caller that can redeliver is told
+to try again.
+
+A replay that fails ends differently on the two engines, because they acknowledge at different moments. The blocking
+engine has already reported each buffered payload handled, so it delivers them before it records the failure. The
+reactive engine has not acknowledged the payloads it holds back, and the failure fails their acknowledgements, so it
+does not deliver them. Their callers offer them again, and the handover refuses everything from then on.
 
 This also settles the reactive engine's second catch-up. Its live sink accepts one subscriber ever, so a catch-up on
 a handover that is already live does not subscribe it again and keeps the pipeline that is already running.

@@ -397,11 +397,12 @@ public final class ReactiveHandover<T, K> {
                 ackSink.error(catchUpFailed(failure));
                 return;
             }
-            if (!live) {
+            if (!live || liveDeliveryPaused()) {
                 // Refuse without buffering, unlike acceptReportingDelivery. Covers "never started", "still
                 // replaying", and "stopped mid-replay" alike, all three are "not live", and a caller here has
                 // already promised it can redeliver, so there is nothing to gain by holding the payload instead of
-                // asking again later.
+                // asking again later. A replay on a handover that is already live pauses live delivery, and counts
+                // as still replaying here, the same as on the blocking engine.
                 ackSink.success(false);
                 return;
             }
@@ -779,7 +780,9 @@ public final class ReactiveHandover<T, K> {
                 }
             }
             if (paused != null) {
-                return paused.asMono().then(deliverWhenNoReplayRuns(item));
+                // A replay that failed has already failed this payload's acknowledgement, so its caller offers it again
+                // and delivering it here as well would apply it twice.
+                return paused.asMono().then(Mono.defer(() -> terminalError.get() != null ? Mono.<Void>empty() : deliverWhenNoReplayRuns(item)));
             }
             return deliverItem(item).doFinally(signal -> liveDeliveryEnded());
         });
@@ -798,6 +801,12 @@ public final class ReactiveHandover<T, K> {
                 liveIdle = Sinks.empty();
             }
             return liveIdle.asMono();
+        }
+    }
+
+    private boolean liveDeliveryPaused() {
+        synchronized (liveGate) {
+            return livePaused != null;
         }
     }
 

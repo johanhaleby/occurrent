@@ -42,6 +42,7 @@ import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -995,6 +996,61 @@ class ReactiveHandoverTest {
         assertThat(delivered).containsExactly("1", "1");
         assertThat(first.alreadyDeliveredByReplay).isEmpty();
         assertThat(second.alreadyDeliveredByReplay).isEmpty();
+    }
+
+    // When a replay on a live handover fails, the acknowledgement of a live payload held back during it fails with the
+    // catch-up failure, so its caller offers the payload again. The payload must then not reach the view here as well.
+    // The pause gives a delivery that would wrongly follow the failure the time to show up in the log.
+    @Test
+    void a_live_payload_held_back_while_a_replay_on_a_live_handover_fails_is_not_delivered_after_its_ack_failed() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<CompletableFuture<Boolean>> liveAcks = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        AtomicBoolean offered = new AtomicBoolean();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.defer(() -> {
+            if (payload.equals("R2")) {
+                return Mono.error(new IllegalStateException("replay boom"));
+            }
+            log.add(payload);
+            if (payload.equals("R1") && offered.compareAndSet(false, true)) {
+                liveAcks.add(self.get().acceptReportingDelivery("L1").toFuture());
+            }
+            return Mono.empty();
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+
+        StepVerifier.create(handover.catchUp(source(List.of("R1", "R2"), false))).verifyErrorMessage("replay boom");
+        Throwable ackFailure = catchThrowable(() -> liveAcks.get(0).get(5, TimeUnit.SECONDS));
+        Mono.delay(Duration.ofMillis(300)).block();
+
+        assertThat(ackFailure).hasCauseInstanceOf(ReactiveHandover.PreDispatchRefusalException.class);
+        assertThat(log).containsExactly("R1");
+    }
+
+    // acceptIfLive refuses while a replay runs, even on a handover that is already live, the same as the blocking
+    // engine, so a caller that can redeliver is told to try again rather than having its payload held until the replay
+    // ends.
+    @Test
+    void acceptIfLive_refuses_while_a_replay_runs_on_a_live_handover() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<CompletableFuture<Boolean>> answers = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.defer(() -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                answers.add(self.get().acceptIfLive("L1").toFuture());
+            }
+            return Mono.empty();
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+
+        StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectNext(true).verifyComplete();
+
+        assertThat(answers.get(0).get(5, TimeUnit.SECONDS)).isFalse();
+        Mono.delay(Duration.ofMillis(300)).block();
+        assertThat(log).containsExactly("R1");
     }
 
     @Test

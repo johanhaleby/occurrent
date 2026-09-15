@@ -558,6 +558,19 @@ public final class BlockingHandover<T, K> {
             if (replayOpen) {
                 abandonReplayWithoutMasking(source);
             }
+            boolean deliverBuffer;
+            synchronized (lock) {
+                deliverBuffer = replayRunning && liveWhenReplayStops;
+            }
+            if (deliverBuffer) {
+                // A payload taken into the buffer during a replay on a live handover was reported handled, so it is
+                // delivered before the failure makes this handover refuse everything that comes after.
+                try {
+                    deliverBufferAndGoLive();
+                } catch (RuntimeException | Error deliveryFailure) {
+                    e.addSuppressed(deliveryFailure);
+                }
+            }
             synchronized (lock) {
                 catchUpFailure = e;
                 replayRunning = false;

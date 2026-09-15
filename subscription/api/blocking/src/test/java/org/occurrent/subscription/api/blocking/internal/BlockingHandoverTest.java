@@ -640,6 +640,55 @@ class BlockingHandoverTest {
         assertThat(second.alreadyDeliveredByReplay).isEmpty();
     }
 
+    // A replay on a live handover buffers live payloads, and a payload taken into that buffer has already been reported
+    // handled, so its caller has acknowledged it. When the replay fails, those payloads are delivered before the failure
+    // is recorded, rather than left in a buffer nothing drains any more.
+    @Test
+    void a_live_payload_buffered_while_a_replay_on_a_live_handover_fails_is_still_delivered() {
+        List<String> log = new ArrayList<>();
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
+        AtomicBoolean offered = new AtomicBoolean();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("R2")) {
+                throw new IllegalStateException("replay boom");
+            }
+            log.add(payload);
+            if (payload.equals("R1") && offered.compareAndSet(false, true)) {
+                assertThat(self.get().acceptReportingDelivery("L1")).isTrue();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        self.set(handover);
+        handover.catchUp(source(List.of(), true));
+
+        Throwable failure = catchThrowable(() -> handover.catchUp(source(List.of("R1", "R2"), false)));
+
+        assertThat(failure).hasMessage("replay boom");
+        assertThat(log).containsExactly("R1", "L1");
+        assertThat(handover.refusesPermanently()).isTrue();
+    }
+
+    // acceptIfLive refuses while a replay runs, even on a handover that is already live, so a caller that can
+    // redeliver is told to try again rather than having its payload held until the replay ends.
+    @Test
+    void acceptIfLive_refuses_while_a_replay_runs_on_a_live_handover() {
+        List<String> log = new ArrayList<>();
+        List<Boolean> answers = new ArrayList<>();
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                answers.add(self.get().acceptIfLive("L1"));
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        self.set(handover);
+        handover.catchUp(source(List.of(), true));
+
+        handover.catchUp(source(List.of("R1"), false));
+
+        assertThat(answers).containsExactly(false);
+        assertThat(log).containsExactly("R1");
+    }
+
     @Test
     void replay_lifecycle_is_started_then_completed_before_the_buffer_drain_and_the_marker() {
         List<String> log = Collections.synchronizedList(new ArrayList<>());
