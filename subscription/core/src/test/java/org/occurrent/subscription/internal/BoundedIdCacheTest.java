@@ -90,12 +90,28 @@ class BoundedIdCacheTest {
     }
 
     @Test
+    void clear_forgets_every_id_and_the_cache_fills_again_from_empty() {
+        BoundedIdCache<String> cache = new BoundedIdCache<>(2);
+        cache.add("a");
+        cache.add("b");
+
+        cache.clear();
+        cache.add("c");
+        cache.add("d");
+
+        assertThat(cache.contains("a")).isFalse();
+        assertThat(cache.contains("b")).isFalse();
+        assertThat(cache.contains("c")).isTrue();
+        assertThat(cache.contains("d")).isTrue();
+    }
+
+    @Test
     void rejects_a_max_size_below_one() {
-        assertThatThrownBy(() -> new BoundedIdCache(0))
+        assertThatThrownBy(() -> new BoundedIdCache<String>(0))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("maxSize must be at least 1, was 0");
 
-        assertThatThrownBy(() -> new BoundedIdCache(-1))
+        assertThatThrownBy(() -> new BoundedIdCache<String>(-1))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("maxSize must be at least 1, was -1");
     }

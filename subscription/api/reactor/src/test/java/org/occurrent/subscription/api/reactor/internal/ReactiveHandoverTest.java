@@ -875,6 +875,61 @@ class ReactiveHandoverTest {
         assertThat(delivered).containsExactly("R1", "R1", "R2", "L1");
     }
 
+    // A view that buffers during a replay discards that buffer when the replay stops, so a key the stopped replay left
+    // behind would suppress the only copy of an event the read model never got. The key is forgotten instead, and a
+    // view that wrote the event through receives it twice, which at-least-once delivery allows.
+    @Test
+    void a_payload_a_stopped_replay_delivered_is_delivered_again_once_the_handover_goes_live() {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String, String> handover = handover(delivered);
+        FakeSource stopped = source(List.of("R1", "R2"), false);
+        stopped.stopAfter(1);
+        StepVerifier.create(handover.catchUp(stopped)).expectNext(false).verifyComplete();
+
+        FakeSource goLive = source(List.of(), true);
+        StepVerifier.create(handover.catchUp(goLive)).expectNext(true).verifyComplete();
+        StepVerifier.create(handover.accept("R1")).verifyComplete();
+
+        assertThat(delivered).containsExactly("R1", "R1");
+        assertThat(stopped.alreadyDeliveredByReplay).isEmpty();
+        assertThat(goLive.alreadyDeliveredByReplay).isEmpty();
+    }
+
+    // The live sink accepts one subscriber ever, so a catch-up on a handover that is already live must not subscribe it
+    // again. The sink's refusal would be recorded as a failed catch-up and every later payload refused. It would
+    // arrive after the second catch-up's own signal, hence the pause.
+    @Test
+    void a_catch_up_on_a_handover_that_is_already_live_leaves_it_accepting_payloads() {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String, String> handover = handover(delivered);
+        StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectNext(true).verifyComplete();
+
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        Mono.delay(Duration.ofMillis(500)).block();
+
+        assertThat(handover.refusesPermanently()).isFalse();
+        StepVerifier.create(handover.accept("L1")).verifyComplete();
+        assertThat(delivered).containsExactly("R1", "L1");
+    }
+
+    // A catch-up that replays nothing leaves a live copy of a payload the earlier, finished replay delivered reaching
+    // the source that replayed it, since that source is the one that can record it.
+    @Test
+    void a_catch_up_that_replays_nothing_leaves_the_earlier_replays_payloads_reaching_the_source_that_replayed_them() {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String, String> handover = handover(delivered);
+        FakeSource replayed = source(List.of("1"), false);
+        StepVerifier.create(handover.catchUp(replayed)).expectNext(true).verifyComplete();
+
+        FakeSource goLive = source(List.of(), true);
+        StepVerifier.create(handover.catchUp(goLive)).expectNext(true).verifyComplete();
+        StepVerifier.create(handover.accept("1")).verifyComplete();
+
+        assertThat(delivered).containsExactly("1");
+        assertThat(replayed.alreadyDeliveredByReplay).containsExactly("1");
+        assertThat(goLive.alreadyDeliveredByReplay).isEmpty();
+    }
+
     @Test
     void replay_lifecycle_is_started_then_completed_before_the_marker() throws Exception {
         List<String> log = Collections.synchronizedList(new ArrayList<>());

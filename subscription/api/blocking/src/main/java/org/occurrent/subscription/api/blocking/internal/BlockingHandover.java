@@ -123,6 +123,10 @@ public final class BlockingHandover<T, K> {
          * The replay was stopped before it finished, that is, {@link #keepReplaying()} returned {@code false}. Called
          * instead of {@link #replayCompleted()}, so anything buffered since {@link #replayStarted()} is discarded
          * rather than written, the same discard-on-stop contract {@link #keepReplaying()} documents. Must not throw.
+         * <p>
+         * Before this call the engine forgets every de-dup key the replay delivered, so a later live copy of one of
+         * those payloads is delivered rather than suppressed. A source that wrote the payload through receives it
+         * twice, which at-least-once delivery allows, and one that discarded it receives it again.
          */
         default void replayAbandoned() {
         }
@@ -223,9 +227,9 @@ public final class BlockingHandover<T, K> {
     private boolean live = false;
     private boolean stopped = false;
     private @Nullable Throwable catchUpFailure = null;
-    // Held so a live payload the replay already delivered can reach the source that replayed it, since accept(..) is
-    // handed no source of its own. Written by catchUp(Source) before anything can set live, and only read on a path
-    // that requires live.
+    // The source whose replay filled replayedIds, so a live payload that replay already delivered can reach it, since
+    // accept(..) is handed no source of its own. Written when a replay starts rather than by every catchUp(Source), so
+    // a catch-up that replays nothing leaves it in place, and cleared with replayedIds when a replay is abandoned.
     private @Nullable Source<T> source = null;
 
     private BlockingHandover(Consumer<T> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun) {
@@ -439,7 +443,6 @@ public final class BlockingHandover<T, K> {
             // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying
             // again rather than only by building a new one.
             stopped = false;
-            this.source = source;
         }
         // Tracks whether replayStarted() ran and replayCompleted() has not yet closed it out, so the catch block below
         // knows whether there is a replay lifecycle left open to abandon, rather than calling replayAbandoned() after
@@ -451,6 +454,9 @@ public final class BlockingHandover<T, K> {
                 return true;
             }
             boolean stoppedMidReplay = false;
+            synchronized (lock) {
+                this.source = source;
+            }
             source.replayStarted();
             replayOpen = true;
             try (Stream<T> history = source.replay()) {
@@ -520,6 +526,13 @@ public final class BlockingHandover<T, K> {
     // engine call it in the first place; the contract asks the source not to throw here, but this engine does not
     // trust that.
     private void abandonReplayWithoutMasking(Source<T> source) {
+        // A view that buffers during a replay discards that buffer here, so a key the replay left behind would
+        // suppress the only copy of an event the read model never got. Forgetting it costs a view that wrote through
+        // a second delivery, which at-least-once delivery allows.
+        synchronized (lock) {
+            replayedIds.clear();
+            this.source = null;
+        }
         try {
             source.replayAbandoned();
         } catch (RuntimeException | Error ignored) {
@@ -533,7 +546,9 @@ public final class BlockingHandover<T, K> {
         List<T> toDeliver;
         List<K> keysToDeliver;
         List<T> alreadyReplayed;
+        Source<T> replayedBy;
         synchronized (lock) {
+            replayedBy = this.source;
             toDeliver = new ArrayList<>(buffer.size());
             keysToDeliver = new ArrayList<>(buffer.size());
             alreadyReplayed = new ArrayList<>();
@@ -563,7 +578,7 @@ public final class BlockingHandover<T, K> {
         // that comes after it.
         try {
             for (T replayedPayload : alreadyReplayed) {
-                source.alreadyDeliveredByReplay(replayedPayload);
+                replayedBy.alreadyDeliveredByReplay(replayedPayload);
             }
         } catch (RuntimeException | Error e) {
             // Nothing has been delivered yet, so every key reserved above is still reserved and would be skipped by a

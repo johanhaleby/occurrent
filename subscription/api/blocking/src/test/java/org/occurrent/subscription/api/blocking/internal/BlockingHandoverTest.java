@@ -540,6 +540,44 @@ class BlockingHandoverTest {
         assertThat(delivered).containsExactly("R1", "R1", "R2", "L1");
     }
 
+    // A view that buffers during a replay discards that buffer when the replay stops, so a key the stopped replay left
+    // behind would suppress the only copy of an event the read model never got. The key is forgotten instead, and a
+    // view that wrote the event through receives it twice, which at-least-once delivery allows.
+    @Test
+    void a_payload_a_stopped_replay_delivered_is_delivered_again_once_the_handover_goes_live() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String, String> handover = handover(delivered);
+        FakeSource stopped = source(List.of("R1", "R2"), false);
+        stopped.stopAfter(1);
+        handover.catchUp(stopped);
+
+        FakeSource goLive = source(List.of(), true);
+        handover.catchUp(goLive);
+        handover.accept("R1");
+
+        assertThat(delivered).containsExactly("R1", "R1");
+        assertThat(stopped.alreadyDeliveredByReplay).isEmpty();
+        assertThat(goLive.alreadyDeliveredByReplay).isEmpty();
+    }
+
+    // A feed's goLive() is a catch-up that replays nothing. A live copy of a payload the earlier, finished replay
+    // delivered still reaches the source that replayed it, since that source is the one that can record it.
+    @Test
+    void a_catch_up_that_replays_nothing_leaves_the_earlier_replays_payloads_reaching_the_source_that_replayed_them() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String, String> handover = handover(delivered);
+        FakeSource replayed = source(List.of("1"), false);
+        handover.catchUp(replayed);
+
+        FakeSource goLive = source(List.of(), true);
+        handover.catchUp(goLive);
+        handover.accept("1");
+
+        assertThat(delivered).containsExactly("1");
+        assertThat(replayed.alreadyDeliveredByReplay).containsExactly("1");
+        assertThat(goLive.alreadyDeliveredByReplay).isEmpty();
+    }
+
     @Test
     void replay_lifecycle_is_started_then_completed_before_the_buffer_drain_and_the_marker() {
         List<String> log = Collections.synchronizedList(new ArrayList<>());

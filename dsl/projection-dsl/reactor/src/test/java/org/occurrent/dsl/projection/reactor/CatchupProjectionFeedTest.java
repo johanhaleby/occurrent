@@ -25,6 +25,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
+import org.occurrent.dsl.projection.MaterializedViewOptions;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.AppendId;
@@ -45,8 +46,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
+import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -241,6 +245,68 @@ class CatchupProjectionFeedTest {
         assertThat(appliedAppends.hasApplied("counter", appendId)).isFalse();
     }
 
+    // A stopped replay discards what a coalescing view buffered. The live copy of an event that replay delivered has
+    // to be applied after goLive(), not skipped as a duplicate of a delivery whose work was thrown away.
+    @Test
+    void an_event_a_stopped_replay_delivered_is_applied_when_its_live_copy_arrives_after_go_live() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        AppendId appendId = new AppendId(UUID.randomUUID());
+        AppliedAppendStore appliedAppends = AppliedAppendStore.inMemory();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        // A batch larger than the history, so the view writes nothing before the stop discards what it buffered.
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter",
+                Projections.recordingAppliedAppends(
+                        Projections.reactiveUpdateWithMetadata(stoppingTheReplayAtTheFirstEvent(feedRef), repository, new MaterializedViewOptions(100)),
+                        "counter", appliedAppends),
+                Filter.all(), stampedReader(appendId, "1", "2"), converter, Counted::eventId, null);
+        feedRef.set(feed);
+
+        feed.catchUp().block(ofSeconds(5));
+        assertThat(repo).isEmpty();
+
+        feed.goLive().block(ofSeconds(5));
+        feed.accept(EventMetadata.from(stamped(appendId, "1")), new Counted("1")).block(ofSeconds(5));
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(repo.get("counter")).isEqualTo(1);
+            assertThat(appliedAppends.hasApplied("counter", appendId)).isTrue();
+        });
+    }
+
+    // goLive() after a finished catch-up replays nothing. The live copy of an event that replay applied is still
+    // suppressed, and its append is still recorded, because the copy reaches the source whose replay applied it.
+    @Test
+    void go_live_after_a_finished_catch_up_still_records_an_append_whose_live_copy_is_suppressed() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        AppendId appendId = new AppendId(UUID.randomUUID());
+        AppliedAppendStore appliedAppends = AppliedAppendStore.inMemory();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter",
+                Projections.recordingAppliedAppends(
+                        Projections.reactiveUpdateWithMetadata(projection(), repository, "counter"), "counter", appliedAppends),
+                Filter.all(), stampedReader(appendId, "1", "2"), converter, Counted::eventId, null);
+
+        feed.catchUp().block(ofSeconds(5));
+        feed.goLive().block(ofSeconds(5));
+        feed.accept(EventMetadata.from(stamped(appendId, "2")), new Counted("2")).block(ofSeconds(5));
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(repo.get("counter")).isEqualTo(2);
+            assertThat(appliedAppends.hasApplied("counter", appendId)).isTrue();
+        });
+
+        // goLive() found the feed already live and left its pipeline running, so a later event is still applied. A
+        // refusal would arrive after goLive() completed, hence the pause.
+        Mono.delay(ofMillis(500)).block();
+        feed.accept(EventMetadata.from(stamped(appendId, "3")), new Counted("3")).block(ofSeconds(5));
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(3));
+    }
+
     @Test
     void a_live_event_not_in_the_replay_is_folded_after_the_catch_up() {
         CloudEventConverter<Counted> converter = countedConverter();
@@ -432,6 +498,20 @@ class CatchupProjectionFeedTest {
     private static Projection<Integer, Counted, String> projection() {
         return Projection.<Integer, Counted, String>builder(0)
                 .id(event -> "counter")
+                .on(Counted.class, (state, event) -> state + 1)
+                .build();
+    }
+
+    // Stops the replay from inside the first event's id lookup, so that event is buffered and then discarded.
+    private static Projection<Integer, Counted, String> stoppingTheReplayAtTheFirstEvent(AtomicReference<CatchupProjectionFeed<Counted>> feed) {
+        AtomicBoolean stopped = new AtomicBoolean();
+        return Projection.<Integer, Counted, String>builder(0)
+                .id(event -> {
+                    if (stopped.compareAndSet(false, true)) {
+                        feed.get().stopCatchUp();
+                    }
+                    return "counter";
+                })
                 .on(Counted.class, (state, event) -> state + 1)
                 .build();
     }

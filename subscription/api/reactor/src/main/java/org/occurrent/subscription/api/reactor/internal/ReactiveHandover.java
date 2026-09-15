@@ -130,6 +130,10 @@ public final class ReactiveHandover<T, K> {
          * The replay was stopped before it finished, that is, {@link #keepReplaying()} returned {@code false}. Called
          * instead of {@link #replayCompleted()}, so anything buffered since {@link #replayStarted()} is discarded
          * rather than written, the same discard-on-stop contract {@link #keepReplaying()} documents. Must not throw.
+         * <p>
+         * Before this call the engine forgets every de-dup key the replay delivered, so a later live copy of one of
+         * those payloads is delivered rather than suppressed. A source that wrote the payload through receives it
+         * twice, which at-least-once delivery allows, and one that discarded it receives it again.
          */
         default void replayAbandoned() {
         }
@@ -242,6 +246,14 @@ public final class ReactiveHandover<T, K> {
     private final java.util.concurrent.atomic.AtomicLong remainingInDrain = new java.util.concurrent.atomic.AtomicLong(-1);
     // The source of the catch-up currently going live, so the drain can tell it when the buffered set is exhausted.
     private final AtomicReference<Source<T>> drainedSource = new AtomicReference<>();
+    // The source whose replay filled replayedIds, so a live payload that replay already delivered can reach it. Set
+    // when a replay starts rather than by every catchUp(Source), so a catch-up that replays nothing leaves it in
+    // place, and cleared with replayedIds when a replay is abandoned.
+    private final AtomicReference<@Nullable Source<T>> replaySource = new AtomicReference<>();
+    // The live sink accepts one subscriber ever. A catch-up on a handover that is already live, a feed's goLive()
+    // after its catchUp(), leaves the running pipeline alone instead of subscribing again, which the sink would
+    // refuse and the error handler would record as a failed catch-up.
+    private final AtomicBoolean liveSinkSubscribed = new AtomicBoolean();
     // Acks of live payloads buffered but not yet folded, so a catch-up failure fails them rather than leaving the
     // caller's accept Monos hanging forever. The Boolean each carries is whether the payload was genuinely
     // delivered, not just whether the ack completed without error, see acceptReportingDelivery(..).
@@ -575,6 +587,7 @@ public final class ReactiveHandover<T, K> {
             if (done) {
                 return Mono.empty();
             }
+            replaySource.set(source);
             source.replayStarted();
             replayOpen.set(true);
             return source.replay().map(this::replayedItem)
@@ -623,7 +636,9 @@ public final class ReactiveHandover<T, K> {
                     }
                     catchupDone.tryEmitValue(true);
                 })
-                .thenMany(liveSink.asFlux().concatMap(this::deliver))
+                .thenMany(Flux.defer(() -> liveSinkSubscribed.compareAndSet(false, true)
+                        ? liveSink.asFlux().concatMap(this::deliver)
+                        : Flux.<Void>empty()))
                 // This engine subscribes its own pipeline rather than handing it back, so without a scheduler the
                 // replay would run on whoever called catchUp, which is the Spring refresh thread for an annotated
                 // projection. boundedElastic because the replay folds through blocking bridges.
@@ -668,6 +683,11 @@ public final class ReactiveHandover<T, K> {
     // an abandon call for a lifecycle that already closed successfully.
     private void abandonReplayWithoutMasking(Source<T> source, AtomicBoolean replayOpen) {
         if (replayOpen.compareAndSet(true, false)) {
+            // A view that buffers during a replay discards that buffer here, so a key the replay left behind would
+            // suppress the only copy of an event the read model never got. Forgetting it costs a view that wrote
+            // through a second delivery, which at-least-once delivery allows.
+            replayedIds.clear();
+            replaySource.set(null);
             try {
                 source.replayAbandoned();
             } catch (RuntimeException | Error ignored) {
@@ -756,10 +776,10 @@ public final class ReactiveHandover<T, K> {
     }
 
     // Resolved when the suppression happens rather than when the item was made, because a payload buffered during the
-    // replay is made before catchUp has a source to hand. Every live delivery runs after drainedSource is set, so the
-    // null branch is only ever reached by a caller that never ran a catch-up at all.
+    // replay is made before that replay has started. A key in replayedIds means a replay set replaySource, so the null
+    // branch is only reached when an abandon cleared both between the key check and this call.
     private Mono<Void> alreadyDeliveredByReplay(T payload) {
-        Source<T> source = drainedSource.get();
+        Source<T> source = replaySource.get();
         return source == null ? Mono.empty() : source.alreadyDeliveredByReplay(payload);
     }
 

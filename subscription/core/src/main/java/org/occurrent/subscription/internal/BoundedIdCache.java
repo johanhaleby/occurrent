@@ -59,6 +59,11 @@ public final class BoundedIdCache<K> {
         return ids.contains(id);
     }
 
+    public synchronized void clear() {
+        ids.clear();
+        order.clear();
+    }
+
     public synchronized void add(K id) {
         if (ids.add(id)) {
             order.add(id);
