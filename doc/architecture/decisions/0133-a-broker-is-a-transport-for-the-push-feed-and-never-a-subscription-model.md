@@ -1263,8 +1263,9 @@ acknowledgement from the worker takes `consumeLock` like every other call on the
 poll thread already took when it released a held tag.
 
 One thread per bridge keeps deliveries handled one at a time and in the order the broker sent them, which is what the
-callback gave each channel before. The worker's queue never holds more than `prefetchCount` deliveries, since the
-broker sends no more than that many unacknowledged ones to a consumer, so nothing new was needed to limit it.
+callback gave each channel before. The worker's queue holds at most `prefetchCount` deliveries from the current
+channel, since the broker sends no more than that many unacknowledged ones to a consumer and a recovery drops the
+rest, as described below.
 
 **Shutdown.** `close()` cancels the consumer, then stops the worker without starting any delivery still queued for
 it, and waits up to a new `closeTimeout(Duration)` on both builders for the one being handled. Thirty seconds is the
@@ -1273,14 +1274,20 @@ A handler still running after that is interrupted and logged at `warn`. A delive
 never acknowledged, so closing the channel puts it back on the queue. A permanent stop runs on the worker itself, so
 it stops the worker the same way but without waiting.
 
-**A connection recovery can cost more than one duplicate.** The amendment above that removed the channel-generation
-fence still holds, and the fence stays gone. The client ignores an acknowledgement for a tag from a dead channel, so
-the bridges act on every tag. What changes is how many deliveries the bridge holds when the connection drops. Before,
-it held at most the one it was handling. The worker can hold up to `prefetchCount` of them. It handles each one, and RabbitMQ delivers each
-one again on the recovered channel, so each is handled twice. At the default `prefetchCount` of one nothing changes.
-Above one it stays within the at-least-once delivery these bridges promise everywhere else, and telling a delivery
-from the dead channel apart from a fresh one is exactly what the fence got wrong in
-[#922](https://github.com/johanhaleby/occurrent/issues/922).
+**A connection recovery drops what the dead channel left waiting.** The amendment above that removed the
+channel-generation fence still holds, and the fence stays gone. The client ignores an acknowledgement for a tag from a
+dead channel, so the bridges act on every tag they handle. What the worker adds is a queue of deliveries not yet
+handled, and RabbitMQ puts every one of them back on the queue when their channel dies. Left alone, a handler blocked
+across several recoveries would find a copy of the same message waiting for it from each one. So when a recovery of
+the consume channel starts, the worker drops every delivery submitted to it so far that has not started yet.
+
+The client calls the channel's `handleRecoveryStarted` after it has created the replacement channel and before
+`recoverTopology` registers the consumer on it again, and the replacement numbers its deliveries after every tag the
+dead channel issued. Nothing from the replacement can have been submitted by then, and nothing from it is ever
+dropped. That is where this differs from the fence, which bumped its counter from `handleRecovery`, after the consumer
+was already back, and so dropped a delivery from the new channel in
+[#922](https://github.com/johanhaleby/occurrent/issues/922). The delivery being handled when the connection drops
+still finishes and is delivered once more, the one duplicate the bridges already had.
 
 **Two alternatives were not taken.** A `Connection` per bridge would isolate the bridges too, but it changes both
 builders to take a `ConnectionFactory` instead of a `Connection`, multiplies the connections every application opens
@@ -1291,4 +1298,6 @@ check that anyone followed it, so isolation would rest on a setting nobody finds
 `RabbitMqCloudEventBridgeWorkerThreadTest` and `RabbitMqDomainEventBridgeWorkerThreadTest` build two bridges on a
 connection whose shared executor has one thread, block the handler in one bridge, and assert that the other bridge's
 event arrives before the block is released. Both fail against the old callback, where the healthy bridge never
-receives its event.
+receives its event. `RabbitMqCloudEventBridgeConnectionRecoveryTest` blocks a handler across two forced recoveries and
+asserts the message is handled twice rather than three times, and `RabbitMqDomainEventBridgeRecoveryDiscardTest` calls
+the domain bridge's recovery listener by hand to check the same thing.

@@ -95,6 +95,8 @@ class RabbitMqDomainEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handledByHealthyBridge).containsExactly(new TestOrderPlaced("order-2")));
             assertThat(releaseBlockedProjection.getCount()).as("the blocked projection is still blocked").isOne();
+            // Released here rather than only in finally, so closing the blocked bridge does not wait out its close timeout.
+            releaseBlockedProjection.countDown();
         } finally {
             releaseBlockedProjection.countDown();
         }

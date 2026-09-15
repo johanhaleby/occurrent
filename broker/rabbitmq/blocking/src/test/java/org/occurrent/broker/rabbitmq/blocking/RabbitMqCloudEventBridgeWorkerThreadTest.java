@@ -102,6 +102,8 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handledByHealthyBridge).extracting(CloudEvent::getId).containsExactly("healthy-1"));
             assertThat(releaseBlockedHandler.getCount()).as("the blocked handler is still blocked").isOne();
+            // Released here rather than only in finally, so closing the blocked bridge does not wait out its close timeout.
+            releaseBlockedHandler.countDown();
         } finally {
             releaseBlockedHandler.countDown();
         }
@@ -198,7 +200,8 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
         }
 
-        assertThat(handlerInterrupted).isTrue();
+        // close() interrupts the handler without waiting for it to notice.
+        await().atMost(Duration.ofSeconds(5)).untilTrue(handlerInterrupted);
         assertThat(startedIds).containsExactly("id-1");
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(3));
     }

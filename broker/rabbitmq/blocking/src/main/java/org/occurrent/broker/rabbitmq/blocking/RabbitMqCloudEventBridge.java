@@ -161,9 +161,9 @@ import static java.util.Objects.requireNonNull;
  * Under {@link DeliveryFailurePolicy#PARK} that costs one duplicate. A delivery that fails while the connection is
  * recovering is published to the parking destination, and the acknowledgement that normally follows the park does
  * nothing, so RabbitMQ requeues the message as well. You end up with a parked copy and a copy still on the source
- * queue, which is the same at-least-once delivery this bridge gives you everywhere else. With
- * {@link Builder#prefetchCount(int)} above one, a delivery still waiting for the worker thread when the connection
- * drops is handled once from the old channel and once more when RabbitMQ delivers it again on the new one.
+ * queue, which is the same at-least-once delivery this bridge gives you everywhere else. A delivery still waiting
+ * for the worker thread when the connection drops is not handled at all. It is dropped as soon as the recovery
+ * starts, since RabbitMQ delivers it again on the recovered channel.
  */
 public final class RabbitMqCloudEventBridge implements AutoCloseable {
 
@@ -253,6 +253,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         } catch (IOException e) {
             throw new RabbitMqBridgeException("Failed to declare topology for queue \"" + queue + "\"", e);
         }
+        worker.discardOnRecovery(consumeChannel);
         scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
@@ -561,6 +562,8 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         scheduler.shutdownNow();
         consumeLock.lock();
         try {
+            // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
+            permanentlyStopped = true;
             if (consumerTag != null) {
                 try {
                     consumeChannel.basicCancel(consumerTag);
