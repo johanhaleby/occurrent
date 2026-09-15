@@ -136,8 +136,8 @@ public final class FlowSaga {
          * standing ahead of them. A transition keeps the events of the step it left as well, for that step's reaction, and
          * the step it enters then fills its own cap before anything is dropped, so the most an instance holds at any one
          * moment is {@code historyWindow + 2 * stepWindow + 1} rather than one {@code stepWindow}'s worth, of its own
-         * declared-type events. That bound does not include a retained event of a type no step declares, which the two
-         * paragraphs above already say this cap does not limit.
+         * declared-type events plus the start type. That bound does not include a retained event of a type no step
+         * declares and that is not the start type, which the two paragraphs above already say this cap does not limit.
          * <p>
          * Keeping a count means being able to match it to a leaf again after a redeploy, so a window-condition leaf in a capped
          * step names its predicate, {@code event(Payment.class, 2, "isBig", p -> p.isBig())}. {@link #build()} refuses a capped
