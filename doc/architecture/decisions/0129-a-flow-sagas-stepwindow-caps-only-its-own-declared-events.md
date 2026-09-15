@@ -133,14 +133,14 @@ a genuine reason should watch the store's warning rather than assume `stepWindow
 document size, and a caller who wants that bound back should narrow the selector to the flow's own
 declared types instead.
 
-A widened selector is not the only way to reach this gap. `startType` is deliberately left out of
-`stepDeclaredEventTypes` (it is unioned only into `eventTypes()`, for the subscription selector), so
-a repeat of the start type after an instance has already started is `isDeclared`-false for exactly the
-same reason a foreign-typed event is, and it grows a step's retained tail the same way, on a flow
-whose selector was never widened at all. `SagaExecutionSupport.startEventOrNull` returns `null` once
+A widened selector was not the only way to reach this gap. `startType` is deliberately left out of
+`stepDeclaredEventTypes` (it is unioned only into `eventTypes()`, for the subscription selector), so a
+repeat of the start type after an instance had already started was `isDeclared`-false for exactly the
+same reason a foreign-typed event is, and it grew a step's retained tail the same way, on a flow whose
+selector was never widened at all. `SagaExecutionSupport.startEventOrNull` returns `null` once
 `hasStarted`, so that repeat event falls through to `evolve` as an ordinary correlated event rather
 than starting a second instance. This ADR's consequences section originally scoped the uncapped case
-to a widened selector only, which is incomplete.
+to a widened selector only, which was incomplete, and the decision section above now states the fix.
 
 Two ways to close this were weighed. Counting the start type as declared once an instance has started
 reuses the eviction mechanism `isDeclared` already runs, one added clause and no new field, and it
