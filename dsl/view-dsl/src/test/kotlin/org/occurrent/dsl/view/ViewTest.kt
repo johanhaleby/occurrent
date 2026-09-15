@@ -546,5 +546,26 @@ class ViewTest {
 
             assertThat(view.initialState()).isNull()
         }
+
+        @Test
+        fun `java View create with no initial state returns a view whose state is nullable`() {
+            // The type arguments are non-null, so this stops compiling if the Java factory stops returning a nullable state.
+            val view: View<NameState?, DomainEvent> = View.create<NameState, DomainEvent> { s, e ->
+                when (e) {
+                    is NameDefined -> NameState(e.userId(), e.name)
+                    is NameWasChanged -> s?.copy(name = e.name)
+                }
+            }
+
+            assertThat(view.initialState()).isNull()
+        }
+
+        @Test
+        fun `java metadata-aware View create with no initial state returns a view whose state is nullable`() {
+            // The type arguments are non-null, so this stops compiling if the Java factory stops returning a nullable state.
+            val view: View<Long?, DomainEvent> = View.create<Long, DomainEvent> { s, metadata, _ -> metadata.position ?: s }
+
+            assertThat(view.initialState()).isNull()
+        }
     }
 }

@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.view;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
@@ -119,14 +120,14 @@ class ViewMetadataTest {
 
         @Test
         void create_with_no_argument_starts_from_null_like_create_of_null() {
-            View<Boolean, Registered> view = View.create((state, event) -> !state);
+            View<@Nullable Boolean, Registered> view = View.create((state, event) -> state == null || !state);
 
             assertThat(view.initialState()).isNull();
         }
 
         @Test
         void metadata_aware_create_with_no_argument_starts_from_null_like_create_of_null() {
-            View<Long, Registered> view = View.create((Long state, EventMetadata m, Registered event) -> m.getPosition());
+            View<@Nullable Long, Registered> view = View.create((@Nullable Long state, EventMetadata m, Registered event) -> m.getPosition());
 
             assertThat(view.initialState()).isNull();
         }

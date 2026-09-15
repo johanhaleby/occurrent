@@ -70,6 +70,16 @@ class SnapshotViewKotlinTest {
     }
 
     @Test
+    fun `java SnapshotView builder with no initial state builds a view whose state is nullable`() {
+        // The type arguments are non-null, so this stops compiling if the Java factory stops returning a nullable state.
+        val view: SnapshotView<Int?, LedgerEvent> = SnapshotView.builder<Int, LedgerEvent>()
+            .on(Deposited::class.java) { balance, e -> (balance ?: 0) + e.amount }
+            .build()
+
+        assertThat(view.view().initialState()).isNull()
+    }
+
+    @Test
     fun `dcbSnapshotView dsl registers a metadata-aware fold that receives the real event metadata`() {
         val dcbView = dcbSnapshotView<String, LedgerEvent>(initialState = "") {
             on<Deposited> { _, metadata, _ -> "${metadata.streamId}@${metadata.streamVersion}" }

@@ -405,5 +405,17 @@ class SagaExtensionsTest {
 
             assertThat(saga.initialState()).isNull()
         }
+
+        @Test
+        fun `java Saga builder with no initial state builds a saga whose state is nullable`() {
+            // The type arguments are non-null, so this stops compiling if the Java factory stops returning a nullable state.
+            val saga: Saga<GameEvent, GameState?, GameCommand> = Saga.builder<GameEvent, GameState, GameCommand>()
+                .correlateAll { it.gameId }
+                .startsOn(GameStarted::class.java)
+                .evolve(GameStarted::class.java) { state, e -> state ?: InProgress(e.gameId) }
+                .build()
+
+            assertThat(saga.initialState()).isNull()
+        }
     }
 }

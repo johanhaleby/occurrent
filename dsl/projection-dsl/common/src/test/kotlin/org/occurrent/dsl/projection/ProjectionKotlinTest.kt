@@ -216,5 +216,26 @@ class ProjectionKotlinTest {
 
             assertThat(projection.view().initialState()).isNull()
         }
+
+        @Test
+        fun `java Projection builder with no initial state builds a projection whose state is nullable`() {
+            // The type arguments are non-null, so this stops compiling if the Java factory stops returning a nullable state.
+            val projection: Projection<Boolean?, AccountEvent, String> = Projection.builder<Boolean, AccountEvent, String>()
+                .id { it.accountId }
+                .on(AccountRegistered::class.java) { state, _ -> state ?: true }
+                .build()
+
+            assertThat(projection.view().initialState()).isNull()
+        }
+
+        @Test
+        fun `java Projection singletonBuilder with no initial state builds a projection whose state is nullable`() {
+            // The type arguments are non-null, so this stops compiling if the Java factory stops returning a nullable state.
+            val projection: Projection<Boolean?, AccountEvent, String> = Projection.singletonBuilder<Boolean, AccountEvent>()
+                .on(AccountRegistered::class.java) { state, _ -> state ?: true }
+                .build()
+
+            assertThat(projection.view().initialState()).isNull()
+        }
     }
 }

@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
@@ -1068,7 +1069,7 @@ class SagaTest {
 
         @Test
         void builder_with_no_argument_starts_from_null_like_builder_of_null() {
-            Saga<OrderEvent, OrderState, OrderCommand> saga = Saga.<OrderEvent, OrderState, OrderCommand>builder()
+            Saga<OrderEvent, @Nullable OrderState, OrderCommand> saga = Saga.<OrderEvent, OrderState, OrderCommand>builder()
                     .correlateAll(OrderEvent::orderId)
                     .startsOn(OrderPlaced.class)
                     .evolve(OrderPlaced.class, (state, e) -> new AwaitingPayment(e.orderId()))
