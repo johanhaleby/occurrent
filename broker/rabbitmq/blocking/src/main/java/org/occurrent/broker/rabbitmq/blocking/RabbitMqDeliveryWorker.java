@@ -25,12 +25,12 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 
 import java.time.Duration;
-import java.util.Iterator;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static java.util.Objects.requireNonNull;
 
@@ -62,9 +62,7 @@ public final class RabbitMqDeliveryWorker {
     private final Logger log;
     private final ThreadPoolExecutor executor;
     private final AtomicInteger unfinishedDeliveries = new AtomicInteger();
-    private final Object deliveryTagLock = new Object();
-    private long highestSubmittedDeliveryTag;
-    private volatile long discardUpToDeliveryTag;
+    private final AtomicLong discardUpToDeliveryTag = new AtomicLong();
     private volatile @Nullable Thread thread;
     private volatile boolean stopped;
 
@@ -93,9 +91,6 @@ public final class RabbitMqDeliveryWorker {
      * @param work        Handles the delivery, including acknowledging it.
      */
     public void submit(long deliveryTag, Runnable work) {
-        synchronized (deliveryTagLock) {
-            highestSubmittedDeliveryTag = Math.max(highestSubmittedDeliveryTag, deliveryTag);
-        }
         unfinishedDeliveries.incrementAndGet();
         try {
             executor.execute(new DeliveryTask(deliveryTag, work));
@@ -109,7 +104,7 @@ public final class RabbitMqDeliveryWorker {
 
     /**
      * Makes sure that no delivery from a channel that died is started once an automatic recovery of {@code channel}
-     * has begun. Does nothing for a channel that never recovers automatically.
+     * has begun. Does nothing for any other channel.
      * <p>
      * RabbitMQ has already put every unacknowledged delivery from the dead channel back on the queue, and the
      * recovered channel delivers each of them again. Without this a handler blocked across several recoveries would
@@ -118,15 +113,18 @@ public final class RabbitMqDeliveryWorker {
      * The client calls this after it has created the replacement channel and before it registers the bridge's
      * consumer on it again. The replacement numbers its deliveries after every tag the dead channel issued, and that
      * last tag is read off the replacement here, so a callback from the dead channel that only reaches this worker
-     * later is dropped too, while nothing from the replacement ever is. For a channel that does not expose that number,
-     * the highest tag submitted so far is used instead, which misses such late callbacks but never drops a fresh one.
+     * later is dropped too, while nothing from the replacement ever is. A channel that is not the client's own
+     * {@code AutorecoveringChannel} over a {@code RecoveryAwareChannelN} gives no such guarantee about its tags, so
+     * for it nothing is dropped and a blocked handler may see the same message again after a recovery.
      */
     public void discardOnRecovery(Channel channel) {
         if (channel instanceof Recoverable recoverable) {
             recoverable.addRecoveryListener(new RecoveryListener() {
                 @Override
                 public void handleRecoveryStarted(Recoverable recoverable) {
-                    discardUpTo(lastDeliveryTagOfDeadChannel(channel));
+                    if (channel instanceof AutorecoveringChannel recovering && recovering.getDelegate() instanceof RecoveryAwareChannelN replacement) {
+                        discardUpTo(replacement.getActiveDeliveryTagOffset());
+                    }
                 }
 
                 @Override
@@ -136,23 +134,12 @@ public final class RabbitMqDeliveryWorker {
         }
     }
 
-    private long lastDeliveryTagOfDeadChannel(Channel channel) {
-        if (channel instanceof AutorecoveringChannel recovering && recovering.getDelegate() instanceof RecoveryAwareChannelN replacement) {
-            return replacement.getActiveDeliveryTagOffset();
-        }
-        synchronized (deliveryTagLock) {
-            return highestSubmittedDeliveryTag;
-        }
-    }
-
     private void discardUpTo(long deliveryTag) {
-        synchronized (deliveryTagLock) {
-            discardUpToDeliveryTag = Math.max(discardUpToDeliveryTag, deliveryTag);
-        }
+        discardUpToDeliveryTag.accumulateAndGet(deliveryTag, Math::max);
         int discarded = 0;
-        for (Iterator<Runnable> tasks = executor.getQueue().iterator(); tasks.hasNext(); ) {
-            if (((DeliveryTask) tasks.next()).deliveryTag <= deliveryTag) {
-                tasks.remove();
+        // Removing through the queue itself, since the worker may take a task between reading it and removing it.
+        for (Runnable task : executor.getQueue().toArray(new Runnable[0])) {
+            if (((DeliveryTask) task).deliveryTag <= deliveryTag && executor.getQueue().remove(task)) {
                 discarded++;
             }
         }
@@ -164,7 +151,7 @@ public final class RabbitMqDeliveryWorker {
     }
 
     private void run(long deliveryTag, Runnable work) {
-        if (stopped || deliveryTag <= discardUpToDeliveryTag) {
+        if (stopped || deliveryTag <= discardUpToDeliveryTag.get()) {
             return;
         }
         try {

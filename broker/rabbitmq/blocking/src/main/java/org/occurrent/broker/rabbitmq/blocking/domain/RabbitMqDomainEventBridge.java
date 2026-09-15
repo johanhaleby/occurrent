@@ -217,7 +217,8 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
     // Set once close() stops waiting for a projection, so nothing that projection does afterwards acknowledges or parks
-    // its delivery before the channel close puts it back on the queue. Read under consumeLock.
+    // its delivery before the channel close puts it back on the queue. Read under consumeLock, so a park or
+    // acknowledgement that already holds the lock finishes, since the projection returned before it started.
     private volatile boolean inFlightDeliveryAbandoned;
     // Tracks whether this bridge has ever seen feed.isReadyForLiveDelivery() answer true, so reconcileConsumption
     // can tell a feed that has never gone live (still replaying, or nothing registered yet, both ordinary startup

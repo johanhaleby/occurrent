@@ -63,9 +63,13 @@ import static org.mockito.Mockito.withSettings;
  */
 class RabbitMqDomainEventBridgeRecoveryDiscardTest {
 
+    /**
+     * A channel that is not the client's own recovering channel says nothing about how it numbers deliveries after a
+     * recovery, so the bridge drops nothing for it rather than risk dropping a fresh delivery.
+     */
     @SuppressWarnings("unchecked")
     @Test
-    void a_delivery_still_waiting_when_a_recovery_starts_is_dropped_and_one_from_the_recovered_channel_is_not() throws Exception {
+    void a_recovery_of_a_channel_that_does_not_expose_its_delivery_tag_offset_drops_nothing() throws Exception {
         Connection connection = mock(Connection.class);
         Channel channel = mock(Channel.class, withSettings().extraInterfaces(Recoverable.class));
         when(connection.openChannel()).thenReturn(Optional.of(channel));
@@ -103,15 +107,15 @@ class RabbitMqDomainEventBridgeRecoveryDiscardTest {
 
             deliverCallback.get().handle("consumer-tag", delivery(1, "blocked"));
             assertThat(firstCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
-            deliverCallback.get().handle("consumer-tag", delivery(2, "from-the-dead-channel"));
+            deliverCallback.get().handle("consumer-tag", delivery(2, "queued-before-the-recovery"));
 
             recoveryListener.getValue().handleRecoveryStarted((Recoverable) channel);
-            deliverCallback.get().handle("consumer-tag", delivery(3, "from-the-recovered-channel"));
+            // Numbered from 1 again, the way a channel with no offset of its own might number them.
+            deliverCallback.get().handle("consumer-tag", delivery(1, "from-the-recovered-channel"));
             releaseFirstCall.countDown();
 
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(2));
-            Thread.sleep(200);
-            assertThat(handled).containsExactly("blocked", "from-the-recovered-channel");
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled)
+                    .containsExactly("blocked", "queued-before-the-recovery", "from-the-recovered-channel"));
         } finally {
             releaseFirstCall.countDown();
             bridge.close();

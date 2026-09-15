@@ -206,7 +206,8 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
     // Set once close() stops waiting for a handler, so nothing that handler does afterwards acknowledges or parks its
-    // delivery before the channel close puts it back on the queue. Read under consumeLock.
+    // delivery before the channel close puts it back on the queue. Read under consumeLock, so a park or
+    // acknowledgement that already holds the lock finishes, since the handler returned before it started.
     private volatile boolean inFlightDeliveryAbandoned;
 
     // Package-private rather than private so RabbitMqCloudEventBridgeOutcomeRoutingTest can build one over a

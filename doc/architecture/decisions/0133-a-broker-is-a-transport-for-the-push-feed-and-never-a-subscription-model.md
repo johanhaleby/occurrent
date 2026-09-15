@@ -1272,8 +1272,10 @@ rest, as described below.
 **Shutdown.** `close()` cancels the consumer, then stops the worker without starting any delivery still queued for
 it, and waits up to a new `closeTimeout(Duration)` on both builders for the one being handled. Thirty seconds is the
 default, the same as the Kafka bridges, and both starters set it from `occurrent.broker.rabbitmq.bridge.close-timeout`.
-A handler still running after that is interrupted and logged at `warn`, and from then on nothing it does
-acknowledges or parks its delivery, so closing the channel puts that delivery back on the queue. Every step of
+A handler still running after that is interrupted and logged at `warn`, and nothing it does after that
+acknowledges or parks its delivery, so closing the channel puts that delivery back on the queue. A park or
+acknowledgement already under way at that moment still finishes, since the handler had returned before it started.
+Closing the channel under it gives at worst a parked copy plus the original back on the queue. Every step of
 `close()` shares that one deadline, since the worker holds the bridge's lock while a park waits up to five seconds for
 its confirm, and closing the channel cancels the consumer and requeues whatever a skipped step would have released. A
 permanent stop runs on the worker itself, so it stops the worker the same way but without waiting.
@@ -1290,8 +1292,8 @@ The client calls the channel's `handleRecoveryStarted` after it has created the 
 channel issued, and `RecoveryAwareChannelN.getActiveDeliveryTagOffset()` on the replacement is that last tag. The
 worker drops every delivery up to it, both those already waiting and any callback from the dead channel the client
 only runs later, and nothing from the replacement is ever dropped. That getter is public but sits in the client's
-`impl.recovery` package, so for a channel that is not one of those classes the worker uses the highest tag submitted
-so far instead. That misses a late callback but still never drops a fresh delivery. This is where it differs from
+`impl.recovery` package, and a channel that is not one of those classes says nothing about how it numbers deliveries
+after a recovery, so for such a channel the worker drops nothing at all. This is where it differs from
 the fence, which bumped its counter from `handleRecovery`, after the consumer was already back, and so dropped a
 delivery from the new channel in [#922](https://github.com/johanhaleby/occurrent/issues/922). The delivery being
 handled when the connection drops still finishes and is delivered once more, the one duplicate the bridges already
