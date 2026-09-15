@@ -27,11 +27,25 @@ import java.lang.reflect.Method;
  * <p>
  * Invoking the method on the raw bean instead would run it with no advice applied, including
  * {@code @Transactional}, on every delivery for as long as the application runs. Refused rather than done silently.
+ * <p>
+ * Also thrown when the bean the handler would be invoked on is not the implementation the method was read from, a
+ * prototype whose factory returned an unrelated class or a subclass overriding the method. Invoking it would run that
+ * other class's code under this method's subscription id.
  */
 public final class SubscriptionHandlerNotInvocableException extends IllegalStateException {
 
     SubscriptionHandlerNotInvocableException(Method method, String reason) {
         super("Cannot invoke %s.%s through its Spring proxy, so its advice would never apply. %s"
                 .formatted(method.getDeclaringClass().getName(), method.getName(), reason));
+    }
+
+    private SubscriptionHandlerNotInvocableException(String message) {
+        super(message);
+    }
+
+    static SubscriptionHandlerNotInvocableException notTheImplementationOf(Method method, Class<?> implementation) {
+        return new SubscriptionHandlerNotInvocableException(("Cannot invoke %s.%s on a %s, because that class does not run the implementation the handler was read from. " +
+                "The bean's factory built a different class than the one Occurrent read the handler from, either an unrelated class or a subclass overriding the method. Return the same implementation on every call.")
+                .formatted(method.getDeclaringClass().getName(), method.getName(), implementation.getName()));
     }
 }

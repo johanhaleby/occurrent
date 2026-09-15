@@ -402,6 +402,25 @@ class LateBeanAnnotationRegistrationTest {
         });
     }
 
+    // A BeanPostProcessor after Occurrent's can publish an object of another class than the one the handler was
+    // registered against. A late handler is invoked on the published bean, so the check that it runs the handler's
+    // own implementation happens again there, on the first delivery.
+    @Test
+    void a_late_handler_whose_bean_is_replaced_by_another_implementation_is_refused_on_delivery() {
+        runner.withUserConfiguration(LateReplacedHandlerConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Function2<EventMetadata, TestEvent, ?>> handler = ArgumentCaptor.forClass(Function2.class);
+            context.getBean("replacedHandlerSubscriber");
+            verify(context.getBean(Subscriptions.class))
+                    .subscribe(eq("late-replaced-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), handler.capture());
+
+            assertThatThrownBy(() -> handler.getValue().invoke(null, new TestEvent()))
+                    .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
+                    .hasMessageContaining(ReplacementHandler.class.getName());
+        });
+    }
+
     // Claiming an id is one atomic add rather than a check under a lock, so two threads building two lazy beans
     // that declare the same id cannot both win. The lock this replaced was held across the registrar's own
     // collaborator lookups, which is what could deadlock against a thread building one of those collaborators.
@@ -1265,6 +1284,56 @@ class LateBeanAnnotationRegistrationTest {
         @Lazy
         Marker twoHandlerSubscriber() {
             return new TwoHandlerSubscriber();
+        }
+    }
+
+    interface ReplaceableHandler extends Marker {
+        void on(TestEvent event);
+    }
+
+    static class LateReplacedHandlerSubscriber implements ReplaceableHandler {
+        @Override
+        @Subscription(id = "late-replaced-handler")
+        public void on(TestEvent event) {
+        }
+    }
+
+    static class ReplacementHandler implements ReplaceableHandler {
+        @Override
+        public void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class LateReplacedHandlerConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        @Lazy
+        Marker replacedHandlerSubscriber() {
+            return new LateReplacedHandlerSubscriber();
+        }
+
+        // Replaces the bean only after this post processor's own callback has registered the handler, so the
+        // registration checks see the original class and only the delivery sees the replacement.
+        @Bean
+        static BeanPostProcessor replacingPostProcessor() {
+            return new BeanPostProcessor() {
+                @Override
+                public Object postProcessAfterInitialization(Object bean, String beanName) {
+                    return bean instanceof LateReplacedHandlerSubscriber ? new ReplacementHandler() : bean;
+                }
+            };
         }
     }
 
