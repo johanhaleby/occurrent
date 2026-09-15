@@ -302,8 +302,9 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     // Where the retained tail has to start so that at most stepWindow of the current step's own DECLARED-type events
-    // (isDeclared, i.e. stepDeclaredEventTypes) are kept. The tail is one run of events, and the current step's events sit at
-    // the end of it behind whatever carry-over historyWindow granted, so dropping the step's oldest events means
+    // (isDeclared: a member of stepDeclaredEventTypes, or a repeat of startType) are kept. The tail is one run of
+    // events, and the current step's events sit at the end of it behind whatever carry-over historyWindow granted,
+    // so dropping the step's oldest events means
     // dropping the whole carry-over ahead of them first. Advancing the start by the excess alone would drop that many
     // carry-over events and leave every one of the step's, which caps nothing and takes the history a guard was
     // promised.
@@ -357,10 +358,11 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // Whether event is of a type some step's own branch or window-condition leaf declares, i.e. a member of
     // stepDeclaredEventTypes (unexpanded, see collectStepDeclaredEventTypes in FlowSaga.Builder), or is a repeat of
     // startType. An empty declared set means no step declared any type at all, so every event counts when it is
-    // empty, the same reading eventTypes()'s own javadoc gives an empty declared set. startType counts here even
-    // though it is deliberately left out of stepDeclaredEventTypes (that set feeds only the subscription selector,
-    // ADR 129): this method only ever runs once an instance has started, so any startType event it sees is a
-    // retained repeat, not the delivery that created the instance, and ADR 129 counts that repeat as declared.
+    // empty, the same reading eventTypes()'s own javadoc gives an empty declared set. startType is deliberately
+    // left out of stepDeclaredEventTypes itself, since startType feeds only the subscription selector through
+    // eventTypes(), not any step's own branches. This method checks startType separately from that set, per ADR
+    // 129, because it only ever runs once an instance has started, so any startType event it sees here is a
+    // retained repeat, not the delivery that created the instance.
     private boolean isDeclared(E event) {
         if (startType.isInstance(event)) {
             return true;
