@@ -225,10 +225,14 @@ of every run you ran, not only the last one.
 Each finished run logs its own outcome, either `Repaired positions ranged from X to Y` or `No position was repaired`,
 so a range you did not write down at the time is still in the logs.
 
-A run that was killed and resumed reports the same complete range as one that never stopped. The checkpoint records
-the batch it is about to touch, widened to that batch's positions, before touching it, not only the batch it just
-finished, so every position the run repairs sits inside one checkpointed range or another, whichever batch a kill
-happens to catch. Resume it and read its result the way you would any other run's.
+A run that was killed and resumed reports a range that still covers everything it repaired, and can also name a
+position it turns out not to have. The checkpoint records the batch it is about to touch, widened to every position
+that batch might write, before touching it, not only the batch it just finished, so every position the run actually
+repairs sits inside one checkpointed range or another, whichever batch a kill happens to catch. If a kill falls
+between the two writes, that wider value is what a resume starts from, so a range from a run that had to resume can
+be wider than what it actually repaired, one bound by a position an operator's own hand-set fix collided with, say.
+The wider direction is the safe one. It can send you to check a consumer that turns out fine, never the other way
+around. Resume it and read its result the way you would any other run's.
 
 A position in one of those ranges can be one the repair restored, or one that was already correct on an event only its
 tag array needed rebuilding for, which is what a run after a hand-set fix on an event with DCB tags can look like.

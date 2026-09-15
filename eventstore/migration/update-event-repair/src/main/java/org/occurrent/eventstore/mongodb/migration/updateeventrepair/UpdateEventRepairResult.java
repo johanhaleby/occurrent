@@ -71,7 +71,12 @@ import java.util.List;
  *                                cue to check it, rather than going back to the store to work out the range by hand.
  *                                Carried across a resume the way {@code unrecoverableEventCount} is, so a run that
  *                                resumed an interrupted one still bounds the positions the earlier segment repaired,
- *                                not only the ones it walked itself.
+ *                                not only the ones it walked itself. A run that had to resume past an interruption
+ *                                can widen this beyond what any segment of it actually repaired, since the
+ *                                checkpoint a resume starts from can hold a position from a batch the interruption
+ *                                caught before that batch's own attempt at it was confirmed one way or the other.
+ *                                That never narrows the range, only widens it, so the bound above still holds. A run
+ *                                that never had to resume reports this pair exactly.
  * @param maxRepairedPosition     The highest position among the same events as {@code minRepairedPosition}, or
  *                                {@code null} on the same condition. Together the two bound the repaired range
  *                                without naming every event in it.

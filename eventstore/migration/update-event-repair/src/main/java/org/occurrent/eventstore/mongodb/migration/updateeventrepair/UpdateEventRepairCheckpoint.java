@@ -33,8 +33,10 @@ final class UpdateEventRepairCheckpoint {
     // Carried across a resume for the same reason as the count above. A run killed after repairing positions in an
     // earlier segment and resumed from the checkpoint would otherwise return a range bounding only the segment it
     // walked itself, hiding the earlier segment's positions from an operator using the range for step 7. Written
-    // before a batch's events are touched as well as after, so this pair already covers the batch even for a kill
-    // between the two.
+    // before a batch's events are touched as well as after, widened to every position the batch's plans could write
+    // before, narrowed back to what actually got confirmed after, so a kill between the two keeps the wider one on
+    // disk. That is why a resumed run's own range can be wider than what it actually repaired, see
+    // UpdateEventRepairResult.
     static final String FIELD_MIN_REPAIRED_POSITION = "minRepairedPosition";
     static final String FIELD_MAX_REPAIRED_POSITION = "maxRepairedPosition";
 

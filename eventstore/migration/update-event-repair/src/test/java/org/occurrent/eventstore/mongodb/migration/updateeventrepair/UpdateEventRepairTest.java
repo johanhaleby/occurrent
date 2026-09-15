@@ -871,6 +871,41 @@ class UpdateEventRepairTest {
         );
     }
 
+    @Test
+    void a_resumed_run_can_report_a_range_wider_than_anything_it_actually_repaired() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        damageTheWayUpdateEventUsedTo("b", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        // b's damaged string claims a's position, so its write is rejected, but the pre-batch checkpoint below
+        // cannot know that yet, since finding out means asking the same index the write itself asks.
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(positionOfA))));
+
+        UpdateEventRepair killedRightAfterRejectingB = new UpdateEventRepair(
+                databaseFailingTheCheckpointWriteThatFollowsAnEventRepair(), EVENT_COLLECTION,
+                UpdateEventRepairOptions.defaults().withBatchSize(1), RetryStrategy.none());
+
+        assertThatThrownBy(killedRightAfterRejectingB::run)
+                .as("the checkpoint write that follows the rejected write must fail, or this test never reaches the gap this design accepts")
+                .isInstanceOf(MongoCommandException.class);
+
+        UpdateEventRepairResult resumed = newRepair().run();
+
+        assertAll(
+                () -> assertThat(resumed.eventsRepaired())
+                        .as("b's position is not its own, so the resumed run cannot write it any more than the killed one could")
+                        .isZero(),
+                () -> assertThat(resumed.unrecoverableEvents())
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN),
+                () -> assertThat(resumed.minRepairedPosition())
+                        .as("the killed run's checkpoint is a superset that already included a's position before b's write was rejected, and a kill before the post-batch write left it there")
+                        .isEqualTo(positionOfA),
+                () -> assertThat(resumed.maxRepairedPosition()).isEqualTo(positionOfA)
+        );
+    }
+
     private void waitUntilCheckpointExists() {
         for (int attempt = 0; attempt < 200; attempt++) {
             if (database.getCollection(EVENT_COLLECTION + "_update_event_repair_checkpoint").countDocuments() > 0) {

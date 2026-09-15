@@ -23,7 +23,6 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
-import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.Sorts;
@@ -44,11 +43,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Supplier;
 
 import static com.mongodb.client.model.Filters.and;
@@ -107,8 +102,10 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * {@code _id} order in batches. A run is idempotent because it only touches events that still look damaged, and it
  * is safe to kill because each event is repaired on its own and a checkpoint document records how far it got. The
  * checkpoint is written twice per batch, once before any event in it is touched, with its range widened to every
- * position the batch could modify, and again after, so a checkpoint covering the batch already exists even for a
- * kill between the two.
+ * position the batch could modify, and again after, narrowed back to exactly what the batch confirmed repairing.
+ * A kill between the two still has the wider one on disk for a later run to load, so {@link #run()}'s own returned
+ * range can be wider than what it actually repaired once a run has resumed past an interruption. See
+ * {@link UpdateEventRepairResult}.
  *
  * <pre>{@code
  * MongoDatabase database = mongoClient.getDatabase("my-database");
@@ -195,11 +192,14 @@ public final class UpdateEventRepair {
         }
         long repaired = 0;
         List<UnrecoverableEvent> unrecoverable = new ArrayList<>();
-        // Bounds of every readable position this call and, once resumed, every earlier segment of this same run
-        // repaired, carried across a resume the same way unrecoverableCount is and for the same reason. Without
-        // that, a run killed after repairing positions in an earlier segment would return a range naming only the
-        // segment the resumed call walked itself, hiding the earlier one from step 7. Widened before each batch's
-        // events are touched, not only after, so this range already covers the batch even for a kill between the two.
+        // Bounds of every position this call and, once resumed, every earlier segment of this same run actually
+        // confirmed repaired, carried across a resume the same way unrecoverableCount is and for the same reason.
+        // Without that, a run killed after repairing positions in an earlier segment would return a range naming
+        // only the segment the resumed call walked itself, hiding the earlier one from step 7. Only the per-event
+        // loop below ever widens this pair. The pre-batch checkpoint widens a separate, wider value, so a run that
+        // resumes past an interruption can start from that wider value here too, which is why a range carried
+        // across a resume can include a position no segment of the run ever actually repaired, see
+        // UpdateEventRepairResult.
         @Nullable Long minRepairedPosition = checkpoint == null ? null : numberOrNull(checkpoint.get(UpdateEventRepairCheckpoint.FIELD_MIN_REPAIRED_POSITION));
         @Nullable Long maxRepairedPosition = checkpoint == null ? null : numberOrNull(checkpoint.get(UpdateEventRepairCheckpoint.FIELD_MAX_REPAIRED_POSITION));
         // Read once up front. A damaged event predates this run, since no version from 0.34.0 on can create one, so
@@ -227,13 +227,26 @@ public final class UpdateEventRepair {
             // widen never saw and so never checkpointed.
             List<PlannedRepair> planned = planBatch(batch, positionCeiling);
 
-            // Widen the range to every position this batch could modify before touching any of it, so a checkpoint
-            // covering what was written already exists even if a kill skips the post-batch checkpoint below.
-            for (long readablePosition : readablePositionsOf(planned)) {
-                minRepairedPosition = minRepairedPosition == null ? readablePosition : Math.min(minRepairedPosition, readablePosition);
-                maxRepairedPosition = maxRepairedPosition == null ? readablePosition : Math.max(maxRepairedPosition, readablePosition);
+            // Checkpoint a range wide enough to cover whatever this batch is about to modify, before touching any
+            // of it, so a checkpoint covering the batch already exists even for a kill that skips the post-batch
+            // write below. This widens a local copy, never minRepairedPosition/maxRepairedPosition themselves, and
+            // only for a plan with something to write, a parse or validation failure or an unrebuildable tag array
+            // give both nothing to widen for either way. It does not ask whether another event currently owns a
+            // candidate, since that can change before repairEvent's write actually resolves it against the same
+            // index, and a snapshot taken here would only be a stale guess of what that live check will find. The
+            // post-batch write below narrows the checkpoint back to exactly what got confirmed, so this local value
+            // only outlives the batch when a kill catches it before that narrowing runs.
+            Long widenedMin = minRepairedPosition;
+            Long widenedMax = maxRepairedPosition;
+            for (PlannedRepair plannedRepair : planned) {
+                RepairPlan plan = plannedRepair.plan();
+                if (!plan.updates().isEmpty() && plan.readablePosition() != null) {
+                    long candidate = plan.readablePosition();
+                    widenedMin = widenedMin == null ? candidate : Math.min(widenedMin, candidate);
+                    widenedMax = widenedMax == null ? candidate : Math.max(widenedMax, candidate);
+                }
             }
-            checkpointRepairedRange(minRepairedPosition, maxRepairedPosition);
+            checkpointRepairedRange(widenedMin, widenedMax);
 
             long repairedInBatch = 0;
             for (PlannedRepair plannedRepair : planned) {
@@ -514,50 +527,6 @@ public final class UpdateEventRepair {
     private static Bson afterFilter(@Nullable Object lastProcessedId) {
         return lastProcessedId == null ? new Document() : gt(ID, lastProcessedId);
     }
-
-    // The positions repairEvent would end up recording for this batch, reading each event's plan from planBatch
-    // rather than planning it again, so an event whose plan has no update in it, an unreadable tag encoding on an
-    // otherwise already-correct position for instance, never widens the range either. A plan cannot see the one
-    // rejection that only shows up at write time, another document already holding the same position, so that is
-    // checked here directly against the same unique index, in one query for every candidate in the batch rather
-    // than one round trip per event. An event whose candidate is its own already-correct position owns it in that
-    // query too, which is not a conflict, so it is matched by id rather than excluded along with a real owner.
-    private List<Long> readablePositionsOf(List<PlannedRepair> planned) {
-        Map<Object, Long> candidates = new LinkedHashMap<>();
-        for (PlannedRepair plannedRepair : planned) {
-            RepairPlan plan = plannedRepair.plan();
-            if (!plan.updates().isEmpty() && plan.readablePosition() != null) {
-                candidates.put(plannedRepair.event().get(ID), plan.readablePosition());
-            }
-        }
-        if (candidates.isEmpty()) {
-            return List.of();
-        }
-
-        Map<Long, Object> ownerOfPosition = new HashMap<>();
-        withRetry(() -> eventCollection.find(Filters.in(POSITION, new ArrayList<>(new LinkedHashSet<>(candidates.values()))))
-                .projection(Projections.include(ID, POSITION))
-                .into(new ArrayList<>()))
-                .forEach(owned -> ownerOfPosition.put(((Number) owned.get(POSITION)).longValue(), owned.get(ID)));
-
-        List<Long> readable = new ArrayList<>(candidates.size());
-        candidates.forEach((eventId, position) -> {
-            Object owner = ownerOfPosition.get(position);
-            if (owner == null || owner.equals(eventId)) {
-                readable.add(position);
-            }
-        });
-        return readable;
-    }
-
-    // This check is a snapshot, not a lock, so it has the same kind of residual race the positionCeiling recheck in
-    // validatedPosition accepts elsewhere in this class. If a candidate is excluded here because another event owns
-    // its position, and a supported concurrent EventStoreOperations delete removes that owner before repairEvent's
-    // write runs, the write can then succeed on a position this widen never saw, and a kill before the post-batch
-    // checkpoint loses it the way the batch it is in was meant to be covered against. Closing it needs the
-    // ownership check, the write and the checkpoint coupled in one transaction, which this module does not use
-    // anywhere else. Left open pending that decision, since the batches this can affect already need a forged
-    // duplicate position colliding with an event a concurrent delete removes inside this same narrow window.
 
     // Upserts only the repaired-range fields, leaving lastProcessedId, unrecoverableCount and processedCount alone
     // since none of them have changed yet for this batch. Creates the checkpoint document on a first-batch kill,
