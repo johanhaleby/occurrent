@@ -792,7 +792,7 @@ class FlowSagaTest {
                             .as("the repeated start event evicted one Approved to stay within the cap of 2")
                             .isEqualTo(1),
                     () -> assertThat(afterRepeatedStart.receivedEvents().count(Opened.class))
-                            .as("the initiating Opened plus the repeat, both counted, keep the cap at 2 declared events")
+                            .as("the pinned initiating Opened, outside the cap, plus the repeat, one of its 2 declared slots")
                             .isEqualTo(2)
             );
         }
