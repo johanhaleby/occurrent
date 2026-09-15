@@ -102,9 +102,13 @@ class UpdateEventRepairTest {
     private static final URI SOURCE = URI.create("urn:test");
     private static final String EVENT_COLLECTION = "events";
 
+    // enableTestCommands is on because this class's own failpoint tests need configureFailPoint, which the server
+    // otherwise refuses with CommandNotFound. Reusing the replSet name and log-message wait ReplicaSetReadyMongoDBContainer
+    // already configures, since withCommand replaces the whole command line rather than adding to it.
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true)
+                    .withCommand("--replSet", "docker-rs", "--setParameter", "enableTestCommands=1");
 
     @RegisterExtension
     OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
@@ -852,7 +856,10 @@ class UpdateEventRepairTest {
 
         assertThatThrownBy(killedRightAfterRepairingTheEvent::run)
                 .as("the checkpoint write that follows the event write must fail, or this test never reaches the gap the fix closes")
-                .isInstanceOf(MongoCommandException.class);
+                .isInstanceOf(MongoCommandException.class)
+                .extracting(e -> ((MongoCommandException) e).getErrorCode())
+                .as("the error must be the failpoint's own BadValue, or the proxy caught some other command instead of the intended checkpoint write")
+                .isEqualTo(2);
 
         assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
                 .as("the event must already be repaired by the time the checkpoint write after it fails")
@@ -887,7 +894,10 @@ class UpdateEventRepairTest {
 
         assertThatThrownBy(killedRightAfterRejectingB::run)
                 .as("the checkpoint write that follows the rejected write must fail, or this test never reaches the gap this design accepts")
-                .isInstanceOf(MongoCommandException.class);
+                .isInstanceOf(MongoCommandException.class)
+                .extracting(e -> ((MongoCommandException) e).getErrorCode())
+                .as("the error must be the failpoint's own BadValue, or the proxy caught some other command instead of the intended checkpoint write")
+                .isEqualTo(2);
 
         UpdateEventRepairResult resumed = newRepair().run();
 
@@ -922,7 +932,10 @@ class UpdateEventRepairTest {
 
         assertThatThrownBy(killedRightAfterFixingTheTagArray::run)
                 .as("the checkpoint write that follows the tag-array write must fail, or this test never reaches the gap this design closes")
-                .isInstanceOf(MongoCommandException.class);
+                .isInstanceOf(MongoCommandException.class)
+                .extracting(e -> ((MongoCommandException) e).getErrorCode())
+                .as("the error must be the failpoint's own BadValue, or the proxy caught some other command instead of the intended checkpoint write")
+                .isEqualTo(2);
 
         assertThat(newRepair().report().eventsNeedingRepair())
                 .as("the tag fix must have reached the server, or this event still matches the filter and the test proves nothing")
