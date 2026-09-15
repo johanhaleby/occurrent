@@ -334,7 +334,9 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > with `SubscriptionHandlerNotInvocableException`, at registration and again on the first delivery to an object of a
 > different class. The check is not the exact class equality #990 uses, because a JDK interface proxy over a target
 > source that is not a fixed singleton cannot be unwrapped, and a handler, unlike a descriptor factory, still runs
-> through that proxy. Such a proxy is not checked.
+> through that proxy. A proxy like that, a scoped proxy for example, is not unwrapped. An interface proxy passes,
+> and a CGLIB proxy is checked only by the class it subclasses, so neither checks the objects its target source
+> hands out. Refusing them instead would break a handler on a scoped bean, which runs through that proxy today.
 
 **Moving there inherits how the existing descriptor annotations invoke a factory, including one hazard they already
 have.** `OccurrentBlockingAnnotationBeanPostProcessor` resolves the bean from the context and `invokeFactory` calls the

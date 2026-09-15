@@ -376,9 +376,10 @@ public final class SubscriptionAnnotations {
      * method, would run its own code under the scanned method's subscription id.
      * <p>
      * The bean is unwrapped with {@link #ultimateTarget} first, so a proxy around the right implementation passes. A
-     * subclass that inherits the method unchanged passes too, since it runs the same code. A JDK interface proxy
-     * whose target source is not a fixed singleton cannot be unwrapped without asking it for a target, so it passes
-     * and the handler keeps running through that proxy.
+     * subclass that inherits the method unchanged passes too, since it runs the same code. A proxy whose target
+     * source is not a fixed singleton, a scoped proxy for example, is not unwrapped, since that would mean asking it
+     * for a target. A JDK interface proxy like that passes, and a CGLIB one is checked by the class it subclasses, so
+     * neither checks the objects its target source hands out. The handler keeps running through that proxy.
      *
      * @param bean   the (possibly proxied) object the handler is about to be invoked on
      * @param method the handler method the scan read
