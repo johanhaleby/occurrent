@@ -324,6 +324,47 @@ public final class UpdateEventRepair {
     private boolean repairEvent(Document event, List<UnrecoverableEvent> unrecoverable, List<Long> repairedPosition, long positionCeiling) {
         Object eventId = event.get(ID);
         Object storedPosition = event.get(POSITION);
+        RepairPlan plan = planRepair(event, positionCeiling, unrecoverable);
+
+        if (plan.updates().isEmpty()) {
+            return false;
+        }
+
+        // The duplicate key is caught inside the retried block, so a deterministic rejection returns rather than
+        // throwing, and the retry only ever sees a transient failure. Re-running the same $set is harmless.
+        //
+        // Matched rather than modified, because a retry after an ambiguous failure has to count as the repair it is.
+        // Every field in this update is one the event does not have yet. Position is set only when it is a string, so
+        // writing it changes its type, and the tag array only when the field is absent. A first attempt that reaches
+        // the server therefore always modifies the document, and modified zero can only mean the lost acknowledgement
+        // of a write that did land. Counting that as unrepaired would understate the run against the event's own log
+        // line, which is written whatever the count says.
+        boolean wrote = withRetry(() -> {
+            try {
+                return eventCollection.updateOne(eq(ID, eventId), Updates.combine(plan.updates())).getMatchedCount() > 0;
+            } catch (MongoWriteException e) {
+                if (ErrorCategory.fromErrorCode(e.getError().getCode()) != ErrorCategory.DUPLICATE_KEY) {
+                    throw e;
+                }
+                // Another event already holds this position as a number, and the unique position index refuses a
+                // second claim on it. The update was rejected whole, so the event is exactly as it was found.
+                unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN, String.valueOf(storedPosition)));
+                return false;
+            }
+        });
+        if (wrote && plan.readablePosition() != null) {
+            repairedPosition.add(plan.readablePosition());
+        }
+        return wrote;
+    }
+
+    // What repairEvent would write for this event, and the position it would record if that write reaches the
+    // server, computed without touching the event so the same plan also tells the pre-batch widen below what this
+    // event would actually change. Findings go into the caller's list exactly as repairEvent's own findings do, so
+    // a caller that discards it, the widen, gets none of the logging or counting a real repair attempt gets.
+    private RepairPlan planRepair(Document event, long positionCeiling, List<UnrecoverableEvent> unrecoverable) {
+        Object eventId = event.get(ID);
+        Object storedPosition = event.get(POSITION);
         Object rawTags = event.get(DcbCloudEvents.TAGS);
         String encodedTags;
         if (rawTags instanceof String tags) {
@@ -383,36 +424,10 @@ public final class UpdateEventRepair {
             }
         }
 
-        if (updates.isEmpty()) {
-            return false;
-        }
+        return new RepairPlan(updates, readablePosition);
+    }
 
-        // The duplicate key is caught inside the retried block, so a deterministic rejection returns rather than
-        // throwing, and the retry only ever sees a transient failure. Re-running the same $set is harmless.
-        //
-        // Matched rather than modified, because a retry after an ambiguous failure has to count as the repair it is.
-        // Every field in this update is one the event does not have yet. Position is set only when it is a string, so
-        // writing it changes its type, and the tag array only when the field is absent. A first attempt that reaches
-        // the server therefore always modifies the document, and modified zero can only mean the lost acknowledgement
-        // of a write that did land. Counting that as unrepaired would understate the run against the event's own log
-        // line, which is written whatever the count says.
-        boolean wrote = withRetry(() -> {
-            try {
-                return eventCollection.updateOne(eq(ID, eventId), Updates.combine(updates)).getMatchedCount() > 0;
-            } catch (MongoWriteException e) {
-                if (ErrorCategory.fromErrorCode(e.getError().getCode()) != ErrorCategory.DUPLICATE_KEY) {
-                    throw e;
-                }
-                // Another event already holds this position as a number, and the unique position index refuses a
-                // second claim on it. The update was rejected whole, so the event is exactly as it was found.
-                unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN, String.valueOf(storedPosition)));
-                return false;
-            }
-        });
-        if (wrote && readablePosition != null) {
-            repairedPosition.add(readablePosition);
-        }
-        return wrote;
+    private record RepairPlan(List<Bson> updates, @Nullable Long readablePosition) {
     }
 
     /**
@@ -475,36 +490,23 @@ public final class UpdateEventRepair {
         return lastProcessedId == null ? new Document() : gt(ID, lastProcessedId);
     }
 
-    // The position repairEvent would treat as this event's readable position, parsed and validated the same way,
-    // into a scratch list so this scan reports nothing of its own. A position repairEvent would reject, one that
-    // is not a number, not positive, or above the counter, stays null here too, since repairEvent never writes it
-    // and widening the range for it would only mislead an operator with a bound the batch does not actually reach.
-    // repairEvent's own validation cannot see the one rejection that only shows up at write time, another document
-    // already holding the same position, so that is checked here directly against the same unique index, excluding
-    // this document itself since an already-correct position matches its own document without being taken by
-    // anyone. Widening for a position destined for that rejection would claim a position no document ends up
-    // holding, contrary to what minRepairedPosition and maxRepairedPosition promise.
+    // The position repairEvent would end up recording for this event, using the same plan repairEvent itself writes
+    // from, so a plan with no update in it, an unreadable tag encoding on an otherwise already-correct position for
+    // instance, never widens this range either. planRepair cannot see the one
+    // rejection that only shows up at write time, another document already holding the same position, so that is
+    // checked here directly against the same unique index, excluding this document itself since an already-correct
+    // position matches its own document without being taken by anyone. Widening for a position the plan would not
+    // reach, or that write-time check would reject, would claim a position no document ends up holding, contrary to
+    // what minRepairedPosition and maxRepairedPosition promise.
     private @Nullable Long readablePositionOf(Document event, long positionCeiling) {
-        Object storedPosition = event.get(POSITION);
         List<UnrecoverableEvent> discarded = new ArrayList<>(1);
+        RepairPlan plan = planRepair(event, positionCeiling, discarded);
+        if (plan.updates().isEmpty() || plan.readablePosition() == null) {
+            return null;
+        }
         Object eventId = event.get(ID);
-        Long candidate;
-        if (storedPosition instanceof String positionAsString) {
-            try {
-                candidate = validatedPosition(Long.parseLong(positionAsString), positionCeiling, eventId, discarded);
-            } catch (NumberFormatException e) {
-                return null;
-            }
-        } else if (storedPosition instanceof Number number) {
-            candidate = validatedPosition(number.longValue(), positionCeiling, eventId, discarded);
-        } else {
-            return null;
-        }
-        if (candidate == null) {
-            return null;
-        }
-        long owner = withRetry(() -> eventCollection.countDocuments(and(eq(POSITION, candidate), ne(ID, eventId))));
-        return owner > 0 ? null : candidate;
+        long owner = withRetry(() -> eventCollection.countDocuments(and(eq(POSITION, plan.readablePosition()), ne(ID, eventId))));
+        return owner > 0 ? null : plan.readablePosition();
     }
 
     // Upserts only the repaired-range fields, leaving lastProcessedId, unrecoverableCount and processedCount alone

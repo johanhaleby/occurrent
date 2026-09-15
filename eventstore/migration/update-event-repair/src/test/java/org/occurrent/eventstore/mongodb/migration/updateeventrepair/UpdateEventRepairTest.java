@@ -380,6 +380,36 @@ class UpdateEventRepairTest {
     }
 
     @Test
+    void a_numeric_position_event_whose_tag_array_cannot_be_rebuilt_does_not_widen_the_range() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        // Position is untouched and already valid, so this event matches the filter only through its tag array, and
+        // dcbtags here cannot be decoded, so nothing about the event can actually be rebuilt.
+        events().updateOne(new Document("id", "a"),
+                new Document("$unset", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, ""))
+                        .append("$set", new Document(DcbCloudEvents.TAGS, 42)));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.UNREADABLE),
+                () -> assertThat(result.eventsRepaired())
+                        .as("nothing about this event could be rebuilt, so nothing was repaired")
+                        .isZero(),
+                () -> assertThat(result.minRepairedPosition())
+                        .as("the event's own valid position must not bound a range of events this run repaired, since nothing about it was")
+                        .isNull(),
+                () -> assertThat(result.maxRepairedPosition()).isNull(),
+                () -> assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
+                        .as("nothing reached this event at all, so its position must stay exactly as it was")
+                        .isEqualTo(positionOfA)
+        );
+    }
+
+    @Test
     void a_second_run_after_a_hand_set_position_still_bounds_the_range_with_it() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
