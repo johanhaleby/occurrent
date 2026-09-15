@@ -52,7 +52,7 @@ class PositionCatchupPipelineTest {
         // drains positions 1..20, and returns. assertTimeoutPreemptively fails loudly if the livelock ever returns.
         FakeReader reader = FakeReader.withEventsInRange(1, 100).headSupplier(advancingBy(10));
         CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
-        BoundedIdCache cache = new BoundedIdCache(1000);
+        BoundedIdCache<CatchupEventKey> cache = new BoundedIdCache<>(1000);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000);
 
         long cursor = assertTimeoutPreemptively(Duration.ofSeconds(5), () ->
@@ -69,7 +69,7 @@ class PositionCatchupPipelineTest {
     @Test
     void a_truncated_history_never_announces_that_it_was_read() {
         FakeReader reader = FakeReader.withEventsInRange(1, 10).headSupplier(() -> 10L);
-        BoundedIdCache cache = new BoundedIdCache(1000);
+        BoundedIdCache<CatchupEventKey> cache = new BoundedIdCache<>(1000);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000);
         AtomicBoolean keepRunning = new AtomicBoolean(true);
         AtomicBoolean announced = new AtomicBoolean(false);
@@ -90,7 +90,7 @@ class PositionCatchupPipelineTest {
             headReads.incrementAndGet();
             return 30L;
         });
-        BoundedIdCache cache = new BoundedIdCache(1000);
+        BoundedIdCache<CatchupEventKey> cache = new BoundedIdCache<>(1000);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000);
 
         long cursor = pipeline.replay(0, () -> true, (events, ignoredCache) -> events.forEach(CloudEvent::getId), cache, () -> {

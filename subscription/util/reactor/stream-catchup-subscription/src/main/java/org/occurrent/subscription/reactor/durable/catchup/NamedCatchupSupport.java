@@ -152,12 +152,12 @@ final class NamedCatchupSupport {
         if (delegate.isRunning(subscriptionId) || delegate.isPaused(subscriptionId)) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
         }
-        BoundedIdCache cache = new BoundedIdCache(handoverCacheSize);
+        BoundedIdCache<CatchupEventKey> cache = new BoundedIdCache<>(handoverCacheSize);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
         CatchupState state = new CatchupState();
 
         Function<CloudEvent, Mono<Void>> liveAction = cloudEvent ->
-                livePredicate.test(cloudEvent) && !cache.contains(cloudEvent.getId()) ? action.apply(cloudEvent) : Mono.empty();
+                livePredicate.test(cloudEvent) && !cache.contains(CatchupEventKey.of(cloudEvent)) ? action.apply(cloudEvent) : Mono.empty();
 
         // The replay is relaunchable: stop() aborts and parks it, start(..) runs this again from the same start
         // position (re-adding ids to the cache is a no-op; re-delivering replayed events is at-least-once).

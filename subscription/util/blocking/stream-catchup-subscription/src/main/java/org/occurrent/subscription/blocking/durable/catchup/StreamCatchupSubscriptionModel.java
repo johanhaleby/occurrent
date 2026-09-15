@@ -287,7 +287,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         final Checkpoint globalCheckpoint = captureLiveResumeCheckpoint(delegatedStartAt);
 
         // Cache to avoid re-delivering events already streamed during catch-up when they arrive again live.
-        BoundedIdCache catchupPhaseCache = new BoundedIdCache(config.cacheSize);
+        BoundedIdCache<CatchupEventKey> catchupPhaseCache = new BoundedIdCache<>(config.cacheSize);
 
         // Reconcile events written after the bulk replay started but at or before the live resume position
         // (globalCheckpoint): read the newest N in insertion order (SortBy.natural descending + limit, no skip)
@@ -380,7 +380,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                     }));
 
             Consumer<CloudEvent> liveConsumer = cloudEvent -> {
-                if (!catchupPhaseCache.contains(cloudEvent.getId())) {
+                if (!catchupPhaseCache.contains(CatchupEventKey.of(cloudEvent))) {
                     action.accept(cloudEvent);
                 }
             };
@@ -436,7 +436,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // Page through the position sequence from the resume position to the head seen at the start, in windows so a
         // large rebuild does not load the whole matched set at once, then reconcile until the head stops advancing.
         // Re-reads of overlapping windows are deduped by the cache (delivery is at-least-once).
-        BoundedIdCache catchupPhaseCache = new BoundedIdCache(config.cacheSize);
+        BoundedIdCache<CatchupEventKey> catchupPhaseCache = new BoundedIdCache<>(config.cacheSize);
         PositionCatchupPipeline.Reader streamReader = new PositionCatchupPipeline.Reader() {
             @Override
             public long currentHead() {
@@ -491,7 +491,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                     }));
 
             Consumer<CloudEvent> liveConsumer = cloudEvent -> {
-                if (!catchupPhaseCache.contains(cloudEvent.getId())) {
+                if (!catchupPhaseCache.contains(CatchupEventKey.of(cloudEvent))) {
                     action.accept(cloudEvent);
                 }
             };
@@ -551,7 +551,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         return StreamSubscriptionFilter.filter(withCapabilityScope(plainFilterOf(filter)));
     }
 
-    private void runCatchupForStream(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache cache) {
+    private void runCatchupForStream(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache) {
         deliverCatchupEvents(cloudEvents, subscriptionId, action, cache, e -> TimeBasedCheckpoint.from(e.getTime()));
     }
 
@@ -561,7 +561,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
      * event by {@code positionToPersist}, which differs between the time-based path (time based) and the position path
      * (global position).
      */
-    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache cache, Function<CloudEvent, Checkpoint> positionToPersist) {
+    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache, Function<CloudEvent, Checkpoint> positionToPersist) {
         // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
         // resource-backed read (the Spring Mongo bulk replay wraps a server cursor) does not leak its cursor.
         try (cloudEvents) {
@@ -570,7 +570,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 // Skip events already delivered in an earlier reconciliation pass (the delta is re-read until it
                 // stabilises, so passes overlap) and record the rest so the live subscription can skip them at the
                 // handover seam. Without the filter the overlapping re-reads would deliver duplicates.
-                takeWhile = takeWhile.filter(e -> !cache.contains(e.getId())).peek(e -> cache.add(e.getId()));
+                takeWhile = takeWhile.filter(e -> !cache.contains(CatchupEventKey.of(e))).peek(e -> cache.add(CatchupEventKey.of(e)));
             }
             takeWhile
                     .peek(action)

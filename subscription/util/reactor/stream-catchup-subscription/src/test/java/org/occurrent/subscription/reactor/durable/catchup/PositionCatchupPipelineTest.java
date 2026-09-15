@@ -91,21 +91,37 @@ class PositionCatchupPipelineTest {
     }
 
     @Test
+    void a_live_event_sharing_only_its_id_with_a_reconciled_event_is_delivered_and_not_suppressed() {
+        // e1 from producer A is read during the reconcile phase (the bulk head is 0, so the bulk phase reads
+        // nothing, and the reconcile snapshot at 1 picks up e1) and recorded in the dedup cache. A live event that
+        // shares only its id, from producer B, is a different event under CloudEvents' (id, source) identity and
+        // must still be delivered, not suppressed as a re-delivery of the reconciled one.
+        FakeReader reader = FakeReader.withEventsAt(1).headSupplier(headsOf(0, 1));
+        CloudEvent fromB = CloudEventBuilder.v1(event("e1")).withSource(URI.create("urn:producer:b")).build();
+        FakeLiveSource live = new FakeLiveSource(List.of(fromB));
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, 0).map(ce -> ce.getId() + "@" + ce.getSource()))
+                .expectNext("e1@urn:test", "e1@urn:producer:b")
+                .verifyComplete();
+    }
+
+    @Test
     void the_named_catch_up_path_keeps_the_history_ids_out_of_the_cache() {
         // replayApplying is what every named subscription runs through, so it is what a recording projection runs
         // through, and the test above only covers the cold catchup(..) entry point. Cache a history id here and the
         // live delivery of a write that was still in flight when the head was read is dropped, which is #891.
         FakeReader reader = FakeReader.withEventsInRange(1, 4).headSupplier(headsOf(2, 4));
-        BoundedIdCache cache = new BoundedIdCache(1000);
+        BoundedIdCache<CatchupEventKey> cache = new BoundedIdCache<>(1000);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
 
         StepVerifier.create(pipeline.replayApplying(0, cache, () -> true, event -> Mono.empty(), () -> {
         })).verifyComplete();
 
-        assertThat(cache.contains("e1")).as("read by a history window").isFalse();
-        assertThat(cache.contains("e2")).as("read by a history window").isFalse();
-        assertThat(cache.contains("e3")).as("read by the reconciliation window").isTrue();
-        assertThat(cache.contains("e4")).as("read by the reconciliation window").isTrue();
+        assertThat(cache.contains(key("e1"))).as("read by a history window").isFalse();
+        assertThat(cache.contains(key("e2"))).as("read by a history window").isFalse();
+        assertThat(cache.contains(key("e3"))).as("read by the reconciliation window").isTrue();
+        assertThat(cache.contains(key("e4"))).as("read by the reconciliation window").isTrue();
     }
 
     @Test
@@ -194,6 +210,10 @@ class PositionCatchupPipelineTest {
         return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("type").build();
     }
 
+    private static CatchupEventKey key(String id) {
+        return new CatchupEventKey(id, URI.create("urn:test"));
+    }
+
     // Maps a position to an event and answers head reads from a supplier so a test can hold the head still or keep it
     // advancing to simulate sustained writes.
     // Two things make this test able to fail. The history has to be longer than concatMap's default prefetch of 32,
@@ -206,7 +226,7 @@ class PositionCatchupPipelineTest {
         AtomicInteger handled = new AtomicInteger();
         AtomicInteger handledWhenAnnounced = new AtomicInteger(-1);
 
-        StepVerifier.create(pipeline.replayApplying(0, new BoundedIdCache(1000), () -> true,
+        StepVerifier.create(pipeline.replayApplying(0, new BoundedIdCache<>(1000), () -> true,
                         event -> Mono.<Void>fromRunnable(handled::incrementAndGet).subscribeOn(Schedulers.single()),
                         () -> handledWhenAnnounced.set(handled.get())))
                 .verifyComplete();
@@ -224,7 +244,7 @@ class PositionCatchupPipelineTest {
         AtomicBoolean keepReplaying = new AtomicBoolean(true);
         AtomicBoolean announced = new AtomicBoolean(false);
 
-        StepVerifier.create(pipeline.replayApplying(0, new BoundedIdCache(1000), keepReplaying::get,
+        StepVerifier.create(pipeline.replayApplying(0, new BoundedIdCache<>(1000), keepReplaying::get,
                         event -> Mono.fromRunnable(() -> keepReplaying.set(false)),
                         () -> announced.set(true)))
                 .verifyComplete();
@@ -242,7 +262,7 @@ class PositionCatchupPipelineTest {
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
         AtomicBoolean keepReplaying = new AtomicBoolean(true);
 
-        StepVerifier.create(pipeline.replayApplying(0, new BoundedIdCache(1000), keepReplaying::get,
+        StepVerifier.create(pipeline.replayApplying(0, new BoundedIdCache<>(1000), keepReplaying::get,
                         event -> Mono.fromRunnable(() -> keepReplaying.set(false)),
                         () -> {
                         }))

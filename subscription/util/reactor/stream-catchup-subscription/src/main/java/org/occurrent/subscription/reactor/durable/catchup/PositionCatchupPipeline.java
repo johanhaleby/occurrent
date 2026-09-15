@@ -84,11 +84,11 @@ final class PositionCatchupPipeline {
         if (startPosition < 0) {
             throw new IllegalArgumentException("startPosition cannot be negative, was " + startPosition);
         }
-        BoundedIdCache cache = new BoundedIdCache(handoverCacheSize);
+        BoundedIdCache<CatchupEventKey> cache = new BoundedIdCache<>(handoverCacheSize);
         return captureLiveToken(subscriptionModel)
                 .flatMapMany(liveToken -> {
                     Flux<CloudEvent> live = subscriptionModel.subscribe(liveSubscriptionFilter, StartAt.checkpoint(liveToken))
-                            .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(cloudEvent.getId()));
+                            .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(CatchupEventKey.of(cloudEvent)));
                     return replay(startPosition, cache).concatWith(live);
                 });
     }
@@ -112,7 +112,7 @@ final class PositionCatchupPipeline {
      * event never seen during the replay is still delivered once, live. Used by the cold pipeline above. The named
      * catch-up path in {@code NamedCatchupSupport} uses {@link #replayApplying} instead, which applies the same rule.
      */
-    Flux<CloudEvent> replay(long startPosition, BoundedIdCache cache) {
+    Flux<CloudEvent> replay(long startPosition, BoundedIdCache<CatchupEventKey> cache) {
         if (startPosition < 0) {
             throw new IllegalArgumentException("startPosition cannot be negative, was " + startPosition);
         }
@@ -135,7 +135,7 @@ final class PositionCatchupPipeline {
      * {@code keepReplaying} truncates each half, and the tail is skipped entirely once it answers {@code false}, so
      * a stop that lands after the history has drained costs no head read and no window read.
      */
-    Flux<Void> replayApplying(long startPosition, BoundedIdCache cache, BooleanSupplier keepReplaying,
+    Flux<Void> replayApplying(long startPosition, BoundedIdCache<CatchupEventKey> cache, BooleanSupplier keepReplaying,
                               Function<CloudEvent, Mono<Void>> action, Runnable reconcileStarting) {
         if (startPosition < 0) {
             throw new IllegalArgumentException("startPosition cannot be negative, was " + startPosition);
@@ -159,14 +159,14 @@ final class PositionCatchupPipeline {
     // Emits events in (fromExclusive, toInclusive], paging in position windows. A null cache records nothing, which is
     // what the history windows pass, so the live stream can deliver a history event again. Used by both the bulk and
     // the reconciliation phases.
-    private Flux<CloudEvent> windows(long fromExclusive, long toInclusive, @Nullable BoundedIdCache cache) {
+    private Flux<CloudEvent> windows(long fromExclusive, long toInclusive, @Nullable BoundedIdCache<CatchupEventKey> cache) {
         if (fromExclusive >= toInclusive) {
             return Flux.empty();
         }
         long upTo = Math.min(fromExclusive + windowSize, toInclusive);
         Flux<CloudEvent> window = reader.readWindow(fromExclusive, upTo);
         if (cache != null) {
-            window = window.doOnNext(event -> cache.add(event.getId()));
+            window = window.doOnNext(event -> cache.add(CatchupEventKey.of(event)));
         }
         return window.concatWith(Flux.defer(() -> windows(upTo, toInclusive, cache)));
     }
@@ -174,7 +174,7 @@ final class PositionCatchupPipeline {
     // Snapshot the head once and drain events up to it in position order. Re-reading a moving head would advance
     // forever under sustained writes and never hand over to live (livelock). Anything after the snapshot is
     // covered by the live change stream (resumes from the pre-bulk token), deduped by the id cache.
-    private Flux<CloudEvent> reconcile(long cursor, BoundedIdCache cache) {
+    private Flux<CloudEvent> reconcile(long cursor, BoundedIdCache<CatchupEventKey> cache) {
         return reader.currentHead().flatMapMany(snapshotHead -> windows(cursor, snapshotHead, cache));
     }
 }
