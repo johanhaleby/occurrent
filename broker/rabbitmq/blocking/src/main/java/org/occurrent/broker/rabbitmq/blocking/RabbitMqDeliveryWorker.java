@@ -227,12 +227,14 @@ public final class RabbitMqDeliveryWorker {
 
     /**
      * Interrupts a delivery still running after {@link #stop(Duration)} gave up waiting for it, and logs it at
-     * {@code warn}. The bridge makes sure beforehand that nothing the handler does afterwards acknowledges the
-     * delivery, so the channel close puts it back on the queue.
+     * {@code warn}. The bridge fences the acknowledgement on its close deadline, so nothing the handler starts after
+     * it acknowledges or parks the delivery, and unless one of those was already under way the channel close puts the
+     * delivery back on the queue.
      */
     public void interruptRunningWork(Duration timeout) {
         log.warn("A handler on queue \"{}\" was still running {} after the bridge was asked to close. Closing anyway. " +
-                "Its delivery is not acknowledged, so RabbitMQ delivers it again.", queue, timeout);
+                "Nothing it starts from here acknowledges or parks its delivery, so unless one of those was already " +
+                "under way, RabbitMQ delivers that message again.", queue, timeout);
         executor.shutdownNow();
     }
 
