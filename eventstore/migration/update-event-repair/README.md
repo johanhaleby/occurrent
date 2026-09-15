@@ -186,7 +186,7 @@ script on your laptop.
 | --- | --- | --- |
 | `batchSize` | 500 | How many events to read and repair per batch. Larger batches finish faster but hold more in memory each iteration. |
 | `throttleMillis` | 0 | How long to sleep between batches. Raise this to leave more room for production traffic. `0` means no pause. |
-| `maxReportedUnrecoverable` | 1000 | How many unrepairable findings the result keeps. One event can produce two, so this bounds findings rather than events. The count of events is always complete and every finding is logged, so the cap only bounds the returned list. |
+| `maxReportedUnrecoverable` | 1000 | How many unrepairable findings the result keeps. One event can produce two, so this bounds findings rather than events. `unrecoverableEventCount()` is not capped by this and every finding is logged, so the cap only bounds the returned list, not what a run reports or logs. |
 
 ## More detail
 

@@ -140,10 +140,12 @@ finished run could report a clean collection while a position was still gone.
 
 `result.unrecoverableEventCount()` is the number of events this run could not fully repair, carried across a resume
 by the checkpoint. It is not the whole of what needs you, and a `0` is not proof that nothing does, so read it
-together with the count above rather than on its own.
+together with the count above rather than on its own. A run that never had to resume reports this exactly. One that
+resumed past a kill can report a number higher than the events you actually find, since a batch the kill caught
+before it finished can be counted again once the run picks it back up, so treat this count as an upper bound rather
+than an exact one whenever a run needed resuming.
 `result.unrecoverableEvents()` names the findings by `_id`, and every one is also logged, so a truncated list is not
-a lost report. The reasons below are independent, so one event can produce two findings and still count once. The
-count is events, because that is the number of events you have to look at.
+a lost report. The reasons below are independent, so one event can produce two findings and still count once.
 
 **`POSITION_LOST`.** The event's position was never stored, so there is nothing to restore it from. The tool does
 not assign a new one, because a position invented in `_id` order would look right and be wrong, and any consumer
