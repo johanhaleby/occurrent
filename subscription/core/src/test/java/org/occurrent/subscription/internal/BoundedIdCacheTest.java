@@ -28,7 +28,7 @@ class BoundedIdCacheTest {
 
     @Test
     void contains_an_added_id() {
-        BoundedIdCache cache = new BoundedIdCache(2);
+        BoundedIdCache<String> cache = new BoundedIdCache<>(2);
 
         cache.add("a");
 
@@ -38,7 +38,7 @@ class BoundedIdCacheTest {
 
     @Test
     void evicts_the_oldest_id_when_the_cap_is_exceeded() {
-        BoundedIdCache cache = new BoundedIdCache(2);
+        BoundedIdCache<String> cache = new BoundedIdCache<>(2);
 
         cache.add("a");
         cache.add("b");
@@ -51,7 +51,7 @@ class BoundedIdCacheTest {
 
     @Test
     void re_adding_an_id_does_not_make_it_younger() {
-        BoundedIdCache cache = new BoundedIdCache(2);
+        BoundedIdCache<String> cache = new BoundedIdCache<>(2);
 
         cache.add("a");
         cache.add("b");
@@ -66,7 +66,7 @@ class BoundedIdCacheTest {
 
     @Test
     void retains_exactly_the_most_recent_ids_up_to_the_cap() {
-        BoundedIdCache cache = new BoundedIdCache(3);
+        BoundedIdCache<String> cache = new BoundedIdCache<>(3);
 
         for (int i = 0; i < 10; i++) {
             cache.add("id-" + i);
@@ -80,7 +80,7 @@ class BoundedIdCacheTest {
 
     @Test
     void a_cache_of_one_holds_only_the_latest_id() {
-        BoundedIdCache cache = new BoundedIdCache(1);
+        BoundedIdCache<String> cache = new BoundedIdCache<>(1);
 
         cache.add("a");
         cache.add("b");
@@ -90,12 +90,28 @@ class BoundedIdCacheTest {
     }
 
     @Test
+    void clear_forgets_every_id_and_the_cache_fills_again_from_empty() {
+        BoundedIdCache<String> cache = new BoundedIdCache<>(2);
+        cache.add("a");
+        cache.add("b");
+
+        cache.clear();
+        cache.add("c");
+        cache.add("d");
+
+        assertThat(cache.contains("a")).isFalse();
+        assertThat(cache.contains("b")).isFalse();
+        assertThat(cache.contains("c")).isTrue();
+        assertThat(cache.contains("d")).isTrue();
+    }
+
+    @Test
     void rejects_a_max_size_below_one() {
-        assertThatThrownBy(() -> new BoundedIdCache(0))
+        assertThatThrownBy(() -> new BoundedIdCache<String>(0))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("maxSize must be at least 1, was 0");
 
-        assertThatThrownBy(() -> new BoundedIdCache(-1))
+        assertThatThrownBy(() -> new BoundedIdCache<String>(-1))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("maxSize must be at least 1, was -1");
     }

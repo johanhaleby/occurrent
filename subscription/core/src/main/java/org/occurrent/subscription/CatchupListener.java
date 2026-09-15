@@ -61,10 +61,11 @@ public interface CatchupListener {
 
     /**
      * A live copy arrived of an event this catch-up's history read already delivered, so the model did not deliver it
-     * a second time. The projection has applied the event and is meant to apply it exactly once, so this is not a
-     * delivery and nothing here should apply it again. What it is, is the only chance the projection gets to write
-     * down the append that event came from, since the history read wrote nothing down
+     * a second time. This is not a delivery, and nothing here should apply the event again. It is the only chance the
+     * projection gets to write down the append that event came from, since the history read wrote nothing down
      * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
+     * The history read delivering the event does not mean the projection applied it, since a projection can skip an
+     * event, so a recording projection writes the append down only when the history read applied an event of it.
      * <p>
      * Sent only after {@link #historyRead(Object)}, and only for an event the history read itself delivered. An event
      * an earlier live delivery already handled is not sent here, because that delivery wrote down what it owed. Sent

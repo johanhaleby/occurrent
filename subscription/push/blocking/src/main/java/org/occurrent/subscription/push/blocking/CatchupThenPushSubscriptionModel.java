@@ -206,7 +206,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // the one component that actually owns the buffer rather than track readiness separately. Populated once, in
     // subscribe(), and kept for the id's whole lifetime (a stop-then-relaunch reuses the same handover), removed only
     // by cancelSubscription and shutdown.
-    private final ConcurrentMap<String, BlockingHandover<CloudEvent>> handoversBySubscriptionId = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, BlockingHandover<CloudEvent, CloudEventKey>> handoversBySubscriptionId = new ConcurrentHashMap<>();
     // One lock per registered subscription id, so the marker write and the lifecycle calls that move the id are
     // one step against each other without the model monitor being held across a checkpoint store call.
     // Entries are created only by a registration and outlive the subscription, which is the same trade ADR 131
@@ -285,7 +285,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Fail fast on a filter that cannot be replayed, before registering anything on the live feed.
         Filter replayFilter = ReplayFilters.replayFilterFor(filter);
 
-        BlockingHandover<CloudEvent> handover = BlockingHandover.create(action, CloudEvent::getId, options, "subscription");
+        BlockingHandover<CloudEvent, CloudEventKey> handover = BlockingHandover.create(action, CloudEventKey::of, options, "subscription");
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
         // lost in the gap between the replay head and going live. Registers a delivery-reporting action rather than
         // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) still buffers
@@ -363,13 +363,13 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      */
     public boolean isReadyForLiveDelivery(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        BlockingHandover<CloudEvent> handover = handoversBySubscriptionId.get(subscriptionId);
+        BlockingHandover<CloudEvent, CloudEventKey> handover = handoversBySubscriptionId.get(subscriptionId);
         return handover != null && handover.isReadyForLiveDelivery();
     }
 
     // Starts one replay for subscriptionId and returns its handle. Called by subscribe, and again by start(true) or
     // resumeSubscription for a replay that a stop interrupted.
-    private Future<Boolean> launchReplay(String subscriptionId, BlockingHandover<CloudEvent> handover, Filter replayFilter,
+    private Future<Boolean> launchReplay(String subscriptionId, BlockingHandover<CloudEvent, CloudEventKey> handover, Filter replayFilter,
                                           AtomicReference<Supplier<Future<Boolean>>> ownLaunch) {
         // The task needs to name itself to forget(), so the entry it removes is its own rather than whatever holds
         // the id by then. Without that, a cancel followed by a re-subscribe of the same id lets this replay keep
@@ -895,6 +895,15 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                     case null, default -> throw new IllegalStateException("The catch-up for subscription '" + id + "' failed", e.getCause());
                 }
             }
+        }
+    }
+
+    // A CloudEvent is identified by its id and source together, so the same id from two producers is two events.
+    // Null for an event with no id, which the handover refuses.
+    private record CloudEventKey(String id, URI source) {
+        private static @Nullable CloudEventKey of(CloudEvent event) {
+            String id = event.getId();
+            return id == null ? null : new CloudEventKey(id, event.getSource());
         }
     }
 }

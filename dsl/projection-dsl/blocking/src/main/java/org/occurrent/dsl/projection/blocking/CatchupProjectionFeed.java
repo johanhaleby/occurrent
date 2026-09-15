@@ -78,7 +78,7 @@ public final class CatchupProjectionFeed<E> {
     private final @Nullable CheckpointStorage catchupMarker;
     private final String id;
 
-    private final BlockingHandover<Delivered<E>> handover;
+    private final BlockingHandover<Delivered<E>, String> handover;
     // Read by the replay once per event, so stopCatchUp() takes effect at the next event rather than at the end.
     private volatile boolean stopped = false;
 
@@ -341,6 +341,10 @@ public final class CatchupProjectionFeed<E> {
      * live, or writing the completion marker, so a partial replay is never recorded as a finished one and the next
      * {@link #catchUp()} replays the whole history again. A stop is not a failure: the feed stays usable rather than
      * rejecting every later event.
+     * <p>
+     * A view that buffers during a replay discards that buffer on a stop, so after a {@link #goLive()} the live copy
+     * of an event the stopped replay delivered is delivered again rather than skipped as a duplicate. A view that
+     * wrote the event through receives it twice, which at-least-once delivery allows.
      */
     public void stopCatchUp() {
         stopped = true;
