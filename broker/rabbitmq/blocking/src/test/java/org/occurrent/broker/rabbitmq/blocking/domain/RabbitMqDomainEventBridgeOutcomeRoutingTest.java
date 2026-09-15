@@ -124,6 +124,6 @@ class RabbitMqDomainEventBridgeOutcomeRoutingTest {
         RabbitMqDeliveryFailureAction failureAction = new RabbitMqDeliveryFailureAction(channel,
                 DeliveryFailurePolicy.REDELIVER, null, null,
                 LoggerFactory.getLogger(RabbitMqDomainEventBridgeOutcomeRoutingTest.class));
-        return new RabbitMqDomainEventBridge<>(null, channel, "queue", 1, Duration.ofSeconds(1), failureAction);
+        return new RabbitMqDomainEventBridge<>(null, channel, "queue", 1, Duration.ofSeconds(1), failureAction, Duration.ofSeconds(1));
     }
 }

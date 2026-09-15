@@ -1243,3 +1243,88 @@ work and needs its own.
 
 Recording the gap is the whole of what this amendment does about it. A later ADR that adds the accessor is what would
 close it.
+
+## Amendment (2026-09-15): each RabbitMQ bridge handles its deliveries on a thread of its own
+
+A second design review since 0.33.0 found that giving each bridge its own channel and its own acknowledgements does
+not stop one bridge from holding up another. amqp-client calls every consumer on a connection from one shared pool,
+`Math.max(1, availableProcessors)` threads in 5.33.1 unless the `ConnectionFactory` was given an executor of its own.
+Both bridges ran the whole delivery inside that callback, including the model or the feed, the handler and the
+acknowledgement. A handler waiting on a store that is down therefore kept one of those threads for as long as it
+waited, and with one available processor a single such handler stopped every other bridge on the same `Connection`
+from receiving anything. Both starters hand every bridge the one `Connection` bean, so that is the default
+deployment. `AGENTS.md` does not allow one consumer to be blocked by another being faulty, so this is a defect
+rather than a tuning question. See [#1045](https://github.com/johanhaleby/occurrent/issues/1045).
+
+**What the bridges do now.** Each bridge owns one worker thread, through `RabbitMqDeliveryWorker`. The client
+callback hands the delivery to that thread and returns. The worker runs what the callback used to run, unchanged, so
+the outcome routing, the held-tag pacing and the permanent stop behave as before. An acknowledgement or negative
+acknowledgement from the worker takes `consumeLock` like every other call on the consume channel, the same lock the
+poll thread already took when it released a held tag.
+
+Anything escaping that call stops the bridge and closes its channel, which puts the delivery back on the queue. That
+is an `Error` a handler threw, or an acknowledgement the bridge could not issue, since a handler's own
+`RuntimeException` and `AssertionError` go through the delivery failure policy instead. The client used to do the
+same, because the delivery ran on its callback thread and its exception handler closes a channel for anything that
+escapes. Without it the delivery would sit unacknowledged on a consumer the broker sends nothing further to at the
+default `prefetchCount` of one, which is a bridge that has stopped without saying so.
+
+One thread per bridge keeps deliveries handled one at a time and in the order the broker sent them, which is what the
+callback gave each channel before. The worker's queue holds at most `prefetchCount` deliveries from the current
+channel. The broker sends no more than that many unacknowledged deliveries to one consumer, but it counts them per
+consumer, and a bridge cancels its consumer and starts a new one whenever the subscription pauses and resumes. So a
+bridge starts a new consumer only once the worker has finished everything the previous one sent. A recovery drops the
+rest, as described below. The count behind that is of deliveries handed to the worker, so one the client has taken
+but not yet handed over does not hold a consumer back, and the queue can hold a little more than `prefetchCount` for
+as long as that takes.
+
+**Shutdown.** `close()` cancels the consumer, then stops the worker without starting any delivery still queued for
+it, and waits up to a new `closeTimeout(Duration)` on both builders for the one being handled. Thirty seconds is the
+default, the same as the Kafka bridges, and both starters set it from `occurrent.broker.rabbitmq.bridge.close-timeout`.
+A handler still running after that is interrupted and logged at `warn`. The deadline itself is what fences the
+acknowledgement, published before `close()` starts waiting and read under `consumeLock`, so a handler finishing
+around it either acknowledges before it or does not acknowledge at all, rather than racing a flag `close()` would
+set afterwards. Closing the channel then puts that delivery back on the queue. A park or acknowledgement already
+under way at the deadline still finishes, since the handler had returned before it started.
+Closing the channel under it gives at worst a parked copy plus the original back on the queue. Every step of
+`close()` shares that one deadline, since the worker holds the bridge's lock while a park waits up to five seconds for
+its confirm, and closing the channel cancels the consumer and requeues whatever a skipped step would have released.
+The deadline bounds the waiting rather than the method, since closing the channel and the parking sink happens after
+it. A handler that ignores its interrupt also keeps running after `close()` returns, so whatever it writes is written
+whenever it finishes, which for a bridge built again on the same queue in the same process can be after events that
+later bridge has already handled. A permanent stop runs on the worker itself, so it stops the worker the same way but
+without waiting.
+
+**A connection recovery drops what the dead channel left waiting.** The amendment above that removed the
+channel-generation fence still holds, and the fence stays gone. The client ignores an acknowledgement for a tag from a
+dead channel, so the bridges act on every tag they handle. What the worker adds is a queue of deliveries not yet
+handled, and RabbitMQ puts every one of them back on the queue when their channel dies. Left alone, a handler blocked
+across several recoveries would find a copy of the same message waiting for it from each one. So once a recovery of
+the consume channel starts, the worker starts no delivery from the dead channel.
+
+The client calls the channel's `handleRecoveryStarted` after it has created the replacement channel and before
+`recoverTopology` registers the consumer on it again. The replacement numbers its deliveries after every tag the dead
+channel issued, and `RecoveryAwareChannelN.getActiveDeliveryTagOffset()` on the replacement is that last tag. The
+worker drops every delivery up to it, both those already waiting and any callback from the dead channel the client
+only runs later, and nothing from the replacement is ever dropped. That getter is public but sits in the client's
+`impl.recovery` package, and a channel that is not one of those classes says nothing about how it numbers deliveries
+after a recovery, so for such a channel the worker drops nothing at all. This is where it differs from
+the fence, which bumped its counter from `handleRecovery`, after the consumer was already back, and so dropped a
+delivery from the new channel in [#922](https://github.com/johanhaleby/occurrent/issues/922). The delivery being
+handled when the connection drops still finishes and is delivered once more, the one duplicate the bridges already
+had.
+
+**Two alternatives were not taken.** A `Connection` per bridge would isolate the bridges too, but it changes both
+builders to take a `ConnectionFactory` instead of a `Connection`, multiplies the connections every application opens
+against the broker, and still lets an executor the user shares between factories bring the problem back. Documenting
+that the `Connection` needs an executor with at least one thread per bridge was the other option. The bridge cannot
+check that anyone followed it, so isolation would rest on a setting nobody finds out about until it fails.
+
+`RabbitMqCloudEventBridgeWorkerThreadTest` and `RabbitMqDomainEventBridgeWorkerThreadTest` build two bridges on a
+connection whose shared executor has one thread, block the handler in one bridge, and assert that the other bridge's
+event arrives before the block is released. Both fail against the old callback, where the healthy bridge never
+receives its event. `RabbitMqCloudEventBridgeConnectionRecoveryTest` blocks a handler across two forced recoveries and
+asserts the message is handled twice rather than three times, and `RabbitMqDomainEventBridgeRecoveryDiscardTest` calls
+the domain bridge's recovery listener by hand to check the same thing, including a callback from the dead channel that
+arrives after the recovery started. `RabbitMqCloudEventBridgeWorkerThreadTest` also checks that under `PARK` a
+delivery whose handler `close()` interrupted is neither parked nor acknowledged.

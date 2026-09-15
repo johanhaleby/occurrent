@@ -100,6 +100,13 @@ public class RabbitMqBrokerProperties {
         private int prefetchCount = 1;
 
         /**
+         * {@code RabbitMqCloudEventBridge.Builder#closeTimeout(Duration)} and
+         * {@code RabbitMqDomainEventBridge.Builder#closeTimeout(Duration)}. Thirty seconds by default, matching those
+         * builders' own default.
+         */
+        private Duration closeTimeout = Duration.ofSeconds(30);
+
+        /**
          * {@code RabbitMqCloudEventBridge.Builder#declareTopology(boolean)} and
          * {@code RabbitMqDomainEventBridge.Builder#declareTopology(boolean)}. {@code true} by default, matching
          * those builders' own default. Set to {@code false} for a deployment whose platform team owns the queue
@@ -131,6 +138,14 @@ public class RabbitMqBrokerProperties {
 
         public void setPrefetchCount(int prefetchCount) {
             this.prefetchCount = prefetchCount;
+        }
+
+        public Duration getCloseTimeout() {
+            return closeTimeout;
+        }
+
+        public void setCloseTimeout(Duration closeTimeout) {
+            this.closeTimeout = closeTimeout;
         }
 
         public boolean isDeclareTopology() {
