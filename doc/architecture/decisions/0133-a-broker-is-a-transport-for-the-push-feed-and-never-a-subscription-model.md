@@ -1243,3 +1243,52 @@ work and needs its own.
 
 Recording the gap is the whole of what this amendment does about it. A later ADR that adds the accessor is what would
 close it.
+
+## Amendment (2026-09-15): each RabbitMQ bridge handles its deliveries on a thread of its own
+
+A second design review since 0.33.0 found that giving each bridge its own channel and its own acknowledgements does
+not stop one bridge from holding up another. amqp-client calls every consumer on a connection from one shared pool,
+`Math.max(1, availableProcessors)` threads in 5.33.1 unless the `ConnectionFactory` was given an executor of its own.
+Both bridges ran the whole delivery inside that callback, including the model or the feed, the handler and the
+acknowledgement. A handler waiting on a store that is down therefore kept one of those threads for as long as it
+waited, and with one available processor a single such handler stopped every other bridge on the same `Connection`
+from receiving anything. Both starters hand every bridge the one `Connection` bean, so that is the default
+deployment. `AGENTS.md` does not allow one consumer to be blocked by another being faulty, so this is a defect
+rather than a tuning question. See [#1045](https://github.com/johanhaleby/occurrent/issues/1045).
+
+**What the bridges do now.** Each bridge owns one worker thread, through `RabbitMqDeliveryWorker`. The client
+callback hands the delivery to that thread and returns. The worker runs what the callback used to run, unchanged, so
+the outcome routing, the held-tag pacing and the permanent stop behave as before. An acknowledgement or negative
+acknowledgement from the worker takes `consumeLock` like every other call on the consume channel, the same lock the
+poll thread already took when it released a held tag.
+
+One thread per bridge keeps deliveries handled one at a time and in the order the broker sent them, which is what the
+callback gave each channel before. The worker's queue never holds more than `prefetchCount` deliveries, since the
+broker sends no more than that many unacknowledged ones to a consumer, so nothing new was needed to limit it.
+
+**Shutdown.** `close()` cancels the consumer, then stops the worker without starting any delivery still queued for
+it, and waits up to a new `closeTimeout(Duration)` on both builders for the one being handled. Thirty seconds is the
+default, the same as the Kafka bridges, and both starters set it from `occurrent.broker.rabbitmq.bridge.close-timeout`.
+A handler still running after that is interrupted and logged at `warn`. A delivery the worker did not finish was
+never acknowledged, so closing the channel puts it back on the queue. A permanent stop runs on the worker itself, so
+it stops the worker the same way but without waiting.
+
+**A connection recovery can cost more than one duplicate.** The amendment above that removed the channel-generation
+fence still holds, and the fence stays gone. The client ignores an acknowledgement for a tag from a dead channel, so
+the bridges act on every tag. What changes is how many deliveries the bridge holds when the connection drops. Before,
+it held at most the one it was handling. The worker can hold up to `prefetchCount` of them. It handles each one, and RabbitMQ delivers each
+one again on the recovered channel, so each is handled twice. At the default `prefetchCount` of one nothing changes.
+Above one it stays within the at-least-once delivery these bridges promise everywhere else, and telling a delivery
+from the dead channel apart from a fresh one is exactly what the fence got wrong in
+[#922](https://github.com/johanhaleby/occurrent/issues/922).
+
+**Two alternatives were not taken.** A `Connection` per bridge would isolate the bridges too, but it changes both
+builders to take a `ConnectionFactory` instead of a `Connection`, multiplies the connections every application opens
+against the broker, and still lets an executor the user shares between factories bring the problem back. Documenting
+that the `Connection` needs an executor with at least one thread per bridge was the other option. The bridge cannot
+check that anyone followed it, so isolation would rest on a setting nobody finds out about until it fails.
+
+`RabbitMqCloudEventBridgeWorkerThreadTest` and `RabbitMqDomainEventBridgeWorkerThreadTest` build two bridges on a
+connection whose shared executor has one thread, block the handler in one bridge, and assert that the other bridge's
+event arrives before the block is released. Both fail against the old callback, where the healthy bridge never
+receives its event.

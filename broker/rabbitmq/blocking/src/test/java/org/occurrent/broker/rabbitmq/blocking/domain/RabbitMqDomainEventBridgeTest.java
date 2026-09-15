@@ -404,8 +404,8 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
     /**
      * {@code RoutingOutcome.DEFERRED} bypasses {@link DeliveryFailurePolicy} entirely, including {@code PARK}, the
      * same as the CloudEvent-level bridge. {@code DomainEventFeed}'s coarse gate requires
-     * {@code isReadyForLiveDelivery()} before consuming at all, unlike the push-side bridge, and RabbitMQ's Java
-     * client dispatches one channel's deliveries to {@code handleDelivery} sequentially regardless of prefetch, so
+     * {@code isReadyForLiveDelivery()} before consuming at all, unlike the push-side bridge, and the bridge handles
+     * its deliveries one at a time on its own worker thread regardless of prefetch, so
      * two messages from the same bridge can never race each other into {@code acceptIfLive} concurrently. The
      * reachable way to prove this against a real broker is a direct, out-of-band call for the same dedup key (the
      * domain event's {@code orderId}, this feed's own id extractor) that holds it in flight while the bridge
