@@ -998,11 +998,12 @@ class ReactiveHandoverTest {
         assertThat(second.alreadyDeliveredByReplay).isEmpty();
     }
 
-    // When a replay on a live handover fails, the acknowledgement of a live payload held back during it fails with the
-    // catch-up failure, so its caller offers the payload again. The payload must then not reach the view here as well.
+    // When a replay on a live handover fails, the acknowledgements of the live payloads held back during it fail with
+    // the catch-up failure, so their callers offer them again. None of them may reach the view here as well. Two of
+    // them, since the failure opens the pause, so only the first ever waits at it and the second arrives after.
     // The pause gives a delivery that would wrongly follow the failure the time to show up in the log.
     @Test
-    void a_live_payload_held_back_while_a_replay_on_a_live_handover_fails_is_not_delivered_after_its_ack_failed() throws Exception {
+    void live_payloads_held_back_while_a_replay_on_a_live_handover_fails_are_not_delivered_after_their_acks_failed() throws Exception {
         List<String> log = new CopyOnWriteArrayList<>();
         List<CompletableFuture<Boolean>> liveAcks = new CopyOnWriteArrayList<>();
         AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
@@ -1014,6 +1015,7 @@ class ReactiveHandoverTest {
             log.add(payload);
             if (payload.equals("R1") && offered.compareAndSet(false, true)) {
                 liveAcks.add(self.get().acceptReportingDelivery("L1").toFuture());
+                liveAcks.add(self.get().acceptReportingDelivery("L2").toFuture());
             }
             return Mono.empty();
         }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
@@ -1021,10 +1023,11 @@ class ReactiveHandoverTest {
         StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
 
         StepVerifier.create(handover.catchUp(source(List.of("R1", "R2"), false))).verifyErrorMessage("replay boom");
-        Throwable ackFailure = catchThrowable(() -> liveAcks.get(0).get(5, TimeUnit.SECONDS));
+        for (CompletableFuture<Boolean> ack : liveAcks) {
+            assertThat(catchThrowable(() -> ack.get(5, TimeUnit.SECONDS))).hasCauseInstanceOf(ReactiveHandover.PreDispatchRefusalException.class);
+        }
         Mono.delay(Duration.ofMillis(300)).block();
 
-        assertThat(ackFailure).hasCauseInstanceOf(ReactiveHandover.PreDispatchRefusalException.class);
         assertThat(log).containsExactly("R1");
     }
 

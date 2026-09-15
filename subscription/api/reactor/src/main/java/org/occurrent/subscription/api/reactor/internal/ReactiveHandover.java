@@ -772,6 +772,12 @@ public final class ReactiveHandover<T, K> {
     // A live payload waits here while a replay runs, and is delivered once that replay has ended, completed or stopped.
     private Mono<Void> deliverWhenNoReplayRuns(Item<K> item) {
         return Mono.defer(() -> {
+            if (terminalError.get() != null) {
+                // A failed catch-up has already failed this payload's acknowledgement, so its caller offers it again
+                // and delivering it here as well would apply it twice. Checked for every payload, not only one waiting
+                // at the pause, since the failure opens the pause and the rest arrive here without ever waiting.
+                return Mono.<Void>empty();
+            }
             Sinks.Empty<Void> paused;
             synchronized (liveGate) {
                 paused = livePaused;
@@ -780,9 +786,7 @@ public final class ReactiveHandover<T, K> {
                 }
             }
             if (paused != null) {
-                // A replay that failed has already failed this payload's acknowledgement, so its caller offers it again
-                // and delivering it here as well would apply it twice.
-                return paused.asMono().then(Mono.defer(() -> terminalError.get() != null ? Mono.<Void>empty() : deliverWhenNoReplayRuns(item)));
+                return paused.asMono().then(deliverWhenNoReplayRuns(item));
             }
             return deliverItem(item).doFinally(signal -> liveDeliveryEnded());
         });
