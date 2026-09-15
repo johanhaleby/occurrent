@@ -38,7 +38,13 @@ import java.util.List;
  * @param eventsRepaired          How many stored events this call modified. A re-run after a completed run reports
  *                                {@code 0}, since the repair only touches events that still look damaged.
  * @param unrecoverableEventCount How many events this call could not fully repair, plus whatever an interrupted
- *                                earlier run carried in the checkpoint. Counts every one, whether or not it fitted in
+ *                                earlier run carried in the checkpoint. Exact for a run that never had to resume.
+ *                                One that did can report a number higher than the events found unrecoverable across
+ *                                every segment of it combined, an event whose plan can never produce an update
+ *                                inflates this once for every interruption that catches the batch it is in before
+ *                                that batch finishes, since nothing here can tell that a later count already
+ *                                includes an earlier one's contribution. Treat it as an upper bound whenever a run
+ *                                needed resuming. Counts every event, whether or not it fitted in
  *                                {@code unrecoverableEvents}, and counts events rather than findings, so an event
  *                                with two things wrong with it counts once. It is not the whole of what needs a
  *                                person, and a {@code 0} here is not proof that nothing does. Rebuilding a
@@ -61,20 +67,25 @@ import java.util.List;
  *                                {@code unrecoverableEventCount} covers the earlier part too, since that count is
  *                                carried in the checkpoint. Every finding is logged at WARN when it is found, so
  *                                neither a truncated list nor a resume means a lost report.
- * @param minRepairedPosition     The lowest numeric {@code position} of every event this call successfully repaired,
- *                                or {@code null} if none of them had a readable position. That position can be one
- *                                this call restored, or one that was already correct on an event this call only
- *                                rebuilt the tag array of, for instance a {@code POSITION_ALREADY_TAKEN} event an
- *                                operator fixed by hand before running the repair again. A consumer whose checkpoint
- *                                sits below this value cannot have read past a repaired event, since it has not
- *                                reached one yet. One that sits at or above it might have, and that is the operator's
- *                                cue to check it, rather than going back to the store to work out the range by hand.
- *                                Carried across a resume the way {@code unrecoverableEventCount} is, so a run that
- *                                resumed an interrupted one still bounds the positions the earlier segment repaired,
- *                                not only the ones it walked itself.
- * @param maxRepairedPosition     The highest position among the same events as {@code minRepairedPosition}, or
- *                                {@code null} on the same condition. Together the two bound the repaired range
- *                                without naming every event in it.
+ * @param minRepairedPosition     A lower bound on the position of every event this call successfully repaired, or
+ *                                {@code null} if none of them had a readable position. Exact for a run that never
+ *                                had to resume. One that did can report a position no event this call repaired ever
+ *                                held, including a non-{@code null} value while {@code eventsRepaired} is {@code 0},
+ *                                since the checkpoint a resume starts from can hold a position from a batch the
+ *                                interruption caught before that batch's own attempt at it was confirmed one way or
+ *                                the other. That position can be one this call restored, or one that was
+ *                                already correct on an event this call only rebuilt the tag array of, for instance a
+ *                                {@code POSITION_ALREADY_TAKEN} event an operator fixed by hand before running the
+ *                                repair again. A consumer whose checkpoint sits below this value cannot have read
+ *                                past a repaired event, since it has not reached one yet, whether the bound is exact
+ *                                or conservative. One that sits at or above it might have, and that is the
+ *                                operator's cue to check it, rather than going back to the store to work out the
+ *                                range by hand. Carried across a resume the way {@code unrecoverableEventCount} is,
+ *                                so a run that resumed an interrupted one still bounds the positions the earlier
+ *                                segment repaired, not only the ones it walked itself.
+ * @param maxRepairedPosition     An upper bound on the position of every event {@code minRepairedPosition} bounds
+ *                                below, or {@code null} on the same condition and exact under the same condition.
+ *                                Together the two bound the repaired range without naming every event in it.
  */
 @NullMarked
 public record UpdateEventRepairResult(long eventsRepaired, long unrecoverableEventCount, long eventsWithLostPosition,

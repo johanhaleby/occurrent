@@ -92,7 +92,9 @@ both `report()` and `run()` read the whole collection. On a large store, run the
 The repair rebuilds an event from what its document still holds. Where the old write-back destroyed the only copy of
 a value, that value is gone, and the tool reports the event rather than inventing one. `UpdateEventRepairResult`
 lists the findings by `_id`, and every one is also logged. One event can produce two of them, since the reasons below
-are independent, so `unrecoverableEventCount()` counts events rather than findings.
+are independent, so `unrecoverableEventCount()` counts events rather than findings. That count is exact only for a
+run that never had to resume, an upper bound otherwise, since a batch an interruption caught partway through can be
+counted again once a resumed run picks it back up.
 
 - **A position that was dropped entirely.** An update function that returned an event built from scratch kept
 none of the original's extensions, so no position was stored. The tool will not assign a fresh one. A position
@@ -186,7 +188,7 @@ script on your laptop.
 | --- | --- | --- |
 | `batchSize` | 500 | How many events to read and repair per batch. Larger batches finish faster but hold more in memory each iteration. |
 | `throttleMillis` | 0 | How long to sleep between batches. Raise this to leave more room for production traffic. `0` means no pause. |
-| `maxReportedUnrecoverable` | 1000 | How many unrepairable findings the result keeps. One event can produce two, so this bounds findings rather than events. The count of events is always complete and every finding is logged, so the cap only bounds the returned list. |
+| `maxReportedUnrecoverable` | 1000 | How many unrepairable findings the result keeps. One event can produce two, so this bounds findings rather than events. `unrecoverableEventCount()` is not capped by this and every finding is logged, so the cap only bounds the returned list, not what a run reports or logs. |
 
 ## More detail
 

@@ -160,7 +160,9 @@ collection was clean while the position was still gone. `UpdateEventRepairResult
 
 The count of unrecoverable events is a count of events rather than of findings. The reasons are independent, so a document whose
 `dcbtags` is not a string and whose position cannot be read produces two, and counting both would inflate the number
-the CLI's exit message and the runbook present as how many events a person has to look at.
+the CLI's exit message and the runbook present as how many events a person has to look at. That number is exact only
+for a run that never had to resume. One that did can count the same still-unrepairable event again for each batch a
+kill caught before the resumed run picked it back up, so it is then an upper bound rather than an exact count.
 
 Something else survives the repair without being reported at all, so it is not an unrecoverable case.
 The old write-back preserved whatever position the update function returned, so a function that set `position` itself
