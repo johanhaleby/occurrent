@@ -100,7 +100,10 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <h2>Running it</h2>
  * {@link #report()} sizes the damage and writes nothing. {@link #run()} repairs, walking the collection in
  * {@code _id} order in batches. A run is idempotent because it only touches events that still look damaged, and it
- * is safe to kill because each event is repaired on its own and a checkpoint document records how far it got.
+ * is safe to kill because each event is repaired on its own and a checkpoint document records how far it got. The
+ * checkpoint is written twice per batch, once before any event in it is touched, with its range widened to every
+ * position the batch could modify, and again after, so a checkpoint covering the batch already exists even for a
+ * kill between the two.
  *
  * <pre>{@code
  * MongoDatabase database = mongoClient.getDatabase("my-database");
@@ -190,7 +193,8 @@ public final class UpdateEventRepair {
         // Bounds of every readable position this call and, once resumed, every earlier segment of this same run
         // repaired, carried across a resume the same way unrecoverableCount is and for the same reason. Without
         // that, a run killed after repairing positions in an earlier segment would return a range naming only the
-        // segment the resumed call walked itself, hiding the earlier one from step 7.
+        // segment the resumed call walked itself, hiding the earlier one from step 7. Widened before each batch's
+        // events are touched, not only after, so this range already covers the batch even for a kill between the two.
         @Nullable Long minRepairedPosition = checkpoint == null ? null : numberOrNull(checkpoint.get(UpdateEventRepairCheckpoint.FIELD_MIN_REPAIRED_POSITION));
         @Nullable Long maxRepairedPosition = checkpoint == null ? null : numberOrNull(checkpoint.get(UpdateEventRepairCheckpoint.FIELD_MAX_REPAIRED_POSITION));
         // Read once up front. A damaged event predates this run, since no version from 0.34.0 on can create one, so
@@ -210,6 +214,19 @@ public final class UpdateEventRepair {
             if (batch.isEmpty()) {
                 break;
             }
+
+            // Widen the range to every position this batch could modify before touching any of it, so a checkpoint
+            // covering what was written already exists even if a kill skips the post-batch checkpoint below. Read
+            // the same way repairEvent reads a stored position, so a position repairEvent would leave unrepaired,
+            // a forged or hand-typed one for instance, never widens this range either.
+            for (Document event : batch) {
+                Long readablePosition = readablePositionOf(event, positionCeiling);
+                if (readablePosition != null) {
+                    minRepairedPosition = minRepairedPosition == null ? readablePosition : Math.min(minRepairedPosition, readablePosition);
+                    maxRepairedPosition = maxRepairedPosition == null ? readablePosition : Math.max(maxRepairedPosition, readablePosition);
+                }
+            }
+            checkpointRepairedRange(minRepairedPosition, maxRepairedPosition);
 
             long repairedInBatch = 0;
             for (Document event : batch) {
@@ -455,6 +472,42 @@ public final class UpdateEventRepair {
 
     private static Bson afterFilter(@Nullable Object lastProcessedId) {
         return lastProcessedId == null ? new Document() : gt(ID, lastProcessedId);
+    }
+
+    // The position repairEvent would treat as this event's readable position, parsed and validated the same way,
+    // into a scratch list so this scan reports nothing of its own. A position repairEvent would reject, one that
+    // is not a number, not positive, or above the counter, stays null here too, since repairEvent never writes it
+    // and widening the range for it would only mislead an operator with a bound the batch does not actually reach.
+    private @Nullable Long readablePositionOf(Document event, long positionCeiling) {
+        Object storedPosition = event.get(POSITION);
+        List<UnrecoverableEvent> discarded = new ArrayList<>(1);
+        if (storedPosition instanceof String positionAsString) {
+            try {
+                return validatedPosition(Long.parseLong(positionAsString), positionCeiling, event.get(ID), discarded);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        } else if (storedPosition instanceof Number number) {
+            return validatedPosition(number.longValue(), positionCeiling, event.get(ID), discarded);
+        }
+        return null;
+    }
+
+    // Upserts only the repaired-range fields, leaving lastProcessedId, unrecoverableCount and processedCount alone
+    // since none of them have changed yet for this batch. Creates the checkpoint document on a first-batch kill,
+    // the same way the post-batch checkpoint below would have.
+    private void checkpointRepairedRange(@Nullable Long minRepairedPosition, @Nullable Long maxRepairedPosition) {
+        if (minRepairedPosition == null) {
+            return;
+        }
+        withRetry(() -> checkpointCollection.findOneAndUpdate(
+                eq(ID, UpdateEventRepairCheckpoint.CHECKPOINT_DOCUMENT_ID),
+                Updates.combine(
+                        Updates.set(UpdateEventRepairCheckpoint.FIELD_MIN_REPAIRED_POSITION, minRepairedPosition),
+                        Updates.set(UpdateEventRepairCheckpoint.FIELD_MAX_REPAIRED_POSITION, maxRepairedPosition)
+                ),
+                new FindOneAndUpdateOptions().upsert(true)
+        ));
     }
 
     private void checkpoint(Object lastProcessedId, int batchSize, long unrecoverableCount, @Nullable Long minRepairedPosition, @Nullable Long maxRepairedPosition) {

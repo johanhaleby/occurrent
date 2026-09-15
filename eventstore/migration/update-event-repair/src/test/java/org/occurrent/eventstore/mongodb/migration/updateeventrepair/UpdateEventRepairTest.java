@@ -18,6 +18,7 @@
 package org.occurrent.eventstore.mongodb.migration.updateeventrepair;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoCommandException;
 import com.mongodb.MongoSocketReadException;
 import com.mongodb.ServerAddress;
 import com.mongodb.client.MongoClient;
@@ -49,6 +50,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -68,6 +70,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
 
@@ -800,6 +803,37 @@ class UpdateEventRepairTest {
         );
     }
 
+    @Test
+    void a_resumed_run_still_reports_the_position_a_killed_run_repaired_but_never_got_to_checkpoint_after() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+
+        UpdateEventRepair killedRightAfterRepairingTheEvent = new UpdateEventRepair(
+                databaseFailingTheCheckpointWriteThatFollowsAnEventRepair(), EVENT_COLLECTION,
+                UpdateEventRepairOptions.defaults().withBatchSize(1), RetryStrategy.none());
+
+        assertThatThrownBy(killedRightAfterRepairingTheEvent::run)
+                .as("the checkpoint write that follows the event write must fail, or this test never reaches the gap the fix closes")
+                .isInstanceOf(MongoCommandException.class);
+
+        assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
+                .as("the event must already be repaired by the time the checkpoint write after it fails")
+                .isInstanceOf(Number.class);
+
+        UpdateEventRepairResult resumed = newRepair().run();
+
+        assertAll(
+                () -> assertThat(resumed.eventsRepaired())
+                        .as("the event is already repaired, so the resumed run has nothing left to do itself")
+                        .isZero(),
+                () -> assertThat(resumed.minRepairedPosition())
+                        .as("a consumer below this position must not be excluded from recovery, since the killed run repaired it before it could checkpoint")
+                        .isEqualTo(positionOfA),
+                () -> assertThat(resumed.maxRepairedPosition()).isEqualTo(positionOfA)
+        );
+    }
+
     private void waitUntilCheckpointExists() {
         for (int attempt = 0; attempt < 200; attempt++) {
             if (database.getCollection(EVENT_COLLECTION + "_update_event_repair_checkpoint").countDocuments() > 0) {
@@ -878,6 +912,38 @@ class UpdateEventRepairTest {
                 new Class<?>[]{MongoDatabase.class},
                 (proxy, method, args) -> method.getName().equals("getCollection") && EVENT_COLLECTION.equals(args[0])
                         ? flakyEvents
+                        : invoke(method, database, args));
+    }
+
+    /**
+     * A database whose checkpoint collection lets its first {@code findOneAndUpdate} through, the one this fix
+     * writes before a batch's events are touched, then arms a real MongoDB {@code failCommand} failpoint that fails
+     * the next one, which is the post-batch write. The failpoint is armed only once the first call has already
+     * returned, so a race between the two calls cannot make it catch the wrong one, and {@code mode: {times: 1}}
+     * means it fires exactly once and needs no cleanup. {@code BadValue} is not one of the error codes a driver's
+     * own retryable-writes support retries on its own, so the failure reaches {@code UpdateEventRepair} instead of
+     * being silently absorbed a layer below it.
+     */
+    @SuppressWarnings("unchecked")
+    private MongoDatabase databaseFailingTheCheckpointWriteThatFollowsAnEventRepair() {
+        MongoCollection<Document> realCheckpoints = database.getCollection(EVENT_COLLECTION + "_update_event_repair_checkpoint");
+        AtomicInteger findOneAndUpdateCalls = new AtomicInteger();
+        MongoCollection<Document> checkpointsFailingTheSecondWrite = (MongoCollection<Document>) Proxy.newProxyInstance(
+                MongoCollection.class.getClassLoader(),
+                new Class<?>[]{MongoCollection.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("findOneAndUpdate") && findOneAndUpdateCalls.incrementAndGet() > 1) {
+                        mongoClient.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand")
+                                .append("mode", new Document("times", 1))
+                                .append("data", new Document("failCommands", List.of("findAndModify")).append("errorCode", 2)));
+                    }
+                    return invoke(method, realCheckpoints, args);
+                });
+        return (MongoDatabase) Proxy.newProxyInstance(
+                MongoDatabase.class.getClassLoader(),
+                new Class<?>[]{MongoDatabase.class},
+                (proxy, method, args) -> method.getName().equals("getCollection") && (EVENT_COLLECTION + "_update_event_repair_checkpoint").equals(args[0])
+                        ? checkpointsFailingTheSecondWrite
                         : invoke(method, database, args));
     }
 
