@@ -10,12 +10,17 @@ catch-up-then-push handover, and amends
 [ADR 135](0135-the-reactive-handover-dedup-is-fed-only-by-the-reconciliation-read.md), whose survey of the blocking
 stacks did not reach that handover. Resolves [#963](https://github.com/johanhaleby/occurrent/issues/963).
 
+Updated before release for [#1041](https://github.com/johanhaleby/occurrent/issues/1041), which adds decisions 5
+and 6 and settles the question [#974](https://github.com/johanhaleby/occurrent/issues/974) left open.
+
 ## Context
 
 A catch-up-then-push composition registers its live feed first, replays the store's history, then drains what
 buffered while it replayed and goes live. An event committed during the replay can arrive twice, once from the
-history read and once from the broker, and both engines de-duplicate that overlap by an id extracted from the
-payload.
+history read and once from the broker, and both engines de-duplicate that overlap by a key extracted from the
+payload. Both push models key a CloudEvent by its id and source together, since CloudEvents only promises that pair
+to be unique, and two producers can each send an event with id `1`. A projection feed keys a domain event by the id
+its caller extracts.
 
 ADR 132 decision 6 splits a catch-up in two. The history it set out to read records nothing, and everything after
 that records, because for some of what follows the catch-up is the only delivery there will ever be. The push
@@ -54,7 +59,8 @@ id untrue.
 ### 1. The de-dup cache is two caches
 
 `replayedIds` is written only by the replay loop. `deliveredIds` is written only by a successful live delivery.
-Every read site checks both, so which payloads are delivered does not change at all, on any path.
+Every read site checks both, so splitting the cache does not change which payloads are delivered, on any path.
+Decision 6 is the one place delivery does change.
 
 What the two caches decide is what happens to the copy that is not delivered. That is one fact per cache, and one
 cache cannot say which of the two a suppressed key is.
@@ -69,8 +75,12 @@ travels from the engine to the recorder in one vocabulary.
 A suppression by `deliveredIds` stays what it was, a no-op. The earlier live delivery ran everything a delivery
 runs, the recording included, so there is nothing left owing.
 
-The hook is not a delivery and must not apply the payload again. It exists for the work a source does per delivery
-rather than per application, which today is exactly one thing, writing down the append the payload came from.
+The hook is not a delivery and must not apply the payload again. It exists so a recording projection can write down
+the append the payload came from, which neither the replay nor the suppressed copy would otherwise do.
+
+The hook goes to the source whose replay filled `replayedIds`. That source is set when a replay starts, not by every
+catch-up, so a catch-up that replays nothing, a feed's `goLive()` after its `catchUp()`, keeps reporting to the
+source that can record.
 
 ### 3. The hook fires once per suppressed copy, not once per event
 
@@ -83,14 +93,46 @@ quiet, would buy nothing and would need its own eviction rule.
 `ReplayAware` and `ReactiveReplayAware` take an `EventMetadata`, since a pull feed's live payload has metadata and
 nothing else. `CatchupListener` takes a `CloudEvent`, since `subscription/core` does not depend on the
 cloudevents extension where `EventMetadata` lives. `RecordingMaterializedView` and `RecordingReactiveUpdate`
-implement both and record either way.
+implement both, and both overloads make the check in decision 5 before they record.
+
+### 5. The hook proves a delivery, not an application
+
+A call to `alreadyDeliveredByReplay` says the replay delivered a payload with the same key. It does not say the
+projection applied it. `Projection.id` returning `null` skips an event, and the replay delivers that event all the
+same.
+
+So each recorder remembers the appends its replay applied an event of, and records a suppressed copy only when its
+append is among them. The set belongs to one catch-up and starts empty with the next. It holds up to 10000 appends,
+the handover's default replay cache size, which counts events rather than appends, so at that default no append is
+forgotten while a copy of one of its events can still be suppressed. An append past the bound stays unrecorded and a
+wait for it times out, which is the one wrong answer this allows. A wait never answers `true` for an append nothing
+applied.
+
+### 6. An abandoned replay's keys are cleared
+
+When a replay is stopped or fails, the engine clears `replayedIds` and forgets the source that filled it, before it
+calls `replayAbandoned()`. A pull feed's recorder forgets the appends that replay applied at the same time.
+
+A view that coalesces has just discarded what it buffered from that replay. A key left behind would suppress the only
+copy of an event the read model never received, and since `replayedIds` has no live writer that loss would last as
+long as the handover. A view that writes through applied every event the replay delivered, so a later live copy
+reaches it a second time. `goLive()` already promises at-least-once delivery, so the duplicate is allowed, and a lost
+event is not.
+
+This also settles the reactive engine's second catch-up. Its live sink accepts one subscriber ever, so a catch-up on
+a handover that is already live does not subscribe it again and keeps the pipeline that is already running.
+Subscribing again was refused by the sink, recorded as a failed catch-up, and made the handover refuse every later
+payload.
 
 ## Consequences
 
 - A projection declared `@Projection(recordAppliedAppends = true)` on any of the six compositions now records an
-  append whose only delivery was the replay's, so `waitUntilApplied` answers for it.
-- Delivery is unchanged. Four tests assert an event overlapping the handover is applied exactly once, two at the
-  engines and two at the projection DSL, and none of them changed.
+  append whose only delivery was the replay's, when the replay applied an event of it, so `waitUntilApplied` answers
+  for it.
+- Delivery is unchanged outside decision 6. Four tests assert an event overlapping the handover is applied exactly
+  once, two at the engines and two at the projection DSL, and none of them changed.
+- A recording projection holds up to 10000 append ids per catch-up, one for each append its replay applied an event
+  of.
 - A second problem closes with the split. The replay used to flood one bounded cache that evicts the eldest, so
   after a history longer than the cache the live-redelivery de-dup held nothing but replayed ids at the moment the
   handover went live. The two caches are filled by one writer each.
@@ -99,17 +141,9 @@ implement both and record either way.
 - A hook that throws reaches the payload's own acknowledgement rather than the delivery pipeline, so the source
   offers the payload again and the recording is retried. On the drain path a throw releases the reservations the
   drain took, the same recovery a failed drain delivery gets.
-- `replayedIds` is never cleared, which was already true of the single cache. An abandoned replay leaves keys behind
-  that suppress a later `goLive` drain, and after this change that suppression records an append for state the
-  abandoned replay discarded. A clear in `replayAbandoned` would trade that for a second application on a view
-  that does not coalesce, so neither branch is right on its own and this ADR decides neither. Filed as
-  [#974](https://github.com/johanhaleby/occurrent/issues/974).
-- How long those keys last does change, and not in one direction. `BoundedIdCache` evicts on insertion, so one cache
-  fed by live deliveries as well as by the replay aged an abandoned replay's keys out after `dedupCacheSize` live
-  events. `replayedIds` has no live writer, so nothing ages them out until another replay runs, and a `goLive` after
-  a stop runs none. For a view that coalesces, whose batch was discarded, that turns an event lost until the cache
-  aged into an event lost for good. For a view that writes through, which applied every one of those events, it
-  turns a second application into no second application, which is what the de-dup was for. Same split decides both,
-  and which one a handover gets is the question [#974](https://github.com/johanhaleby/occurrent/issues/974) has to
-  answer. Reaching either needs `stopCatchUp()` and then `goLive()` on one handover, which no composition this
-  library ships does by itself.
+- `replayedIds` is cleared when a replay is abandoned (decision 6), which answers
+  [#974](https://github.com/johanhaleby/occurrent/issues/974). After `stopCatchUp()` and then `goLive()`, a view that
+  coalesces receives the events the stopped replay discarded, and a view that writes through receives them a second
+  time. Neither suppression records an append, since nothing is suppressed.
+- A replay that finishes keeps its keys until another replay starts or the cache evicts them. It applied and saved
+  everything it delivered, so suppressing a later copy of one of those events is what the de-dup is for.
