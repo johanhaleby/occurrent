@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.projection;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
@@ -391,7 +392,7 @@ class ProjectionTest {
 
         @Test
         void builder_with_no_argument_starts_from_null_like_builder_of_null() {
-            Projection<Boolean, AccountEvent, String> projection = Projection.<Boolean, AccountEvent, String>builder()
+            Projection<@Nullable Boolean, AccountEvent, String> projection = Projection.<Boolean, AccountEvent, String>builder()
                     .id(AccountEvent::accountId)
                     .build();
 
@@ -400,7 +401,7 @@ class ProjectionTest {
 
         @Test
         void singleton_builder_with_no_argument_starts_from_null_like_singleton_builder_of_null() {
-            Projection<Boolean, AccountEvent, String> projection = Projection.<Boolean, AccountEvent>singletonBuilder()
+            Projection<@Nullable Boolean, AccountEvent, String> projection = Projection.<Boolean, AccountEvent>singletonBuilder()
                     .build();
 
             assertThat(projection.view().initialState()).isNull();

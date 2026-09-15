@@ -166,9 +166,10 @@ public interface View<S extends @Nullable Object, E> {
 
     /**
      * Creates a {@code View} whose fold begins from no state. The state stays {@code null} until {@code evolve}
-     * replaces it. See {@link #create(Object, BiFunction)} for the fold.
+     * replaces it, so {@code evolve} and the returned {@code View} see {@code @Nullable S}, which Kotlin reads as
+     * {@code S?}. See {@link #create(Object, BiFunction)} for the fold.
      */
-    static <S extends @Nullable Object, E> View<S, E> create(@NonNull BiFunction<S, E, S> evolve) {
+    static <S extends @Nullable Object, E> View<@Nullable S, E> create(@NonNull BiFunction<@Nullable S, E, @Nullable S> evolve) {
         return create(null, evolve);
     }
 
@@ -199,9 +200,10 @@ public interface View<S extends @Nullable Object, E> {
 
     /**
      * Creates a metadata-aware {@code View} (see {@link #create(Object, Fold)}) whose fold begins from no state.
-     * The state stays {@code null} until {@code fold} replaces it.
+     * The state stays {@code null} until {@code fold} replaces it, so {@code fold} and the returned {@code View} see
+     * {@code @Nullable S}, which Kotlin reads as {@code S?}.
      */
-    static <S extends @Nullable Object, E> View<S, E> create(@NonNull Fold<S, E> fold) {
+    static <S extends @Nullable Object, E> View<@Nullable S, E> create(@NonNull Fold<@Nullable S, E> fold) {
         return create(null, fold);
     }
 }

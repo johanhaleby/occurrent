@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.snapshot;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.snapshot.LedgerFixture.BooksClosed;
 import org.occurrent.dsl.snapshot.LedgerFixture.Deposited;
@@ -65,8 +66,8 @@ class SnapshotViewTest {
 
     @Test
     void builder_with_no_argument_starts_from_null_like_builder_of_null() {
-        SnapshotView<Integer, LedgerEvent> view = SnapshotView.<Integer, LedgerEvent>builder()
-                .on(Deposited.class, (balance, e) -> balance + e.amount())
+        SnapshotView<@Nullable Integer, LedgerEvent> view = SnapshotView.<Integer, LedgerEvent>builder()
+                .on(Deposited.class, (balance, e) -> (balance == null ? 0 : balance) + e.amount())
                 .build();
 
         assertThat(view.view().initialState()).isNull();
