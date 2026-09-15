@@ -92,7 +92,9 @@ both `report()` and `run()` read the whole collection. On a large store, run the
 The repair rebuilds an event from what its document still holds. Where the old write-back destroyed the only copy of
 a value, that value is gone, and the tool reports the event rather than inventing one. `UpdateEventRepairResult`
 lists the findings by `_id`, and every one is also logged. One event can produce two of them, since the reasons below
-are independent, so `unrecoverableEventCount()` counts events rather than findings.
+are independent, so `unrecoverableEventCount()` counts events rather than findings. That count is exact only for a
+run that never had to resume, an upper bound otherwise, since a batch an interruption caught partway through can be
+counted again once a resumed run picks it back up.
 
 - **A position that was dropped entirely.** An update function that returned an event built from scratch kept
 none of the original's extensions, so no position was stored. The tool will not assign a fresh one. A position

@@ -328,8 +328,14 @@ public final class UpdateEventRepair {
         String repairedRange = minRepairedPosition == null
                 ? "No position was repaired"
                 : "Repaired positions ranged from " + minRepairedPosition + " to " + maxRepairedPosition;
-        log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone, {} are left without a position. {}.",
-                eventStoreCollectionName, repaired, unrecoverableCount, lostPosition, repairedRange);
+        // checkpoint is unchanged since the top of this call, so it still says whether this run resumed one that
+        // did not finish. Only such a run needs this, since the range and the count above are then upper bounds
+        // rather than exact, per UpdateEventRepairResult.
+        String precisionNote = checkpoint == null
+                ? ""
+                : " This run resumed one that did not finish, so the range and the count above can be upper bounds rather than exact.";
+        log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone, {} are left without a position. {}.{}",
+                eventStoreCollectionName, repaired, unrecoverableCount, lostPosition, repairedRange, precisionNote);
         // Logged above before the checkpoint is removed, not after, so a kill between the two still leaves this
         // finished run's own result in the log. Deleting first would have made this the only durable copy of a
         // result nothing failed to compute, only failed to get out of the process, exactly the loss this class

@@ -28,7 +28,8 @@ import org.jspecify.annotations.NullMarked;
  * <p>
  * One of these is one finding, not one event. The reasons are independent, so a document whose {@code dcbtags} is not
  * a string and whose position cannot be read produces two. {@code UpdateEventRepairResult.unrecoverableEventCount()}
- * counts the events behind them.
+ * counts the events behind them, exactly for a run that never had to resume, an upper bound otherwise, see that
+ * method's own javadoc for why.
  *
  * @param eventId The {@code _id} of the stored event.
  * @param reason  Why the event could not be fully repaired.
