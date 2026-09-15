@@ -257,8 +257,21 @@ public final class UpdateEventRepair {
             }
             checkpointCrashRecord(widenedMin, widenedMax, widenedUnrecoverableCount);
 
+            // Logged here, before any event in the batch is written, so a kill right after one of those writes
+            // does not keep the finding out of the log even though the loop below is the ordinary place it gets
+            // logged from. Only a plan's own findings are logged here, since those are fixed once the plan is. The
+            // loop below logs only what is new since this pass, a write-time POSITION_ALREADY_TAKEN for instance,
+            // so nothing gets logged twice.
+            for (PlannedRepair plannedRepair : planned) {
+                for (UnrecoverableEvent unrecoverableEvent : plannedRepair.findings()) {
+                    log.warn("Cannot fully repair event {} in collection '{}': {} ({}).",
+                            unrecoverableEvent.eventId(), eventStoreCollectionName, unrecoverableEvent.reason(), unrecoverableEvent.detail());
+                }
+            }
+
             long repairedInBatch = 0;
             for (PlannedRepair plannedRepair : planned) {
+                int plannedFindingCount = plannedRepair.findings().size();
                 List<Long> repairedPosition = new ArrayList<>(1);
                 if (repairEvent(plannedRepair, repairedPosition)) {
                     repaired++;
@@ -276,9 +289,14 @@ public final class UpdateEventRepair {
                     // how many events a person has to look at, not how many things are wrong with them.
                     unrecoverableCount++;
                 }
-                for (UnrecoverableEvent unrecoverableEvent : found) {
-                    log.warn("Cannot fully repair event {} in collection '{}': {} ({}).",
-                            unrecoverableEvent.eventId(), eventStoreCollectionName, unrecoverableEvent.reason(), unrecoverableEvent.detail());
+                for (int i = 0; i < found.size(); i++) {
+                    UnrecoverableEvent unrecoverableEvent = found.get(i);
+                    // Findings up to plannedFindingCount were already logged above, before this event was written.
+                    // Only a finding repairEvent's own write added, POSITION_ALREADY_TAKEN, is new here.
+                    if (i >= plannedFindingCount) {
+                        log.warn("Cannot fully repair event {} in collection '{}': {} ({}).",
+                                unrecoverableEvent.eventId(), eventStoreCollectionName, unrecoverableEvent.reason(), unrecoverableEvent.detail());
+                    }
                     if (unrecoverable.size() < options.maxReportedUnrecoverable()) {
                         unrecoverable.add(unrecoverableEvent);
                     }
