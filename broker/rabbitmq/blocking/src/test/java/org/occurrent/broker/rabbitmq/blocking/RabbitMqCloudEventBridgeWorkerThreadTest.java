@@ -24,6 +24,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
@@ -204,6 +205,39 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         await().atMost(Duration.ofSeconds(5)).untilTrue(handlerInterrupted);
         assertThat(startedIds).containsExactly("id-1");
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(3));
+    }
+
+    @Test
+    void close_neither_parks_nor_acknowledges_a_delivery_whose_handler_it_interrupted() throws Exception {
+        String queue = declareAndBindQueue("parking-at-close");
+        String parkingQueue = declareAndBindQueue("parked");
+        CountDownLatch handlerEntered = new CountDownLatch(1);
+        CountDownLatch neverReleased = new CountDownLatch(1);
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        model.subscribe("parking-at-close", cloudEvent -> {
+            handlerEntered.countDown();
+            try {
+                neverReleased.await();
+            } catch (InterruptedException e) {
+                // Failing, which under PARK would park the delivery if close() still let it.
+                throw new IllegalStateException("interrupted", e);
+            }
+        });
+
+        try (RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(RabbitMqDestination.of(exchange, "parked"))
+                .closeTimeout(Duration.ofMillis(200))
+                .build()) {
+            publish("parking-at-close", "id-1");
+            assertThat(handlerEntered.await(5, TimeUnit.SECONDS)).isTrue();
+        }
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isOne());
+        // Long enough for a park the handler's failure started to have reached the parking queue.
+        Thread.sleep(500);
+        assertThat(queueMessageCount(parkingQueue)).isZero();
     }
 
     private RabbitMqCloudEventBridge.Builder bridge(PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, String queue) {

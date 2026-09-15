@@ -25,6 +25,8 @@ import com.rabbitmq.client.Delivery;
 import com.rabbitmq.client.Envelope;
 import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.RecoveryListener;
+import com.rabbitmq.client.impl.recovery.AutorecoveringChannel;
+import com.rabbitmq.client.impl.recovery.RecoveryAwareChannelN;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
@@ -105,6 +107,70 @@ class RabbitMqDomainEventBridgeRecoveryDiscardTest {
 
             recoveryListener.getValue().handleRecoveryStarted((Recoverable) channel);
             deliverCallback.get().handle("consumer-tag", delivery(3, "from-the-recovered-channel"));
+            releaseFirstCall.countDown();
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(2));
+            Thread.sleep(200);
+            assertThat(handled).containsExactly("blocked", "from-the-recovered-channel");
+        } finally {
+            releaseFirstCall.countDown();
+            bridge.close();
+        }
+    }
+
+    /**
+     * The client can still run a callback from the dead channel after the recovery has started. The replacement
+     * channel's offset says which tags the dead channel issued, so that late delivery is dropped too.
+     */
+    @SuppressWarnings("unchecked")
+    @Test
+    void a_delivery_from_the_dead_channel_that_reaches_the_bridge_after_the_recovery_started_is_dropped() throws Exception {
+        Connection connection = mock(Connection.class);
+        AutorecoveringChannel channel = mock(AutorecoveringChannel.class);
+        RecoveryAwareChannelN replacement = mock(RecoveryAwareChannelN.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        when(channel.getDelegate()).thenReturn(replacement);
+        // The dead channel issued tags 1 to 3, so the replacement numbers its deliveries from 4.
+        when(replacement.getActiveDeliveryTagOffset()).thenReturn(3L);
+        AtomicReference<DeliverCallback> deliverCallback = new AtomicReference<>();
+        when(channel.basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class)))
+                .thenAnswer(invocation -> {
+                    deliverCallback.set(invocation.getArgument(2));
+                    return "consumer-tag";
+                });
+
+        DomainEventFeed<String> feed = mock(DomainEventFeed.class);
+        when(feed.hasProjection()).thenReturn(true);
+        when(feed.isReadyForLiveDelivery()).thenReturn(true);
+        CountDownLatch firstCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirstCall = new CountDownLatch(1);
+        List<String> handled = new CopyOnWriteArrayList<>();
+        when(feed.acceptCloudEvent(any())).thenAnswer(invocation -> {
+            CloudEvent cloudEvent = invocation.getArgument(0);
+            handled.add(cloudEvent.getId());
+            if (handled.size() == 1) {
+                firstCallEntered.countDown();
+                releaseFirstCall.await(10, TimeUnit.SECONDS);
+            }
+            return RoutingOutcome.DELIVERED;
+        });
+
+        RabbitMqDomainEventBridge<String> bridge = RabbitMqDomainEventBridge.builder(connection, feed, "queue")
+                .declareTopology(false)
+                .pollInterval(Duration.ofMillis(20))
+                .build();
+        try {
+            ArgumentCaptor<RecoveryListener> recoveryListener = ArgumentCaptor.forClass(RecoveryListener.class);
+            verify(channel).addRecoveryListener(recoveryListener.capture());
+            verify(channel, timeout(2000)).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+
+            deliverCallback.get().handle("consumer-tag", delivery(1, "blocked"));
+            assertThat(firstCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            deliverCallback.get().handle("consumer-tag", delivery(2, "queued-on-the-dead-channel"));
+
+            recoveryListener.getValue().handleRecoveryStarted(channel);
+            deliverCallback.get().handle("consumer-tag", delivery(3, "late-from-the-dead-channel"));
+            deliverCallback.get().handle("consumer-tag", delivery(4, "from-the-recovered-channel"));
             releaseFirstCall.countDown();
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(2));

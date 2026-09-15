@@ -19,6 +19,8 @@ package org.occurrent.broker.rabbitmq.blocking;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.RecoveryListener;
+import com.rabbitmq.client.impl.recovery.AutorecoveringChannel;
+import com.rabbitmq.client.impl.recovery.RecoveryAwareChannelN;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 
@@ -42,12 +44,12 @@ import static java.util.Objects.requireNonNull;
  * whatever the handler does.
  * <p>
  * One thread per bridge keeps deliveries handled one at a time, in the order the broker sent them. The broker sends
- * no more than the bridge's {@code prefetchCount} unacknowledged deliveries to one consumer, and when an automatic
- * connection recovery starts, {@link #discardOnRecovery(Channel)} drops every delivery still waiting here from the
- * channel that died. So the queue in front of the thread holds at most {@code prefetchCount} deliveries from the
- * current channel, however many recoveries happen while a handler is blocked.
+ * no more than the bridge's {@code prefetchCount} unacknowledged deliveries to one consumer, and once an automatic
+ * connection recovery starts, {@link #discardOnRecovery(Channel)} makes sure no delivery from the channel that died
+ * is started. So the queue in front of the thread holds at most {@code prefetchCount} deliveries from the current
+ * channel, however many recoveries happen while a handler is blocked.
  * <p>
- * A delivery this worker never starts, because {@link #stopAcceptingWork()} or {@link #close(Duration)} ran first or a
+ * A delivery this worker never starts, because {@link #stopAcceptingWork()} or {@link #stop(Duration)} ran first or a
  * recovery dropped it, is left unacknowledged. RabbitMQ puts every unacknowledged delivery on a closed channel back on
  * the queue, and the bridge closes its channel right after either call, so nothing is lost.
  */
@@ -100,21 +102,25 @@ public final class RabbitMqDeliveryWorker {
     }
 
     /**
-     * Drops every delivery waiting for the worker thread when an automatic recovery of {@code channel} starts. Does
-     * nothing for a channel that never recovers automatically.
+     * Makes sure that no delivery from a channel that died is started once an automatic recovery of {@code channel}
+     * has begun. Does nothing for a channel that never recovers automatically.
      * <p>
-     * The client calls this after it has created the channel that replaces the dead one and before it registers the
-     * bridge's consumer on it again, so every delivery submitted by then came from the dead channel, and RabbitMQ has
-     * already put each of them back on the queue. The replacement channel numbers its deliveries after every tag the
-     * dead one issued, so a delivery from it is never dropped. Without this a handler blocked across several
-     * recoveries would find a copy of the same message waiting for it from every one of them.
+     * RabbitMQ has already put every unacknowledged delivery from the dead channel back on the queue, and the
+     * recovered channel delivers each of them again. Without this a handler blocked across several recoveries would
+     * find a copy of the same message waiting for it from every one of them.
+     * <p>
+     * The client calls this after it has created the replacement channel and before it registers the bridge's
+     * consumer on it again. The replacement numbers its deliveries after every tag the dead channel issued, and that
+     * last tag is read off the replacement here, so a callback from the dead channel that only reaches this worker
+     * later is dropped too, while nothing from the replacement ever is. For a channel that does not expose that number,
+     * the highest tag submitted so far is used instead, which misses such late callbacks but never drops a fresh one.
      */
     public void discardOnRecovery(Channel channel) {
         if (channel instanceof Recoverable recoverable) {
             recoverable.addRecoveryListener(new RecoveryListener() {
                 @Override
                 public void handleRecoveryStarted(Recoverable recoverable) {
-                    discardDeliveriesSubmittedSoFar();
+                    discardUpTo(lastDeliveryTagOfDeadChannel(channel));
                 }
 
                 @Override
@@ -124,13 +130,20 @@ public final class RabbitMqDeliveryWorker {
         }
     }
 
-    private void discardDeliveriesSubmittedSoFar() {
-        long discardUpTo;
-        synchronized (deliveryTagLock) {
-            discardUpTo = highestSubmittedDeliveryTag;
-            discardUpToDeliveryTag = Math.max(discardUpToDeliveryTag, discardUpTo);
+    private long lastDeliveryTagOfDeadChannel(Channel channel) {
+        if (channel instanceof AutorecoveringChannel recovering && recovering.getDelegate() instanceof RecoveryAwareChannelN replacement) {
+            return replacement.getActiveDeliveryTagOffset();
         }
-        boolean discarded = executor.getQueue().removeIf(task -> ((DeliveryTask) task).deliveryTag <= discardUpTo);
+        synchronized (deliveryTagLock) {
+            return highestSubmittedDeliveryTag;
+        }
+    }
+
+    private void discardUpTo(long deliveryTag) {
+        synchronized (deliveryTagLock) {
+            discardUpToDeliveryTag = Math.max(discardUpToDeliveryTag, deliveryTag);
+        }
+        boolean discarded = executor.getQueue().removeIf(task -> ((DeliveryTask) task).deliveryTag <= deliveryTag);
         if (discarded) {
             log.debug("Dropped the deliveries on queue \"{}\" still waiting for the worker when the connection " +
                     "dropped. RabbitMQ delivers them again on the recovered channel.", queue);
@@ -167,26 +180,34 @@ public final class RabbitMqDeliveryWorker {
     }
 
     /**
-     * Starts no queued delivery and waits up to {@code timeout} for the one already running to finish. A handler still
-     * running after that is interrupted and logged at {@code warn}, since the bridge closes its channel next, which
-     * puts that delivery back on the queue to be handled again. Returns at once when called from the worker thread,
-     * since waiting there would wait for the caller itself.
+     * Starts no queued delivery and waits up to {@code timeout} for the one already running to finish.
+     *
+     * @return {@code false} when a delivery was still running after {@code timeout}, {@code true} otherwise. Always
+     * {@code true} when called from the worker thread, which returns at once since waiting there would wait for the
+     * caller itself.
      */
-    public void close(Duration timeout) {
+    public boolean stop(Duration timeout) {
         stopAcceptingWork();
         if (isWorkerThread()) {
-            return;
+            return true;
         }
         try {
-            if (!executor.awaitTermination(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                log.warn("A handler on queue \"{}\" was still running {} after the bridge was asked to close. Closing " +
-                        "anyway. Its delivery was never acknowledged, so RabbitMQ delivers it again.", queue, timeout);
-                executor.shutdownNow();
-            }
+            return executor.awaitTermination(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
-            executor.shutdownNow();
             Thread.currentThread().interrupt();
+            return false;
         }
+    }
+
+    /**
+     * Interrupts a delivery still running after {@link #stop(Duration)} gave up waiting for it, and logs it at
+     * {@code warn}. The bridge makes sure beforehand that nothing the handler does afterwards acknowledges the
+     * delivery, so the channel close puts it back on the queue.
+     */
+    public void interruptRunningWork(Duration timeout) {
+        log.warn("A handler on queue \"{}\" was still running {} after the bridge was asked to close. Closing anyway. " +
+                "Its delivery is not acknowledged, so RabbitMQ delivers it again.", queue, timeout);
+        executor.shutdownNow();
     }
 
     private final class DeliveryTask implements Runnable {

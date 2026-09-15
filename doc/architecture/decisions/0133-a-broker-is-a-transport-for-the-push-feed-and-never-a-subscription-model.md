@@ -1270,24 +1270,28 @@ rest, as described below.
 **Shutdown.** `close()` cancels the consumer, then stops the worker without starting any delivery still queued for
 it, and waits up to a new `closeTimeout(Duration)` on both builders for the one being handled. Thirty seconds is the
 default, the same as the Kafka bridges, and both starters set it from `occurrent.broker.rabbitmq.bridge.close-timeout`.
-A handler still running after that is interrupted and logged at `warn`. A delivery the worker did not finish was
-never acknowledged, so closing the channel puts it back on the queue. A permanent stop runs on the worker itself, so
-it stops the worker the same way but without waiting.
+A handler still running after that is interrupted and logged at `warn`, and from then on nothing it does
+acknowledges or parks its delivery, so closing the channel puts that delivery back on the queue. A permanent stop
+runs on the worker itself, so it stops the worker the same way but without waiting.
 
 **A connection recovery drops what the dead channel left waiting.** The amendment above that removed the
 channel-generation fence still holds, and the fence stays gone. The client ignores an acknowledgement for a tag from a
 dead channel, so the bridges act on every tag they handle. What the worker adds is a queue of deliveries not yet
 handled, and RabbitMQ puts every one of them back on the queue when their channel dies. Left alone, a handler blocked
-across several recoveries would find a copy of the same message waiting for it from each one. So when a recovery of
-the consume channel starts, the worker drops every delivery submitted to it so far that has not started yet.
+across several recoveries would find a copy of the same message waiting for it from each one. So once a recovery of
+the consume channel starts, the worker starts no delivery from the dead channel.
 
 The client calls the channel's `handleRecoveryStarted` after it has created the replacement channel and before
-`recoverTopology` registers the consumer on it again, and the replacement numbers its deliveries after every tag the
-dead channel issued. Nothing from the replacement can have been submitted by then, and nothing from it is ever
-dropped. That is where this differs from the fence, which bumped its counter from `handleRecovery`, after the consumer
-was already back, and so dropped a delivery from the new channel in
-[#922](https://github.com/johanhaleby/occurrent/issues/922). The delivery being handled when the connection drops
-still finishes and is delivered once more, the one duplicate the bridges already had.
+`recoverTopology` registers the consumer on it again. The replacement numbers its deliveries after every tag the dead
+channel issued, and `RecoveryAwareChannelN.getActiveDeliveryTagOffset()` on the replacement is that last tag. The
+worker drops every delivery up to it, both those already waiting and any callback from the dead channel the client
+only runs later, and nothing from the replacement is ever dropped. That getter is public but sits in the client's
+`impl.recovery` package, so for a channel that is not one of those classes the worker uses the highest tag submitted
+so far instead. That misses a late callback but still never drops a fresh delivery. This is where it differs from
+the fence, which bumped its counter from `handleRecovery`, after the consumer was already back, and so dropped a
+delivery from the new channel in [#922](https://github.com/johanhaleby/occurrent/issues/922). The delivery being
+handled when the connection drops still finishes and is delivered once more, the one duplicate the bridges already
+had.
 
 **Two alternatives were not taken.** A `Connection` per bridge would isolate the bridges too, but it changes both
 builders to take a `ConnectionFactory` instead of a `Connection`, multiplies the connections every application opens
@@ -1300,4 +1304,6 @@ connection whose shared executor has one thread, block the handler in one bridge
 event arrives before the block is released. Both fail against the old callback, where the healthy bridge never
 receives its event. `RabbitMqCloudEventBridgeConnectionRecoveryTest` blocks a handler across two forced recoveries and
 asserts the message is handled twice rather than three times, and `RabbitMqDomainEventBridgeRecoveryDiscardTest` calls
-the domain bridge's recovery listener by hand to check the same thing.
+the domain bridge's recovery listener by hand to check the same thing, including a callback from the dead channel that
+arrives after the recovery started. `RabbitMqCloudEventBridgeWorkerThreadTest` also checks that under `PARK` a
+delivery whose handler `close()` interrupted is neither parked nor acknowledged.

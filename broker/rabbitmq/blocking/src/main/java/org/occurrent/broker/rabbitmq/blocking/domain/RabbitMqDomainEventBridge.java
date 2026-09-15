@@ -216,6 +216,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     // pace it, so it still applies immediately, through failureAction, from the point of failure.
     private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
+    // Set under consumeLock once close() stops waiting for a projection, so nothing that projection does afterwards
+    // acknowledges or parks its delivery before the channel close puts it back on the queue.
+    private boolean inFlightDeliveryAbandoned;
     // Tracks whether this bridge has ever seen feed.isReadyForLiveDelivery() answer true, so reconcileConsumption
     // can tell a feed that has never gone live (still replaying, or nothing registered yet, both ordinary startup
     // states) apart from one that reached live and then stopped, which DomainEventFeed's own contract says only
@@ -478,6 +481,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     private void ackNow(long deliveryTag) {
         consumeLock.lock();
         try {
+            if (inFlightDeliveryAbandoned) {
+                return;
+            }
             failureAction.ack(deliveryTag);
         } finally {
             consumeLock.unlock();
@@ -496,6 +502,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         } else {
             consumeLock.lock();
             try {
+                if (inFlightDeliveryAbandoned) {
+                    return;
+                }
                 failureAction.apply(deliveryTag, properties, body);
             } finally {
                 consumeLock.unlock();
@@ -594,7 +603,15 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             consumeLock.unlock();
         }
         // Outside consumeLock, since a projection finishing acknowledges under it.
-        worker.close(closeTimeout);
+        if (!worker.stop(closeTimeout)) {
+            consumeLock.lock();
+            try {
+                inFlightDeliveryAbandoned = true;
+            } finally {
+                consumeLock.unlock();
+            }
+            worker.interruptRunningWork(closeTimeout);
+        }
         consumeLock.lock();
         try {
             try {

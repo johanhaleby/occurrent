@@ -205,6 +205,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     // pace it, so it still applies immediately, through failureAction, from the point of failure.
     private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
+    // Set under consumeLock once close() stops waiting for a handler, so nothing that handler does afterwards
+    // acknowledges or parks its delivery before the channel close puts it back on the queue.
+    private boolean inFlightDeliveryAbandoned;
 
     // Package-private rather than private so RabbitMqCloudEventBridgeOutcomeRoutingTest can build one over a
     // mocked Channel. Nothing here talks to a broker, the builder's own start(..) does that.
@@ -468,6 +471,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     private void ackNow(long deliveryTag) {
         consumeLock.lock();
         try {
+            if (inFlightDeliveryAbandoned) {
+                return;
+            }
             failureAction.ack(deliveryTag);
         } finally {
             consumeLock.unlock();
@@ -486,6 +492,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         } else {
             consumeLock.lock();
             try {
+                if (inFlightDeliveryAbandoned) {
+                    return;
+                }
                 failureAction.apply(deliveryTag, properties, body);
             } finally {
                 consumeLock.unlock();
@@ -576,7 +585,15 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             consumeLock.unlock();
         }
         // Outside consumeLock, since a handler finishing acknowledges under it.
-        worker.close(closeTimeout);
+        if (!worker.stop(closeTimeout)) {
+            consumeLock.lock();
+            try {
+                inFlightDeliveryAbandoned = true;
+            } finally {
+                consumeLock.unlock();
+            }
+            worker.interruptRunningWork(closeTimeout);
+        }
         consumeLock.lock();
         try {
             try {
