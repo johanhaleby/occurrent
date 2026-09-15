@@ -142,8 +142,9 @@ finished run could report a clean collection while a position was still gone.
 by the checkpoint. It is not the whole of what needs you, and a `0` is not proof that nothing does, so read it
 together with the count above rather than on its own. A run that never had to resume reports this exactly. One that
 resumed past a kill can report a number higher than the events you actually find, since a batch the kill caught
-before it finished can be counted again once the run picks it back up, so treat this count as an upper bound rather
-than an exact one whenever a run needed resuming.
+before it finished can be counted again once the run picks it back up. If the same batch is interrupted more than
+once, the same still-unrepairable event is counted again each time, so treat this count as an upper bound rather
+than an exact one whenever a run needed resuming, and more so the more times it did.
 `result.unrecoverableEvents()` names the findings by `_id`, and every one is also logged, so a truncated list is not
 a lost report. The reasons below are independent, so one event can produce two findings and still count once.
 

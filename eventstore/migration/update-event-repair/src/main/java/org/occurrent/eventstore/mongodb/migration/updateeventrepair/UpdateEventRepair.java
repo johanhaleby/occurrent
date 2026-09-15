@@ -232,15 +232,19 @@ public final class UpdateEventRepair {
             // that skips the post-batch write below. This widens local copies, never minRepairedPosition,
             // maxRepairedPosition or unrecoverableCount themselves. The range only widens for a plan with a
             // readable position, a parse or validation failure or an unrebuildable tag array leave nothing to widen
-            // it with. It does not ask whether another event currently owns a candidate, since that can change
-            // before repairEvent's write actually resolves it against the same index, and a snapshot taken here
-            // would only be a stale guess of what that live check will find. The count widens for a plan with a
-            // finding already on it, since that finding is fixed once the plan is, and it has to survive an event
-            // whose write fixes the one thing that made it match the damaged-event filter, an unrebuildable tag
-            // array for instance, while a finding unrelated to that fix, an unassignable position for instance,
-            // still needs reporting after a scan can no longer find the event to report it from. The post-batch
-            // write below narrows the checkpoint back to exactly what got confirmed, so these local values only
-            // outlive the batch when a kill catches it before that narrowing runs.
+            // it with. Neither the range nor the count asks whether another event currently owns a candidate
+            // position, since that can change before repairEvent's write actually resolves it against the same
+            // index, and a snapshot taken here would only be a stale guess of what that live check will find. That
+            // omission is what closes the race an ownership check here would otherwise reopen. The same plan
+            // decides what gets widened and what repairEvent writes from, so the widen and the write can never
+            // disagree about a candidate, since only the live index can reject one, and only at write time. The
+            // count widens for a plan with a finding already on it, since that finding is fixed once the plan is,
+            // and it has to survive an event whose write fixes the one thing that made it match the damaged-event
+            // filter, an unrebuildable tag array for instance, while a finding unrelated to that fix, an
+            // unassignable position for instance, still needs reporting after a scan can no longer find the event
+            // to report it from. The post-batch write below narrows the checkpoint back to exactly what got
+            // confirmed, so these local values only outlive the batch when a kill catches it before that narrowing
+            // runs.
             Long widenedMin = minRepairedPosition;
             Long widenedMax = maxRepairedPosition;
             long widenedUnrecoverableCount = unrecoverableCount;
