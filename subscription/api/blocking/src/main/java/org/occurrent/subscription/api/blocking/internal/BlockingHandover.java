@@ -483,6 +483,8 @@ public final class BlockingHandover<T, K> {
             }
             boolean stoppedMidReplay = false;
             synchronized (lock) {
+                // Every key belongs to the source a suppression reports to, so a new replay starts from none.
+                replayedIds.clear();
                 this.source = source;
                 replayRunning = true;
                 liveWhenReplayStops = live;

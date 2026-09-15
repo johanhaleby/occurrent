@@ -80,7 +80,8 @@ the append the payload came from, which neither the replay nor the suppressed co
 
 The hook goes to the source whose replay filled `replayedIds`. That source is set when a replay starts, not by every
 catch-up, so a catch-up that replays nothing, a feed's `goLive()` after its `catchUp()`, keeps reporting to the
-source that can record.
+source that can record. A replay also clears `replayedIds` when it starts, so every key in it came from the source
+the hook reports to.
 
 ### 3. The hook fires once per suppressed copy, not once per event
 

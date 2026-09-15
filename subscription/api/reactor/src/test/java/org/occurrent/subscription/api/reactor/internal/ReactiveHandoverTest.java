@@ -978,6 +978,25 @@ class ReactiveHandoverTest {
         assertThat(delivered).containsExactly("R1", "L1");
     }
 
+    // A replay owns the keys it delivered. A second replay starts from none, so a live copy of an event only the first
+    // replay delivered is delivered, rather than suppressed and reported to the second replay's source, which never
+    // saw it.
+    @Test
+    void a_second_replay_starts_without_the_keys_the_first_replay_delivered() {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String, String> handover = handover(delivered);
+        FakeSource first = source(List.of("1"), false);
+        StepVerifier.create(handover.catchUp(first)).expectNext(true).verifyComplete();
+        FakeSource second = source(List.of(), false);
+        StepVerifier.create(handover.catchUp(second)).expectNext(true).verifyComplete();
+
+        StepVerifier.create(handover.accept("1")).verifyComplete();
+
+        assertThat(delivered).containsExactly("1", "1");
+        assertThat(first.alreadyDeliveredByReplay).isEmpty();
+        assertThat(second.alreadyDeliveredByReplay).isEmpty();
+    }
+
     @Test
     void replay_lifecycle_is_started_then_completed_before_the_marker() throws Exception {
         List<String> log = Collections.synchronizedList(new ArrayList<>());

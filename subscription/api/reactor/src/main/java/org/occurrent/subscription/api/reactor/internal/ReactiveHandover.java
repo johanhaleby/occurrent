@@ -602,6 +602,8 @@ public final class ReactiveHandover<T, K> {
                 return Mono.empty();
             }
             return pauseLiveDelivery().then(Mono.defer(() -> {
+                // Every key belongs to the source a suppression reports to, so a new replay starts from none.
+                replayedIds.clear();
                 replaySource.set(source);
                 source.replayStarted();
                 replayOpen.set(true);
