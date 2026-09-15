@@ -28,7 +28,11 @@ final class UpdateEventRepairCheckpoint {
     static final String FIELD_PROCESSED_COUNT = "processedCount";
     // Carried across a resume so a run that continues an earlier one still reports the damage that earlier one
     // found. Without it a resumed run walks only the events after the checkpoint and reports zero unrecoverable
-    // while the events before it are still damaged.
+    // while the events before it are still damaged. Written before a batch's events are touched as well as after,
+    // widened to every finding the batch's plans already have before, narrowed back to what actually got confirmed
+    // after, for the same reason as the range fields below. An event whose write fixes the one thing that made it
+    // match the damaged-event filter can still have an unrelated finding a later scan can no longer reach it to
+    // report.
     static final String FIELD_UNRECOVERABLE_COUNT = "unrecoverableCount";
     // Carried across a resume for the same reason as the count above. A run killed after repairing positions in an
     // earlier segment and resumed from the checkpoint would otherwise return a range bounding only the segment it

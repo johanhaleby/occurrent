@@ -906,6 +906,40 @@ class UpdateEventRepairTest {
         );
     }
 
+    @Test
+    void a_resumed_run_still_reports_an_unrecoverable_finding_a_killed_run_could_no_longer_be_rediscovered_by() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        // A typo in step 5's hand fix, the same as in a_hand_set_position_that_is_not_positive_is_reported_rather_
+        // than_included_in_the_range. The tag array is still there to rebuild, so repairEvent's write reaches the
+        // server and fixes the one thing that matched this event against the filter, while its position stays
+        // exactly as unassignable as it was.
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 0L)));
+
+        UpdateEventRepair killedRightAfterFixingTheTagArray = new UpdateEventRepair(
+                databaseFailingTheCheckpointWriteThatFollowsAnEventRepair(), EVENT_COLLECTION,
+                UpdateEventRepairOptions.defaults().withBatchSize(1), RetryStrategy.none());
+
+        assertThatThrownBy(killedRightAfterFixingTheTagArray::run)
+                .as("the checkpoint write that follows the tag-array write must fail, or this test never reaches the gap this design closes")
+                .isInstanceOf(MongoCommandException.class);
+
+        assertThat(newRepair().report().eventsNeedingRepair())
+                .as("the tag fix must have reached the server, or this event still matches the filter and the test proves nothing")
+                .isZero();
+
+        UpdateEventRepairResult resumed = newRepair().run();
+
+        assertAll(
+                () -> assertThat(resumed.eventsRepaired())
+                        .as("nothing still matches the filter, so the resumed run repairs nothing itself")
+                        .isZero(),
+                () -> assertThat(resumed.unrecoverableEventCount())
+                        .as("the killed run's checkpoint already counted a's unassignable position before the tag fix took it out of the filter's reach, and a kill before the post-batch write left that count there")
+                        .isEqualTo(1)
+        );
+    }
+
     private void waitUntilCheckpointExists() {
         for (int attempt = 0; attempt < 200; attempt++) {
             if (database.getCollection(EVENT_COLLECTION + "_update_event_repair_checkpoint").countDocuments() > 0) {

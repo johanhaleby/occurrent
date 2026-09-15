@@ -44,7 +44,9 @@ import java.util.List;
  *                                person, and a {@code 0} here is not proof that nothing does. Rebuilding a
  *                                lost-position event's tag array stops it matching the repair filter, so a later call
  *                                never sees it and reports {@code 0} here while {@code eventsWithLostPosition} is
- *                                still above zero. Read both.
+ *                                still above zero. Read both. A run that had to resume past an interruption can also
+ *                                report a count higher than what any segment of it actually confirmed, the same way
+ *                                and for the same reason {@code minRepairedPosition} can.
  * @param eventsWithLostPosition  How many events in the collection have DCB tags and no {@code position} at all once
  *                                this run finished. Asked of the collection rather than accumulated over the run, so
  *                                it covers events an earlier run repaired the tag array of and events this one was

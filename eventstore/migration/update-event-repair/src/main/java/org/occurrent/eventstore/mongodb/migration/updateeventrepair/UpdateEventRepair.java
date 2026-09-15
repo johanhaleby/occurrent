@@ -227,17 +227,23 @@ public final class UpdateEventRepair {
             // widen never saw and so never checkpointed.
             List<PlannedRepair> planned = planBatch(batch, positionCeiling);
 
-            // Checkpoint a range wide enough to cover whatever this batch is about to modify, before touching any
-            // of it, so a checkpoint covering the batch already exists even for a kill that skips the post-batch
-            // write below. This widens a local copy, never minRepairedPosition/maxRepairedPosition themselves, and
-            // only for a plan with something to write, a parse or validation failure or an unrebuildable tag array
-            // give both nothing to widen for either way. It does not ask whether another event currently owns a
-            // candidate, since that can change before repairEvent's write actually resolves it against the same
-            // index, and a snapshot taken here would only be a stale guess of what that live check will find. The
-            // post-batch write below narrows the checkpoint back to exactly what got confirmed, so this local value
-            // only outlives the batch when a kill catches it before that narrowing runs.
+            // Checkpoint a range and an unrecoverable count wide enough to cover whatever this batch is about to
+            // modify, before touching any of it, so a checkpoint covering the batch already exists even for a kill
+            // that skips the post-batch write below. This widens local copies, never minRepairedPosition,
+            // maxRepairedPosition or unrecoverableCount themselves. The range only widens for a plan with a
+            // readable position, a parse or validation failure or an unrebuildable tag array leave nothing to widen
+            // it with. It does not ask whether another event currently owns a candidate, since that can change
+            // before repairEvent's write actually resolves it against the same index, and a snapshot taken here
+            // would only be a stale guess of what that live check will find. The count widens for a plan with a
+            // finding already on it, since that finding is fixed once the plan is, and it has to survive an event
+            // whose write fixes the one thing that made it match the damaged-event filter, an unrebuildable tag
+            // array for instance, while a finding unrelated to that fix, an unassignable position for instance,
+            // still needs reporting after a scan can no longer find the event to report it from. The post-batch
+            // write below narrows the checkpoint back to exactly what got confirmed, so these local values only
+            // outlive the batch when a kill catches it before that narrowing runs.
             Long widenedMin = minRepairedPosition;
             Long widenedMax = maxRepairedPosition;
+            long widenedUnrecoverableCount = unrecoverableCount;
             for (PlannedRepair plannedRepair : planned) {
                 RepairPlan plan = plannedRepair.plan();
                 if (!plan.updates().isEmpty() && plan.readablePosition() != null) {
@@ -245,8 +251,11 @@ public final class UpdateEventRepair {
                     widenedMin = widenedMin == null ? candidate : Math.min(widenedMin, candidate);
                     widenedMax = widenedMax == null ? candidate : Math.max(widenedMax, candidate);
                 }
+                if (!plannedRepair.findings().isEmpty()) {
+                    widenedUnrecoverableCount++;
+                }
             }
-            checkpointRepairedRange(widenedMin, widenedMax);
+            checkpointCrashRecord(widenedMin, widenedMax, widenedUnrecoverableCount);
 
             long repairedInBatch = 0;
             for (PlannedRepair plannedRepair : planned) {
@@ -528,18 +537,19 @@ public final class UpdateEventRepair {
         return lastProcessedId == null ? new Document() : gt(ID, lastProcessedId);
     }
 
-    // Upserts only the repaired-range fields, leaving lastProcessedId, unrecoverableCount and processedCount alone
-    // since none of them have changed yet for this batch. Creates the checkpoint document on a first-batch kill,
-    // the same way the post-batch checkpoint below would have.
-    private void checkpointRepairedRange(@Nullable Long minRepairedPosition, @Nullable Long maxRepairedPosition) {
-        if (minRepairedPosition == null) {
+    // Upserts the repaired-range and unrecoverable-count fields, leaving lastProcessedId and processedCount alone
+    // since neither has changed yet for this batch. Creates the checkpoint document on a first-batch kill, the
+    // same way the post-batch checkpoint below would have.
+    private void checkpointCrashRecord(@Nullable Long minRepairedPosition, @Nullable Long maxRepairedPosition, long unrecoverableCount) {
+        if (minRepairedPosition == null && unrecoverableCount == 0) {
             return;
         }
         withRetry(() -> checkpointCollection.findOneAndUpdate(
                 eq(ID, UpdateEventRepairCheckpoint.CHECKPOINT_DOCUMENT_ID),
                 Updates.combine(
                         Updates.set(UpdateEventRepairCheckpoint.FIELD_MIN_REPAIRED_POSITION, minRepairedPosition),
-                        Updates.set(UpdateEventRepairCheckpoint.FIELD_MAX_REPAIRED_POSITION, maxRepairedPosition)
+                        Updates.set(UpdateEventRepairCheckpoint.FIELD_MAX_REPAIRED_POSITION, maxRepairedPosition),
+                        Updates.set(UpdateEventRepairCheckpoint.FIELD_UNRECOVERABLE_COUNT, unrecoverableCount)
                 ),
                 new FindOneAndUpdateOptions().upsert(true)
         ));
