@@ -88,19 +88,37 @@ public final class RabbitMqDeliveryWorker {
      * Queues {@code work} for the worker thread and returns without waiting for it. Called from the RabbitMQ client's
      * consumer callback.
      *
+     * A delivery from a channel a recovery has already replaced is dropped here rather than queued, and so is one
+     * arriving after {@link #stopAcceptingWork()}. Both stay unacknowledged, and the channel the bridge closes next
+     * puts them back on the queue.
+     *
      * @param deliveryTag The delivery {@code work} handles.
      * @param work        Handles the delivery, including acknowledging it, and deals with its own failures. Anything
      *                    escaping it ends this worker's thread, which the executor then replaces.
      */
     public void submit(long deliveryTag, Runnable work) {
+        if (deliveryTag <= discardUpToDeliveryTag.get()) {
+            // A callback from a channel a recovery has already replaced. Dropped here rather than queued, so one that
+            // arrives while a handler is blocked does not wait in memory until that handler finishes.
+            log.debug("Dropping delivery tag {} on queue \"{}\", it came from a channel that has been replaced. " +
+                    "RabbitMQ delivers it again on the recovered channel.", deliveryTag, queue);
+            return;
+        }
         unfinishedDeliveries.incrementAndGet();
+        DeliveryTask task = new DeliveryTask(deliveryTag, work);
         try {
-            executor.execute(new DeliveryTask(deliveryTag, work));
+            executor.execute(task);
         } catch (RejectedExecutionException e) {
             unfinishedDeliveries.decrementAndGet();
             // Throwing back into the client would make its exception handler close the channel.
             log.debug("Delivery tag {} on queue \"{}\" arrived after the bridge stopped. It stays unacknowledged, " +
                     "and closing the channel puts it back on the queue.", deliveryTag, queue);
+            return;
+        }
+        // A recovery starting between the check above and the queueing would otherwise keep the task here, so take it
+        // back. One already running is dropped by run() instead.
+        if (deliveryTag <= discardUpToDeliveryTag.get() && executor.getQueue().remove(task)) {
+            unfinishedDeliveries.decrementAndGet();
         }
     }
 

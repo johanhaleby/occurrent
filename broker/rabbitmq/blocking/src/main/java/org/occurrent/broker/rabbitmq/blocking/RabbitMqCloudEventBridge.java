@@ -603,6 +603,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         scheduler.shutdownNow();
         // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
         permanentlyStopped = true;
+        // Before the cancel, since a delivery the client has already dispatched could otherwise reach an idle worker
+        // and start a handler while this is closing.
+        worker.stopAcceptingWork();
         // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that lock
         // while a park waits for its confirm. Closing the channel below cancels the consumer and requeues the rest.
         if (lockBefore(deadline)) {
