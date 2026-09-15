@@ -1031,6 +1031,44 @@ class ReactiveHandoverTest {
         assertThat(log).containsExactly("R1");
     }
 
+    // A catch-up with nothing to replay runs while another catch-up is replaying, which is what a feed's goLive()
+    // racing its catchUp() does. It must not let the live payloads through, since the replay it would release them
+    // into can still discard what a view buffered from them.
+    @Test
+    void a_catch_up_with_nothing_to_replay_does_not_release_a_running_replays_hold_on_live_delivery() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<CompletableFuture<Boolean>> liveAcks = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        AtomicBoolean offered = new AtomicBoolean();
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            log.add(payload);
+            if (payload.equals("R1") && offered.compareAndSet(false, true)) {
+                liveAcks.add(self.get().acceptReportingDelivery("L1").toFuture());
+                replayReached.countDown();
+                try {
+                    releaseReplay.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        Mono<Boolean> replaying = handover.catchUp(source(List.of("R1"), false));
+        assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        Mono.delay(Duration.ofMillis(300)).block();
+
+        assertThat(log).containsExactly("R1");
+        releaseReplay.countDown();
+        StepVerifier.create(replaying).expectNext(true).verifyComplete();
+        assertThat(liveAcks.get(0).get(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(log).containsExactly("R1", "L1");
+    }
+
     // The payloads a replay holds back stay held until the whole catch-up has succeeded. A marker write that fails
     // after the replay finished fails their acknowledgements, so they must not have been delivered and acknowledged in
     // the meantime.

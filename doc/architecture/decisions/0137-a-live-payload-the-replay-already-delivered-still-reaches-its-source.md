@@ -128,7 +128,8 @@ completed or stopped, and a handover that was live before the replay stays live 
 later payloads. On the reactive engine they wait until the catch-up has written its marker, since their
 acknowledgements are still open and a phase that fails after the replay has to fail them rather than find them
 acknowledged. The blocking engine reported them handled when it buffered them, so its drain runs where it always
-did. While the replay runs, `acceptIfLive` refuses on both engines, so a caller that can redeliver is told
+did. Only the catch-up that held the live payloads back lets them through again, so a `goLive()` running next to a
+replay releases nothing. While the replay runs, `acceptIfLive` refuses on both engines, so a caller that can redeliver is told
 to try again.
 
 A replay that fails ends differently on the two engines, because they acknowledge at different moments. The blocking

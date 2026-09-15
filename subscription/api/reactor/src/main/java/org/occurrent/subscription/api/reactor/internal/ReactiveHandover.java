@@ -595,6 +595,9 @@ public final class ReactiveHandover<T, K> {
         // below knows whether there is a replay lifecycle left open to abandon, rather than calling replayAbandoned()
         // after a clean replayCompleted() has already told the view its batch is durable (ADR 110).
         AtomicBoolean replayOpen = new AtomicBoolean(false);
+        // This catch-up's own hold on live delivery, installed only when it actually replays, and the only thing it
+        // ever releases.
+        Sinks.Empty<Void> pause = Sinks.empty();
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
@@ -604,7 +607,7 @@ public final class ReactiveHandover<T, K> {
             if (done) {
                 return Mono.empty();
             }
-            return pauseLiveDelivery().then(Mono.defer(() -> {
+            return pauseLiveDelivery(pause).then(Mono.defer(() -> {
                 // Every key belongs to the source a suppression reports to, so a new replay starts from none.
                 replayedIds.clear();
                 replaySource.set(source);
@@ -651,7 +654,7 @@ public final class ReactiveHandover<T, K> {
                     // Held here until the marker is written, not from the end of the replay, so a payload a handover
                     // that was already live held back is never delivered and acknowledged while a phase that can still
                     // fail is running. A failure fails its acknowledgement instead, and its caller offers it again.
-                    resumeLiveDelivery();
+                    resumeLiveDelivery(pause);
                     // An empty buffer has nothing to deliver, so its drain is over the moment the handover is.
                     // Signalled here rather than beside historyDone, so a listener that frees the id on this cannot
                     // do it while the marker is still unwritten. A buffer with anything in it reaches liveDrained
@@ -680,7 +683,7 @@ public final class ReactiveHandover<T, K> {
                             stopped = true;
                         }
                         abandonReplayWithoutMasking(source, replayOpen);
-                        resumeLiveDelivery();
+                        resumeLiveDelivery(pause);
                         catchupDone.tryEmitValue(false);
                         if (!wasLive) {
                             pendingLiveAcks.forEach(sink -> sink.success(false));
@@ -704,7 +707,7 @@ public final class ReactiveHandover<T, K> {
                     // here is what to do" message whichever side of the failure its payload arrived on. The catch-up
                     // signal above still carries the raw cause, since that caller asked about the catch-up itself.
                     pendingLiveAcks.forEach(sink -> sink.error(catchUpFailed(error)));
-                    resumeLiveDelivery();
+                    resumeLiveDelivery(pause);
                 });
 
         return catchupDone.asMono();
@@ -795,11 +798,13 @@ public final class ReactiveHandover<T, K> {
         });
     }
 
-    // Completes once no live payload is being delivered, and none starts until resumeLiveDelivery().
-    private Mono<Void> pauseLiveDelivery() {
+    // Completes once no live payload is being delivered, and none starts until the catch-up that owns this pause
+    // releases it. The owner is what stops a concurrent catch-up with nothing to replay from opening a running
+    // replay's pause and letting live payloads into a view that replay may still discard.
+    private Mono<Void> pauseLiveDelivery(Sinks.Empty<Void> pause) {
         synchronized (liveGate) {
             if (livePaused == null) {
-                livePaused = Sinks.empty();
+                livePaused = pause;
             }
             if (!liveDelivering) {
                 return Mono.empty();
@@ -829,14 +834,16 @@ public final class ReactiveHandover<T, K> {
         }
     }
 
-    private void resumeLiveDelivery() {
-        Sinks.Empty<Void> paused;
+    private void resumeLiveDelivery(Sinks.Empty<Void> pause) {
+        boolean owned;
         synchronized (liveGate) {
-            paused = livePaused;
-            livePaused = null;
+            owned = livePaused == pause;
+            if (owned) {
+                livePaused = null;
+            }
         }
-        if (paused != null) {
-            paused.tryEmitEmpty();
+        if (owned) {
+            pause.tryEmitEmpty();
         }
     }
 
