@@ -31,18 +31,18 @@ is what that costs.
 
 ### When no instance stopped at all
 
-One thing that looks like a quarantine is not one. The saga reads the CloudEvent and asks its id extractor which
+One thing that looks like a stuck instance is not one. The saga reads the CloudEvent and asks its id extractor which
 instance the event belongs to before anything else happens, so a converter or an id extractor that throws gives the
-runner no instance to stop. That event still blocks the subscription the same way, and the runner still gives it
-the same budget, but past the budget it lets the subscription through without quarantining anything.
+runner no instance to stop. That event blocks every instance of the saga, and it keeps blocking them past the budget,
+because the runner never lets the subscription past it. An event the saga cannot route may still belong to an
+instance, and once the subscription moved past it the next event for that instance would mark the instance as having
+handled it, so it could not be fed to the saga again.
 
-Nothing is written for that, so `findByStatus(QUARANTINED, ..)` does not list it and the rest of this runbook does not
-apply. What you get is one `ERROR` from `SagaExecution` saying the saga could not work out which instance the event
-belongs to, naming the event by its redelivery key and logging what stopped it. Letting the subscription past is not
-what removes the event, and the runner confirms that before it does so, so wherever your source still has the event,
-repair the converter or the id extractor and feed it to the saga again. That check asks what the acknowledgement costs
-rather than what the source holds right now, so it does not promise the event is there, and an event somebody erased
-through `EventStoreOperations` is gone by that erasure rather than by this.
+Nothing is written for it, so `findByStatus(QUARANTINED, ..)` does not list it and the rest of this runbook does not
+apply. What you get is a `WARN` from `SagaExecution` on the first failure and an `ERROR` once per budget after that,
+each saying the saga could not work out which instance the event belongs to, naming the event by its redelivery key
+and logging what stopped it. Repair the converter or the id extractor and the saga applies the event in the order it
+was written, with nothing to feed to it again. Other sagas and subscriptions keep going meanwhile.
 
 `OutOfMemoryError` is the other thing that never quarantines. It says the JVM ran out of heap while some instance held
 the thread rather than anything about that instance, so it is rethrown and the instance keeps its state. Every other
