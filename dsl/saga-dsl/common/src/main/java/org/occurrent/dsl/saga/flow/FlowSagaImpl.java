@@ -355,10 +355,16 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     // Whether event is of a type some step's own branch or window-condition leaf declares, i.e. a member of
-    // stepDeclaredEventTypes (unexpanded, see collectStepDeclaredEventTypes in FlowSaga.Builder). An empty set
-    // means no step declared any type at all, so every event counts when it is empty, the same reading
-    // eventTypes()'s own javadoc gives an empty declared set.
+    // stepDeclaredEventTypes (unexpanded, see collectStepDeclaredEventTypes in FlowSaga.Builder), or is a repeat of
+    // startType. An empty declared set means no step declared any type at all, so every event counts when it is
+    // empty, the same reading eventTypes()'s own javadoc gives an empty declared set. startType counts here even
+    // though it is deliberately left out of stepDeclaredEventTypes (that set feeds only the subscription selector,
+    // ADR 129): this method only ever runs once an instance has started, so any startType event it sees is a
+    // retained repeat, not the delivery that created the instance, and ADR 129 counts that repeat as declared.
     private boolean isDeclared(E event) {
+        if (startType.isInstance(event)) {
+            return true;
+        }
         if (stepDeclaredEventTypes.isEmpty()) {
             return true;
         }

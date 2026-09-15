@@ -136,14 +136,21 @@ whose selector was never widened at all. `SagaExecutionSupport.startEventOrNull`
 than starting a second instance. This ADR's consequences section originally scoped the uncapped case
 to a widened selector only, which is incomplete.
 
-Two ways to close this were weighed, though the fix itself is left to a follow-up. Counting the start
-type as declared once an instance has started reuses the eviction mechanism `isDeclared` already runs,
-one added clause and no new field, and it leaves the isolation rule this ADR's decision section already
-protects untouched, since only the start type's own accounting changes. A total ceiling on the step's
-retained tail regardless of type was considered instead and rejected for the same reason the decision
-section above rejects it for the widened-selector case. It would evict a foreign-typed event too, the
-event this ADR's isolation rule promises is never discarded on arrival. Counting the start type as
-declared is the smaller change and the one that does not reopen that promise.
+Two ways to close this were weighed. Counting the start type as declared once an instance has started
+reuses the eviction mechanism `isDeclared` already runs, one added clause and no new field, and it
+leaves the isolation rule this ADR's decision section already protects untouched, since only the start
+type's own accounting changes. A total ceiling on the step's retained tail regardless of type was
+considered instead and rejected for the same reason the decision section above rejects it for the
+widened-selector case. It would evict a foreign-typed event too, the event this ADR's isolation rule
+promises is never discarded on arrival. Counting the start type as declared is the smaller change and
+the one that does not reopen that promise.
+
+**Done.** `FlowSagaImpl.isDeclared` now also returns true for an event of the start type, so a retained
+repeat counts toward `stepWindow` and can be evicted like any of a step's own declared events. A step
+fed nothing but repeats of the start type is bounded by `stepWindow` the same way a step fed only its
+own declared types always was. The widened-selector growth this ADR already described for a genuinely
+foreign type is untouched, and stays the documented trade-off in `Saga#replacementFilter()` and
+`FlowSaga.Builder#stepWindow(int)`.
 
 This ADR supersedes the "deferred to 0.34" routing recorded on both #773 and #764 with a decided
 answer now, landing in the same change that fixes the eviction defect.
