@@ -80,7 +80,7 @@ final class PositionCatchupPipeline {
      * @param reconcileStarting Run once the history windows have all been delivered and before the reconciliation
      *                          reads anything.
      */
-    long replay(long startPosition, BooleanSupplier keepRunning, BiConsumer<Stream<CloudEvent>, @Nullable BoundedIdCache> deliver, BoundedIdCache cache, Runnable reconcileStarting) {
+    long replay(long startPosition, BooleanSupplier keepRunning, BiConsumer<Stream<CloudEvent>, @Nullable BoundedIdCache<CatchupEventKey>> deliver, BoundedIdCache<CatchupEventKey> cache, Runnable reconcileStarting) {
         long bulkHead = reader.currentHead();
         long cursor = windows(startPosition, bulkHead, keepRunning, deliver, null);
 
@@ -103,7 +103,7 @@ final class PositionCatchupPipeline {
 
     // Delivers events in (fromExclusive, toInclusive], paging in position windows. Stops early when keepRunning
     // reports false, for example on shutdown or cancellation.
-    private long windows(long fromExclusive, long toInclusive, BooleanSupplier keepRunning, BiConsumer<Stream<CloudEvent>, @Nullable BoundedIdCache> deliver, @Nullable BoundedIdCache cache) {
+    private long windows(long fromExclusive, long toInclusive, BooleanSupplier keepRunning, BiConsumer<Stream<CloudEvent>, @Nullable BoundedIdCache<CatchupEventKey>> deliver, @Nullable BoundedIdCache<CatchupEventKey> cache) {
         long cursor = fromExclusive;
         while (cursor < toInclusive && keepRunning.getAsBoolean()) {
             long upTo = Math.min(cursor + windowSize, toInclusive);

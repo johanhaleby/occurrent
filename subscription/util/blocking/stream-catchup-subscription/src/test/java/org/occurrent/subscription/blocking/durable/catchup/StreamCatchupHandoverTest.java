@@ -67,6 +67,21 @@ class StreamCatchupHandoverTest {
     }
 
     @Test
+    void a_live_event_sharing_only_its_id_with_a_reconciled_event_is_delivered_and_not_suppressed() {
+        // e1 from producer A is read during the reconcile phase (the head advances between the bulk read and the
+        // reconcile snapshot) and recorded in the dedup cache. A live event that shares only its id, from producer B,
+        // is a different event under CloudEvents' (id, source) identity and must still be delivered, not suppressed
+        // as a re-delivery of the reconciled one.
+        FakePositionStore store = FakePositionStore.withEventsAt(1).heads(0, 1);
+        CloudEvent fromB = CloudEventBuilder.v1(event("e1")).withSource(URI.create("urn:producer:b")).build();
+        FakeLiveModel live = new FakeLiveModel(List.of(fromB));
+
+        CopyOnWriteArrayList<String> received = deliverCapturingIdentity(live, store, 1000);
+
+        assertThat(received).containsExactly("e1@urn:test", "e1@urn:producer:b");
+    }
+
+    @Test
     void an_overlap_larger_than_the_old_1000_cap_delivers_each_event_exactly_once_when_the_ceiling_covers_it() {
         // Bulk drains 1..1000, then the head advances to 3000, so reconcile drains the 2000 events written during the
         // replay (an overlap far past the old fixed 1000 cap). The live source re-delivers those 2000, and a ceiling
@@ -97,6 +112,17 @@ class StreamCatchupHandoverTest {
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
         StreamCatchupSubscriptionModel catchup = new StreamCatchupSubscriptionModel(live, store, new CatchupSubscriptionModelConfig(ceiling));
         boolean started = catchup.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> received.add(cloudEvent.getId()))
+                .waitUntilStarted(Duration.ofSeconds(10));
+        assertThat(started).isTrue();
+        return received;
+    }
+
+    // Like deliver(..), but captures the full (id, source) identity instead of just the id, so a test can tell two
+    // events that share an id but not a source apart.
+    private CopyOnWriteArrayList<String> deliverCapturingIdentity(FakeLiveModel live, FakePositionStore store, int ceiling) {
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel catchup = new StreamCatchupSubscriptionModel(live, store, new CatchupSubscriptionModelConfig(ceiling));
+        boolean started = catchup.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> received.add(cloudEvent.getId() + "@" + cloudEvent.getSource()))
                 .waitUntilStarted(Duration.ofSeconds(10));
         assertThat(started).isTrue();
         return received;
