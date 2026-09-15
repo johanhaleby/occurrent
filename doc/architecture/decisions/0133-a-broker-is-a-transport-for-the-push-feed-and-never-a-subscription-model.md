@@ -1281,9 +1281,11 @@ as long as that takes.
 **Shutdown.** `close()` cancels the consumer, then stops the worker without starting any delivery still queued for
 it, and waits up to a new `closeTimeout(Duration)` on both builders for the one being handled. Thirty seconds is the
 default, the same as the Kafka bridges, and both starters set it from `occurrent.broker.rabbitmq.bridge.close-timeout`.
-A handler still running after that is interrupted and logged at `warn`, and nothing it does after that
-acknowledges or parks its delivery, so closing the channel puts that delivery back on the queue. A park or
-acknowledgement already under way at that moment still finishes, since the handler had returned before it started.
+A handler still running after that is interrupted and logged at `warn`. The deadline itself is what fences the
+acknowledgement, published before `close()` starts waiting and read under `consumeLock`, so a handler finishing
+around it either acknowledges before it or does not acknowledge at all, rather than racing a flag `close()` would
+set afterwards. Closing the channel then puts that delivery back on the queue. A park or acknowledgement already
+under way at the deadline still finishes, since the handler had returned before it started.
 Closing the channel under it gives at worst a parked copy plus the original back on the queue. Every step of
 `close()` shares that one deadline, since the worker holds the bridge's lock while a park waits up to five seconds for
 its confirm, and closing the channel cancels the consumer and requeues whatever a skipped step would have released.

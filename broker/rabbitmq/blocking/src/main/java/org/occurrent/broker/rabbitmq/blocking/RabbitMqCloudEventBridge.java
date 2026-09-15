@@ -207,10 +207,11 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     // pace it, so it still applies immediately, through failureAction, from the point of failure.
     private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
-    // Set once close() stops waiting for a handler, so nothing that handler does afterwards acknowledges or parks its
-    // delivery before the channel close puts it back on the queue. Read under consumeLock, so a park or
-    // acknowledgement that already holds the lock finishes, since the handler returned before it started.
-    private volatile boolean inFlightDeliveryAbandoned;
+    // When close() has to give up on a delivery, which is at this moment. Published before close() starts waiting and
+    // read under consumeLock, so a handler that returns around the deadline either acknowledges before it or is
+    // fenced by it, rather than racing a flag close() would set afterwards. A park or acknowledgement that already
+    // holds the lock finishes, since the handler returned before it started. Long.MAX_VALUE until close() runs.
+    private volatile long closeDeadlineNanos = Long.MAX_VALUE;
 
     // Package-private rather than private so RabbitMqCloudEventBridgeOutcomeRoutingTest can build one over a
     // mocked Channel. Nothing here talks to a broker, the builder's own start(..) does that.
@@ -494,7 +495,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     private void ackNow(long deliveryTag) {
         consumeLock.lock();
         try {
-            if (inFlightDeliveryAbandoned) {
+            if (closeDeadlinePassed()) {
                 return;
             }
             failureAction.ack(deliveryTag);
@@ -515,7 +516,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         } else {
             consumeLock.lock();
             try {
-                if (inFlightDeliveryAbandoned) {
+                if (closeDeadlinePassed()) {
                     return;
                 }
                 failureAction.apply(deliveryTag, properties, body);
@@ -581,8 +582,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
      * <p>
      * A delivery that arrived but was not yet being handled is not started, and a handler still running after
      * {@code closeTimeout} is interrupted and logged at {@code warn}. Neither was acknowledged, so closing the channel
-     * puts both back on the queue and they are delivered again. Called from inside a handler, this method does not
-     * wait for that handler, since it is the one calling.
+     * puts both back on the queue and they are delivered again. Nothing acknowledges or parks a delivery once that
+     * deadline has passed, so a handler finishing just after it has its delivery redelivered rather than committed.
+     * Called from inside a handler, this method does not wait for that handler, since it is the one calling.
      * <p>
      * A handler that ignores its interrupt keeps running after this returns, so whatever it writes is written
      * whenever it finishes, which for a bridge built again on the same queue in the same process can be after events
@@ -597,6 +599,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     @Override
     public void close() {
         long deadline = System.nanoTime() + closeTimeout.toNanos();
+        closeDeadlineNanos = deadline;
         scheduler.shutdownNow();
         // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
         permanentlyStopped = true;
@@ -617,8 +620,6 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             }
         }
         if (!worker.stop(remainingUntil(deadline))) {
-            // Set before the interrupt, so a handler that returns because of it neither acknowledges nor parks.
-            inFlightDeliveryAbandoned = true;
             worker.interruptRunningWork(closeTimeout);
         }
         if (lockBefore(deadline)) {
@@ -644,6 +645,11 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             // Best effort, mirroring RabbitMqCloudEventSink#close's own channel teardown.
         }
         failureAction.close();
+    }
+
+    private boolean closeDeadlinePassed() {
+        long deadline = closeDeadlineNanos;
+        return deadline != Long.MAX_VALUE && System.nanoTime() - deadline >= 0;
     }
 
     private boolean lockBefore(long deadlineNanos) {
