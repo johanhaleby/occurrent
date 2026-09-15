@@ -69,11 +69,10 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     private final @Nullable Function<E, @Nullable String> correlateAll;
     private final Set<Class<? extends E>> startEventTypes;
     private final Set<Class<? extends E>> eventTypes;
-    // What stepWindow checks an arriving event against: every type a step's own on(...) branch or window-condition
-    // leaf names, deliberately narrower than eventTypes (which also unions in startType, so the subscription can
-    // create an instance at all). A repeat of the start type arriving after the instance already exists is not one
-    // of a step's own events merely because it once created the instance, unless some step also declares it in its
-    // own right. See ADR 129.
+    // Every type a step's own on(...) branch or window-condition leaf names, deliberately narrower than eventTypes
+    // (which also unions in startType, so the subscription can create an instance at all). isDeclared checks an
+    // arriving event against this set directly, but treats a repeat of startType as declared too once the instance
+    // has started, since that repeat is exactly the case ADR 129 counts toward stepWindow.
     private final Set<Class<? extends E>> stepDeclaredEventTypes;
     // How many received events before the current step's entry are kept, and so what a guard and a reaction can still read
     // of the earlier history. Applied when a step is left.
@@ -303,20 +302,22 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     // Where the retained tail has to start so that at most stepWindow of the current step's own DECLARED-type events
-    // (isDeclared, i.e. stepDeclaredEventTypes) are kept. The tail is one run of events, and the current step's events sit at
-    // the end of it behind whatever carry-over historyWindow granted, so dropping the step's oldest events means
+    // (isDeclared: a member of stepDeclaredEventTypes, or a repeat of startType) are kept. The tail is one run of
+    // events, and the current step's events sit at the end of it behind whatever carry-over historyWindow granted,
+    // so dropping the step's oldest events means
     // dropping the whole carry-over ahead of them first. Advancing the start by the excess alone would drop that many
     // carry-over events and leave every one of the step's, which caps nothing and takes the history a guard was
     // promised.
     //
-    // A correlated event of a type no step in the flow declares (reachable only through a narrowingFilter or
-    // replacementFilter wider than the flow's own types, or a CloudEventTypeMapper that collapses several domain
-    // types onto one CloudEvent type string, see Saga#replacementFilter()) is still counted in appended above it,
-    // but it does not count here: only a declared event both fills the budget and gets evicted to make room. Such a
-    // foreign event is retained for as long as the window does not have to advance past it to evict enough declared
-    // events, and is swept up for free when it does, never targeted on its own. This is what keeps the isolation
-    // rule intact (a genuinely correlated event is never discarded on arrival), at the cost of no longer bounding a
-    // step fed only foreign-typed events; see the ADR for that trade-off.
+    // A correlated event of a type no step in the flow declares and that is not a repeat of startType (reachable
+    // only through a narrowingFilter or replacementFilter wider than the flow's own types, or a CloudEventTypeMapper
+    // that collapses several domain types onto one CloudEvent type string, see Saga#replacementFilter()) is still
+    // counted in appended above it, but it does not count here: only a declared event, isDeclared, both fills the
+    // budget and gets evicted to make room. Such a foreign event is retained for as long as the window does not
+    // have to advance past it to evict enough declared events, and is swept up for free when it does, never
+    // targeted on its own. This is what keeps the isolation rule intact (a genuinely correlated event is never
+    // discarded on arrival), at the cost of no longer bounding a step fed only foreign-typed events; see the ADR
+    // for that trade-off.
     private int boundedWindowStart(int stepEntryIndex, int windowStart, List<E> appended) {
         if (stepWindow == UNBOUNDED_STEP_WINDOW) {
             return windowStart;
@@ -355,10 +356,17 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     // Whether event is of a type some step's own branch or window-condition leaf declares, i.e. a member of
-    // stepDeclaredEventTypes (unexpanded, see collectStepDeclaredEventTypes in FlowSaga.Builder). An empty set
-    // means no step declared any type at all, so every event counts when it is empty, the same reading
-    // eventTypes()'s own javadoc gives an empty declared set.
+    // stepDeclaredEventTypes (unexpanded, see collectStepDeclaredEventTypes in FlowSaga.Builder), or is a repeat of
+    // startType. An empty declared set means no step declared any type at all, so every event counts when it is
+    // empty, the same reading eventTypes()'s own javadoc gives an empty declared set. startType is deliberately
+    // left out of stepDeclaredEventTypes itself, since startType feeds only the subscription selector through
+    // eventTypes(), not any step's own branches. This method checks startType separately from that set, per ADR
+    // 129, because it only ever runs once an instance has started, so any startType event it sees here is a
+    // retained repeat, not the delivery that created the instance.
     private boolean isDeclared(E event) {
+        if (startType.isInstance(event)) {
+            return true;
+        }
         if (stepDeclaredEventTypes.isEmpty()) {
             return true;
         }

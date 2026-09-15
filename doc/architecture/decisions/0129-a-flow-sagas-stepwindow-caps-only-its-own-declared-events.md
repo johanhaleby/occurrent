@@ -42,12 +42,16 @@ covers how a declared sealed type expands into it). That set is deliberately nar
 `eventTypes()` itself, which unions in the flow's `startType` too, because that union exists only so
 the subscription selector can create an instance in the first place, not because a step treats the
 start type as its own. A repeat of the start type arriving after the instance already exists is not
-one of a step's own events merely because it once created the instance, unless some step also
-declares it in its own right, the same way a first step can use
-`on(StepCondition.event(startType, 1), ...)`. A correlated event of any other type is still appended
-to `received()`, never silently dropped, but it neither counts toward the N-event budget nor evicts
-one of the step's own events by itself. It is swept up only as a byproduct of the window advancing
-past it while dropping enough declared events ahead of it to satisfy the cap.
+one of a step's own events merely because it once created the instance, so it stays out of that
+per-step set unless some step also declares it in its own right, the same way a first step can use
+`on(StepCondition.event(startType, 1), ...)`. `stepWindow`'s cap counts it anyway. Once an instance
+has started, a retained repeat of the start type counts as declared for the cap and the eviction
+walk, the same way one of a step's own declared-type events does, because a repeat of the event that
+created the instance is not the kind of foreign traffic this decision means to leave uncapped. A
+correlated event of any other type is still appended to `received()`, never silently dropped, but it
+neither counts toward the N-event budget nor evicts one of the step's own events by itself. It is
+swept up only as a byproduct of the window advancing past it while dropping enough declared events
+ahead of it to satisfy the cap.
 
 The alternative the issue also named, discarding the foreign event before it is ever appended, was
 rejected. Nothing else in the codebase silently drops an event that genuinely arrived and correlated
@@ -115,10 +119,15 @@ correction in the same change:
 
 ## Consequences
 
-The vast majority of existing flows, everything without a `replacementFilter`, a `narrowingFilter`,
-or a collapsing type mapper, see no behavior change. Their subscription can never deliver a
-foreign-typed event, so `isDeclared` is true for everything they ever receive and the cap behaves
-exactly as before.
+Against the 0.33.0 baseline this ADR fixes, every existing flow sees no behavior change, including a
+flow that keeps receiving repeats of its own start type. 0.33.0 counted every retained event toward
+`stepWindow` regardless of declared type, so such a repeat was already bounded there. This decision's
+own fix keeps it bounded the same way. The gap the paragraph below describes existed only in the
+still-unreleased implementation this ADR's earlier decision produced, never in anything a 0.33.0
+caller observed, and closing it in the same unreleased change is what keeps that promise true. A flow
+without a `replacementFilter`, a `narrowingFilter`, or a collapsing type mapper sees no change from the
+widened-selector defect #773 targets either, since its subscription can never deliver a foreign-typed
+event, so `isDeclared` was already true for everything else it receives.
 
 A flow that already widened its selector gets a genuine bug fix. `stepWindow` now keeps exactly N of
 its own declared-type events, instead of a mix that a foreign-type flood could crowd out. What it
@@ -127,23 +136,29 @@ a genuine reason should watch the store's warning rather than assume `stepWindow
 document size, and a caller who wants that bound back should narrow the selector to the flow's own
 declared types instead.
 
-A widened selector is not the only way to reach this gap. `startType` is deliberately left out of
-`stepDeclaredEventTypes` (it is unioned only into `eventTypes()`, for the subscription selector), so
-a repeat of the start type after an instance has already started is `isDeclared`-false for exactly the
-same reason a foreign-typed event is, and it grows a step's retained tail the same way, on a flow
-whose selector was never widened at all. `SagaExecutionSupport.startEventOrNull` returns `null` once
+A widened selector was not the only way to reach this gap. `startType` is deliberately left out of
+`stepDeclaredEventTypes` (it is unioned only into `eventTypes()`, for the subscription selector), so a
+repeat of the start type after an instance had already started was `isDeclared`-false for exactly the
+same reason a foreign-typed event is, and it grew a step's retained tail the same way, on a flow whose
+selector was never widened at all. `SagaExecutionSupport.startEventOrNull` returns `null` once
 `hasStarted`, so that repeat event falls through to `evolve` as an ordinary correlated event rather
 than starting a second instance. This ADR's consequences section originally scoped the uncapped case
-to a widened selector only, which is incomplete.
+to a widened selector only, which was incomplete, and the decision section above now states the fix.
 
-Two ways to close this were weighed, though the fix itself is left to a follow-up. Counting the start
-type as declared once an instance has started reuses the eviction mechanism `isDeclared` already runs,
-one added clause and no new field, and it leaves the isolation rule this ADR's decision section already
-protects untouched, since only the start type's own accounting changes. A total ceiling on the step's
-retained tail regardless of type was considered instead and rejected for the same reason the decision
-section above rejects it for the widened-selector case. It would evict a foreign-typed event too, the
-event this ADR's isolation rule promises is never discarded on arrival. Counting the start type as
-declared is the smaller change and the one that does not reopen that promise.
+Two ways to close this were weighed. Counting the start type as declared once an instance has started
+reuses the eviction mechanism `isDeclared` already runs, one added clause and no new field, and it
+leaves the isolation rule this ADR's decision section already protects untouched, since only the start
+type's own accounting changes. A total ceiling on the step's retained tail regardless of type was
+considered instead and rejected for the same reason the decision section above rejects it for the
+widened-selector case. It would evict a foreign-typed event too, the event this ADR's isolation rule
+promises is never discarded on arrival. Counting the start type as declared is the smaller change and
+the one that does not reopen that promise, which is the fix the decision section above now states.
 
-This ADR supersedes the "deferred to 0.34" routing recorded on both #773 and #764 with a decided
-answer now, landing in the same change that fixes the eviction defect.
+**Done.** `FlowSagaImpl.isDeclared` returns true for an event of the start type, so a retained repeat
+counts toward `stepWindow` and can be evicted like any of a step's own declared events. A step fed
+nothing but repeats of the start type is bounded by `stepWindow` the same way a step fed only its own
+declared types always was. The widened-selector growth this ADR already described for a genuinely
+foreign type is untouched, and stays the documented trade-off in `Saga#replacementFilter()` and
+`FlowSaga.Builder#stepWindow(int)`. This ADR supersedes the "deferred to 0.34" routing recorded on
+both #773 and #764 with a decided answer now, landing in the same change that fixes the eviction
+defect.

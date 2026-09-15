@@ -6,8 +6,9 @@ Each section describes one 0.34.0 change that requires action from a caller on 0
 Ten things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
-counts and evicts only the events its own steps declare, which most callers need to do nothing about. Read
-[section 2](#2-a-flow-sagas-stepwindow-now-caps-only-its-own-declared-events). A projection, a subscription, a
+counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
+callers need to do nothing about. Read
+[section 2](#2-a-flow-sagas-stepwindow-now-caps-its-declared-events-and-the-start-type). A projection, a subscription, a
 query, or a snapshot that declares an event type whose concrete subtypes cannot be found is now refused, the same
 refusal 0.33.0 already shipped for a saga and an annotation-based subscription, and one shape that was exempt
 everywhere, a concrete class that is neither final nor sealed, is now refused on all six. Read
@@ -104,7 +105,7 @@ A duplicate-typed pair whose count is not a literal needs you to work out which 
 whichever of `a` and `b` is larger, so `event(Type.class, Math.max(a, b))` is the direct translation in Java, and
 the Kotlin equivalent reads the same way.
 
-## 2. A flow saga's `stepWindow` now caps only its own declared events
+## 2. A flow saga's `stepWindow` now caps its declared events and the start type
 
 No recipe, and most callers need to do nothing. This only matters if your flow sets a
 `narrowingFilter`, a `replacementFilter` wider than the flow's own declared types, or uses a
@@ -118,12 +119,13 @@ types evict one of the step's own events, and the absolute bound section 9 state
 `historyWindow + 2 * stepWindow + 1`, held because of that same defect.
 
 `stepWindow` now counts and evicts only events of a type some step's `on(...)` branch or
-window-condition leaf actually names. An event of any other type is still retained, never
-discarded, but it no longer takes one of the cap's slots or evicts a declared event to make room
-for itself. The bound in section 9 still holds for a flow's own declared-type events. It no longer
-bounds a step fed only events of a type no step declares, which is not a new gap. It was always the
-kind of growth `stepWindow` and `historyWindow` alone did not close, only masked. Watch the
-0.33.0 store-boundary warning if your flow admits such events and you care about total document
+window-condition leaf actually names, plus an event of the type that starts the flow. An
+event of any other type is still retained, never discarded, but it no longer takes one of the
+cap's slots or evicts a declared event to make room for itself. The bound in section 9 still holds
+for a flow's own declared-type events, the start type included. It no longer bounds a step fed only
+events of a type no step declares and that is not the start type, which is not a new gap. It was
+always the kind of growth `stepWindow` and `historyWindow` alone did not close, only masked. Watch
+the 0.33.0 store-boundary warning if your flow admits such events and you care about total document
 size. See [ADR 129](../architecture/decisions/0129-a-flow-sagas-stepwindow-caps-only-its-own-declared-events.md)
 for the full decision.
 

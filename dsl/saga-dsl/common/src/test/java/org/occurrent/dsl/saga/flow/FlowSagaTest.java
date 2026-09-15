@@ -589,6 +589,14 @@ class FlowSagaTest {
             return events;
         }
 
+        private static Opened[] repeatedStart(int count, String id) {
+            Opened[] events = new Opened[count];
+            for (int i = 0; i < count; i++) {
+                events[i] = new Opened(id);
+            }
+            return events;
+        }
+
         @Test
         void a_count_still_completes_on_the_same_event_after_the_cap_dropped_the_earlier_matches() {
             List<String> saw = new ArrayList<>();
@@ -770,10 +778,9 @@ class FlowSagaTest {
         }
 
         @Test
-        void a_repeated_start_type_event_does_not_count_toward_the_cap_unless_a_step_also_declares_it() {
-            // eventTypes(), the subscription selector, unions in startType so an instance can ever be created, but a
-            // repeat of that type arriving after the instance already exists is not one of this step's own events
-            // just because it once created the instance. waitingForThree's "wait" step never declares Opened.
+        void a_repeated_start_type_event_counts_toward_the_cap_once_the_instance_has_started() {
+            // ADR 129: a retained repeat of startType counts as declared once the instance has started, even though
+            // waitingForThree's "wait" step never declares Opened in its own on(...) or window-condition leaves.
             Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(2, new ArrayList<>());
             FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
 
@@ -782,12 +789,25 @@ class FlowSagaTest {
 
             assertAll(
                     () -> assertThat(afterRepeatedStart.receivedEvents().count(Approved.class))
-                            .as("the repeated start event did not evict either Approved, since no step declares Opened")
-                            .isEqualTo(2),
+                            .as("the repeated start event evicted one Approved to stay within the cap of 2")
+                            .isEqualTo(1),
                     () -> assertThat(afterRepeatedStart.receivedEvents().count(Opened.class))
-                            .as("the repeat is still retained, both it and the initiating event")
+                            .as("the pinned initiating Opened, outside the cap, plus the repeat, one of its 2 declared slots")
                             .isEqualTo(2)
             );
+        }
+
+        @Test
+        void repeated_start_type_events_on_a_started_instance_leave_at_most_the_cap_retained() {
+            // ADR 129's fix: once started, a retained start-type repeat counts toward stepWindow like a declared
+            // one, so it no longer grows the instance without bound the way an undeclared foreign type still can.
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(2, new ArrayList<>());
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            FlowState<CapEvent> afterRepeats = deliver(saga, opened, repeatedStart(50, "c1"));
+
+            assertThat(afterRepeats.received()).as("the cap of 2 bounds the repeated start events too")
+                    .hasSizeLessThanOrEqualTo(3);
         }
 
         @Test
