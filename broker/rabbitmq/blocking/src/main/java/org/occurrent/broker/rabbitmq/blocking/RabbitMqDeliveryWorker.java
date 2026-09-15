@@ -91,6 +91,10 @@ public final class RabbitMqDeliveryWorker {
      * A delivery from a channel a recovery has already replaced is dropped here rather than queued, and so is one
      * arriving after {@link #stopAcceptingWork()}. Both stay unacknowledged, and the channel the bridge closes next
      * puts them back on the queue.
+     * <p>
+     * That drop is covered by {@code RabbitMqDomainEventBridgeRecoveryDiscardTest}. The recheck after the queueing is
+     * not, and that test passes without it. It covers only a recovery starting between the two, which would otherwise
+     * hold one delivery here until the handler ahead of it finishes. Nothing is acknowledged wrongly either way.
      *
      * @param deliveryTag The delivery {@code work} handles.
      * @param work        Handles the delivery, including acknowledging it, and deals with its own failures. Anything
@@ -116,7 +120,7 @@ public final class RabbitMqDeliveryWorker {
             return;
         }
         // A recovery starting between the check above and the queueing would otherwise keep the task here, so take it
-        // back. One already running is dropped by run() instead.
+        // back. One already running is dropped by run() instead. No test covers these three lines, see the javadoc.
         if (deliveryTag <= discardUpToDeliveryTag.get() && executor.getQueue().remove(task)) {
             unfinishedDeliveries.decrementAndGet();
         }
