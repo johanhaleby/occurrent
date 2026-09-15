@@ -178,10 +178,13 @@ ceiling to compare against and this is never reported.
 outside Occurrent. The run continues past it, so one such event does not hold up the rest.
 
 **Write down the range this run reported before you do anything else.** The finished-run log line names it,
-`Repaired positions ranged from X to Y`, or says `No position was repaired` when no event it repaired had a position it
-could read. `result.minRepairedPosition()` and `result.maxRepairedPosition()` hold the same two numbers, or both
-`null`. A run that finishes deletes its checkpoint, so any further run starts with no range and reports only the
-positions it repaired itself. Step 7 needs the range of every run you ran.
+`Repaired positions ranged from X to Y`, or says `No position was repaired` when the run has nothing to report. A
+resumed run can print a range here even though it repaired nothing itself, a batch a kill caught before this run
+picked it back up put that range in the checkpoint before this run started, so do not read this line as proof the
+run in front of you did the repairing. Step 7 says more about that. `result.minRepairedPosition()` and
+`result.maxRepairedPosition()` hold the same two numbers, or both `null`. A run that finishes deletes its
+checkpoint, so any further run starts with no range and reports only the positions it repaired itself. Step 7 needs
+the range of every run you ran.
 
 **Write down every position you set by hand as well, because the repair will usually never mention it again.**
 Setting a position by hand is itself what stops an event looking damaged, so after the fix it matches neither half of

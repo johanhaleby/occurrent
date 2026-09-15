@@ -69,10 +69,11 @@ import java.util.List;
  *                                neither a truncated list nor a resume means a lost report.
  * @param minRepairedPosition     A lower bound on the position of every event this call successfully repaired, or
  *                                {@code null} if none of them had a readable position. Exact for a run that never
- *                                had to resume. One that did can report a position lower than any it actually
- *                                repaired, since the checkpoint a resume starts from can hold a position from a
- *                                batch the interruption caught before that batch's own attempt at it was confirmed
- *                                one way or the other. That position can be one this call restored, or one that was
+ *                                had to resume. One that did can report a position no event this call repaired ever
+ *                                held, including a non-{@code null} value while {@code eventsRepaired} is {@code 0},
+ *                                since the checkpoint a resume starts from can hold a position from a batch the
+ *                                interruption caught before that batch's own attempt at it was confirmed one way or
+ *                                the other. That position can be one this call restored, or one that was
  *                                already correct on an event this call only rebuilt the tag array of, for instance a
  *                                {@code POSITION_ALREADY_TAKEN} event an operator fixed by hand before running the
  *                                repair again. A consumer whose checkpoint sits below this value cannot have read
