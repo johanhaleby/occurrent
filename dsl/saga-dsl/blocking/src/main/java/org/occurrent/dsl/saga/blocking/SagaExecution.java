@@ -218,23 +218,24 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * <p>
      * The budget only sets how often that is said. The first failure is a warning, and after that it is logged at ERROR
      * once per {@link SagaRunnerConfig#quarantineAfter()} for as long as the event keeps being offered, rather than
-     * every time the source offers it. Without a budget, or on an event carrying no redelivery key, nothing is logged
-     * here, which is what 0.33.0 did.
+     * every time the source offers it. Without a budget the warning is said once and not repeated. An event carrying no
+     * redelivery key logs nothing here, because nothing tells one delivery of it from the next.
      */
     private void refuseUnroutableDelivery(EventMeta meta, Throwable failure) {
-        Duration quarantineAfter = config.quarantineAfter();
         String redeliveryKey = meta.redeliveryKey();
-        if (quarantineAfter == null || redeliveryKey == null || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
+        if (redeliveryKey == null || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
             return;
         }
         Instant now = Instant.now();
         UnroutableDelivery existing = unroutableDeliveries.putIfAbsent(redeliveryKey, new UnroutableDelivery(now, now));
         if (existing == null) {
-            log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, so the event is refused and the subscription offers it again. Every instance of this saga waits behind it until the converter or the id extractor can read it, and the event is then applied in the order it was written. It is never skipped, because an event the saga cannot route may still belong to an instance and acknowledging it would lose it. This is logged again every {} while it lasts.",
-                    subscriptionId, redeliveryKey, quarantineAfter, failure);
+            log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, so the event is refused and the subscription offers it again. Every instance of this saga waits behind it until the converter or the id extractor can read it, and the event is then applied in the order it was written. It is never skipped, because an event the saga cannot route may still belong to an instance and acknowledging it would lose it.",
+                    subscriptionId, redeliveryKey, failure);
             return;
         }
-        if (Duration.between(existing.lastLoggedAt(), now).compareTo(quarantineAfter) < 0
+        Duration quarantineAfter = config.quarantineAfter();
+        if (quarantineAfter == null
+            || Duration.between(existing.lastLoggedAt(), now).compareTo(quarantineAfter) < 0
             || !unroutableDeliveries.replace(redeliveryKey, existing, new UnroutableDelivery(existing.firstFailedAt(), now))) {
             return;
         }

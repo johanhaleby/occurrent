@@ -112,8 +112,9 @@ import static java.util.Objects.requireNonNull;
  *       and once the subscription moved past it the next event for that instance would move the instance's watermark
  *       beyond it, so feeding it to the saga again would be ignored as a redelivery and the event would be lost. It is
  *       refused on every redelivery instead, as every version up to 0.33.0 did, and every instance of this saga waits
- *       behind it while other sagas and subscriptions keep going. The first failure is logged at WARN and after that at
- *       ERROR once per {@code quarantineAfter}, naming the event and the exception that stopped it. Once the converter
+ *       behind it while other sagas and subscriptions keep going. The first failure is logged at WARN and, when
+ *       {@code quarantineAfter} is set, at ERROR once per {@code quarantineAfter} after that, naming the event and the
+ *       exception that stopped it. Once the converter
  *       or the id extractor is repaired the event is applied in the order it was written, with nothing to feed again.
  *       <p>
  *       Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of blocking indefinitely instead,

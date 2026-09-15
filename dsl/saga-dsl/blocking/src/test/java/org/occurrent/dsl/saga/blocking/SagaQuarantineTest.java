@@ -744,7 +744,12 @@ class SagaQuarantineTest {
                 // About sixty offers at one every twenty milliseconds, and four budgets.
                 TimeUnit.MILLISECONDS.sleep(BUDGET.toMillis() * 4);
 
-                List<ILoggingEvent> refusals = appender.list.stream()
+                // Copied under the appender's lock, because the delivery thread is still refusing the event and logging.
+                List<ILoggingEvent> logged;
+                synchronized (appender) {
+                    logged = new ArrayList<>(appender.list);
+                }
+                List<ILoggingEvent> refusals = logged.stream()
                         .filter(event -> event.getFormattedMessage().contains("which instance the event '" + POISON + "@2'"))
                         .toList();
                 assertAll(
@@ -770,6 +775,39 @@ class SagaQuarantineTest {
             TimeUnit.SECONDS.sleep(2);
 
             assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY));
+        }
+
+        /**
+         * A runner on a feed that cannot promise to hold what it delivers has no budget, so there is nothing to pace a
+         * repeat by. The first failure is still said, naming the event, so the saga is not stopped with nothing in the
+         * log to say why.
+         */
+        @Test
+        void still_says_so_once_when_the_quarantine_budget_is_switched_off() throws Exception {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+                run(model, CONFIG.withQuarantineAfter(null));
+                pushTheHealthyEventBehindTheUncorrelatableOne(model);
+
+                TimeUnit.MILLISECONDS.sleep(BUDGET.toMillis() * 4);
+
+                List<ILoggingEvent> logged;
+                synchronized (appender) {
+                    logged = new ArrayList<>(appender.list);
+                }
+                assertThat(logged)
+                        .filteredOn(event -> event.getFormattedMessage().contains("which instance the event '" + POISON + "@2'"))
+                        .extracting(ILoggingEvent::getLevel)
+                        .containsExactly(Level.WARN);
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
         }
 
         @Test
