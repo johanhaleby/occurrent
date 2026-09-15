@@ -50,6 +50,7 @@ import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
 import static com.mongodb.client.model.Filters.exists;
 import static com.mongodb.client.model.Filters.gt;
+import static com.mongodb.client.model.Filters.ne;
 import static com.mongodb.client.model.Filters.or;
 import static com.mongodb.client.model.Filters.type;
 import static java.util.Objects.requireNonNull;
@@ -478,19 +479,32 @@ public final class UpdateEventRepair {
     // into a scratch list so this scan reports nothing of its own. A position repairEvent would reject, one that
     // is not a number, not positive, or above the counter, stays null here too, since repairEvent never writes it
     // and widening the range for it would only mislead an operator with a bound the batch does not actually reach.
+    // repairEvent's own validation cannot see the one rejection that only shows up at write time, another document
+    // already holding the same position, so that is checked here directly against the same unique index, excluding
+    // this document itself since an already-correct position matches its own document without being taken by
+    // anyone. Widening for a position destined for that rejection would claim a position no document ends up
+    // holding, contrary to what minRepairedPosition and maxRepairedPosition promise.
     private @Nullable Long readablePositionOf(Document event, long positionCeiling) {
         Object storedPosition = event.get(POSITION);
         List<UnrecoverableEvent> discarded = new ArrayList<>(1);
+        Object eventId = event.get(ID);
+        Long candidate;
         if (storedPosition instanceof String positionAsString) {
             try {
-                return validatedPosition(Long.parseLong(positionAsString), positionCeiling, event.get(ID), discarded);
+                candidate = validatedPosition(Long.parseLong(positionAsString), positionCeiling, eventId, discarded);
             } catch (NumberFormatException e) {
                 return null;
             }
         } else if (storedPosition instanceof Number number) {
-            return validatedPosition(number.longValue(), positionCeiling, event.get(ID), discarded);
+            candidate = validatedPosition(number.longValue(), positionCeiling, eventId, discarded);
+        } else {
+            return null;
         }
-        return null;
+        if (candidate == null) {
+            return null;
+        }
+        long owner = withRetry(() -> eventCollection.countDocuments(and(eq(POSITION, candidate), ne(ID, eventId))));
+        return owner > 0 ? null : candidate;
     }
 
     // Upserts only the repaired-range fields, leaving lastProcessedId, unrecoverableCount and processedCount alone

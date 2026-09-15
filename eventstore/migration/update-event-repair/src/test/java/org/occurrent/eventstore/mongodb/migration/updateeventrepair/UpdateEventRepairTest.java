@@ -368,7 +368,14 @@ class UpdateEventRepairTest {
                         .isEqualTo(UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN),
                 () -> assertThat(storedDocument("b"))
                         .as("a rejected repair must leave the event exactly as it was found, tag array included")
-                        .isEqualTo(damaged)
+                        .isEqualTo(damaged),
+                () -> assertThat(result.eventsRepaired())
+                        .as("the only event in this run was rejected, so nothing was repaired")
+                        .isZero(),
+                () -> assertThat(result.minRepairedPosition())
+                        .as("a's position is not b's own, whatever b's damaged string claimed, so it must not bound a range of events this run repaired")
+                        .isNull(),
+                () -> assertThat(result.maxRepairedPosition()).isNull()
         );
     }
 
