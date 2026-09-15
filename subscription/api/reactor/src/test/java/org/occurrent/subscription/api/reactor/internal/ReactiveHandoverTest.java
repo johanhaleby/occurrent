@@ -1031,6 +1031,36 @@ class ReactiveHandoverTest {
         assertThat(log).containsExactly("R1");
     }
 
+    // The payloads a replay holds back stay held until the whole catch-up has succeeded. A marker write that fails
+    // after the replay finished fails their acknowledgements, so they must not have been delivered and acknowledged in
+    // the meantime.
+    @Test
+    void live_payloads_held_back_are_not_delivered_before_the_catch_up_marker_is_written() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<CompletableFuture<Boolean>> liveAcks = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        AtomicBoolean offered = new AtomicBoolean();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            log.add(payload);
+            if (payload.equals("R1") && offered.compareAndSet(false, true)) {
+                liveAcks.add(self.get().acceptReportingDelivery("L1").toFuture());
+            }
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        FakeSource failingMarker = source(List.of("R1"), false);
+        failingMarker.onMarkCaughtUp = () -> {
+            throw new IllegalStateException("marker boom");
+        };
+
+        StepVerifier.create(handover.catchUp(failingMarker)).verifyErrorMessage("marker boom");
+        Throwable ackFailure = catchThrowable(() -> liveAcks.get(0).get(5, TimeUnit.SECONDS));
+        Mono.delay(Duration.ofMillis(300)).block();
+
+        assertThat(ackFailure).hasCauseInstanceOf(ReactiveHandover.PreDispatchRefusalException.class);
+        assertThat(log).containsExactly("R1");
+    }
+
     // acceptIfLive refuses while a replay runs, even on a handover that is already live, the same as the blocking
     // engine, so a caller that can redeliver is told to try again rather than having its payload held until the replay
     // ends.

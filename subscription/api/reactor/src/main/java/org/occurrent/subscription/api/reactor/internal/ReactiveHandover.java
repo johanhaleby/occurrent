@@ -620,10 +620,7 @@ public final class ReactiveHandover<T, K> {
                         // Ordered before the marker and before the live buffer drain, so anything a replay-aware view
                         // buffered is durable before either runs.
                         .then(Mono.defer(source::replayCompleted))
-                        .doOnSuccess(ignored -> {
-                            replayOpen.set(false);
-                            resumeLiveDelivery();
-                        });
+                        .doOnSuccess(ignored -> replayOpen.set(false));
             }));
         });
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : source.markCaughtUp());
@@ -651,6 +648,10 @@ public final class ReactiveHandover<T, K> {
                     // flips its own live field. A payload acceptIfLive(..) sees after this point is treated as live
                     // even while whatever buffered ahead of it during the replay is still being delivered.
                     live = true;
+                    // Held here until the marker is written, not from the end of the replay, so a payload a handover
+                    // that was already live held back is never delivered and acknowledged while a phase that can still
+                    // fail is running. A failure fails its acknowledgement instead, and its caller offers it again.
+                    resumeLiveDelivery();
                     // An empty buffer has nothing to deliver, so its drain is over the moment the handover is.
                     // Signalled here rather than beside historyDone, so a listener that frees the id on this cannot
                     // do it while the marker is still unwritten. A buffer with anything in it reaches liveDrained

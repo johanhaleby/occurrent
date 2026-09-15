@@ -125,7 +125,10 @@ its `goLive()`. A live payload delivered while that replay runs goes into the sa
 or not its key was suppressed. So a replay holds live payloads back until it ends, the same as before a first
 catch-up, after waiting for any live delivery or replay callback still running. They are delivered when it ends,
 completed or stopped, and a handover that was live before the replay stays live after a stop rather than dropping
-later payloads. While the replay runs, `acceptIfLive` refuses on both engines, so a caller that can redeliver is told
+later payloads. On the reactive engine they wait until the catch-up has written its marker, since their
+acknowledgements are still open and a phase that fails after the replay has to fail them rather than find them
+acknowledged. The blocking engine reported them handled when it buffered them, so its drain runs where it always
+did. While the replay runs, `acceptIfLive` refuses on both engines, so a caller that can redeliver is told
 to try again.
 
 A replay that fails ends differently on the two engines, because they acknowledge at different moments. The blocking
@@ -159,5 +162,6 @@ payload.
   [#974](https://github.com/johanhaleby/occurrent/issues/974). After `stopCatchUp()` and then `goLive()`, a view that
   coalesces receives the events the stopped replay discarded, and a view that writes through receives them a second
   time. Neither suppression records an append, since nothing is suppressed.
-- A replay that finishes keeps its keys until another replay starts or the cache evicts them. It applied and saved
-  everything it delivered, so suppressing a later copy of one of those events is what the de-dup is for.
+- A replay that finishes keeps its keys until another replay starts or the cache evicts them. It delivered every one
+  of those events, which is what the de-dup is about, and decision 5 decides separately whether a suppressed copy
+  records its append.

@@ -96,8 +96,8 @@ public final class BlockingHandover<T, K> {
          * What the stop does with the live payloads depends on where the handover stood when the replay started. One
          * that had not gone live drains nothing and does not go live, and live payloads arriving after the stop are
          * dropped rather than buffered, the same dropped-not-deferred contract a stopped subscription model has
-         * (ADR 85). One that was already live delivers what buffered while the replay ran and goes on delivering, see
-         * {@link BlockingHandover#catchUp}. The final, post-loop check exists because the
+         * (ADR 85). One that was already live delivers what it buffered while the replay ran and goes on delivering,
+         * see {@link BlockingHandover#catchUp}. The final, post-loop check exists because the
          * per-payload one only ever runs before a fold, never after the last one: an attempt whose ownership lapses
          * while that last fold is still running would otherwise reach {@link #markCaughtUp()} for a history its
          * current owner never actually folded.
