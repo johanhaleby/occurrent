@@ -45,8 +45,11 @@ import java.util.List;
  *                                lost-position event's tag array stops it matching the repair filter, so a later call
  *                                never sees it and reports {@code 0} here while {@code eventsWithLostPosition} is
  *                                still above zero. Read both. A run that had to resume past an interruption can also
- *                                report a count higher than what any segment of it actually confirmed, the same way
- *                                and for the same reason {@code minRepairedPosition} can.
+ *                                report a count higher than what any segment of it actually confirmed, for the same
+ *                                reason {@code minRepairedPosition} can. Unlike that range, an event whose plan can
+ *                                never produce an update inflates this count once for every interruption that
+ *                                catches the batch it is in before that batch finishes, since nothing here can tell
+ *                                that a later count already includes an earlier one's contribution.
  * @param eventsWithLostPosition  How many events in the collection have DCB tags and no {@code position} at all once
  *                                this run finished. Asked of the collection rather than accumulated over the run, so
  *                                it covers events an earlier run repaired the tag array of and events this one was

@@ -558,6 +558,16 @@ public final class UpdateEventRepair {
     // Upserts the repaired-range and unrecoverable-count fields, leaving lastProcessedId and processedCount alone
     // since neither has changed yet for this batch. Creates the checkpoint document on a first-batch kill, the
     // same way the post-batch checkpoint below would have.
+    //
+    // The range widens safely under a replay because Math.min/Math.max of the same candidate twice is the
+    // candidate. The count does not have that property. If a kill lands here and the batch is replayed because
+    // lastProcessedId never advanced past it, an event whose plan can never produce an update, an unreadable tag
+    // encoding on a position that itself can never be assigned for instance, is planned and counted again on the
+    // replay, since nothing here can tell that the count it loaded already includes this same not-yet-confirmed
+    // batch's contribution rather than only batches that finished. Telling those apart needs the checkpoint to
+    // store the pending batch's own count apart from the confirmed one, which this does not do. Left this way
+    // because undercounting, the gap this widen closes, hides real damage from an operator, and the count this
+    // trades it for only overstates the damage instead.
     private void checkpointCrashRecord(@Nullable Long minRepairedPosition, @Nullable Long maxRepairedPosition, long unrecoverableCount) {
         if (minRepairedPosition == null && unrecoverableCount == 0) {
             return;
