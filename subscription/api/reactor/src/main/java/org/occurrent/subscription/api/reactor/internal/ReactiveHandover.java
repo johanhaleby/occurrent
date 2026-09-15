@@ -98,12 +98,14 @@ public final class ReactiveHandover<T, K> {
          * Whether the replay should keep going, asked once per payload before it is folded. Return {@code false} to
          * stop one already in flight, because the model was stopped or is shutting down.
          * <p>
-         * A stop is not a failure. Nothing is drained, the handover does not go live, {@link #markCaughtUp()} is not
-         * called, and no terminal error is recorded, so the next catch-up replays the whole history and the handover
-         * stays usable. On a handover that had not gone live, live payloads arriving after a stop are dropped and
-         * their acks complete rather than hang, the same dropped-not-deferred contract a stopped subscription model
-         * has (ADR 85). A handover that was live before the replay started goes on delivering after the stop, see
-         * {@link ReactiveHandover#catchUp}.
+         * A stop is not a failure. {@link #markCaughtUp()} is not called and no terminal error is recorded, so the
+         * next catch-up replays the whole history and the handover stays usable.
+         * <p>
+         * What the stop does with the live payloads depends on where the handover stood when the replay started. One
+         * that had not gone live drains nothing and does not go live, and live payloads arriving after the stop are
+         * dropped and their acks complete rather than hang, the same dropped-not-deferred contract a stopped
+         * subscription model has (ADR 85). One that was already live delivers what it held back and goes on
+         * delivering, see {@link ReactiveHandover#catchUp}.
          */
         default boolean keepReplaying() {
             return true;
@@ -237,8 +239,8 @@ public final class ReactiveHandover<T, K> {
     // by the replay, inside the history phase, so suppressing the live copy owes the source a call to
     // Source.alreadyDeliveredByReplay(..) (ADR 137). One cache cannot tell those apart, and the replay's own volume
     // evicting the live keys is what made the live-redelivery de-dup empty exactly when the handover went live.
-    private final BoundedIdCache deliveredIds;
-    private final BoundedIdCache replayedIds;
+    private final BoundedIdCache<K> deliveredIds;
+    private final BoundedIdCache<K> replayedIds;
     private final Sinks.Many<Item<K>> liveSink;
     // The sink's own queue, held so the drain has a boundary. Everything in it when the history read finishes is what
     // was buffered while that read ran, and counting those down is the only way to know when the drain is over: the

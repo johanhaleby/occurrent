@@ -25,6 +25,7 @@ import org.occurrent.subscription.internal.HandoverMessages;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
@@ -689,6 +690,45 @@ class BlockingHandoverTest {
         assertThat(log).containsExactly("R1");
     }
 
+    // The drain tells the source that replayed a payload about the live copy it suppressed, and it does that after this
+    // handover is live. A catch-up starting right then waits for those calls, so a replay never runs while the source
+    // of the replay before it is still being told about its payloads.
+    @Test
+    void a_replay_waits_for_a_drain_callback_of_the_replay_before_it() throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch callbackRunning = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        CountDownLatch secondReplayStarted = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = BlockingHandover.create(
+                delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        // Buffered before the replay runs and sharing its key, so the drain suppresses it and reports it to the source.
+        handover.accept("1");
+        FakeSource first = source(List.of("1"), false);
+        first.onAlreadyDeliveredByReplay = () -> {
+            callbackRunning.countDown();
+            awaitLatch(releaseCallback);
+        };
+        FakeSource second = source(List.of("2"), false);
+        second.onReplayStarted = secondReplayStarted::countDown;
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<Boolean> firstCatchUp = threads.submit(() -> handover.catchUp(first));
+            assertThat(callbackRunning.await(5, TimeUnit.SECONDS)).isTrue();
+            Future<Boolean> secondCatchUp = threads.submit(() -> handover.catchUp(second));
+
+            assertThat(secondReplayStarted.await(300, TimeUnit.MILLISECONDS)).isFalse();
+
+            releaseCallback.countDown();
+            assertThat(firstCatchUp.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(secondCatchUp.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(secondReplayStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(delivered).containsExactly("1", "2");
+        } finally {
+            releaseCallback.countDown();
+            threads.shutdownNow();
+        }
+    }
+
     @Test
     void replay_lifecycle_is_started_then_completed_before_the_buffer_drain_and_the_marker() {
         List<String> log = Collections.synchronizedList(new ArrayList<>());
@@ -863,6 +903,7 @@ class BlockingHandoverTest {
         private Runnable onReplayStarted;
         private Runnable onReplayCompleted;
         private Runnable onReplayAbandoned;
+        private Runnable onAlreadyDeliveredByReplay;
         private int replayCallCount = 0;
         private int markCaughtUpCallCount = 0;
         private int stopAfter = Integer.MAX_VALUE;
@@ -875,6 +916,9 @@ class BlockingHandoverTest {
         @Override
         public void alreadyDeliveredByReplay(String payload) {
             alreadyDeliveredByReplay.add(payload);
+            if (onAlreadyDeliveredByReplay != null) {
+                onAlreadyDeliveredByReplay.run();
+            }
         }
 
         private void stopAfter(int deliveries) {

@@ -90,11 +90,14 @@ public final class BlockingHandover<T, K> {
          * already in flight, because the model was stopped or is shutting down, or because whatever identifies this
          * attempt (a subscription id, say) has since been reassigned to a different one.
          * <p>
-         * A stop is not a failure. Nothing is drained, the handover does not go live, {@link #markCaughtUp()} is not
-         * called, and no failure is recorded, so the next catch-up replays the whole history and the handover stays
-         * usable. On a handover that had not gone live, live payloads arriving after a stop are dropped rather than
-         * buffered, the same dropped-not-deferred contract a stopped subscription model has (ADR 85). A handover that
-         * was live before the replay started goes on delivering after the stop, see {@link BlockingHandover#catchUp}. The final, post-loop check exists because the
+         * A stop is not a failure. {@link #markCaughtUp()} is not called and no failure is recorded, so the next
+         * catch-up replays the whole history and the handover stays usable.
+         * <p>
+         * What the stop does with the live payloads depends on where the handover stood when the replay started. One
+         * that had not gone live drains nothing and does not go live, and live payloads arriving after the stop are
+         * dropped rather than buffered, the same dropped-not-deferred contract a stopped subscription model has
+         * (ADR 85). One that was already live delivers what buffered while the replay ran and goes on delivering, see
+         * {@link BlockingHandover#catchUp}. The final, post-loop check exists because the
          * per-payload one only ever runs before a fold, never after the last one: an attempt whose ownership lapses
          * while that last fold is still running would otherwise reach {@link #markCaughtUp()} for a history its
          * current owner never actually folded.
@@ -218,8 +221,8 @@ public final class BlockingHandover<T, K> {
     // by the replay, inside the history phase, so suppressing the live copy owes the source a call to
     // Source.alreadyDeliveredByReplay(..) (ADR 137). One cache cannot tell those apart, and the replay's own volume
     // evicting the live keys is what made the live-redelivery de-dup empty exactly when the handover went live.
-    private final BoundedIdCache deliveredIds;
-    private final BoundedIdCache replayedIds;
+    private final BoundedIdCache<K> deliveredIds;
+    private final BoundedIdCache<K> replayedIds;
     // Dedup keys currently being delivered outside the lock, so a second concurrent delivery of the same key waits
     // for neither: it is dropped rather than raced, and the first attempt's own success or failure is what decides
     // deliveredIds. Without this a key could be marked delivered before deliver.accept(payload) actually succeeds,
@@ -659,6 +662,9 @@ public final class BlockingHandover<T, K> {
                     keysToDeliver.add(key);
                 }
             }
+            // Counted before this handover goes live, so a catch-up that starts right after waits for these calls
+            // rather than replaying while the previous replay's source is still being told about them.
+            replayCallbacksRunning += alreadyReplayed.size();
             buffer.clear();
             replayRunning = false;
             live = true;
@@ -674,6 +680,13 @@ public final class BlockingHandover<T, K> {
             // later redelivery. Released for the same reason the delivery loop below releases the rest of them.
             releaseReservations(keysToDeliver);
             throw e;
+        } finally {
+            // Counted from under the lock that made this handover live, so a catch-up starting right now waits for
+            // these calls rather than replaying while the previous replay's source is still being told about them.
+            synchronized (lock) {
+                replayCallbacksRunning -= alreadyReplayed.size();
+                lock.notifyAll();
+            }
         }
         // Outside the monitor, same as a live accept(Object) (#588). Still sequential on this thread, so catchUp's
         // markCaughtUp() call after this method returns is still ordered after every one of these deliveries, and a
