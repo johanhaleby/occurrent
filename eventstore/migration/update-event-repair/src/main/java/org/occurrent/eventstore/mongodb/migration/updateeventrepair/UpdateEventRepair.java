@@ -220,19 +220,25 @@ public final class UpdateEventRepair {
                 break;
             }
 
+            // Planned once per event, before anything in the batch is touched, so the plan the widen below checks
+            // is the same plan repairEvent writes from. Planning twice risked the two calls seeing different
+            // answers for the same event, since a live store's position counter can advance between them, so a
+            // candidate above the counter at the first call could validate at a second one, writing a position the
+            // widen never saw and so never checkpointed.
+            List<PlannedRepair> planned = planBatch(batch, positionCeiling);
+
             // Widen the range to every position this batch could modify before touching any of it, so a checkpoint
             // covering what was written already exists even if a kill skips the post-batch checkpoint below.
-            for (long readablePosition : readablePositionsOf(batch, positionCeiling)) {
+            for (long readablePosition : readablePositionsOf(planned)) {
                 minRepairedPosition = minRepairedPosition == null ? readablePosition : Math.min(minRepairedPosition, readablePosition);
                 maxRepairedPosition = maxRepairedPosition == null ? readablePosition : Math.max(maxRepairedPosition, readablePosition);
             }
             checkpointRepairedRange(minRepairedPosition, maxRepairedPosition);
 
             long repairedInBatch = 0;
-            for (Document event : batch) {
-                List<UnrecoverableEvent> found = new ArrayList<>(1);
+            for (PlannedRepair plannedRepair : planned) {
                 List<Long> repairedPosition = new ArrayList<>(1);
-                if (repairEvent(event, found, repairedPosition, positionCeiling)) {
+                if (repairEvent(plannedRepair, repairedPosition)) {
                     repaired++;
                     repairedInBatch++;
                 }
@@ -240,6 +246,7 @@ public final class UpdateEventRepair {
                     minRepairedPosition = minRepairedPosition == null ? position : Math.min(minRepairedPosition, position);
                     maxRepairedPosition = maxRepairedPosition == null ? position : Math.max(maxRepairedPosition, position);
                 }
+                List<UnrecoverableEvent> found = plannedRepair.findings();
                 if (!found.isEmpty()) {
                     // One document can produce more than one finding. A dcbtags value that is not a string and a
                     // position that cannot be read are independent damage, and an event carrying both reports both.
@@ -305,7 +312,8 @@ public final class UpdateEventRepair {
     }
 
     /**
-     * Repairs one event in a single update, so the fields it can restore are written together or not at all.
+     * Repairs one event from its plan in a single update, so the fields it can restore are written together or not
+     * at all.
      * <p>
      * That is atomicity across the recoverable fields, not a promise that both always come back. When one field is
      * beyond saving and the other is not, the recoverable one is still restored and the other is reported. An
@@ -320,10 +328,9 @@ public final class UpdateEventRepair {
      * @return whether this call's update reached the event. A write the server applied and then failed to acknowledge
      * counts, since the retry that follows it repairs nothing only because the first attempt already did.
      */
-    private boolean repairEvent(Document event, List<UnrecoverableEvent> unrecoverable, List<Long> repairedPosition, long positionCeiling) {
-        Object eventId = event.get(ID);
-        Object storedPosition = event.get(POSITION);
-        RepairPlan plan = planRepair(event, positionCeiling, unrecoverable);
+    private boolean repairEvent(PlannedRepair plannedRepair, List<Long> repairedPosition) {
+        Object eventId = plannedRepair.event().get(ID);
+        RepairPlan plan = plannedRepair.plan();
 
         if (plan.updates().isEmpty()) {
             return false;
@@ -347,7 +354,8 @@ public final class UpdateEventRepair {
                 }
                 // Another event already holds this position as a number, and the unique position index refuses a
                 // second claim on it. The update was rejected whole, so the event is exactly as it was found.
-                unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN, String.valueOf(storedPosition)));
+                plannedRepair.findings().add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN,
+                        String.valueOf(plannedRepair.event().get(POSITION))));
                 return false;
             }
         });
@@ -357,10 +365,28 @@ public final class UpdateEventRepair {
         return wrote;
     }
 
+    // Plans every event in a batch exactly once, before anything in it is touched, so the plan the pre-batch widen
+    // checks and the plan repairEvent writes from are the same object rather than two separate calls that could
+    // answer differently. A live store's position counter can move between two calls, so a second, independent
+    // planRepair could validate a candidate the first one had rejected, writing a position the widen never saw and
+    // so never checkpointed.
+    private List<PlannedRepair> planBatch(List<Document> batch, long positionCeiling) {
+        List<PlannedRepair> planned = new ArrayList<>(batch.size());
+        for (Document event : batch) {
+            List<UnrecoverableEvent> findings = new ArrayList<>(1);
+            planned.add(new PlannedRepair(event, planRepair(event, positionCeiling, findings), findings));
+        }
+        return planned;
+    }
+
+    // An event alongside its plan and the findings planning it produced, findings a real repair attempt reports
+    // once repairEvent has also had its own chance to add a write-time one, POSITION_ALREADY_TAKEN, to the same list.
+    private record PlannedRepair(Document event, RepairPlan plan, List<UnrecoverableEvent> findings) {
+    }
+
     // What repairEvent would write for this event, and the position it would record if that write reaches the
-    // server, computed without touching the event so the same plan also tells the pre-batch widen below what this
-    // event would actually change. Findings go into the caller's list exactly as repairEvent's own findings do, so
-    // a caller that discards it, the widen, gets none of the logging or counting a real repair attempt gets.
+    // server, computed without touching the event so planBatch's single call also tells the pre-batch widen what
+    // this event would change.
     private RepairPlan planRepair(Document event, long positionCeiling, List<UnrecoverableEvent> unrecoverable) {
         Object eventId = event.get(ID);
         Object storedPosition = event.get(POSITION);
@@ -489,20 +515,19 @@ public final class UpdateEventRepair {
         return lastProcessedId == null ? new Document() : gt(ID, lastProcessedId);
     }
 
-    // The positions repairEvent would end up recording for this batch, using the same plan repairEvent itself
-    // writes from, so an event whose plan has no update in it, an unreadable tag encoding on an otherwise
-    // already-correct position for instance, never widens the range either. planRepair cannot see the one rejection
-    // that only shows up at write time, another document already holding the same position, so that is checked here
-    // directly against the same unique index, in one query for every candidate in the batch rather than one round
-    // trip per event. An event whose candidate is its own already-correct position owns it in that query too, which
-    // is not a conflict, so it is matched by id rather than excluded along with a real owner.
-    private List<Long> readablePositionsOf(List<Document> batch, long positionCeiling) {
-        List<UnrecoverableEvent> discarded = new ArrayList<>(1);
+    // The positions repairEvent would end up recording for this batch, reading each event's plan from planBatch
+    // rather than planning it again, so an event whose plan has no update in it, an unreadable tag encoding on an
+    // otherwise already-correct position for instance, never widens the range either. A plan cannot see the one
+    // rejection that only shows up at write time, another document already holding the same position, so that is
+    // checked here directly against the same unique index, in one query for every candidate in the batch rather
+    // than one round trip per event. An event whose candidate is its own already-correct position owns it in that
+    // query too, which is not a conflict, so it is matched by id rather than excluded along with a real owner.
+    private List<Long> readablePositionsOf(List<PlannedRepair> planned) {
         Map<Object, Long> candidates = new LinkedHashMap<>();
-        for (Document event : batch) {
-            RepairPlan plan = planRepair(event, positionCeiling, discarded);
+        for (PlannedRepair plannedRepair : planned) {
+            RepairPlan plan = plannedRepair.plan();
             if (!plan.updates().isEmpty() && plan.readablePosition() != null) {
-                candidates.put(event.get(ID), plan.readablePosition());
+                candidates.put(plannedRepair.event().get(ID), plan.readablePosition());
             }
         }
         if (candidates.isEmpty()) {
