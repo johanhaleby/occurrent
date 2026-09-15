@@ -840,6 +840,39 @@ class SagaQuarantineTest {
             assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY));
         }
 
+        /**
+         * An event carrying no redelivery key still blocks the saga, so it is still said, naming the event by its
+         * CloudEvent id and source, which stay the same from one delivery to the next.
+         */
+        @Test
+        void says_so_once_too_when_the_event_carries_no_redelivery_key() throws Exception {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+                run(model, CONFIG.withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT));
+                model.push(converter.toCloudEvent(new OrderPlaced("1", HEALTHY)));
+                model.push(converter.toCloudEvent(new PaymentReserved("3", POISON)));
+
+                TimeUnit.MILLISECONDS.sleep(BUDGET.toMillis() * 2);
+
+                List<ILoggingEvent> logged;
+                synchronized (appender) {
+                    logged = new ArrayList<>(appender.list);
+                }
+                assertThat(logged)
+                        .filteredOn(event -> event.getFormattedMessage().contains("which instance the event '3 from urn:test'"))
+                        .filteredOn(event -> event.getLevel() == Level.WARN)
+                        .hasSize(1);
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
         sealed interface StreamEvent permits Opened, Added, Finished {
             String orderId();
         }

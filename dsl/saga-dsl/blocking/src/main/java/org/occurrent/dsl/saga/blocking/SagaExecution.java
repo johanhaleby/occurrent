@@ -108,7 +108,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // keying on the input made every delivery look like the first one. Cleared as soon as the instance processes
     // anything, so a recovery is announced again if it stops a second time.
     private final Set<String> refusalAnnounced = ConcurrentHashMap.newKeySet();
-    // The deliveries the saga could not work out an instance for, keyed by redelivery key, holding when the routing
+    // The deliveries the saga could not work out an instance for, keyed by redelivery key, or by CloudEvent id and source
+    // for an event carrying none, holding when the routing
     // started failing and when that was last logged. Only the logging reads it, so a delivery the source re-offers every
     // few milliseconds is logged once per budget rather than at that cadence. Dropped as soon as the event routes.
     private final ConcurrentHashMap<String, UnroutableDelivery> unroutableDeliveries = new ConcurrentHashMap<>();
@@ -148,7 +149,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             sagaId = saga.sagaId(event);
             // Routing worked, whatever the id turned out to be. Cleared here rather than after the delivery, because an
             // event that correlates to no instance returns below and a quarantining one returns normally.
-            forgetRoutingFailure(meta);
+            unroutableDeliveries.remove(unroutableKey(meta, cloudEvent));
             if (sagaId == null) {
                 return;
             }
@@ -188,7 +189,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      */
     private boolean letTheSubscriptionPast(@Nullable String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure) {
         if (sagaId == null) {
-            refuseUnroutableDelivery(meta, failure);
+            refuseUnroutableDelivery(meta, cloudEvent, failure);
             return false;
         }
         Duration quarantineAfter = config.quarantineAfter();
@@ -198,11 +199,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         return quarantine(sagaId, cloudEvent, meta, failure, quarantineAfter);
     }
 
-    private void forgetRoutingFailure(EventMeta meta) {
+    // The redelivery key where the event has one, and otherwise its CloudEvent id and source, which also stay the same
+    // from one delivery of the event to the next.
+    private static String unroutableKey(EventMeta meta, CloudEvent cloudEvent) {
         String redeliveryKey = meta.redeliveryKey();
-        if (redeliveryKey != null) {
-            unroutableDeliveries.remove(redeliveryKey);
-        }
+        return redeliveryKey != null ? redeliveryKey : cloudEvent.getId() + " from " + cloudEvent.getSource();
     }
 
     /**
@@ -219,13 +220,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * The budget only sets how often that is said. The first failure is a warning, and after that it is logged at ERROR
      * once per {@link SagaRunnerConfig#quarantineAfter()} for as long as the event keeps being offered, rather than
      * every time the source offers it. Without a budget the warning is said once and not repeated. An event carrying no
-     * redelivery key logs nothing here, because nothing tells one delivery of it from the next.
+     * redelivery key is named by its CloudEvent id and source instead.
      */
-    private void refuseUnroutableDelivery(EventMeta meta, Throwable failure) {
-        String redeliveryKey = meta.redeliveryKey();
-        if (redeliveryKey == null || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
+    private void refuseUnroutableDelivery(EventMeta meta, CloudEvent cloudEvent, Throwable failure) {
+        if (!SagaExecutionSupport.isAttributableToTheInstance(failure)) {
             return;
         }
+        String redeliveryKey = unroutableKey(meta, cloudEvent);
         Instant now = Instant.now();
         UnroutableDelivery existing = unroutableDeliveries.putIfAbsent(redeliveryKey, new UnroutableDelivery(now, now));
         if (existing == null) {
