@@ -49,8 +49,9 @@ import static java.util.Objects.requireNonNull;
  * no more than the bridge's {@code prefetchCount} unacknowledged deliveries to one consumer, the bridge starts a new
  * consumer only once {@link #isIdle()}, and once an automatic connection recovery starts,
  * {@link #discardOnRecovery(Channel)} makes sure no delivery from the channel that died is started. So the queue in
- * front of the thread holds at most {@code prefetchCount} deliveries from the current channel, however many pauses or
- * recoveries happen while a handler is blocked.
+ * front of the thread holds about {@code prefetchCount} deliveries from the current channel, however many pauses or
+ * recoveries happen while a handler is blocked. Only about, since {@link #isIdle()} counts what this worker has been
+ * handed, and a delivery the client has taken but not yet handed over is not counted when a consumer starts.
  * <p>
  * A delivery this worker never starts, because {@link #stopAcceptingWork()} or {@link #stop(Duration)} ran first or a
  * recovery dropped it, is left unacknowledged. RabbitMQ puts every unacknowledged delivery on a closed channel back on
@@ -88,7 +89,8 @@ public final class RabbitMqDeliveryWorker {
      * consumer callback.
      *
      * @param deliveryTag The delivery {@code work} handles.
-     * @param work        Handles the delivery, including acknowledging it.
+     * @param work        Handles the delivery, including acknowledging it, and deals with its own failures. Anything
+     *                    escaping it ends this worker's thread, which the executor then replaces.
      */
     public void submit(long deliveryTag, Runnable work) {
         unfinishedDeliveries.incrementAndGet();
@@ -154,19 +156,16 @@ public final class RabbitMqDeliveryWorker {
         if (stopped || deliveryTag <= discardUpToDeliveryTag.get()) {
             return;
         }
-        try {
-            work.run();
-        } catch (RuntimeException e) {
-            log.error("Handling delivery tag {} on queue \"{}\" failed outside the bridge's delivery failure policy, " +
-                    "most likely while acknowledging it. The delivery stays unacknowledged until the channel closes.",
-                    deliveryTag, queue, e);
-        }
+        work.run();
     }
 
     /**
      * Whether every delivery submitted so far has finished or been dropped. RabbitMQ applies {@code prefetchCount} to
      * each consumer separately, so a bridge starts a new consumer only once this is true. Otherwise a consumer started
      * after a pause would add a second window of deliveries behind a handler that is still blocked.
+     * <p>
+     * This counts what has been submitted. A delivery the client has taken off the socket but not yet handed over is
+     * not counted, so a consumer can start while such a delivery is still on its way here.
      */
     public boolean isIdle() {
         return unfinishedDeliveries.get() == 0;

@@ -1262,12 +1262,21 @@ the outcome routing, the held-tag pacing and the permanent stop behave as before
 acknowledgement from the worker takes `consumeLock` like every other call on the consume channel, the same lock the
 poll thread already took when it released a held tag.
 
+Anything escaping that call stops the bridge and closes its channel, which puts the delivery back on the queue. That
+is an `Error` a handler threw, or an acknowledgement the bridge could not issue, since a handler's own
+`RuntimeException` and `AssertionError` go through the delivery failure policy instead. The client used to do the
+same, because the delivery ran on its callback thread and its exception handler closes a channel for anything that
+escapes. Without it the delivery would sit unacknowledged on a consumer the broker sends nothing further to at the
+default `prefetchCount` of one, which is a bridge that has stopped without saying so.
+
 One thread per bridge keeps deliveries handled one at a time and in the order the broker sent them, which is what the
 callback gave each channel before. The worker's queue holds at most `prefetchCount` deliveries from the current
 channel. The broker sends no more than that many unacknowledged deliveries to one consumer, but it counts them per
 consumer, and a bridge cancels its consumer and starts a new one whenever the subscription pauses and resumes. So a
 bridge starts a new consumer only once the worker has finished everything the previous one sent. A recovery drops the
-rest, as described below.
+rest, as described below. The count behind that is of deliveries handed to the worker, so one the client has taken
+but not yet handed over does not hold a consumer back, and the queue can hold a little more than `prefetchCount` for
+as long as that takes.
 
 **Shutdown.** `close()` cancels the consumer, then stops the worker without starting any delivery still queued for
 it, and waits up to a new `closeTimeout(Duration)` on both builders for the one being handled. Thirty seconds is the
@@ -1277,8 +1286,12 @@ acknowledges or parks its delivery, so closing the channel puts that delivery ba
 acknowledgement already under way at that moment still finishes, since the handler had returned before it started.
 Closing the channel under it gives at worst a parked copy plus the original back on the queue. Every step of
 `close()` shares that one deadline, since the worker holds the bridge's lock while a park waits up to five seconds for
-its confirm, and closing the channel cancels the consumer and requeues whatever a skipped step would have released. A
-permanent stop runs on the worker itself, so it stops the worker the same way but without waiting.
+its confirm, and closing the channel cancels the consumer and requeues whatever a skipped step would have released.
+The deadline bounds the waiting rather than the method, since closing the channel and the parking sink happens after
+it. A handler that ignores its interrupt also keeps running after `close()` returns, so whatever it writes is written
+whenever it finishes, which for a bridge built again on the same queue in the same process can be after events that
+later bridge has already handled. A permanent stop runs on the worker itself, so it stops the worker the same way but
+without waiting.
 
 **A connection recovery drops what the dead channel left waiting.** The amendment above that removed the
 channel-generation fence still holds, and the fence stays gone. The client ignores an acknowledgement for a tag from a

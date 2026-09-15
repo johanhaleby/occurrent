@@ -43,6 +43,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -99,6 +100,31 @@ class RabbitMqDomainEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
             releaseBlockedProjection.countDown();
         } finally {
             releaseBlockedProjection.countDown();
+        }
+    }
+
+    /**
+     * The domain twin of {@code RabbitMqCloudEventBridgeWorkerThreadTest}'s own {@code Error} test. Before each bridge
+     * had a thread of its own the RabbitMQ client closed the channel for anything escaping its callback, which put the
+     * delivery back on the queue.
+     */
+    @Test
+    void an_error_from_a_projection_stops_the_bridge_and_puts_its_delivery_back_on_the_queue() throws Exception {
+        String queue = declareAndBindQueue("erroring");
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        DomainEventFeed<TestOrderPlaced> feed = liveFeed(event -> {
+            if (firstCall.compareAndSet(true, false)) {
+                throw new Error("boom");
+            }
+        });
+
+        try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = bridge(feed, queue).build()) {
+            publish("erroring", "order-1");
+            publish("erroring", "order-2");
+
+            // Both back on the queue, which only a closed channel does. The bridge acknowledged neither, and with
+            // prefetch one the second was never even sent to it.
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(2));
         }
     }
 

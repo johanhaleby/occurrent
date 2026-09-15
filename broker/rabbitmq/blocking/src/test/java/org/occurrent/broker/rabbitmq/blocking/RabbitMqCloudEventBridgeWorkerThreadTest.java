@@ -208,6 +208,35 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
     }
 
     /**
+     * An {@code Error} is not a handler failure the delivery failure policy covers, and before each bridge had a
+     * thread of its own the RabbitMQ client closed the channel for anything escaping its callback, which put the
+     * delivery back on the queue. Left to itself the worker thread would die with the delivery unacknowledged on a
+     * consumer the broker sends nothing further to, so the message would stay invisible until someone closed the
+     * bridge.
+     */
+    @Test
+    void an_error_from_a_handler_stops_the_bridge_and_puts_its_delivery_back_on_the_queue() throws Exception {
+        String queue = declareAndBindQueue("erroring");
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        model.subscribe("erroring", cloudEvent -> {
+            if (firstCall.compareAndSet(true, false)) {
+                throw new Error("boom");
+            }
+        });
+
+        try (RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue).build()) {
+            publish("erroring", "id-1");
+            publish("erroring", "id-2");
+
+            // Both back on the queue, which only a closed channel does. The bridge acknowledged neither, and with
+            // prefetch one the second was never even sent to it.
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(2));
+        }
+    }
+
+    /**
      * RabbitMQ applies the prefetch count to each consumer separately, so a consumer started again while the handler
      * is still blocked would be sent a delivery of its own, which would wait behind the blocked one.
      */

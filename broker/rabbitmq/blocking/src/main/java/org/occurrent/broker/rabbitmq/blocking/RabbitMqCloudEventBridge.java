@@ -101,7 +101,9 @@ import static java.util.Objects.requireNonNull;
  * on a connection from one shared pool, so this bridge only hands a delivery over to its own worker thread there and
  * returns. A handler that blocks, waiting on a database that is down say, holds up only the bridge it belongs to,
  * never another bridge built on the same {@link Connection}. That one thread handles deliveries one at a time and in
- * the order the broker sent them, and at most {@link Builder#prefetchCount(int)} of them wait for it.
+ * the order the broker sent them, and about {@link Builder#prefetchCount(int)} of them wait for it. An {@code Error}
+ * a handler throws, or an acknowledgement this bridge cannot issue, stops this bridge and closes its channel, which
+ * puts the delivery back on the queue.
  * <p>
  * <strong>Coarse lifecycle.</strong> A background poll, {@link Builder#pollInterval(Duration)} apart (one second by
  * default), reads {@link PushSubscriptionModel#subscriptionIds()} and {@link PushSubscriptionModel#isRunning(String)}
@@ -362,7 +364,26 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
 
     // Runs on the client's shared consumer thread, so it only hands the delivery to this bridge's own worker.
     private void submitDelivery(String deliveryConsumerTag, Delivery delivery) {
-        worker.submit(delivery.getEnvelope().getDeliveryTag(), () -> handleDelivery(delivery));
+        long deliveryTag = delivery.getEnvelope().getDeliveryTag();
+        worker.submit(deliveryTag, () -> handleDeliveryOrStop(delivery, deliveryTag));
+    }
+
+    // handleDelivery routes a handler's own RuntimeException and AssertionError through the delivery failure policy,
+    // so anything escaping it is this bridge failing rather than the handler, either an Error the handler threw or an
+    // acknowledgement this bridge could not issue. The RabbitMQ client used to close the channel for exactly that,
+    // since the delivery ran on its own callback thread, and closing the channel is what puts the delivery back on
+    // the queue. Without it the delivery would sit unacknowledged on a consumer the broker sends nothing further to.
+    // Not rethrown, since the cause is logged here and the delivery is back on the queue, and rethrowing would only
+    // end the worker thread of a bridge that has already stopped.
+    private void handleDeliveryOrStop(Delivery delivery, long deliveryTag) {
+        try {
+            handleDelivery(delivery);
+        } catch (RuntimeException | Error e) {
+            log.error("Handling delivery tag {} on queue \"{}\" failed outside this bridge's delivery failure policy. "
+                    + "Stopping this bridge and closing its channel, which puts that delivery back on the queue.",
+                    deliveryTag, queue, e);
+            stopPermanently();
+        }
     }
 
     private void handleDelivery(Delivery delivery) {
@@ -378,9 +399,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         try {
             model.acceptRedeliverable(cloudEvent);
         } catch (RuntimeException | AssertionError e) {
-            // Catches AssertionError too, since a filter or the handler can throw one, and an uncaught Error here
-            // would leave the delivery unacked and stall the consumer at prefetch one. Any other Error still
-            // propagates. Which of the two things went wrong is read off the reported outcome rather than off the
+            // Catches AssertionError too, since a filter or the handler can throw one, and it belongs in the failure
+            // policy like any other handler failure. Any other Error stops this bridge instead, see
+            // handleDeliveryOrStop. Which of the two things went wrong is read off the reported outcome rather than off the
             // exception type. REFUSED is reported only when this bridge's own model refused before attempting
             // dispatch and promised that refusing is permanent, so a handler that reached into some other
             // permanently failed engine reports DELIVERED and lands in the failure policy below where it belongs.
@@ -562,6 +583,11 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
      * {@code closeTimeout} is interrupted and logged at {@code warn}. Neither was acknowledged, so closing the channel
      * puts both back on the queue and they are delivered again. Called from inside a handler, this method does not
      * wait for that handler, since it is the one calling.
+     * <p>
+     * A handler that ignores its interrupt keeps running after this returns, so whatever it writes is written
+     * whenever it finishes, which for a bridge built again on the same queue in the same process can be after events
+     * that later bridge has already handled. {@code closeTimeout} bounds how long this waits for a handler and for the lock, not
+     * how long the method takes, since closing the channel and the parking sink happens after that deadline.
      * <p>
      * Releasing a held delivery here is belt and braces rather than load bearing: closing a channel with an
      * unacked delivery on it already requeues that delivery at the broker on its own, so skipping this line would
