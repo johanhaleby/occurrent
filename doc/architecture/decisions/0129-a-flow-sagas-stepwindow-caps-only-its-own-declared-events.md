@@ -119,12 +119,15 @@ correction in the same change:
 
 ## Consequences
 
-Against the 0.33.0 baseline this ADR fixes, the vast majority of existing flows, everything without
-a `replacementFilter`, a `narrowingFilter`, or a collapsing type mapper, see no change from the
-widened-selector defect #773 targets. Their subscription can never deliver a foreign-typed event, so
-`isDeclared` was already true for everything else they receive. A flow that keeps receiving repeats
-of its own start type does see a behavior change, whether or not its selector was ever widened, and
-that case is covered below.
+Against the 0.33.0 baseline this ADR fixes, every existing flow sees no behavior change, including a
+flow that keeps receiving repeats of its own start type. 0.33.0 counted every retained event toward
+`stepWindow` regardless of declared type, so such a repeat was already bounded there. This decision's
+own fix keeps it bounded the same way. The gap the paragraph below describes existed only in the
+still-unreleased implementation this ADR's earlier decision produced, never in anything a 0.33.0
+caller observed, and closing it in the same unreleased change is what keeps that promise true. A flow
+without a `replacementFilter`, a `narrowingFilter`, or a collapsing type mapper sees no change from the
+widened-selector defect #773 targets either, since its subscription can never deliver a foreign-typed
+event, so `isDeclared` was already true for everything else it receives.
 
 A flow that already widened its selector gets a genuine bug fix. `stepWindow` now keeps exactly N of
 its own declared-type events, instead of a mix that a foreign-type flood could crowd out. What it
