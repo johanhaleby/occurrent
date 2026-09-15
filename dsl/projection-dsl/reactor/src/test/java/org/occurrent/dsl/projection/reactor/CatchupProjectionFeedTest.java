@@ -214,6 +214,33 @@ class CatchupProjectionFeedTest {
         });
     }
 
+    // Projection.id returning null skips an event, so the replay can deliver an event without applying it. Its live
+    // copy is still suppressed as a duplicate of that delivery, and must not record the append, because nothing in
+    // the read model came from it.
+    @Test
+    void an_event_the_replay_skipped_is_not_recorded_as_applied_when_its_live_copy_is_suppressed() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        AppendId appendId = new AppendId(UUID.randomUUID());
+        AppliedAppendStore appliedAppends = AppliedAppendStore.inMemory();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter",
+                Projections.recordingAppliedAppends(
+                        Projections.reactiveUpdateWithMetadata(skippingEveryEvent(), repository, "counter"), "counter", appliedAppends),
+                Filter.all(), stampedReader(appendId, "1"), converter, Counted::eventId, null);
+        EventMetadata liveCopy = EventMetadata.from(stamped(appendId, "1"));
+
+        // One copy buffers during the catch-up and one arrives after it, the two moments a copy can be suppressed.
+        // The live sink delivers in order, so once the second has been handled the first has too.
+        feed.accept(liveCopy, new Counted("1")).subscribe();
+        feed.catchUp().block();
+        feed.accept(liveCopy, new Counted("1")).block(ofSeconds(5));
+
+        assertThat(repo).isEmpty();
+        assertThat(appliedAppends.hasApplied("counter", appendId)).isFalse();
+    }
+
     @Test
     void a_live_event_not_in_the_replay_is_folded_after_the_catch_up() {
         CloudEventConverter<Counted> converter = countedConverter();
@@ -405,6 +432,13 @@ class CatchupProjectionFeedTest {
     private static Projection<Integer, Counted, String> projection() {
         return Projection.<Integer, Counted, String>builder(0)
                 .id(event -> "counter")
+                .on(Counted.class, (state, event) -> state + 1)
+                .build();
+    }
+
+    private static Projection<Integer, Counted, String> skippingEveryEvent() {
+        return Projection.<Integer, Counted, String>builder(0)
+                .id(event -> null)
                 .on(Counted.class, (state, event) -> state + 1)
                 .build();
     }

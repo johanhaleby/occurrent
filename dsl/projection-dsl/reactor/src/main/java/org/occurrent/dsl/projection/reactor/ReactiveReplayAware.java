@@ -60,10 +60,11 @@ public interface ReactiveReplayAware {
 
     /**
      * A live copy arrived of an event the replay already delivered to this view, so the feed did not deliver it a
-     * second time. The view has applied the event and is meant to apply it exactly once, so nothing here should apply
-     * it again. What it is, is the only chance the view gets to do the work it does per delivery rather than per
-     * application, which for a recording view is writing down the append the event came from
+     * second time, and nothing here should apply it again. This is the only chance a recording view gets to write
+     * down the append the event came from
      * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
+     * The replay delivering the event does not mean the view applied it, since a projection can skip an event, so a
+     * recording view writes the append down only when its replay applied an event of it.
      * <p>
      * Sent only after {@link #replayCompleted()}, and only for an event the replay itself delivered. An event an
      * earlier live delivery already handled is not sent here, because that delivery did all of it. Sent again for

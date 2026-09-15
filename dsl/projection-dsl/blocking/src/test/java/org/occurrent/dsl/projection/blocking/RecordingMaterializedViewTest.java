@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.projection.blocking;
 
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -25,7 +27,9 @@ import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ReplayAware;
 import org.occurrent.eventstore.api.AppendId;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -218,8 +222,99 @@ class RecordingMaterializedViewTest {
         }).doesNotThrowAnyException();
     }
 
+    // A subscription model hands the recorder the CloudEvent of a live copy the replay already delivered. Delivered is
+    // not applied, so the append is recorded only when the replay applied an event of it.
+    @Test
+    void a_live_copy_the_replay_delivered_records_its_append_only_when_the_replay_applied_an_event_of_it() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppendId skipped = AppendId.mint();
+        AppendId applied = AppendId.mint();
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegateApplyingOnly("applied"), PROJECTION_ID, store);
+        Object episode = new Object();
+
+        recording.catchupStarted(episode);
+        recording.update(metadataWithAppendId(skipped), "skipped");
+        recording.update(metadataWithAppendId(applied), "applied");
+        recording.historyRead(episode);
+        recording.alreadyDeliveredByReplay(cloudEventWithAppendId(skipped));
+        recording.alreadyDeliveredByReplay(cloudEventWithAppendId(applied));
+
+        assertThat(store.hasApplied(PROJECTION_ID, skipped)).isFalse();
+        assertThat(store.hasApplied(PROJECTION_ID, applied)).isTrue();
+    }
+
+    // The recorder remembers a limited number of appends per replay. One it has forgotten stays unrecorded, so a wait
+    // for it times out rather than answering true for an append nothing here can say was applied.
+    @Test
+    void an_append_the_recorder_has_forgotten_is_not_recorded_when_its_live_copy_is_suppressed() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store);
+        AppendId first = AppendId.mint();
+        AppendId last = AppendId.mint();
+        Object episode = new Object();
+
+        recording.catchupStarted(episode);
+        recording.update(metadataWithAppendId(first), "first");
+        for (int i = 0; i < CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE - 1; i++) {
+            recording.update(metadataWithAppendId(AppendId.mint()), "between");
+        }
+        recording.update(metadataWithAppendId(last), "last");
+        recording.historyRead(episode);
+        recording.alreadyDeliveredByReplay(metadataWithAppendId(first));
+        recording.alreadyDeliveredByReplay(metadataWithAppendId(last));
+
+        assertThat(store.hasApplied(PROJECTION_ID, first)).isFalse();
+        assertThat(store.hasApplied(PROJECTION_ID, last)).isTrue();
+    }
+
+    // A view that buffers during a replay discards that buffer when the replay is stopped, so once a pull feed has
+    // abandoned its replay nothing that replay applied counts any more.
+    @Test
+    void an_abandoned_replay_leaves_nothing_a_later_suppressed_copy_can_record() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppendId appendId = AppendId.mint();
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store);
+
+        recording.replayStarted();
+        recording.update(metadataWithAppendId(appendId), "event");
+        recording.replayAbandoned();
+        recording.alreadyDeliveredByReplay(metadataWithAppendId(appendId));
+
+        assertThat(store.hasApplied(PROJECTION_ID, appendId)).isFalse();
+    }
+
     private static EventMetadata metadataWithAppendId(AppendId appendId) {
         return new EventMetadata(Map.of(OccurrentCloudEventExtension.APPEND_ID, appendId.toString()));
+    }
+
+    private static CloudEvent cloudEventWithAppendId(AppendId appendId) {
+        return CloudEventBuilder.v1()
+                .withId(appendId.toString())
+                .withSource(URI.create("urn:occurrent:test"))
+                .withType("Event")
+                .withExtension(OccurrentCloudEventExtension.APPEND_ID, appendId.toString())
+                .build();
+    }
+
+    private static MaterializedView<String> delegateApplyingOnly(String appliedEvent) {
+        return new ApplyingOnlyDelegate(appliedEvent);
+    }
+
+    private static final class ApplyingOnlyDelegate implements MaterializedView<String>, SkippableUpdate<String> {
+        private final String appliedEvent;
+
+        private ApplyingOnlyDelegate(String appliedEvent) {
+            this.appliedEvent = appliedEvent;
+        }
+
+        @Override
+        public void update(String event) {
+        }
+
+        @Override
+        public boolean applyReportingWhetherApplied(EventMetadata metadata, String event) {
+            return event.equals(appliedEvent);
+        }
     }
 
     private static MaterializedView<String> noopDelegate() {

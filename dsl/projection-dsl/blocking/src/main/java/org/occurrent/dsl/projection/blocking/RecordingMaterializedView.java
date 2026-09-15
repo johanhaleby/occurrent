@@ -72,6 +72,7 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
     @Override
     public void update(EventMetadata metadata, E event) {
         if (applyDelegate(metadata, event)) {
+            recording.applied(metadata);
             recording.recordIfReady(metadata);
         }
     }
@@ -97,16 +98,17 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
         recording.historyRead(episode);
     }
 
-    // The two overloads are the same fact reaching this view from the two compositions that can produce it, and both
-    // record. A subscription model holds this as a CatchupListener and has a CloudEvent, a pull feed holds it as a
-    // MaterializedView and has whatever metadata the live copy carried (ADR 137).
+    // The two overloads are the same fact reaching this view from the two compositions that can produce it. A
+    // subscription model holds this as a CatchupListener and has a CloudEvent, a pull feed holds it as a
+    // MaterializedView and has whatever metadata the live copy carried (ADR 137). Both record only an append the
+    // replay applied an event of, since the replay delivering an event says nothing about whether it was applied.
     //
     // Only the pull-feed overload forwards. A delegate's replay lifecycle is driven by that feed and by nothing else,
     // so forwarding the subscription-model overload would hand a delegate a call from a lifecycle it never sees,
     // which is why catchupStarted and historyRead do not forward either.
     @Override
     public void alreadyDeliveredByReplay(CloudEvent event) {
-        recording.recordIfReady(EventMetadata.from(event));
+        recordIfTheReplayAppliedIt(EventMetadata.from(event));
     }
 
     @Override
@@ -114,7 +116,13 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
         if (delegate instanceof ReplayAware replayAware) {
             replayAware.alreadyDeliveredByReplay(metadata);
         }
-        recording.recordIfReady(metadata);
+        recordIfTheReplayAppliedIt(metadata);
+    }
+
+    private void recordIfTheReplayAppliedIt(EventMetadata metadata) {
+        if (recording.appliedByReplay(metadata)) {
+            recording.recordIfReady(metadata);
+        }
     }
 
     @Override
@@ -164,7 +172,7 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
         // new one announces itself.
         Object started = feedEpisode.getAndSet(null);
         if (started != null) {
-            recording.historyRead(started);
+            recording.historyAbandoned(started);
         }
     }
 }

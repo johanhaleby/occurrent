@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.projection.reactor;
 
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -26,6 +28,7 @@ import org.occurrent.eventstore.api.AppendId;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -265,8 +268,76 @@ class RecordingReactiveUpdateTest {
         }
     }
 
+    // A subscription model hands the recorder the CloudEvent of a live copy the replay already delivered. Delivered is
+    // not applied, so the append is recorded only when the replay applied an event of it.
+    @Test
+    void a_live_copy_the_replay_delivered_records_its_append_only_when_the_replay_applied_an_event_of_it() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppendId skipped = AppendId.mint();
+        AppendId applied = AppendId.mint();
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(delegateApplyingOnly("applied"), PROJECTION_ID, store);
+        Object episode = new Object();
+
+        recording.catchupStarted(episode);
+        StepVerifier.create(recording.apply(metadataWithAppendId(skipped), "skipped")).verifyComplete();
+        StepVerifier.create(recording.apply(metadataWithAppendId(applied), "applied")).verifyComplete();
+        recording.historyRead(episode);
+        recording.alreadyDeliveredByReplay(cloudEventWithAppendId(skipped));
+        recording.alreadyDeliveredByReplay(cloudEventWithAppendId(applied));
+
+        assertThat(store.hasApplied(PROJECTION_ID, skipped)).isFalse();
+        assertThat(store.hasApplied(PROJECTION_ID, applied)).isTrue();
+    }
+
+    // A view that buffers during a replay discards that buffer when the replay is stopped, so once a pull feed has
+    // abandoned its replay nothing that replay applied counts any more.
+    @Test
+    void an_abandoned_replay_leaves_nothing_a_later_suppressed_copy_can_record() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppendId appendId = AppendId.mint();
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store);
+
+        recording.replayStarted();
+        StepVerifier.create(recording.apply(metadataWithAppendId(appendId), "event")).verifyComplete();
+        recording.replayAbandoned();
+        StepVerifier.create(recording.alreadyDeliveredByReplay(metadataWithAppendId(appendId))).verifyComplete();
+
+        assertThat(store.hasApplied(PROJECTION_ID, appendId)).isFalse();
+    }
+
     private static EventMetadata metadataWithAppendId(AppendId appendId) {
         return new EventMetadata(Map.of(OccurrentCloudEventExtension.APPEND_ID, appendId.toString()));
+    }
+
+    private static CloudEvent cloudEventWithAppendId(AppendId appendId) {
+        return CloudEventBuilder.v1()
+                .withId(appendId.toString())
+                .withSource(URI.create("urn:occurrent:test"))
+                .withType("Event")
+                .withExtension(OccurrentCloudEventExtension.APPEND_ID, appendId.toString())
+                .build();
+    }
+
+    private static BiFunction<EventMetadata, String, Mono<Void>> delegateApplyingOnly(String appliedEvent) {
+        return new ApplyingOnlyDelegate(appliedEvent);
+    }
+
+    private static final class ApplyingOnlyDelegate implements BiFunction<EventMetadata, String, Mono<Void>>, SkippableUpdate<String> {
+        private final String appliedEvent;
+
+        private ApplyingOnlyDelegate(String appliedEvent) {
+            this.appliedEvent = appliedEvent;
+        }
+
+        @Override
+        public Mono<Void> apply(EventMetadata metadata, String event) {
+            return Mono.empty();
+        }
+
+        @Override
+        public Mono<Boolean> applyReportingWhetherApplied(EventMetadata metadata, String event) {
+            return Mono.just(event.equals(appliedEvent));
+        }
     }
 
     private static BiFunction<EventMetadata, String, Mono<Void>> noopDelegate() {

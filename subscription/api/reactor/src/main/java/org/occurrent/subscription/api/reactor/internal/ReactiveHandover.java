@@ -165,13 +165,14 @@ public final class ReactiveHandover<T, K> {
          * second time. Called once per such payload, from the same {@code concatMap} every live payload runs through,
          * so it is serialized against the deliveries around it exactly as a delivery is.
          * <p>
-         * The payload was applied during the replay and is applied exactly once either way, so nothing here should
-         * apply it again. This hook exists for the work a source does on delivery rather than on application, which
-         * for a recording projection is writing down the append the payload came from. Without it that append is
-         * written down by neither delivery, since the replay is inside the history phase where a recorder writes
-         * nothing (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
-         * decision 6) and the live copy is never delivered
-         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
+         * The replay delivered the payload, and it is delivered once either way, so nothing here should deliver it
+         * again. This hook exists for a recording projection, which writes down the append a payload came from once
+         * it has applied it. It writes nothing during the replay, which runs inside the history phase
+         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
+         * decision 6), and the live copy is never delivered
+         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>),
+         * so without this call neither delivery writes the append down. Delivered is not applied, since a projection
+         * can skip an event, so a source that records has to check that its replay applied an event of that append.
          * <p>
          * A payload the replay never delivered, one suppressed because an earlier live delivery already handled it,
          * does not come here. That earlier delivery ran everything a delivery runs, so there is nothing left owing.
