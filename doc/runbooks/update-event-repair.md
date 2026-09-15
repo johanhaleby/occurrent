@@ -140,10 +140,13 @@ finished run could report a clean collection while a position was still gone.
 
 `result.unrecoverableEventCount()` is the number of events this run could not fully repair, carried across a resume
 by the checkpoint. It is not the whole of what needs you, and a `0` is not proof that nothing does, so read it
-together with the count above rather than on its own.
+together with the count above rather than on its own. A run that never had to resume reports this exactly. One that
+resumed past a kill can report a number higher than the events you actually find, since a batch the kill caught
+before it finished can be counted again once the run picks it back up. If the same batch is interrupted more than
+once, the same still-unrepairable event is counted again each time, so treat this count as an upper bound rather
+than an exact one whenever a run needed resuming, and more so the more times it did.
 `result.unrecoverableEvents()` names the findings by `_id`, and every one is also logged, so a truncated list is not
-a lost report. The reasons below are independent, so one event can produce two findings and still count once. The
-count is events, because that is the number of events you have to look at.
+a lost report. The reasons below are independent, so one event can produce two findings and still count once.
 
 **`POSITION_LOST`.** The event's position was never stored, so there is nothing to restore it from. The tool does
 not assign a new one, because a position invented in `_id` order would look right and be wrong, and any consumer
@@ -175,10 +178,13 @@ ceiling to compare against and this is never reported.
 outside Occurrent. The run continues past it, so one such event does not hold up the rest.
 
 **Write down the range this run reported before you do anything else.** The finished-run log line names it,
-`Repaired positions ranged from X to Y`, or says `No position was repaired` when no event it repaired had a position it
-could read. `result.minRepairedPosition()` and `result.maxRepairedPosition()` hold the same two numbers, or both
-`null`. A run that finishes deletes its checkpoint, so any further run starts with no range and reports only the
-positions it repaired itself. Step 7 needs the range of every run you ran.
+`Repaired positions ranged from X to Y`, or says `No position was repaired` when the run has nothing to report. A
+resumed run can print a range here even though it repaired nothing itself, a batch a kill caught before this run
+picked it back up put that range in the checkpoint before this run started, so do not read this line as proof the
+run in front of you did the repairing. Step 7 says more about that. `result.minRepairedPosition()` and
+`result.maxRepairedPosition()` hold the same two numbers, or both `null`. A run that finishes deletes its
+checkpoint, so any further run starts with no range and reports only the positions it repaired itself. Step 7 needs
+the range of every run you ran.
 
 **Write down every position you set by hand as well, because the repair will usually never mention it again.**
 Setting a position by hand is itself what stops an event looking damaged, so after the fix it matches neither half of
@@ -214,41 +220,25 @@ DCB. Time-ordered legacy catch-up is unaffected, because the event's time was ne
 `result.minRepairedPosition()` and `result.maxRepairedPosition()`, the same two numbers the finished-run log line
 prints, bound the position of every event that one run repaired and could read a position for.
 
-A killed and resumed repair stores that range in its checkpoint the same way it stores the unrecoverable count, so the
-numbers a resumed run reports cover the batches the interrupted call checkpointed as well as the ones that finished it.
+The range has one limit, which is why step 7 exists.
 
-The range has two limits, and both of them are why step 7 exists.
-
-The first is that it does not reach past a run that finished. A run deletes its checkpoint once it has walked the
-collection, so the next run starts with no range and reports only the positions it repaired itself. That is what the
-second run in step 5 does. A first run repairs positions 100 to 5000, you hand-fix a DCB event at 7000, and the second
-run reports 7000 to 7000, because that event still has a tag array to rebuild. If you only check consumers at or above
-7000, every consumer that had already resumed past an event between 100 and 5000 keeps missing it permanently. So use
-the range of every run you ran, not only the last one.
+It does not reach past a run that finished. A run deletes its checkpoint once it has walked the collection, so the
+next run starts with no range and reports only the positions it repaired itself. That is what the second run in step
+5 does. A first run repairs positions 100 to 5000, you hand-fix a DCB event at 7000, and the second run reports 7000
+to 7000, because that event still has a tag array to rebuild. If you only check consumers at or above 7000, every
+consumer that had already resumed past an event between 100 and 5000 keeps missing it permanently. So use the range
+of every run you ran, not only the last one.
 Each finished run logs its own outcome, either `Repaired positions ranged from X to Y` or `No position was repaired`,
 so a range you did not write down at the time is still in the logs.
 
-The second is that it does not cover the batch a process died in. The checkpoint is written once per batch, after every
-event in that batch has already been updated, so a kill part way through one loses the positions it had just repaired.
-Those events no longer look damaged, so no resumed run and no later run finds them again, and nothing records where
-they were.
-
-**If any run did not finish on its own, stop here and skip the comparison below.** The range it reports is then
-incomplete in a way no number tells you about, so treat every consumer as possibly affected.
-
-The criterion is a run you had to start again, not anything in the log. A run interrupted during its first batch wrote
-no checkpoint at all, so the next one loads nothing and prints no `Resuming the repair of collection ...` line, while
-still having lost the positions that first batch repaired. Silence there means the checkpoint was gone, not that
-nothing was lost. You are the only record of which runs completed, so note it when one does not.
-
-A repair walks `_id` order, which is not position order, so an event the lost batch repaired can sit anywhere in
-history. It can sit below the minimum the run did report, and it can sit far below where a consumer had already read,
-so neither that minimum nor the consumer's position at the time of the repair narrows anything. Everything the
-consumer has already read is a candidate, so replay it from the beginning, or reconcile over its whole positioned
-history up to its current checkpoint. The guidance further down says which of the two is safe for a given consumer.
-
-What follows, up to and including the comparison against the lowest number, is for a repair where every run finished.
-If one did not, pick up again at "Decide between replaying and reconciling", which applies either way.
+A run that was killed and resumed reports a range that still covers everything it repaired, and can also name a
+position it turns out not to have. The checkpoint records the batch it is about to touch, widened to every position
+that batch might write, before touching it, not only the batch it just finished, so every position the run actually
+repairs sits inside one checkpointed range or another, whichever batch a kill happens to catch. If a kill falls
+between the two writes, that wider value is what a resume starts from, so a range from a run that had to resume can
+be wider than what it actually repaired, one bound by a position an operator's own hand-set fix collided with, say.
+The wider direction is the safe one. It can send you to check a consumer that turns out fine, never the other way
+around. Resume it and read its result the way you would any other run's.
 
 A position in one of those ranges can be one the repair restored, or one that was already correct on an event only its
 tag array needed rebuilding for, which is what a run after a hand-set fix on an event with DCB tags can look like.
@@ -274,8 +264,7 @@ repaired one.
 
 Replaying is safe for a consumer that only overwrites or upserts its own state on each delivery, since writing the
 same value twice produces the same document as writing it once. Rewind its checkpoint to below that lowest number, or
-restart it from the beginning if that is simpler, and let it catch up. A repair where a run did not finish needs the
-restart from the beginning rather than the rewind.
+restart it from the beginning if that is simpler, and let it catch up.
 
 Replaying is not safe for a consumer that causes a side effect outside its own state which cannot run twice, sending
 an email, charging a card, calling another system, since rewinding it reruns that side effect for every event since
@@ -294,13 +283,6 @@ returns nothing, which is the right answer for it.
 db.events.find({ position: { $gte: NumberLong(<minRepairedPosition>),
                              $lte: NumberLong(<maxRepairedPosition, or the checkpoint if that is lower>) } })
          .sort({ position: 1 })
-```
-
-If any run did not finish on its own there is no usable range, so read everything the consumer has already processed
-instead:
-
-```javascript
-db.events.find({ position: { $lte: NumberLong(<the consumer's current checkpoint>) } }).sort({ position: 1 })
 ```
 
 These queries return candidates rather than only repaired events. A range is a floor and a ceiling, so it also returns

@@ -100,7 +100,12 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <h2>Running it</h2>
  * {@link #report()} sizes the damage and writes nothing. {@link #run()} repairs, walking the collection in
  * {@code _id} order in batches. A run is idempotent because it only touches events that still look damaged, and it
- * is safe to kill because each event is repaired on its own and a checkpoint document records how far it got.
+ * is safe to kill because each event is repaired on its own and a checkpoint document records how far it got. The
+ * checkpoint is written twice per batch, once before any event in it is touched, with its range widened to every
+ * position the batch could modify, and again after, narrowed back to exactly what the batch confirmed repairing.
+ * A kill between the two still has the wider one on disk for a later run to load, so {@link #run()}'s own returned
+ * range can be wider than what it actually repaired once a run has resumed past an interruption. See
+ * {@link UpdateEventRepairResult}.
  *
  * <pre>{@code
  * MongoDatabase database = mongoClient.getDatabase("my-database");
@@ -187,10 +192,14 @@ public final class UpdateEventRepair {
         }
         long repaired = 0;
         List<UnrecoverableEvent> unrecoverable = new ArrayList<>();
-        // Bounds of every readable position this call and, once resumed, every earlier segment of this same run
-        // repaired, carried across a resume the same way unrecoverableCount is and for the same reason. Without
-        // that, a run killed after repairing positions in an earlier segment would return a range naming only the
-        // segment the resumed call walked itself, hiding the earlier one from step 7.
+        // Bounds of every position this call and, once resumed, every earlier segment of this same run actually
+        // confirmed repaired, carried across a resume the same way unrecoverableCount is and for the same reason.
+        // Without that, a run killed after repairing positions in an earlier segment would return a range naming
+        // only the segment the resumed call walked itself, hiding the earlier one from step 7. Only the per-event
+        // loop below ever widens this pair. The pre-batch checkpoint widens a separate, wider value, so a run that
+        // resumes past an interruption can start from that wider value here too, which is why a range carried
+        // across a resume can include a position no segment of the run ever actually repaired, see
+        // UpdateEventRepairResult.
         @Nullable Long minRepairedPosition = checkpoint == null ? null : numberOrNull(checkpoint.get(UpdateEventRepairCheckpoint.FIELD_MIN_REPAIRED_POSITION));
         @Nullable Long maxRepairedPosition = checkpoint == null ? null : numberOrNull(checkpoint.get(UpdateEventRepairCheckpoint.FIELD_MAX_REPAIRED_POSITION));
         // Read once up front. A damaged event predates this run, since no version from 0.34.0 on can create one, so
@@ -211,11 +220,64 @@ public final class UpdateEventRepair {
                 break;
             }
 
+            // Planned once per event, before anything in the batch is touched, so the plan the widen below checks
+            // is the same plan repairEvent writes from. Planning twice risked the two calls seeing different
+            // answers for the same event, since a live store's position counter can advance between them, so a
+            // candidate above the counter at the first call could validate at a second one, writing a position the
+            // widen never saw and so never checkpointed.
+            List<PlannedRepair> planned = planBatch(batch, positionCeiling);
+
+            // Checkpoint a range and an unrecoverable count wide enough to cover whatever this batch is about to
+            // modify, before touching any of it, so a checkpoint covering the batch already exists even for a kill
+            // that skips the post-batch write below. This widens local copies, never minRepairedPosition,
+            // maxRepairedPosition or unrecoverableCount themselves. The range only widens for a plan with a
+            // readable position, a parse or validation failure or an unrebuildable tag array leave nothing to widen
+            // it with. Neither the range nor the count asks whether another event currently owns a candidate
+            // position, since that can change before repairEvent's write actually resolves it against the same
+            // index, and a snapshot taken here would only be a stale guess of what that live check will find. That
+            // omission is what closes the race an ownership check here would otherwise reopen. The same plan
+            // decides what gets widened and what repairEvent writes from, so the widen and the write can never
+            // disagree about a candidate, since only the live index can reject one, and only at write time. The
+            // count widens for a plan with a finding already on it, since that finding is fixed once the plan is,
+            // and it has to survive an event whose write fixes the one thing that made it match the damaged-event
+            // filter, an unrebuildable tag array for instance, while a finding unrelated to that fix, an
+            // unassignable position for instance, still needs reporting after a scan can no longer find the event
+            // to report it from. The post-batch write below narrows the checkpoint back to exactly what got
+            // confirmed, so these local values only outlive the batch when a kill catches it before that narrowing
+            // runs.
+            Long widenedMin = minRepairedPosition;
+            Long widenedMax = maxRepairedPosition;
+            long widenedUnrecoverableCount = unrecoverableCount;
+            for (PlannedRepair plannedRepair : planned) {
+                RepairPlan plan = plannedRepair.plan();
+                if (!plan.updates().isEmpty() && plan.readablePosition() != null) {
+                    long candidate = plan.readablePosition();
+                    widenedMin = widenedMin == null ? candidate : Math.min(widenedMin, candidate);
+                    widenedMax = widenedMax == null ? candidate : Math.max(widenedMax, candidate);
+                }
+                if (!plannedRepair.findings().isEmpty()) {
+                    widenedUnrecoverableCount++;
+                }
+            }
+            checkpointCrashRecord(widenedMin, widenedMax, widenedUnrecoverableCount);
+
+            // Logged here, before any event in the batch is written, so a kill right after one of those writes
+            // does not keep the finding out of the log even though the loop below is the ordinary place it gets
+            // logged from. Only a plan's own findings are logged here, since those are fixed once the plan is. The
+            // loop below logs only what is new since this pass, a write-time POSITION_ALREADY_TAKEN for instance,
+            // so nothing gets logged twice.
+            for (PlannedRepair plannedRepair : planned) {
+                for (UnrecoverableEvent unrecoverableEvent : plannedRepair.findings()) {
+                    log.warn("Cannot fully repair event {} in collection '{}': {} ({}).",
+                            unrecoverableEvent.eventId(), eventStoreCollectionName, unrecoverableEvent.reason(), unrecoverableEvent.detail());
+                }
+            }
+
             long repairedInBatch = 0;
-            for (Document event : batch) {
-                List<UnrecoverableEvent> found = new ArrayList<>(1);
+            for (PlannedRepair plannedRepair : planned) {
+                int plannedFindingCount = plannedRepair.findings().size();
                 List<Long> repairedPosition = new ArrayList<>(1);
-                if (repairEvent(event, found, repairedPosition, positionCeiling)) {
+                if (repairEvent(plannedRepair, repairedPosition)) {
                     repaired++;
                     repairedInBatch++;
                 }
@@ -223,6 +285,7 @@ public final class UpdateEventRepair {
                     minRepairedPosition = minRepairedPosition == null ? position : Math.min(minRepairedPosition, position);
                     maxRepairedPosition = maxRepairedPosition == null ? position : Math.max(maxRepairedPosition, position);
                 }
+                List<UnrecoverableEvent> found = plannedRepair.findings();
                 if (!found.isEmpty()) {
                     // One document can produce more than one finding. A dcbtags value that is not a string and a
                     // position that cannot be read are independent damage, and an event carrying both reports both.
@@ -230,9 +293,14 @@ public final class UpdateEventRepair {
                     // how many events a person has to look at, not how many things are wrong with them.
                     unrecoverableCount++;
                 }
-                for (UnrecoverableEvent unrecoverableEvent : found) {
-                    log.warn("Cannot fully repair event {} in collection '{}': {} ({}).",
-                            unrecoverableEvent.eventId(), eventStoreCollectionName, unrecoverableEvent.reason(), unrecoverableEvent.detail());
+                for (int i = 0; i < found.size(); i++) {
+                    UnrecoverableEvent unrecoverableEvent = found.get(i);
+                    // Findings up to plannedFindingCount were already logged above, before this event was written.
+                    // Only a finding repairEvent's own write added, POSITION_ALREADY_TAKEN, is new here.
+                    if (i >= plannedFindingCount) {
+                        log.warn("Cannot fully repair event {} in collection '{}': {} ({}).",
+                                unrecoverableEvent.eventId(), eventStoreCollectionName, unrecoverableEvent.reason(), unrecoverableEvent.detail());
+                    }
                     if (unrecoverable.size() < options.maxReportedUnrecoverable()) {
                         unrecoverable.add(unrecoverableEvent);
                     }
@@ -257,12 +325,22 @@ public final class UpdateEventRepair {
         // what is still there means a finished run cannot report a clean collection while a position is still gone.
         long lostPosition = withRetry(() -> eventCollection.countDocuments(lostPositionFilter()));
 
-        deleteCheckpoint();
         String repairedRange = minRepairedPosition == null
                 ? "No position was repaired"
                 : "Repaired positions ranged from " + minRepairedPosition + " to " + maxRepairedPosition;
-        log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone, {} are left without a position. {}.",
-                eventStoreCollectionName, repaired, unrecoverableCount, lostPosition, repairedRange);
+        // checkpoint is unchanged since the top of this call, so it still says whether this run resumed one that
+        // did not finish. Only such a run needs this, since the range and the count above are then upper bounds
+        // rather than exact, per UpdateEventRepairResult.
+        String precisionNote = checkpoint == null
+                ? ""
+                : " This run resumed one that did not finish, so the range and the count above can be upper bounds rather than exact.";
+        log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone, {} are left without a position. {}.{}",
+                eventStoreCollectionName, repaired, unrecoverableCount, lostPosition, repairedRange, precisionNote);
+        // Logged above before the checkpoint is removed, not after, so a kill between the two still leaves this
+        // finished run's own result in the log. Deleting first would have made this the only durable copy of a
+        // result nothing failed to compute, only failed to get out of the process, exactly the loss this class
+        // otherwise checkpoints against.
+        deleteCheckpoint();
         return new UpdateEventRepairResult(repaired, unrecoverableCount, lostPosition, unrecoverable, minRepairedPosition, maxRepairedPosition);
     }
 
@@ -288,7 +366,8 @@ public final class UpdateEventRepair {
     }
 
     /**
-     * Repairs one event in a single update, so the fields it can restore are written together or not at all.
+     * Repairs one event from its plan in a single update, so the fields it can restore are written together or not
+     * at all.
      * <p>
      * That is atomicity across the recoverable fields, not a promise that both always come back. When one field is
      * beyond saving and the other is not, the recoverable one is still restored and the other is reported. An
@@ -303,7 +382,66 @@ public final class UpdateEventRepair {
      * @return whether this call's update reached the event. A write the server applied and then failed to acknowledge
      * counts, since the retry that follows it repairs nothing only because the first attempt already did.
      */
-    private boolean repairEvent(Document event, List<UnrecoverableEvent> unrecoverable, List<Long> repairedPosition, long positionCeiling) {
+    private boolean repairEvent(PlannedRepair plannedRepair, List<Long> repairedPosition) {
+        Object eventId = plannedRepair.event().get(ID);
+        RepairPlan plan = plannedRepair.plan();
+
+        if (plan.updates().isEmpty()) {
+            return false;
+        }
+
+        // The duplicate key is caught inside the retried block, so a deterministic rejection returns rather than
+        // throwing, and the retry only ever sees a transient failure. Re-running the same $set is harmless.
+        //
+        // Matched rather than modified, because a retry after an ambiguous failure has to count as the repair it is.
+        // Every field in this update is one the event does not have yet. Position is set only when it is a string, so
+        // writing it changes its type, and the tag array only when the field is absent. A first attempt that reaches
+        // the server therefore always modifies the document, and modified zero can only mean the lost acknowledgement
+        // of a write that did land. Counting that as unrepaired would understate the run against the event's own log
+        // line, which is written whatever the count says.
+        boolean wrote = withRetry(() -> {
+            try {
+                return eventCollection.updateOne(eq(ID, eventId), Updates.combine(plan.updates())).getMatchedCount() > 0;
+            } catch (MongoWriteException e) {
+                if (ErrorCategory.fromErrorCode(e.getError().getCode()) != ErrorCategory.DUPLICATE_KEY) {
+                    throw e;
+                }
+                // Another event already holds this position as a number, and the unique position index refuses a
+                // second claim on it. The update was rejected whole, so the event is exactly as it was found.
+                plannedRepair.findings().add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN,
+                        String.valueOf(plannedRepair.event().get(POSITION))));
+                return false;
+            }
+        });
+        if (wrote && plan.readablePosition() != null) {
+            repairedPosition.add(plan.readablePosition());
+        }
+        return wrote;
+    }
+
+    // Plans every event in a batch exactly once, before anything in it is touched, so the plan the pre-batch widen
+    // checks and the plan repairEvent writes from are the same object rather than two separate calls that could
+    // answer differently. A live store's position counter can move between two calls, so a second, independent
+    // planRepair could validate a candidate the first one had rejected, writing a position the widen never saw and
+    // so never checkpointed.
+    private List<PlannedRepair> planBatch(List<Document> batch, long positionCeiling) {
+        List<PlannedRepair> planned = new ArrayList<>(batch.size());
+        for (Document event : batch) {
+            List<UnrecoverableEvent> findings = new ArrayList<>(1);
+            planned.add(new PlannedRepair(event, planRepair(event, positionCeiling, findings), findings));
+        }
+        return planned;
+    }
+
+    // An event alongside its plan and the findings planning it produced, findings a real repair attempt reports
+    // once repairEvent has also had its own chance to add a write-time one, POSITION_ALREADY_TAKEN, to the same list.
+    private record PlannedRepair(Document event, RepairPlan plan, List<UnrecoverableEvent> findings) {
+    }
+
+    // What repairEvent would write for this event, and the position it would record if that write reaches the
+    // server, computed without touching the event so planBatch's single call also tells the pre-batch widen what
+    // this event would change.
+    private RepairPlan planRepair(Document event, long positionCeiling, List<UnrecoverableEvent> unrecoverable) {
         Object eventId = event.get(ID);
         Object storedPosition = event.get(POSITION);
         Object rawTags = event.get(DcbCloudEvents.TAGS);
@@ -365,36 +503,10 @@ public final class UpdateEventRepair {
             }
         }
 
-        if (updates.isEmpty()) {
-            return false;
-        }
+        return new RepairPlan(updates, readablePosition);
+    }
 
-        // The duplicate key is caught inside the retried block, so a deterministic rejection returns rather than
-        // throwing, and the retry only ever sees a transient failure. Re-running the same $set is harmless.
-        //
-        // Matched rather than modified, because a retry after an ambiguous failure has to count as the repair it is.
-        // Every field in this update is one the event does not have yet. Position is set only when it is a string, so
-        // writing it changes its type, and the tag array only when the field is absent. A first attempt that reaches
-        // the server therefore always modifies the document, and modified zero can only mean the lost acknowledgement
-        // of a write that did land. Counting that as unrepaired would understate the run against the event's own log
-        // line, which is written whatever the count says.
-        boolean wrote = withRetry(() -> {
-            try {
-                return eventCollection.updateOne(eq(ID, eventId), Updates.combine(updates)).getMatchedCount() > 0;
-            } catch (MongoWriteException e) {
-                if (ErrorCategory.fromErrorCode(e.getError().getCode()) != ErrorCategory.DUPLICATE_KEY) {
-                    throw e;
-                }
-                // Another event already holds this position as a number, and the unique position index refuses a
-                // second claim on it. The update was rejected whole, so the event is exactly as it was found.
-                unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN, String.valueOf(storedPosition)));
-                return false;
-            }
-        });
-        if (wrote && readablePosition != null) {
-            repairedPosition.add(readablePosition);
-        }
-        return wrote;
+    private record RepairPlan(List<Bson> updates, @Nullable Long readablePosition) {
     }
 
     /**
@@ -455,6 +567,34 @@ public final class UpdateEventRepair {
 
     private static Bson afterFilter(@Nullable Object lastProcessedId) {
         return lastProcessedId == null ? new Document() : gt(ID, lastProcessedId);
+    }
+
+    // Upserts the repaired-range and unrecoverable-count fields, leaving lastProcessedId and processedCount alone
+    // since neither has changed yet for this batch. Creates the checkpoint document on a first-batch kill, the
+    // same way the post-batch checkpoint below would have.
+    //
+    // The range widens safely under a replay because Math.min/Math.max of the same candidate twice is the
+    // candidate. The count does not have that property. If a kill lands here and the batch is replayed because
+    // lastProcessedId never advanced past it, an event whose plan can never produce an update, an unreadable tag
+    // encoding on a position that itself can never be assigned for instance, is planned and counted again on the
+    // replay, since nothing here can tell that the count it loaded already includes this same not-yet-confirmed
+    // batch's contribution rather than only batches that finished. Telling those apart needs the checkpoint to
+    // store the pending batch's own count apart from the confirmed one, which this does not do. Left this way
+    // because undercounting, the gap this widen closes, hides real damage from an operator, and the count this
+    // trades it for only overstates the damage instead.
+    private void checkpointCrashRecord(@Nullable Long minRepairedPosition, @Nullable Long maxRepairedPosition, long unrecoverableCount) {
+        if (minRepairedPosition == null && unrecoverableCount == 0) {
+            return;
+        }
+        withRetry(() -> checkpointCollection.findOneAndUpdate(
+                eq(ID, UpdateEventRepairCheckpoint.CHECKPOINT_DOCUMENT_ID),
+                Updates.combine(
+                        Updates.set(UpdateEventRepairCheckpoint.FIELD_MIN_REPAIRED_POSITION, minRepairedPosition),
+                        Updates.set(UpdateEventRepairCheckpoint.FIELD_MAX_REPAIRED_POSITION, maxRepairedPosition),
+                        Updates.set(UpdateEventRepairCheckpoint.FIELD_UNRECOVERABLE_COUNT, unrecoverableCount)
+                ),
+                new FindOneAndUpdateOptions().upsert(true)
+        ));
     }
 
     private void checkpoint(Object lastProcessedId, int batchSize, long unrecoverableCount, @Nullable Long minRepairedPosition, @Nullable Long maxRepairedPosition) {
