@@ -722,11 +722,11 @@ public class OccurrentProperties {
          * a second event can reach the budget on its first failure. Defaults to five minutes, matching
          * {@code SagaRunnerConfig.defaults()}.
          * <p>
-         * It covers the whole delivery, from the converter reading the event through to the store saving the
-         * result, and an {@code Error} counts like a {@code RuntimeException}. {@code OutOfMemoryError} is the one
-         * exclusion, since that is the process failing rather than the instance's work. A delivery that fails before the saga can
-         * work out which instance it belongs to has no instance to quarantine, so the subscription is let past it once
-         * it has been failing this long and the skip is logged rather than recorded.
+         * It covers everything after the saga has worked out which instance the event belongs to, through to the store
+         * saving the result, and an {@code Error} counts like a {@code RuntimeException}. {@code OutOfMemoryError} is
+         * the one exclusion, since that is the process failing rather than the instance's work. A delivery that fails
+         * before the saga can work out which instance it belongs to is never let past, because acknowledging it would
+         * lose it. It is refused on every redelivery, and this only sets how often that is logged.
          * <p>
          * Set it to zero to keep the pre-0.34.0 behaviour, where the event is retried forever and every other instance
          * of that saga waits behind it. A negative value is rejected at startup rather than read as zero. Quarantine is switched off on its own,

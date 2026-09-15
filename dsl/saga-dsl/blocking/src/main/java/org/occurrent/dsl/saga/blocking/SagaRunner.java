@@ -92,8 +92,8 @@ import static java.util.Objects.requireNonNull;
  *       supply. Where any of those is missing the wait is the one every version
  *       up to 0.33.0 had, which is unbounded.
  *       <p>
- *       What is <em>not</em> among them is what failed or where it was thrown. Every failure of a delivery counts,
- *       from the converter reading the event through the id extractor, the redelivery check, {@code evolve},
+ *       What is <em>not</em> among them is what failed or where it was thrown, once the saga has worked out which
+ *       instance the event belongs to. Every failure from there counts, from the redelivery check, {@code evolve},
  *       {@code react} and the dispatcher, to the store saving the result, and an {@code Error} counts the same as a
  *       {@code RuntimeException}. The one exclusion is a failure of the JVM rather than of the saga's work, which is
  *       {@link OutOfMemoryError} and nothing else. It says the process ran out of heap while this delivery held the
@@ -107,12 +107,15 @@ import static java.util.Objects.requireNonNull;
  *       started failing and the record names whichever event it stopped on. The quarantined instance stops there, and
  *       0.34.0 has no operation that brings it back, so {@code SagaStateStore.delete(sagaId)} is how you abandon it.
  *       <p>
- *       An event the saga could <em>not</em> correlate, because the converter or the id extractor threw, belongs to no
- *       instance, so there is nothing to quarantine and the subscription is let past it. That case is logged at ERROR
- *       naming the event and the exception that stopped it, and no row is written, so
- *       {@code findByStatus(QUARANTINED, ..)} does not list it. Acknowledging the event is not what removes it, which
- *       is what the retention check above establishes, so wherever the source still has it, repairing the converter or
- *       the id extractor and feeding the event to the saga again is the recovery.
+ *       An event the saga could <em>not</em> correlate, because the converter or the id extractor threw, is never let
+ *       past, whatever the budget. Not being able to say which instance it belongs to does not mean it belongs to none,
+ *       and once the subscription moved past it the next event for that instance would move the instance's watermark
+ *       beyond it, so feeding it to the saga again would be ignored as a redelivery and the event would be lost. It is
+ *       refused on every redelivery instead, as every version up to 0.33.0 did, and every instance of this saga waits
+ *       behind it while other sagas and subscriptions keep going. The first failure is logged at WARN and, when
+ *       {@code quarantineAfter} is set, at ERROR once per {@code quarantineAfter} after that, naming the event and the
+ *       exception that stopped it. Once the converter
+ *       or the id extractor is repaired the event is applied in the order it was written, with nothing to feed again.
  *       <p>
  *       Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of blocking indefinitely instead,
  *       which is also what a subscription model that does not guarantee it holds every event it delivers gets, since

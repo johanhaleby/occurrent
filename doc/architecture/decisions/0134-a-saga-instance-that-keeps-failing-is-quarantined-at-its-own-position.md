@@ -11,6 +11,10 @@ Amended in place for [#998](https://github.com/johanhaleby/occurrent/issues/998)
 of the timer path wrong in a way this decision was partly built on. This has not shipped in any release, so the
 amendment is in the Context section below rather than in a superseding record.
 
+Amended in place a second time for [#1042](https://github.com/johanhaleby/occurrent/issues/1042), which found that
+Decision point 3 let the subscription past an event the saga could not route, and that the event was lost when a later
+event for the same instance arrived first. This has not shipped either, so the correction is in Decision point 3.
+
 The three questions this decision could not settle on its own were ruled at that gate and are recorded in
 **Rulings at the design gate** near the end of this file. One of them, the non-replayable source, ships as a
 narrowing rather than a closure, and [#918](https://github.com/johanhaleby/occurrent/issues/918) is its recorded
@@ -266,7 +270,8 @@ this decision never named. The failure had to be a `RuntimeException`, and it ha
 whose id extractor reads a correlation field that is null on one old event satisfies every condition written down here
 and was still never quarantined, because `sagaId` threw outside the `try`. Every other instance of that saga waited
 behind the redelivery forever, which is the outcome this decision exists to remove. The whole delivery now runs inside
-one `try` that catches `Throwable`, so where a failure was thrown decides nothing, what it was decides nothing beyond
+one `try` that catches `Throwable`, so once an event has reached an instance, where a failure was thrown decides
+nothing, what it was decides nothing beyond
 the single exclusion the next paragraph names, and the conditions are the four this decision states and no others. [#997](https://github.com/johanhaleby/occurrent/issues/997) is where that was
 found.
 
@@ -282,22 +287,27 @@ and is taken at its word, because the alternative is worse. An unrelated `OutOfM
 broken instance's failure would exempt that instance forever, and a cause chain has no length limit and can be cyclic,
 while a rule about the thing actually thrown is one line and checkable.
 
-**A delivery that fails before it reaches an instance is skipped rather than quarantined.** The converter and the id
-extractor run before the saga knows which instance an event belongs to, so a failure in either gives nothing to
-quarantine and nothing to write a record on. The budget is the delivery's own in that case, and past it the
-subscription is let through with an error logged rather than a row written. That is weaker than a quarantine, and it is
-the weaker half, so it is stated rather than implied. `findByStatus(QUARANTINED, ..)` does not list a skipped delivery,
-so the log line is all an operator gets. What it keeps is the part that makes quarantine safe, which is that the
-retention check has confirmed that letting the subscription past is not what would destroy the last copy, so wherever
-the source still has the event, repairing the converter or the extractor and feeding it back is the recovery. That check
-answers what the acknowledgement costs rather than what the source holds at this instant, and by its own contract it
-answers yes for an event an operator has already erased, so it is not a promise that the event is there. A budget rather than an immediate skip, because a converter can fail for a while and stop:
-a schema registry down for thirty seconds would otherwise permanently skip every event delivered while it was out,
-which trades a blocked saga for a saga that has lost events. The budget is held in memory, which is enough rather than
-a compromise, since a skipped delivery moves the subscription's checkpoint past it and it is never offered again, so
-the budget only has to outlive the redelivery loop. Recording a skip durably would need a store row keyed by something
-that is not a saga id, and putting rows that are not instances into the instance space is a worse answer than a stated
-gap.
+**A delivery that fails before it reaches an instance is refused on every redelivery and never skipped.** The
+converter and the id extractor run before the saga knows which instance an event belongs to, so a failure in either
+gives nothing to quarantine and nothing to write a record on. Being unable to say which instance an event belongs to
+does not mean it belongs to none. Letting the subscription past it acknowledges it, the next event for the instance it
+belonged to then moves that instance's watermark beyond it, and feeding the repaired event to the saga again is taken
+for a redelivery and ignored. That is loss, and the isolation rule in `AGENTS.md` admits no loss window, however narrow
+or well logged.
+
+So the budget applies only to a delivery that reached an instance. An unroutable delivery is refused every time it is
+offered, which is what 0.33.0 did, and every instance of this saga waits behind it. The same rule permits that,
+because it applies per consumer, and no other saga, projection or subscription waits with it. Once the converter or
+the id extractor is repaired the event is applied in the order it was written, with nothing to feed again. The budget
+only paces the logging, a `WARN` on the first failure and an `ERROR` once per budget after that, so an operator hears
+about it at a rate they can read rather than at the redelivery cadence.
+
+The first implementation skipped the delivery past the budget instead, logging an error and writing nothing, and
+relied on the retention check to make refeeding a recovery. [#1042](https://github.com/johanhaleby/occurrent/issues/1042)
+showed that refeeding recovers nothing once a later event for the same instance has moved its watermark, so the
+transition the skipped event drives never runs. A budget before the skip only delays that, and a durable record of the
+skip would not prevent it either, since the gap is in the instance's order rather than in what is remembered. The
+ruling on #1042 is that no event may ever be lost, which settles it.
 
 ### 4. An instance that has never started needs start detection to stop keying on document existence
 
