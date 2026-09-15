@@ -369,6 +369,33 @@ public final class SubscriptionAnnotations {
     }
 
     /**
+     * Answers whether invoking {@code method} on {@code bean} runs the implementation the scan read the method from.
+     * The scan reads a handler from one class and the object it is invoked on can be another, a prototype whose
+     * factory returns a different implementation on a later call for example. Reflective invocation dispatches
+     * virtually, so an unrelated class sharing an interface with the scanned one, or a subclass overriding the
+     * method, would run its own code under the scanned method's subscription id.
+     * <p>
+     * The bean is unwrapped with {@link #ultimateTarget} first, so a proxy around the right implementation passes. A
+     * subclass that inherits the method unchanged passes too, since it runs the same code. A proxy whose target
+     * source is not a fixed singleton, a scoped proxy for example, is not unwrapped, since that would mean asking it
+     * for a target. A JDK interface proxy like that passes, and a CGLIB one is checked by the class it subclasses, so
+     * neither checks the objects its target source hands out. The handler keeps running through that proxy.
+     *
+     * @param bean   the (possibly proxied) object the handler is about to be invoked on
+     * @param method the handler method the scan read
+     * @return {@code true} if the unwrapped object's class inherits {@code method} without overriding it
+     */
+    public static boolean runsImplementationOf(Object bean, Method method) {
+        Object target = ultimateTarget(bean);
+        if (java.lang.reflect.Proxy.isProxyClass(target.getClass())) {
+            return true;
+        }
+        Class<?> implementation = ClassUtils.getUserClass(target.getClass());
+        return method.getDeclaringClass().isAssignableFrom(implementation)
+                && ClassUtils.getMostSpecificMethod(method, implementation).equals(method);
+    }
+
+    /**
      * Resolve the push feed bean of a {@code source = PUSH} projection, selected by {@code subscriptionModelType}
      * (the annotation's {@code subscriptionModel}) or {@code subscriptionModelName}, or the unique bean of one of
      * {@code candidateTypes} when neither is set. Shared by the blocking and reactive processors so the resolution rules

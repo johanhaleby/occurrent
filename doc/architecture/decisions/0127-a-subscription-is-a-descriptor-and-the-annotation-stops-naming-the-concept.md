@@ -315,6 +315,28 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > [#979](https://github.com/johanhaleby/occurrent/issues/979) already tracks, widened rather than new, and #979's
 > fix closes it for both. Registering late with that window is narrower than never registering at all, which is
 > what this replaces.
+>
+> **Amended on 2026-09-15, for [#1046](https://github.com/johanhaleby/occurrent/issues/1046).** A bean built after
+> startup registers its handlers all or none. Every check a handler's annotation can fail runs before the first of
+> them subscribes, including the ones that need its event types and start position worked out, such as a handler
+> asking for both `startAt` and `startAtGlobalPosition`. Before #1046 those ran as each handler subscribed, so a bean
+> whose second handler was refused there kept its first one subscribed. The first one also kept its reservation, so
+> asking for the bean again skipped it.
+>
+> When the subscribe call itself fails, a store refusing for example, the handlers before it keep running. Undoing
+> them would mean cancelling them, and `DurableSubscriptionModel.cancelSubscription` deletes the
+> stored checkpoint, so a handler that had resumed from an existing checkpoint would lose it.
+>
+> A handler also runs only on an object that runs the exact method the scan read it from, the rule
+> `invokeDescriptorFactory` has applied since #990. The object is unwrapped to its ultimate target first. A subclass
+> that inherits the method unchanged passes, since it runs the same code. An unrelated class sharing an interface
+> with it, or a subclass overriding it, would run its own code under the handler's subscription id, so it is refused
+> with `SubscriptionHandlerNotInvocableException`, at registration and again on the first delivery to an object of a
+> different class. The check is not the exact class equality #990 uses, because a JDK interface proxy over a target
+> source that is not a fixed singleton cannot be unwrapped, and a handler, unlike a descriptor factory, still runs
+> through that proxy. A proxy like that, a scoped proxy for example, is not unwrapped. An interface proxy passes,
+> and a CGLIB proxy is checked only by the class it subclasses, so neither checks the objects its target source
+> hands out. Refusing them instead would break a handler on a scoped bean, which runs through that proxy today.
 
 **Moving there inherits how the existing descriptor annotations invoke a factory, including one hazard they already
 have.** `OccurrentBlockingAnnotationBeanPostProcessor` resolves the bean from the context and `invokeFactory` calls the
