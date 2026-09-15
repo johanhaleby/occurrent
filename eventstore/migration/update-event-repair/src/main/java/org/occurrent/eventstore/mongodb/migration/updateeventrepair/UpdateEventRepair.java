@@ -550,6 +550,15 @@ public final class UpdateEventRepair {
         return readable;
     }
 
+    // This check is a snapshot, not a lock, so it has the same kind of residual race the positionCeiling recheck in
+    // validatedPosition accepts elsewhere in this class. If a candidate is excluded here because another event owns
+    // its position, and a supported concurrent EventStoreOperations delete removes that owner before repairEvent's
+    // write runs, the write can then succeed on a position this widen never saw, and a kill before the post-batch
+    // checkpoint loses it the way the batch it is in was meant to be covered against. Closing it needs the
+    // ownership check, the write and the checkpoint coupled in one transaction, which this module does not use
+    // anywhere else. Left open pending that decision, since the batches this can affect already need a forged
+    // duplicate position colliding with an event a concurrent delete removes inside this same narrow window.
+
     // Upserts only the repaired-range fields, leaving lastProcessedId, unrecoverableCount and processedCount alone
     // since none of them have changed yet for this batch. Creates the checkpoint document on a first-batch kill,
     // the same way the post-batch checkpoint below would have.
