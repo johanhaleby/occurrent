@@ -81,7 +81,7 @@ public class BlockingHandoverThroughputBenchmark {
         @Param({"50", "200"})
         public long workMicros;
 
-        private BlockingHandover<Long> handover;
+        private BlockingHandover<Long, String> handover;
         private final LongAdder sink = new LongAdder();
         private final java.util.concurrent.atomic.AtomicLong idSequence = new java.util.concurrent.atomic.AtomicLong();
 

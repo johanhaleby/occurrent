@@ -78,7 +78,7 @@ import java.util.function.Supplier;
  * wait.
  */
 @NullMarked
-public final class ReactiveHandover<T> {
+public final class ReactiveHandover<T, K> {
 
     /**
      * The replay side of a handover: whether the catch-up already ran, the position-ordered replay flux, and how to
@@ -197,14 +197,14 @@ public final class ReactiveHandover<T> {
      * {@code BlockingHandover.PreDispatchRefusalException}.
      */
     public static final class PreDispatchRefusalException extends IllegalStateException {
-        private final ReactiveHandover<?> owner;
+        private final ReactiveHandover<?, ?> owner;
 
-        PreDispatchRefusalException(ReactiveHandover<?> owner, String message) {
+        PreDispatchRefusalException(ReactiveHandover<?, ?> owner, String message) {
             super(message);
             this.owner = owner;
         }
 
-        PreDispatchRefusalException(ReactiveHandover<?> owner, String message, Throwable cause) {
+        PreDispatchRefusalException(ReactiveHandover<?, ?> owner, String message, Throwable cause) {
             super(message, cause);
             this.owner = owner;
         }
@@ -216,13 +216,13 @@ public final class ReactiveHandover<T> {
          *
          * @param handover The engine to compare against.
          */
-        public boolean thrownBy(ReactiveHandover<?> handover) {
+        public boolean thrownBy(ReactiveHandover<?, ?> handover) {
             return owner == handover;
         }
     }
 
     private final Function<T, Mono<Void>> deliver;
-    private final Function<T, String> dedupId;
+    private final Function<T, K> dedupId;
     private final String noun;
     private final int maxBufferedEvents;
     // Two caches rather than one, because the two suppressions they cause are not the same event. A key in
@@ -232,11 +232,11 @@ public final class ReactiveHandover<T> {
     // evicting the live keys is what made the live-redelivery de-dup empty exactly when the handover went live.
     private final BoundedIdCache deliveredIds;
     private final BoundedIdCache replayedIds;
-    private final Sinks.Many<Item> liveSink;
+    private final Sinks.Many<Item<K>> liveSink;
     // The sink's own queue, held so the drain has a boundary. Everything in it when the history read finishes is what
     // was buffered while that read ran, and counting those down is the only way to know when the drain is over: the
     // live feed never completes, so nothing else marks the end of it.
-    private final LinkedBlockingQueue<Item> liveBuffer;
+    private final LinkedBlockingQueue<Item<K>> liveBuffer;
     // How many buffered payloads are still to be delivered, -1 before the count is taken.
     private final java.util.concurrent.atomic.AtomicLong remainingInDrain = new java.util.concurrent.atomic.AtomicLong(-1);
     // The source of the catch-up currently going live, so the drain can tell it when the buffered set is exhausted.
@@ -255,7 +255,7 @@ public final class ReactiveHandover<T> {
     // long enough not to retry into the same instant.
     private static final java.time.Duration CONCURRENT_EMISSION_RETRY_DELAY = java.time.Duration.ofMillis(1);
     // Offers waiting their turn at the sink, oldest first, so the order they were made is the order they reach it.
-    private final java.util.Queue<PendingOffer> pendingOffers = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.Queue<PendingOffer<K>> pendingOffers = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private final AtomicBoolean offerDrainRunning = new AtomicBoolean();
     // Live payloads taken in and not yet delivered, wherever they are sitting. An offer waits in pendingOffers
     // until the drain hands it to the sink, and then in the sink's own queue until its handler runs, so counting
@@ -281,13 +281,13 @@ public final class ReactiveHandover<T> {
     // without ever touching liveSink, rather than buffering it the way acceptReportingDelivery(..) does.
     private volatile boolean live = false;
 
-    private ReactiveHandover(Function<T, Mono<Void>> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
+    private ReactiveHandover(Function<T, Mono<Void>> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun) {
         this.deliver = deliver;
         this.dedupId = dedupId;
         this.noun = noun;
         this.maxBufferedEvents = options.maxBufferedEvents();
-        this.deliveredIds = new BoundedIdCache(options.dedupCacheSize());
-        this.replayedIds = new BoundedIdCache(options.dedupCacheSize());
+        this.deliveredIds = new BoundedIdCache<>(options.dedupCacheSize());
+        this.replayedIds = new BoundedIdCache<>(options.dedupCacheSize());
         // LinkedBlockingQueue(capacity), not ArrayBlockingQueue(capacity): both cap at maxBufferedEvents (up to 100k by
         // default) and reject past it the same way, but ArrayBlockingQueue pre-allocates its full backing array at
         // construction, roughly 800 KB held for the handover's whole lifetime whether or not the live feed ever
@@ -298,13 +298,14 @@ public final class ReactiveHandover<T> {
 
     /**
      * @param deliver Folds a payload, replayed during the catch-up or live once going live.
-     * @param dedupId Extracts the replay-to-live de-dup key from a payload.
+     * @param dedupId Extracts the replay-to-live de-dup key from a payload. Two payloads count as one only when their
+     *                keys are equal, so the key has to hold everything that identifies a payload.
      * @param options De-dup cache size and live-buffer cap.
      * @param noun    The caller's noun for {@link HandoverMessages#catchUpFailed(String)}, e.g.
      *                {@code "projection feed"} or {@code "subscription"}, the same as the blocking engine takes.
      */
-    public static <T> ReactiveHandover<T> create(
-            Function<T, Mono<Void>> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
+    public static <T, K> ReactiveHandover<T, K> create(
+            Function<T, Mono<Void>> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun) {
         Objects.requireNonNull(deliver, "deliver cannot be null");
         Objects.requireNonNull(dedupId, "dedupId cannot be null");
         Objects.requireNonNull(options, "options cannot be null");
@@ -415,14 +416,14 @@ public final class ReactiveHandover<T> {
             ackSink.success(false);
             return;
         }
-        String key;
+        K key;
         try {
             key = dedupKey(payload);
         } catch (RuntimeException keyFailure) {
             ackSink.error(keyFailure);
             return;
         }
-        Item item = new Item(() -> deliver.apply(payload), () -> alreadyDeliveredByReplay(payload), key, ackSink);
+        Item<K> item = new Item<>(() -> deliver.apply(payload), () -> alreadyDeliveredByReplay(payload), key, ackSink);
         offerToLiveSink(item, ackSink);
     }
 
@@ -440,7 +441,7 @@ public final class ReactiveHandover<T> {
     // One drain at a time also means this engine is the sink's only producer, so FAIL_NON_SERIALIZED cannot happen
     // any more. The handling below stays as defence, not as a path anything reaches today, which is why no test
     // drives it.
-    private void offerToLiveSink(Item item, MonoSink<Boolean> ackSink) {
+    private void offerToLiveSink(Item<K> item, MonoSink<Boolean> ackSink) {
         // Taking a place, stamping the payload with its turn and queueing it are one step. Apart, a payload could
         // take a place and be queued behind one that took its place later, and the drain boundary below counts by
         // turn, so the two have to agree.
@@ -450,8 +451,8 @@ public final class ReactiveHandover<T> {
                 return;
             }
             liveBacklog.incrementAndGet();
-            Item stamped = item.withTurn(admitted.incrementAndGet());
-            pendingOffers.add(new PendingOffer(stamped, ackSink, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
+            Item<K> stamped = item.withTurn(admitted.incrementAndGet());
+            pendingOffers.add(new PendingOffer<>(stamped, ackSink, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
         }
         drainPendingOffers();
     }
@@ -489,7 +490,7 @@ public final class ReactiveHandover<T> {
     // be handed over yet and is waiting for another attempt, false when it emptied the queue.
     private boolean takeQueuedOffersToTheSink() {
         while (true) {
-            PendingOffer pending = pendingOffers.peek();
+            PendingOffer<K> pending = pendingOffers.peek();
             if (pending == null) {
                 return false;
             }
@@ -528,7 +529,7 @@ public final class ReactiveHandover<T> {
 
     // An offer waiting its turn at the sink, with the point in time after which this engine stops offering it and
     // reports contention instead.
-    private record PendingOffer(Item item, MonoSink<Boolean> ack, long deadline) {
+    private record PendingOffer<K>(Item<K> item, MonoSink<Boolean> ack, long deadline) {
     }
 
     /**
@@ -691,7 +692,7 @@ public final class ReactiveHandover<T> {
     // Counts one delivered payload against the buffered set, and tells the source once that set is exhausted. Only
     // ever counts down from a taken count, so a delivery before the history read finished, or after the drain is
     // over, changes nothing.
-    private void countTowardsDrain(Item item) {
+    private void countTowardsDrain(Item<K> item) {
         long remaining = remainingInDrain.get();
         if (remaining <= 0L) {
             return;
@@ -707,7 +708,7 @@ public final class ReactiveHandover<T> {
 
     // Counted after the payload has been delivered rather than before it, so the last buffered one is still part of
     // the drain while it is being handled.
-    private Mono<Void> deliver(Item item) {
+    private Mono<Void> deliver(Item<K> item) {
         return deliverItem(item).doFinally(signal -> {
             if (item.ack() != null) {
                 liveBacklog.decrementAndGet();
@@ -716,7 +717,7 @@ public final class ReactiveHandover<T> {
         });
     }
 
-    private Mono<Void> deliverItem(Item item) {
+    private Mono<Void> deliverItem(Item<K> item) {
         MonoSink<Boolean> ack = item.ack();
         if (ack != null) {
             if (deliveredIds.contains(item.dedupKey())) {
@@ -749,8 +750,8 @@ public final class ReactiveHandover<T> {
         return Mono.defer(item.deliver()).doOnSuccess(v -> replayedIds.add(item.dedupKey()));
     }
 
-    private Item replayedItem(T replayed) {
-        return new Item(() -> deliver.apply(replayed), Mono::empty, dedupKey(replayed), null);
+    private Item<K> replayedItem(T replayed) {
+        return new Item<>(() -> deliver.apply(replayed), Mono::empty, dedupKey(replayed), null);
     }
 
     // Resolved when the suppression happens rather than when the item was made, because a payload buffered during the
@@ -769,26 +770,26 @@ public final class ReactiveHandover<T> {
     }
 
     @SuppressWarnings("ConstantValue") // The function is declared non-null, but it is caller-supplied and unenforced.
-    private String dedupKey(T payload) {
-        String key = dedupId.apply(payload);
+    private K dedupKey(T payload) {
+        K key = dedupId.apply(payload);
         if (key == null) {
             throw new PreDispatchRefusalException(this, HandoverMessages.dedupKeyRequired());
         }
         return key;
     }
 
-    // A replayed payload has a null ack; a live payload carries the MonoSink whose completion (with whether it was
+    // A replayed payload has a null ack. A live payload carries the MonoSink whose completion (with whether it was
     // genuinely delivered) lets the caller acknowledge. Both suppliers are bound to the payload at creation time, so
-    // Item needs no type parameter of its own.
-    private record Item(Supplier<Mono<Void>> deliver, Supplier<Mono<Void>> alreadyDeliveredByReplay, String dedupKey,
+    // the key is the only type Item needs.
+    private record Item<K>(Supplier<Mono<Void>> deliver, Supplier<Mono<Void>> alreadyDeliveredByReplay, K dedupKey,
                        @Nullable MonoSink<Boolean> ack, long turn) {
-        private Item(Supplier<Mono<Void>> deliver, Supplier<Mono<Void>> alreadyDeliveredByReplay, String dedupKey,
+        private Item(Supplier<Mono<Void>> deliver, Supplier<Mono<Void>> alreadyDeliveredByReplay, K dedupKey,
                      @Nullable MonoSink<Boolean> ack) {
             this(deliver, alreadyDeliveredByReplay, dedupKey, ack, Long.MAX_VALUE);
         }
 
-        private Item withTurn(long turn) {
-            return new Item(deliver, alreadyDeliveredByReplay, dedupKey, ack, turn);
+        private Item<K> withTurn(long turn) {
+            return new Item<>(deliver, alreadyDeliveredByReplay, dedupKey, ack, turn);
         }
     }
 }

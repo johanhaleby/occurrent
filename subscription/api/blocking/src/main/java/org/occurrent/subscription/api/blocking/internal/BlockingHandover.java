@@ -65,7 +65,7 @@ import java.util.stream.Stream;
  * whole replay from the source, the backstop for any live payload acknowledged but not yet folded.
  */
 @NullMarked
-public final class BlockingHandover<T> {
+public final class BlockingHandover<T, K> {
 
     /**
      * The replay side of a handover: whether the catch-up already ran, the position-ordered replay stream, and how to
@@ -176,14 +176,14 @@ public final class BlockingHandover<T> {
      * instead of classifying every {@link IllegalStateException} alike.
      */
     public static final class PreDispatchRefusalException extends IllegalStateException {
-        private final BlockingHandover<?> owner;
+        private final BlockingHandover<?, ?> owner;
 
-        PreDispatchRefusalException(BlockingHandover<?> owner, String message) {
+        PreDispatchRefusalException(BlockingHandover<?, ?> owner, String message) {
             super(message);
             this.owner = owner;
         }
 
-        PreDispatchRefusalException(BlockingHandover<?> owner, String message, Throwable cause) {
+        PreDispatchRefusalException(BlockingHandover<?, ?> owner, String message, Throwable cause) {
             super(message, cause);
             this.owner = owner;
         }
@@ -195,13 +195,13 @@ public final class BlockingHandover<T> {
          *
          * @param handover The engine to compare against.
          */
-        public boolean thrownBy(BlockingHandover<?> handover) {
+        public boolean thrownBy(BlockingHandover<?, ?> handover) {
             return owner == handover;
         }
     }
 
     private final Consumer<T> deliver;
-    private final Function<T, String> dedupId;
+    private final Function<T, K> dedupId;
     private final int maxBufferedEvents;
     private final String noun;
 
@@ -218,7 +218,7 @@ public final class BlockingHandover<T> {
     // for neither: it is dropped rather than raced, and the first attempt's own success or failure is what decides
     // deliveredIds. Without this a key could be marked delivered before deliver.accept(payload) actually succeeds,
     // and a delivery that then throws would leave a broker redelivery of the same payload silently skipped.
-    private final Set<String> inFlight = new HashSet<>();
+    private final Set<K> inFlight = new HashSet<>();
     private boolean live = false;
     private boolean stopped = false;
     private @Nullable Throwable catchUpFailure = null;
@@ -227,26 +227,27 @@ public final class BlockingHandover<T> {
     // that requires live.
     private @Nullable Source<T> source = null;
 
-    private BlockingHandover(Consumer<T> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
+    private BlockingHandover(Consumer<T> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun) {
         this.deliver = deliver;
         this.dedupId = dedupId;
         this.maxBufferedEvents = options.maxBufferedEvents();
-        this.deliveredIds = new BoundedIdCache(options.dedupCacheSize());
-        this.replayedIds = new BoundedIdCache(options.dedupCacheSize());
+        this.deliveredIds = new BoundedIdCache<>(options.dedupCacheSize());
+        this.replayedIds = new BoundedIdCache<>(options.dedupCacheSize());
         this.noun = noun;
     }
 
     /**
      * @param deliver Folds a payload, replayed or live. Always called outside this engine's monitor (see the class
      *                javadoc), so it must tolerate concurrent invocation once the handover is live.
-     * @param dedupId Extracts the replay-to-live de-dup key from a payload.
+     * @param dedupId Extracts the replay-to-live de-dup key from a payload. Two payloads count as one only when their
+     *                keys are equal, so the key has to hold everything that identifies a payload.
      * @param options De-dup cache size and live-buffer cap. The cache size sizes each of the two de-dup caches, one
      *                for what the replay delivered and one for what a live delivery did (ADR 137).
      * @param noun    The caller's noun for {@link HandoverMessages#catchUpFailed(String)}, e.g.
      *                {@code "projection feed"} or {@code "subscription"}.
      */
-    public static <T> BlockingHandover<T> create(
-            Consumer<T> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
+    public static <T, K> BlockingHandover<T, K> create(
+            Consumer<T> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun) {
         Objects.requireNonNull(deliver, "deliver cannot be null");
         Objects.requireNonNull(dedupId, "dedupId cannot be null");
         Objects.requireNonNull(options, "options cannot be null");
@@ -286,7 +287,7 @@ public final class BlockingHandover<T> {
      */
     public boolean acceptReportingDelivery(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
-        String deliverKey = null;
+        K deliverKey = null;
         Source<T> replayedBy = null;
         boolean dropped = false;
         synchronized (lock) {
@@ -294,7 +295,7 @@ public final class BlockingHandover<T> {
                 throw new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), catchUpFailure);
             }
             if (live) {
-                String key = dedupKey(payload);
+                K key = dedupKey(payload);
                 if (deliveredIds.contains(key)) {
                     // An earlier attempt already delivered this key, so this call reports it delivered without
                     // redelivering.
@@ -351,7 +352,7 @@ public final class BlockingHandover<T> {
      */
     public boolean acceptIfLive(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
-        String deliverKey = null;
+        K deliverKey = null;
         Source<T> replayedBy = null;
         boolean landed;
         synchronized (lock) {
@@ -365,7 +366,7 @@ public final class BlockingHandover<T> {
                 // asking again later.
                 landed = false;
             } else {
-                String key = dedupKey(payload);
+                K key = dedupKey(payload);
                 if (deliveredIds.contains(key)) {
                     landed = true;
                 } else if (replayedIds.contains(key)) {
@@ -463,7 +464,7 @@ public final class BlockingHandover<T> {
                     T replayed = replaying.next();
                     // Outside the monitor on purpose: only the cache write needs it, neither the caller's fold nor its
                     // key function.
-                    String key = dedupKey(replayed);
+                    K key = dedupKey(replayed);
                     deliver.accept(replayed);
                     synchronized (lock) {
                         replayedIds.add(key);
@@ -529,14 +530,14 @@ public final class BlockingHandover<T> {
         // at all, which is why the signal sits here rather than beside replayCompleted().
         source.historyDone();
         List<T> toDeliver;
-        List<String> keysToDeliver;
+        List<K> keysToDeliver;
         List<T> alreadyReplayed;
         synchronized (lock) {
             toDeliver = new ArrayList<>(buffer.size());
             keysToDeliver = new ArrayList<>(buffer.size());
             alreadyReplayed = new ArrayList<>();
             for (T buffered : buffer) {
-                String key = dedupKey(buffered);
+                K key = dedupKey(buffered);
                 if (deliveredIds.contains(key)) {
                     continue;
                 }
@@ -588,7 +589,7 @@ public final class BlockingHandover<T> {
         }
     }
 
-    private void releaseReservations(List<String> keys) {
+    private void releaseReservations(List<K> keys) {
         if (keys.isEmpty()) {
             return;
         }
@@ -598,8 +599,8 @@ public final class BlockingHandover<T> {
     }
 
     @SuppressWarnings("ConstantValue") // The function is declared non-null, but it is caller-supplied and unenforced.
-    private String dedupKey(T payload) {
-        String key = dedupId.apply(payload);
+    private K dedupKey(T payload) {
+        K key = dedupId.apply(payload);
         if (key == null) {
             throw new PreDispatchRefusalException(this, HandoverMessages.dedupKeyRequired());
         }
@@ -610,7 +611,7 @@ public final class BlockingHandover<T> {
     // to delivered, failure only clears the in-flight marker, so a payload whose delivery threw is not recorded and
     // a later redelivery is free to try again. Only live deliveries reach here, so only they write deliveredIds. The
     // replay writes replayedIds instead.
-    private void deliverOutsideLock(T payload, String key) {
+    private void deliverOutsideLock(T payload, K key) {
         boolean succeeded = false;
         try {
             deliver.accept(payload);

@@ -78,7 +78,7 @@ public final class CatchupProjectionFeed<E> {
     private final @Nullable CheckpointStorage catchupMarker;
     private final String id;
 
-    private final BlockingHandover<Delivered<E>> handover;
+    private final BlockingHandover<Delivered<E>, String> handover;
     // Read by the replay once per event, so stopCatchUp() takes effect at the next event rather than at the end.
     private volatile boolean stopped = false;
 
