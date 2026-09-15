@@ -118,12 +118,13 @@ types evict one of the step's own events, and the absolute bound section 9 state
 `historyWindow + 2 * stepWindow + 1`, held because of that same defect.
 
 `stepWindow` now counts and evicts only events of a type some step's `on(...)` branch or
-window-condition leaf actually names. An event of any other type is still retained, never
-discarded, but it no longer takes one of the cap's slots or evicts a declared event to make room
-for itself. The bound in section 9 still holds for a flow's own declared-type events. It no longer
-bounds a step fed only events of a type no step declares, which is not a new gap. It was always the
-kind of growth `stepWindow` and `historyWindow` alone did not close, only masked. Watch the
-0.33.0 store-boundary warning if your flow admits such events and you care about total document
+window-condition leaf actually names, plus a repeat of the type that started the instance. An
+event of any other type is still retained, never discarded, but it no longer takes one of the
+cap's slots or evicts a declared event to make room for itself. The bound in section 9 still holds
+for a flow's own declared-type events, the start type included. It no longer bounds a step fed only
+events of a type no step declares and that is not the start type, which is not a new gap. It was
+always the kind of growth `stepWindow` and `historyWindow` alone did not close, only masked. Watch
+the 0.33.0 store-boundary warning if your flow admits such events and you care about total document
 size. See [ADR 129](../architecture/decisions/0129-a-flow-sagas-stepwindow-caps-only-its-own-declared-events.md)
 for the full decision.
 

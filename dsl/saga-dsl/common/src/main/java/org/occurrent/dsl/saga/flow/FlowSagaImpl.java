@@ -69,11 +69,10 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     private final @Nullable Function<E, @Nullable String> correlateAll;
     private final Set<Class<? extends E>> startEventTypes;
     private final Set<Class<? extends E>> eventTypes;
-    // What stepWindow checks an arriving event against: every type a step's own on(...) branch or window-condition
-    // leaf names, deliberately narrower than eventTypes (which also unions in startType, so the subscription can
-    // create an instance at all). A repeat of the start type arriving after the instance already exists is not one
-    // of a step's own events merely because it once created the instance, unless some step also declares it in its
-    // own right. See ADR 129.
+    // Every type a step's own on(...) branch or window-condition leaf names, deliberately narrower than eventTypes
+    // (which also unions in startType, so the subscription can create an instance at all). isDeclared checks an
+    // arriving event against this set directly, but treats a repeat of startType as declared too once the instance
+    // has started, since that repeat is exactly the case ADR 129 counts toward stepWindow.
     private final Set<Class<? extends E>> stepDeclaredEventTypes;
     // How many received events before the current step's entry are kept, and so what a guard and a reaction can still read
     // of the earlier history. Applied when a step is left.
@@ -309,14 +308,15 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // carry-over events and leave every one of the step's, which caps nothing and takes the history a guard was
     // promised.
     //
-    // A correlated event of a type no step in the flow declares (reachable only through a narrowingFilter or
-    // replacementFilter wider than the flow's own types, or a CloudEventTypeMapper that collapses several domain
-    // types onto one CloudEvent type string, see Saga#replacementFilter()) is still counted in appended above it,
-    // but it does not count here: only a declared event both fills the budget and gets evicted to make room. Such a
-    // foreign event is retained for as long as the window does not have to advance past it to evict enough declared
-    // events, and is swept up for free when it does, never targeted on its own. This is what keeps the isolation
-    // rule intact (a genuinely correlated event is never discarded on arrival), at the cost of no longer bounding a
-    // step fed only foreign-typed events; see the ADR for that trade-off.
+    // A correlated event of a type no step in the flow declares and that is not a repeat of startType (reachable
+    // only through a narrowingFilter or replacementFilter wider than the flow's own types, or a CloudEventTypeMapper
+    // that collapses several domain types onto one CloudEvent type string, see Saga#replacementFilter()) is still
+    // counted in appended above it, but it does not count here: only a declared event, isDeclared, both fills the
+    // budget and gets evicted to make room. Such a foreign event is retained for as long as the window does not
+    // have to advance past it to evict enough declared events, and is swept up for free when it does, never
+    // targeted on its own. This is what keeps the isolation rule intact (a genuinely correlated event is never
+    // discarded on arrival), at the cost of no longer bounding a step fed only foreign-typed events; see the ADR
+    // for that trade-off.
     private int boundedWindowStart(int stepEntryIndex, int windowStart, List<E> appended) {
         if (stepWindow == UNBOUNDED_STEP_WINDOW) {
             return windowStart;

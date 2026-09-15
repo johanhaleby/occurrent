@@ -346,11 +346,12 @@ public final class FlowSaga {
             return Collections.unmodifiableSet(types);
         }
 
-        // What stepWindow checks an arriving event against, deliberately narrower than collectEventTypes(): every type a
-        // step's own on(...) branch or window-condition leaf names, and nothing added just because it starts the flow. A
-        // repeat of the start type arriving after the instance already exists is not one of a step's own events merely
-        // because it once created the instance, so it is left out here unless some step also declares it in its own right
-        // (the on(StepCondition.event(startType, ...)) case a first step can use). See ADR 129.
+        // The declared-type half of what stepWindow checks an arriving event against, deliberately narrower than
+        // collectEventTypes(): every type a step's own on(...) branch or window-condition leaf names, and nothing
+        // added just because it starts the flow. A repeat of the start type is not one of a step's own events
+        // merely because it once created the instance, so it is left out of this set unless some step also
+        // declares it in its own right (the on(StepCondition.event(startType, ...)) case a first step can use).
+        // FlowSagaImpl.isDeclared checks a repeat of the start type separately, per ADR 129.
         private Set<Class<? extends E>> collectStepDeclaredEventTypes() {
             Set<Class<? extends E>> types = new LinkedHashSet<>();
             for (CompiledStep<E, C> step : steps) {
