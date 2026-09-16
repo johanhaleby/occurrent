@@ -740,8 +740,10 @@ class BlockingHandoverTest {
         BlockingHandover<String, String> handover = BlockingHandover.create(
                 log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
         handover.accept("L1");
+        CountDownLatch replayCompleted = new CountDownLatch(1);
         FakeSource replaying = source(List.of("R1"), false);
         replaying.onReplayStarted = replayStarted::countDown;
+        replaying.onReplayCompleted = replayCompleted::countDown;
         FakeSource goingLive = source(List.of(), true);
         ExecutorService threads = Executors.newSingleThreadExecutor();
         try {
@@ -755,6 +757,8 @@ class BlockingHandoverTest {
 
             assertThat(replayStartedDuringTheTransition).isFalse();
             assertThat(replayStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            // The fold runs after the replay starts, so the log is read once the replay is through it.
+            assertThat(replayCompleted.await(5, TimeUnit.SECONDS)).isTrue();
             assertThat(log).containsExactly("L1", "R1");
         } finally {
             threads.shutdownNow();
