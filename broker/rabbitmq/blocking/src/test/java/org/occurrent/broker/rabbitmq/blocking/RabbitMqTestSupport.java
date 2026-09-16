@@ -65,6 +65,13 @@ public abstract class RabbitMqTestSupport {
     }
 
     /**
+     * For a test that needs a connection configured differently from {@link #connection()}.
+     */
+    protected static String amqpUrl() {
+        return rabbitMQContainer.getAmqpUrl();
+    }
+
+    /**
      * The {@code test.rabbitmq.version} system property Surefire is configured to pass, the same way
      * {@code test.mongo.version} already works for the MongoDB containers. Falls back to a literal for an IDE run,
      * where nothing sets it.

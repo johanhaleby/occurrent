@@ -147,6 +147,6 @@ class RabbitMqCloudEventBridgeOutcomeRoutingTest {
     // The model, the outcome channel and the readiness source are left out because route(..) is handed an outcome
     // that has already been reported and reads none of the three.
     private static RabbitMqCloudEventBridge bridgeOver(Channel channel, RabbitMqDeliveryFailureAction failureAction) {
-        return new RabbitMqCloudEventBridge(null, null, channel, "queue", 1, Duration.ofSeconds(1), failureAction, null);
+        return new RabbitMqCloudEventBridge(null, null, channel, "queue", 1, Duration.ofSeconds(1), failureAction, null, Duration.ofSeconds(1));
     }
 }

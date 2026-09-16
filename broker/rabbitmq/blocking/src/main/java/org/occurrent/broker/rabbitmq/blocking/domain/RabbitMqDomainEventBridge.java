@@ -30,6 +30,7 @@ import org.occurrent.broker.rabbitmq.blocking.RabbitMqBuildFailureClassifier;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryFailureAction;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryWorker;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopology;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
@@ -51,6 +52,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongConsumer;
@@ -100,6 +102,14 @@ import static java.util.Objects.requireNonNull;
  * recovery disabled, or a broker still unreachable when the {@code Connection} was created in the first place,
  * stays dead for every attempt. See that method's own javadoc for exactly what is retried and what is refused
  * immediately.
+ * <p>
+ * <strong>Each bridge handles its deliveries on a thread of its own.</strong> The RabbitMQ client calls every consumer
+ * on a connection from one shared pool, so this bridge only hands a delivery over to its own worker thread there and
+ * returns. A projection that blocks, waiting on a database that is down say, holds up only the bridge it belongs to,
+ * never another bridge built on the same {@link Connection}. That one thread handles deliveries one at a time and in
+ * the order the broker sent them, and about {@link Builder#prefetchCount(int)} of them wait for it. An {@code Error}
+ * a projection throws, or an acknowledgement this bridge cannot issue, stops this bridge and closes its channel,
+ * which puts the delivery back on the queue.
  * <p>
  * <strong>Coarse lifecycle.</strong> A background poll, {@link Builder#pollInterval(Duration)} apart (one second by
  * default), reads {@link DomainEventFeed#hasProjection()} and {@link DomainEventFeed#isReadyForLiveDelivery()} and
@@ -170,7 +180,9 @@ import static java.util.Objects.requireNonNull;
  * Under {@link DeliveryFailurePolicy#PARK} that costs one duplicate. A delivery that fails while the connection is
  * recovering is published to the parking destination, and the acknowledgement that normally follows the park does
  * nothing, so RabbitMQ requeues the message as well. You end up with a parked copy and a copy still on the source
- * queue, which is the same at-least-once delivery this bridge gives you everywhere else.
+ * queue, which is the same at-least-once delivery this bridge gives you everywhere else. A delivery still waiting
+ * for the worker thread when the connection drops is not handled at all. It is dropped as soon as the recovery
+ * starts, since RabbitMQ delivers it again on the recovered channel.
  */
 public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
 
@@ -183,6 +195,8 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     private final Duration pollInterval;
     private final RabbitMqDeliveryFailureAction failureAction;
     private final ScheduledExecutorService scheduler;
+    private final RabbitMqDeliveryWorker worker;
+    private final Duration closeTimeout;
 
     private final Lock consumeLock = new ReentrantLock();
     private @Nullable String consumerTag;
@@ -205,6 +219,11 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     // pace it, so it still applies immediately, through failureAction, from the point of failure.
     private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
+    // When close() has to give up on a delivery, which is at this moment. Published before close() starts waiting and
+    // read under consumeLock, so a projection that returns around the deadline either acknowledges before it or is
+    // fenced by it, rather than racing a flag close() would set afterwards. A park or acknowledgement that already
+    // holds the lock finishes, since the projection returned before it started. Long.MAX_VALUE until close() runs.
+    private final AtomicLong closeDeadlineNanos = new AtomicLong(Long.MAX_VALUE);
     // Tracks whether this bridge has ever seen feed.isReadyForLiveDelivery() answer true, so reconcileConsumption
     // can tell a feed that has never gone live (still replaying, or nothing registered yet, both ordinary startup
     // states) apart from one that reached live and then stopped, which DomainEventFeed's own contract says only
@@ -217,7 +236,7 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     // Package-private rather than private so RabbitMqDomainEventBridgeOutcomeRoutingTest can build one over a
     // mocked Channel. Nothing here talks to a broker, the builder's own start(..) does that.
     RabbitMqDomainEventBridge(DomainEventFeed<E> feed, Channel consumeChannel, String queue, int prefetchCount,
-                                       Duration pollInterval, RabbitMqDeliveryFailureAction failureAction) {
+                                       Duration pollInterval, RabbitMqDeliveryFailureAction failureAction, Duration closeTimeout) {
         this.feed = feed;
         this.consumeChannel = consumeChannel;
         this.queue = queue;
@@ -229,6 +248,8 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             thread.setDaemon(true);
             return thread;
         });
+        this.worker = new RabbitMqDeliveryWorker("rabbitmq-domainevent-bridge-worker-" + queue, queue, log);
+        this.closeTimeout = closeTimeout;
     }
 
     /**
@@ -254,6 +275,7 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         } catch (IOException e) {
             throw new RabbitMqBridgeException("Failed to declare topology for queue \"" + queue + "\"", e);
         }
+        worker.discardOnRecovery(consumeChannel);
         scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
@@ -285,8 +307,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                             "stopped consuming for good.", queue);
                 }
                 boolean shouldConsume = feed.hasProjection() && readyForLiveDelivery;
-                if (shouldConsume && consumerTag == null) {
-                    consumerTag = consumeChannel.basicConsume(queue, false, this::handleDelivery, this::handleCancel);
+                // Waits for the worker to finish what an earlier consumer sent it, see RabbitMqDeliveryWorker#isIdle.
+                if (shouldConsume && consumerTag == null && worker.isIdle()) {
+                    consumerTag = consumeChannel.basicConsume(queue, false, this::submitDelivery, this::handleCancel);
                 } else if (!shouldConsume && consumerTag != null) {
                     consumeChannel.basicCancel(consumerTag);
                     consumerTag = null;
@@ -362,7 +385,31 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         }
     }
 
-    private void handleDelivery(String deliveryConsumerTag, Delivery delivery) {
+    // Runs on the client's shared consumer thread, so it only hands the delivery to this bridge's own worker.
+    private void submitDelivery(String deliveryConsumerTag, Delivery delivery) {
+        long deliveryTag = delivery.getEnvelope().getDeliveryTag();
+        worker.submit(deliveryTag, () -> handleDeliveryOrStop(delivery, deliveryTag));
+    }
+
+    // handleDelivery routes a projection's own RuntimeException and AssertionError through the delivery failure
+    // policy, so anything escaping it is this bridge failing rather than the projection, either an Error the
+    // projection threw or an acknowledgement this bridge could not issue. The RabbitMQ client used to close the channel for
+    // exactly that, since the delivery ran on its own callback thread, and closing the channel is what puts the
+    // delivery back on the queue. Without it the delivery would sit unacknowledged on a consumer the broker sends
+    // nothing further to. Not rethrown, since the cause is logged here and the delivery is back on the queue, and
+    // rethrowing would only end the worker thread of a bridge that has already stopped.
+    private void handleDeliveryOrStop(Delivery delivery, long deliveryTag) {
+        try {
+            handleDelivery(delivery);
+        } catch (RuntimeException | Error e) {
+            log.error("Handling delivery tag {} on queue \"{}\" failed outside this bridge's delivery failure policy. "
+                    + "Stopping this bridge and closing its channel, which puts that delivery back on the queue.",
+                    deliveryTag, queue, e);
+            stopPermanently();
+        }
+    }
+
+    private void handleDelivery(Delivery delivery) {
         long deliveryTag = delivery.getEnvelope().getDeliveryTag();
         CloudEvent cloudEvent;
         try {
@@ -403,8 +450,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             // Either the projection handler itself threw, or the narrow registeredProjection() race the class
             // javadoc describes (an IllegalStateException that is not an UnreadableLiveFilterException). Both are
             // ordinary failure-policy cases, unlike the permanent ones caught above. AssertionError is caught here
-            // too, since the converter, the live matcher or the projection can throw one, and leaving it uncaught
-            // would strand the delivery unacked at prefetch one. Any other Error still propagates.
+            // too, since the converter, the live matcher or the projection can throw one, and it belongs in the
+            // failure policy like any other projection failure. Any other Error stops this bridge instead, see
+            // handleDeliveryOrStop.
             log.debug("The projection registered on queue \"{}\"'s feed failed for delivery tag {}.", queue, deliveryTag, e);
             routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
@@ -459,6 +507,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     private void ackNow(long deliveryTag) {
         consumeLock.lock();
         try {
+            if (closeDeadlinePassed()) {
+                return;
+            }
             failureAction.ack(deliveryTag);
         } finally {
             consumeLock.unlock();
@@ -477,6 +528,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         } else {
             consumeLock.lock();
             try {
+                if (closeDeadlinePassed()) {
+                    return;
+                }
                 failureAction.apply(deliveryTag, properties, body);
             } finally {
                 consumeLock.unlock();
@@ -534,14 +588,30 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             consumeLock.unlock();
         }
         scheduler.shutdown();
+        worker.stopAcceptingWork();
     }
 
     /**
-     * Stops the background poll, cancels this bridge's consumer if it has one, releases any {@code DEFERRED}
-     * delivery still held unacked, and closes the {@link Channel} (and, with {@link DeliveryFailurePolicy#PARK},
-     * the parking sink) this bridge created. Does not close the {@link Connection} it was built from. Never
-     * releases the one delivery {@code stopPermanently()} is holding for {@link UnreadableLiveFilterException},
-     * since that tag never enters the held-{@code DEFERRED} queue this releases in the first place.
+     * Stops the background poll, cancels this bridge's consumer if it has one, waits up to
+     * {@link Builder#closeTimeout(Duration)} for a delivery already being handled to finish, releases any
+     * {@code DEFERRED} delivery still held unacked, and closes the {@link Channel} (and, with
+     * {@link DeliveryFailurePolicy#PARK}, the parking sink) this bridge created. Does not close the
+     * {@link Connection} it was built from. Never releases the one delivery {@code stopPermanently()} is holding for
+     * {@link UnreadableLiveFilterException}, since that tag never enters the held-{@code DEFERRED} queue this
+     * releases in the first place.
+     * <p>
+     * A delivery that arrived but was not yet being handled is not started, and a projection still running after
+     * {@code closeTimeout} is interrupted and logged at {@code warn}. Neither was acknowledged, so closing the channel
+     * puts both back on the queue and they are delivered again. Nothing acknowledges or parks a delivery once that
+     * deadline has passed, so a projection finishing just after it has its delivery redelivered rather than committed.
+     * The same holds from the moment this method stops waiting early, which happens when the calling thread is
+     * interrupted or when a projection is closing its own bridge.
+     * Called from inside a projection, this method does not wait for that projection, since it is the one calling.
+     * <p>
+     * A projection that ignores its interrupt keeps running after this returns, so whatever it writes is written
+     * whenever it finishes, which for a bridge built again on the same queue in the same process can be after events
+     * that later bridge has already handled. {@code closeTimeout} bounds how long this waits for a projection and for the lock,
+     * not how long the method takes, since closing the channel and the parking sink happens after that deadline.
      * <p>
      * Releasing a held {@code DEFERRED} delivery here is belt and braces rather than load bearing: closing a
      * channel with an unacked delivery on it already requeues that delivery at the broker on its own, so skipping
@@ -550,30 +620,56 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
      */
     @Override
     public void close() {
+        long deadline = System.nanoTime() + closeTimeout.toNanos();
+        bringCloseDeadlineForwardTo(deadline);
         scheduler.shutdownNow();
-        consumeLock.lock();
-        try {
-            if (consumerTag != null) {
-                try {
-                    consumeChannel.basicCancel(consumerTag);
-                } catch (IOException ignored) {
-                    // Best effort: the channel is about to be closed either way.
+        // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
+        permanentlyStopped = true;
+        // Before the cancel, since a delivery the client has already dispatched could otherwise reach an idle worker
+        // and start a projection while this is closing.
+        worker.stopAcceptingWork();
+        // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that lock
+        // while a park waits for its confirm. Closing the channel below cancels the consumer and requeues the rest.
+        if (lockBefore(deadline)) {
+            try {
+                if (consumerTag != null) {
+                    try {
+                        consumeChannel.basicCancel(consumerTag);
+                    } catch (IOException ignored) {
+                        // Best effort: the channel is about to be closed either way.
+                    }
+                    consumerTag = null;
                 }
-                consumerTag = null;
+            } finally {
+                consumeLock.unlock();
             }
+        }
+        boolean workerFinished = worker.stop(remainingUntil(deadline));
+        if (!workerFinished || worker.isWorkerThread()) {
+            // The teardown below goes ahead with a delivery still running, either because this thread was interrupted
+            // while waiting or because a projection is closing its own bridge, so fence the acknowledgement from here
+            // rather than at a deadline that may still be in the future.
+            bringCloseDeadlineForwardTo(System.nanoTime());
+        }
+        if (!workerFinished) {
+            worker.interruptRunningWork(closeTimeout);
+        }
+        if (lockBefore(deadline)) {
             try {
-                releaseHeldDeferredDelivery();
-            } catch (RuntimeException ignored) {
-                // Best effort, matching basicCancel above: the channel is about to be closed either way, and
-                // closing it requeues whatever is left held regardless.
+                try {
+                    releaseHeldDeferredDelivery();
+                } catch (RuntimeException ignored) {
+                    // Best effort, matching basicCancel above: the channel is about to be closed either way, and
+                    // closing it requeues whatever is left held regardless.
+                }
+                try {
+                    releaseHeldFailedDelivery();
+                } catch (RuntimeException ignored) {
+                    // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
+                }
+            } finally {
+                consumeLock.unlock();
             }
-            try {
-                releaseHeldFailedDelivery();
-            } catch (RuntimeException ignored) {
-                // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
-            }
-        } finally {
-            consumeLock.unlock();
         }
         try {
             consumeChannel.close();
@@ -581,6 +677,31 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             // Best effort, mirroring RabbitMqCloudEventSink#close's own channel teardown.
         }
         failureAction.close();
+    }
+
+    // Only ever moved earlier, so a second close() cannot push a deadline the first one has already passed back into
+    // the future and let a projection that ignored its interrupt acknowledge after all.
+    private void bringCloseDeadlineForwardTo(long deadlineNanos) {
+        closeDeadlineNanos.accumulateAndGet(deadlineNanos,
+                (current, candidate) -> current == Long.MAX_VALUE || candidate - current < 0 ? candidate : current);
+    }
+
+    private boolean closeDeadlinePassed() {
+        long deadline = closeDeadlineNanos.get();
+        return deadline != Long.MAX_VALUE && System.nanoTime() - deadline >= 0;
+    }
+
+    private boolean lockBefore(long deadlineNanos) {
+        try {
+            return consumeLock.tryLock(Math.max(0, deadlineNanos - System.nanoTime()), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private static Duration remainingUntil(long deadlineNanos) {
+        return Duration.ofNanos(Math.max(0, deadlineNanos - System.nanoTime()));
     }
 
     public static final class Builder<E> {
@@ -595,6 +716,7 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         private @Nullable RabbitMqDestination parkingDestination;
         private Duration pollInterval = Duration.ofSeconds(1);
         private int prefetchCount = 1;
+        private Duration closeTimeout = Duration.ofSeconds(30);
         private RetryStrategy retryStrategy;
 
         private Builder(Connection connection, DomainEventFeed<E> feed, String queue) {
@@ -691,14 +813,30 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         }
 
         /**
-         * How many unacknowledged deliveries this bridge allows itself at once. One by default, which is what keeps
-         * deliveries processed one at a time.
+         * How many unacknowledged deliveries this bridge allows itself at once. One by default. This bridge handles
+         * its deliveries one at a time and in order on its own thread whatever this is set to, so raising it only
+         * lets more of them wait in memory for that thread, which is also how many a connection recovery or a
+         * {@link RabbitMqDomainEventBridge#close()} can hand back to the queue to be delivered again.
          */
         public Builder<E> prefetchCount(int prefetchCount) {
             if (prefetchCount < 1) {
                 throw new IllegalArgumentException("prefetchCount must be at least 1, was " + prefetchCount);
             }
             this.prefetchCount = prefetchCount;
+            return this;
+        }
+
+        /**
+         * How long {@link RabbitMqDomainEventBridge#close()} waits for a delivery already being handled to finish.
+         * Thirty seconds by default, the same as the Kafka bridges. A projection still running after that is
+         * interrupted, and its delivery goes back on the queue when the channel closes, so it is handled again.
+         */
+        public Builder<E> closeTimeout(Duration closeTimeout) {
+            requireNonNull(closeTimeout, "closeTimeout cannot be null");
+            if (closeTimeout.isNegative()) {
+                throw new IllegalArgumentException("closeTimeout cannot be negative, was " + closeTimeout);
+            }
+            this.closeTimeout = closeTimeout;
             return this;
         }
 
@@ -757,7 +895,7 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             RabbitMqDomainEventBridge<E> bridge = null;
             try {
                 failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log);
-                bridge = new RabbitMqDomainEventBridge<>(feed, channel, queue, prefetchCount, pollInterval, failureAction);
+                bridge = new RabbitMqDomainEventBridge<>(feed, channel, queue, prefetchCount, pollInterval, failureAction, closeTimeout);
                 bridge.start(this, destinations);
                 return bridge;
             } catch (RuntimeException e) {

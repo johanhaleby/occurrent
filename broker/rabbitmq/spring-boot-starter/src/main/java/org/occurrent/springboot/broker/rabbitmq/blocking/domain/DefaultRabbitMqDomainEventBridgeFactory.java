@@ -53,6 +53,7 @@ class DefaultRabbitMqDomainEventBridgeFactory implements RabbitMqDomainEventBrid
                 .onDeliveryFailure(bridgeProperties.getOnDeliveryFailure())
                 .pollInterval(bridgeProperties.getPollInterval())
                 .prefetchCount(bridgeProperties.getPrefetchCount())
+                .closeTimeout(bridgeProperties.getCloseTimeout())
                 .retryStrategy(buildRetryStrategy(queue, bridgeProperties.getRetry()));
         DestinationResolver<RabbitMqDestination> resolver = resolverProvider.getIfAvailable();
         if (resolver != null) {

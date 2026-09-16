@@ -44,6 +44,7 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -205,6 +206,71 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
 
             await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(folded).contains("id-1"));
         }
+    }
+
+    /**
+     * A handler blocked across two recoveries finds the message waiting for it a second time from each recovered
+     * channel unless the bridge drops what the dead channel left behind. With prefetch one the message is handled
+     * twice here, once by the blocked call and once by the copy the last recovered channel delivered.
+     */
+    @Test
+    void a_handler_blocked_across_two_recoveries_handles_the_message_once_more_rather_than_once_per_recovery() throws Exception {
+        String queue = "test-queue-" + UUID.randomUUID();
+        adminChannel.queueDeclare(queue, false, false, false, null);
+        adminChannel.queueBind(queue, exchange, OrderPlaced.class.getName());
+        AtomicInteger recoveries = new AtomicInteger();
+        ((Recoverable) connection).addRecoveryListener(new RecoveryListener() {
+            @Override
+            public void handleRecovery(Recoverable recoverable) {
+                recoveries.incrementAndGet();
+            }
+
+            @Override
+            public void handleRecoveryStarted(Recoverable recoverable) {
+            }
+        });
+
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        CountDownLatch firstCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirstCall = new CountDownLatch(1);
+        List<String> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("proj", ce -> {
+            handled.add(ce.getId());
+            if (handled.size() == 1) {
+                firstCallEntered.countDown();
+                try {
+                    releaseFirstCall.await(60, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, queue)
+                .declareTopology(false)
+                .pollInterval(Duration.ofMillis(200))
+                .build()) {
+            publish(OrderPlaced.class.getName(), "id-1");
+            assertThat(firstCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            for (int recovery = 1; recovery <= 2; recovery++) {
+                int expectedRecoveries = recovery;
+                forceCloseAllConnectionsOrFail();
+                await().atMost(Duration.ofSeconds(30)).until(() -> recoveries.get() == expectedRecoveries);
+                // The recovered consumer has taken the requeued copy once the queue has nothing ready on it.
+                await().atMost(Duration.ofSeconds(10)).ignoreExceptions()
+                        .untilAsserted(() -> assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero());
+            }
+            releaseFirstCall.countDown();
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(handled).hasSize(2));
+            sleep(Duration.ofSeconds(1));
+            assertThat(handled).containsExactly("id-1", "id-1");
+        } finally {
+            releaseFirstCall.countDown();
+        }
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero());
     }
 
     private static void sleep(Duration duration) {
