@@ -584,6 +584,8 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
      * {@code closeTimeout} is interrupted and logged at {@code warn}. Neither was acknowledged, so closing the channel
      * puts both back on the queue and they are delivered again. Nothing acknowledges or parks a delivery once that
      * deadline has passed, so a handler finishing just after it has its delivery redelivered rather than committed.
+     * The same holds from the moment this method stops waiting early, which happens when the calling thread is
+     * interrupted or when a handler is closing its own bridge.
      * Called from inside a handler, this method does not wait for that handler, since it is the one calling.
      * <p>
      * A handler that ignores its interrupt keeps running after this returns, so whatever it writes is written
@@ -622,7 +624,14 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
                 consumeLock.unlock();
             }
         }
-        if (!worker.stop(remainingUntil(deadline))) {
+        boolean workerFinished = worker.stop(remainingUntil(deadline));
+        if (!workerFinished || worker.isWorkerThread()) {
+            // The teardown below goes ahead with a delivery still running, either because this thread was interrupted
+            // while waiting or because a handler is closing its own bridge, so fence the acknowledgement from here
+            // rather than at a deadline that may still be in the future.
+            closeDeadlineNanos = System.nanoTime();
+        }
+        if (!workerFinished) {
             worker.interruptRunningWork(closeTimeout);
         }
         if (lockBefore(deadline)) {
