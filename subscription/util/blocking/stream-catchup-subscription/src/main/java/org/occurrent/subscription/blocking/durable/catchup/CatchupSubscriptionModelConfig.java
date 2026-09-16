@@ -36,19 +36,21 @@ public class CatchupSubscriptionModelConfig {
     static final long DEFAULT_DCB_CATCHUP_POSITION_WINDOW_SIZE = 1000;
 
     /**
-     * Default ceiling on the number of event ids kept to dedupe the catch-up-to-live handover, used by convenience
+     * Default ceiling on the number of events kept to dedupe the catch-up-to-live handover, used by convenience
      * constructors without an explicit {@code cacheSize}. The cache grows to cover the replay-to-live overlap
      * (bounded by write volume during replay, not total history) and evicts oldest-first past this ceiling.
      * Exceeding it causes extra duplicate deliveries, never loss (at-least-once). Well above the previous
      * {@code 100} so a rebuild under heavy concurrent writes no longer evicts the overlap before live re-delivers
-     * it. Each id is a short string, so lower it to cap memory or raise it to cut duplicates further.
+     * it. Each entry holds an event's id and source, not just the id, so lower it to cap memory or raise it to cut
+     * duplicates further.
      */
     public static final int DEFAULT_HANDOVER_CACHE_SIZE = 100_000;
 
     /**
-     * The ceiling on the number of CloudEvent ids kept in-memory to deduplicate the switch from catch-up mode to
-     * live subscription mode. The cache grows to cover the overlap the live subscription re-delivers up to this
-     * ceiling, then evicts oldest-first. Exceeding the ceiling yields extra duplicate deliveries, never loss.
+     * The ceiling on the number of CloudEvents, keyed by id and source together, kept in-memory to deduplicate the
+     * switch from catch-up mode to live subscription mode. The cache grows to cover the overlap the live
+     * subscription re-delivers up to this ceiling, then evicts oldest-first. Exceeding the ceiling yields extra
+     * duplicate deliveries, never loss.
      */
     public final int cacheSize;
     public final CheckpointStorageConfig subscriptionStorageConfig;
@@ -64,7 +66,7 @@ public class CatchupSubscriptionModelConfig {
      * Create a new {@code CatchupSubscriptionModelConfig} will the given cache size. Will default to sort by time and then stream version (if time is the same for two events)
      * during the catchup phase. You can change this by calling {@link #catchupPhaseSortBy(SortBy)}.
      *
-     * @param cacheSize The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
+     * @param cacheSize The number of CloudEvents, keyed by id and source together, to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
      *                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
      */
     public CatchupSubscriptionModelConfig(int cacheSize) {
@@ -85,7 +87,7 @@ public class CatchupSubscriptionModelConfig {
      * Create a new {@code CatchupSubscriptionModelConfig} will the given settings. Will default to sort by time and then stream version (if time is the same for two events)
      * during the catchup phase. You can change this by calling {@link #catchupPhaseSortBy(SortBy)}.
      *
-     * @param cacheSize                 The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
+     * @param cacheSize                 The number of CloudEvents, keyed by id and source together, to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
      *                                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
      * @param subscriptionStorageConfig Configures if and how checkpoint persistence should be handled during the catch-up phase.
      */
