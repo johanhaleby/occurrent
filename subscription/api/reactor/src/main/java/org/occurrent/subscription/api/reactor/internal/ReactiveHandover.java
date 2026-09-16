@@ -426,9 +426,10 @@ public final class ReactiveHandover<T, K> {
             ackSink.error(catchUpFailed(failure));
             return;
         }
-        if (stopped) {
+        if (stopped && !live) {
             // Dropped rather than buffered, and the ack completes rather than failing. The replay that would have
-            // drained this buffer was stopped, so nothing is coming to fold it. Dropped, not deferred (ADR 85).
+            // drained this buffer was stopped, so nothing is coming to fold it. Dropped, not deferred (ADR 85). A
+            // handover that has gone live delivers instead, whatever a stop left behind, since its live pipeline runs.
             ackSink.success(false);
             return;
         }
@@ -441,7 +442,7 @@ public final class ReactiveHandover<T, K> {
             ackSink.error(catchUpFailed(failure));
             return;
         }
-        if (stopped) {
+        if (stopped && !live) {
             ackSink.success(false);
             return;
         }
@@ -696,10 +697,12 @@ public final class ReactiveHandover<T, K> {
                         }
                         abandonReplayWithoutMasking(source, replayOpen);
                         resumeLiveDelivery(pause);
-                        catchupDone.tryEmitValue(false);
                         if (!wasLive) {
                             pendingLiveAcks.forEach(sink -> sink.success(false));
                         }
+                        // Emitted last, so a caller that reacts to the stop by calling goLive() finds every payload
+                        // this stop dropped already answered rather than answered while that call is running.
+                        catchupDone.tryEmitValue(false);
                         return;
                     }
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.

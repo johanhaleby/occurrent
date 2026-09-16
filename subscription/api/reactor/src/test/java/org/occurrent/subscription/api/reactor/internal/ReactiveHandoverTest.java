@@ -1031,6 +1031,27 @@ class ReactiveHandoverTest {
         assertThat(log).containsExactly("R1");
     }
 
+    // A stop answers the payloads it drops before it reports itself stopped, so a caller that goes on to call goLive()
+    // finds them answered rather than answered while that call is running.
+    @Test
+    void a_stopped_replay_answers_the_payloads_it_drops_before_it_reports_the_stop() throws Exception {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String, String> handover = handover(delivered);
+        CompletableFuture<Boolean> buffered = handover.acceptReportingDelivery("L1").toFuture();
+        FakeSource stopping = source(List.of("R1", "R2"), false);
+        stopping.stopAfter(1);
+
+        // Read inside the signal itself, which the stop emits on its own thread, so this is the state a caller reacting
+        // to that signal sees rather than whatever the two threads happen to reach first.
+        AtomicBoolean answeredWhenTheStopWasReported = new AtomicBoolean();
+        StepVerifier.create(handover.catchUp(stopping).doOnNext(ignored -> answeredWhenTheStopWasReported.set(buffered.isDone())))
+                .expectNext(false)
+                .verifyComplete();
+
+        assertThat(answeredWhenTheStopWasReported).isTrue();
+        assertThat(buffered.get(5, TimeUnit.SECONDS)).isFalse();
+    }
+
     // A catch-up that arrives while an earlier one's buffered payloads are still being delivered counts its own
     // payloads and tells its own source. The earlier catch-up is still told when its own set is exhausted, which one
     // shared set of counters could not do, since the later catch-up took them over.
