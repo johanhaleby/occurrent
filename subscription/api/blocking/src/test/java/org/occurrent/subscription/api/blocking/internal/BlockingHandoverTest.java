@@ -928,6 +928,116 @@ class BlockingHandoverTest {
                 .containsExactly("L1", "L2");
     }
 
+    /**
+     * A replay that waited for a catch-up with nothing to replay must not inherit the live handover that catch-up
+     * left behind. If it does, a live payload arriving during the replay is folded next to it and thrown away with
+     * the replay's buffer when the replay stops, while its caller was told it was handled.
+     */
+    @Test
+    void a_replay_that_waited_out_a_live_transition_buffers_the_payloads_that_arrive_while_it_runs() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        AtomicBoolean replayRunning = new AtomicBoolean();
+        AtomicBoolean liveFoldedDuringTheReplay = new AtomicBoolean();
+        CountDownLatch transitionReached = new CountDownLatch(1);
+        CountDownLatch releaseTransition = new CountDownLatch(1);
+        CountDownLatch replayStarted = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("L1") && replayRunning.get()) {
+                liveFoldedDuringTheReplay.set(true);
+            }
+            log.add(payload);
+            if (payload.equals("R1")) {
+                // A live payload arriving mid-replay, which is the copy the abandoned replay would take with it.
+                handoverRef.get().accept("L1");
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        FakeSource replaying = source(List.of("R1"), false);
+        replaying.stopAfter(1);
+        replaying.onReplayStarted = () -> {
+            replayRunning.set(true);
+            replayStarted.countDown();
+        };
+        replaying.onReplayCompleted = () -> replayRunning.set(false);
+        replaying.onReplayAbandoned = () -> replayRunning.set(false);
+        FakeSource goingLive = source(List.of(), true);
+        goingLive.onHistoryDone = () -> {
+            transitionReached.countDown();
+            awaitLatch(releaseTransition);
+        };
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<Boolean> goLive = threads.submit(() -> handover.catchUp(goingLive));
+            awaitLatch(transitionReached);
+            Future<Boolean> replay = threads.submit(() -> handover.catchUp(replaying));
+            // Parked in the wait, with the transition about to make the handover live behind its back.
+            assertThat(reachedWithin(replayStarted, 300)).isFalse();
+
+            releaseTransition.countDown();
+
+            assertThat(goLive.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(replay.get(5, TimeUnit.SECONDS)).as("the replay was stopped").isFalse();
+            assertThat(liveFoldedDuringTheReplay).isFalse();
+            assertThat(log).as("the live payload was delivered when the replay ended, not during it")
+                    .containsExactly("R1", "L1");
+        } finally {
+            threads.shutdownNow();
+        }
+    }
+
+    /**
+     * Two catch-ups with nothing to replay can be taking the handover live at the same time. A replay waits for both,
+     * so the first to finish does not release it into a view the second is still draining into.
+     */
+    @Test
+    void a_replay_waits_for_every_live_transition_running_rather_than_the_first_to_finish() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch firstReached = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch secondReached = new CountDownLatch(1);
+        CountDownLatch releaseSecond = new CountDownLatch(1);
+        CountDownLatch replayStarted = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = BlockingHandover.create(
+                log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        FakeSource first = source(List.of(), true);
+        first.onHistoryDone = () -> {
+            firstReached.countDown();
+            awaitLatch(releaseFirst);
+        };
+        FakeSource second = source(List.of(), true);
+        second.onHistoryDone = () -> {
+            secondReached.countDown();
+            awaitLatch(releaseSecond);
+        };
+        CountDownLatch replayCompleted = new CountDownLatch(1);
+        FakeSource replaying = source(List.of("R1"), false);
+        replaying.onReplayStarted = replayStarted::countDown;
+        replaying.onReplayCompleted = replayCompleted::countDown;
+        ExecutorService threads = Executors.newFixedThreadPool(3);
+        try {
+            threads.submit(() -> handover.catchUp(first));
+            awaitLatch(firstReached);
+            threads.submit(() -> handover.catchUp(second));
+            awaitLatch(secondReached);
+            threads.submit(() -> handover.catchUp(replaying));
+            assertThat(reachedWithin(replayStarted, 300)).isFalse();
+
+            releaseFirst.countDown();
+
+            assertThat(reachedWithin(replayStarted, 300))
+                    .as("the second transition is still delivering").isFalse();
+
+            releaseSecond.countDown();
+
+            assertThat(replayStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(replayCompleted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(log).containsExactly("R1");
+        } finally {
+            threads.shutdownNow();
+        }
+    }
+
     private static BlockingHandover<String, String> handover(List<String> delivered) {
         return BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
     }
