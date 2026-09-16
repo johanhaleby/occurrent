@@ -104,8 +104,9 @@ same.
 
 So each recorder remembers the appends its replay applied an event of, and records a suppressed copy only when its
 append is among them. The set belongs to one catch-up and starts empty with the next. It holds up to 10000 appends,
-the handover's default replay cache size, which counts events rather than appends, so at that default no append is
-forgotten while a copy of one of its events can still be suppressed. An append past the bound stays unrecorded and a
+the handover's default replay cache size, which counts events rather than appends, and it forgets the append used
+longest ago rather than the one added longest ago, so an append the replay applies again outlives the ones added
+before it. At that default no append is forgotten while a copy of one of its events can still be suppressed. An append past the bound stays unrecorded and a
 wait for it times out, which is the one wrong answer this allows. A wait never answers `true` for an append nothing
 applied.
 

@@ -22,11 +22,11 @@ import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.eventstore.api.AppendId;
 import org.occurrent.subscription.CatchupThenLiveOptions;
-import org.occurrent.subscription.internal.BoundedIdCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
@@ -88,7 +88,34 @@ public final class AppliedAppendRecording {
     //
     // It also holds the appends the replay applied an event of, since that set belongs to one catch-up and a new
     // one has to start from nothing.
-    private record Catchup(Object episode, boolean readingHistory, BoundedIdCache<AppendId> appliedByReplay) {
+    private record Catchup(Object episode, boolean readingHistory, RecentAppends appliedByReplay) {
+    }
+
+    // The appends a replay applied an event of, bounded, and ordered by when each was last used rather than by when it
+    // was first added. An append with several events is applied again while a live copy of an earlier one of them can
+    // still be suppressed, so first-added order would forget it while the handover still remembers those events.
+    private static final class RecentAppends {
+        private final int capacity;
+        private final LinkedHashMap<AppendId, Boolean> appends = new LinkedHashMap<>(16, 0.75f, true);
+
+        private RecentAppends(int capacity) {
+            this.capacity = capacity;
+        }
+
+        private synchronized void add(AppendId appendId) {
+            appends.put(appendId, Boolean.TRUE);
+            if (appends.size() > capacity) {
+                Iterator<AppendId> oldest = appends.keySet().iterator();
+                oldest.next();
+                oldest.remove();
+            }
+        }
+
+        // get rather than containsKey, so an append a suppression asks about counts as used and outlives one nothing
+        // has asked about since.
+        private synchronized boolean contains(AppendId appendId) {
+            return appends.get(appendId) != null;
+        }
     }
 
     // Matches the handover's default replay cache, which holds one entry per event rather than per append, so at that
@@ -322,7 +349,7 @@ public final class AppliedAppendRecording {
      */
     public void catchupStarted(Object episode) {
         requireNonNull(episode, "episode cannot be null");
-        catchup.set(new Catchup(episode, true, new BoundedIdCache<>(MAX_APPLIED_BY_REPLAY)));
+        catchup.set(new Catchup(episode, true, new RecentAppends(MAX_APPLIED_BY_REPLAY)));
     }
 
     /**
@@ -351,7 +378,7 @@ public final class AppliedAppendRecording {
         requireNonNull(episode, "episode cannot be null");
         Catchup current = catchup.get();
         if (current != null && current.episode() == episode && current.readingHistory()) {
-            catchup.compareAndSet(current, new Catchup(episode, false, new BoundedIdCache<>(MAX_APPLIED_BY_REPLAY)));
+            catchup.compareAndSet(current, new Catchup(episode, false, new RecentAppends(MAX_APPLIED_BY_REPLAY)));
         }
     }
 

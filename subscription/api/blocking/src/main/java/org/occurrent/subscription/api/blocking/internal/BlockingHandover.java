@@ -521,7 +521,11 @@ public final class BlockingHandover<T, K> {
             boolean stoppedMidReplay = false;
             boolean interrupted = false;
             boolean drainAfterInterrupt = false;
+            Throwable alreadyFailed = null;
             synchronized (lock) {
+                // Read before the wait, so the check after it asks whether a catch-up failed while this call waited
+                // rather than whether the handover had already failed when the caller asked for this one.
+                Throwable failureBeforeWaiting = catchUpFailure;
                 boolean wasLive = live;
                 // Stops a further live delivery from starting, which is what the wait below waits out.
                 live = false;
@@ -542,6 +546,12 @@ public final class BlockingHandover<T, K> {
                         // with the payloads after this belonging in its buffer rather than dropped.
                         stopped = true;
                     }
+                } else if (catchUpFailure != null && catchUpFailure != failureBeforeWaiting) {
+                    // The catch-up this call waited for failed, which leaves the handover refusing everything and its
+                    // caller told to replace it. So this replay does not start and fold a history into a view its
+                    // caller was told to stop using. A caller that asks for a catch-up on a handover that had already
+                    // failed still gets one, which is what it asked for.
+                    alreadyFailed = catchUpFailure;
                 } else {
                     // Written after the wait rather than before it, because wait() releases this lock, and a
                     // catch-up going live in that window sets live back to true, which would put the replay next to
@@ -555,6 +565,9 @@ public final class BlockingHandover<T, K> {
                     replayTurnHeld = true;
                     holdsReplayTurn = true;
                 }
+            }
+            if (alreadyFailed != null) {
+                throw new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), alreadyFailed);
             }
             if (interrupted) {
                 if (drainAfterInterrupt) {
@@ -660,7 +673,11 @@ public final class BlockingHandover<T, K> {
                 }
             }
             synchronized (lock) {
-                catchUpFailure = e;
+                // The first failure is the one that matters, so a later call refusing because of it does not take its
+                // place and hide the cause.
+                if (catchUpFailure == null) {
+                    catchUpFailure = e;
+                }
                 if (holdsReplayTurn) {
                     replayRunning = false;
                 }

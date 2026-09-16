@@ -1327,6 +1327,47 @@ class BlockingHandoverTest {
         assertThat(log).as("the payload was drained by the catch-up that was going live").containsExactly("L1");
     }
 
+    /**
+     * A catch-up that failed leaves the handover refusing every payload and its caller told to replace it. A replay
+     * waiting behind that failure must not start, since it would fold a history into a view nobody is using any more.
+     */
+    @Test
+    void a_replay_queued_behind_a_failed_catch_up_does_not_start() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        CountDownLatch queuedReplayStarted = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                foldingR1.countDown();
+                awaitLatch(releaseR1);
+            }
+            if (payload.equals("R2")) {
+                throw new IllegalStateException("fold failed");
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        FakeSource queued = source(List.of("R3"), false);
+        queued.onReplayStarted = queuedReplayStarted::countDown;
+        AtomicReference<Throwable> failed = new AtomicReference<>();
+        AtomicReference<Throwable> queuedOutcome = new AtomicReference<>();
+        Thread failing = new Thread(() -> failed.set(catchThrowable(() -> handover.catchUp(source(List.of("R1", "R2"), false)))), "failing");
+        Thread waiting = new Thread(() -> queuedOutcome.set(catchThrowable(() -> handover.catchUp(queued))), "queued");
+
+        failing.start();
+        awaitLatch(foldingR1);
+        waiting.start();
+        assertThat(reachedWithin(queuedReplayStarted, 300)).isFalse();
+        releaseR1.countDown();
+        failing.join(5_000);
+        waiting.join(5_000);
+
+        assertThat(failed.get()).isInstanceOf(IllegalStateException.class);
+        assertThat(queuedOutcome.get()).as("the queued catch-up was refused rather than run")
+                .isInstanceOf(BlockingHandover.PreDispatchRefusalException.class);
+        assertThat(log).containsExactly("R1", "R2");
+    }
+
     private static BlockingHandover<String, String> handover(List<String> delivered) {
         return BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
     }

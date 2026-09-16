@@ -19,6 +19,7 @@ package org.occurrent.dsl.projection.internal;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
@@ -513,6 +514,28 @@ class AppliedAppendRecordingTest {
             Thread.currentThread().interrupt();
             throw new AssertionError(e);
         }
+    }
+
+    // An append with several events is applied more than once during one replay, and the handover remembers events
+    // rather than appends, so an append whose later events are still in the handover's cache has to still be here.
+    // Forgetting it would leave a suppressed live copy of one of those events unrecorded and its wait timing out.
+    @Test
+    void an_append_applied_again_outlives_the_appends_added_before_it() {
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, AppliedAppendStore.inMemory());
+        Object episode = new Object();
+        recording.catchupStarted(episode);
+        AppendId shared = AppendId.mint();
+        recording.applied(metadataWithAppendId(shared));
+        for (int i = 0; i < CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE - 1; i++) {
+            recording.applied(metadataWithAppendId(AppendId.mint()));
+        }
+
+        // A second event of the same append, then one more append, which is what pushes the oldest entry out.
+        recording.applied(metadataWithAppendId(shared));
+        recording.applied(metadataWithAppendId(AppendId.mint()));
+
+        assertThat(recording.appliedByReplay(metadataWithAppendId(shared)))
+                .as("the append was applied again, so it is not the oldest entry any more").isTrue();
     }
 
     private static EventMetadata metadataWithAppendId(AppendId appendId) {

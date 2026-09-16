@@ -990,6 +990,41 @@ class ReactiveHandoverTest {
         assertThat(firstDrained.await(5, TimeUnit.SECONDS)).as("the earlier drain still reached its source").isTrue();
     }
 
+    /**
+     * The same as the blocking engine. A catch-up that failed leaves the handover refusing everything, so a replay
+     * holding a turn taken behind that failure is refused rather than folded into a view nobody is using any more.
+     */
+    @Test
+    void a_replay_queued_behind_a_failed_catch_up_does_not_start() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                foldingR1.countDown();
+                try {
+                    releaseR1.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            if (payload.equals("R2")) {
+                throw new IllegalStateException("fold failed");
+            }
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        FakeSource queued = source(List.of("R3"), false);
+
+        Mono<Boolean> failing = handover.catchUp(source(List.of("R1", "R2"), false));
+        assertThat(foldingR1.await(5, TimeUnit.SECONDS)).isTrue();
+        Mono<Boolean> queuedCatchUp = handover.catchUp(queued);
+        releaseR1.countDown();
+
+        StepVerifier.create(failing).expectError(IllegalStateException.class).verify(Duration.ofSeconds(5));
+        StepVerifier.create(queuedCatchUp).expectError(ReactiveHandover.PreDispatchRefusalException.class).verify(Duration.ofSeconds(5));
+        assertThat(log).as("the queued replay never folded its history").containsExactly("R1", "R2");
+    }
+
     private static FakeSource source(List<String> history, boolean alreadyCaughtUp) {
         return new FakeSource(history, alreadyCaughtUp);
     }

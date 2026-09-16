@@ -334,10 +334,14 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
-     * Stop a replay still in flight. It notices at its next event and unwinds without draining the live buffer, going
-     * live, or recording the completion marker, so a partial replay is never recorded as a finished one and the next
-     * {@link #catchUp()} replays the whole history again. A stop is not a failure: the feed stays usable rather than
-     * failing every later event.
+     * Stop a replay still in flight. It notices at its next event and unwinds without recording the completion marker,
+     * so a partial replay is never recorded as a finished one and the next {@link #catchUp()} replays the whole
+     * history again. A stop is not a failure: the feed stays usable rather than failing every later event.
+     * <p>
+     * What the stop does with the live events depends on where the feed stood when the replay started. One that had
+     * not gone live drains nothing and does not go live, and the acknowledgements of the events it held complete
+     * rather than fail. One replaying after a {@link #goLive()} delivers what it held while the replay ran and goes on
+     * delivering, since those events were accepted by a feed that was already live.
      * <p>
      * A view that buffers during a replay discards that buffer on a stop, so after a {@link #goLive()} the live copy
      * of an event the stopped replay delivered is delivered again rather than skipped as a duplicate. A view that
