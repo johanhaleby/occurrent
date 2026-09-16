@@ -1092,6 +1092,46 @@ class BlockingHandoverTest {
         assertThat(log).as("the handover the other catch-up made live still delivers").containsExactly("L1", "L2");
     }
 
+    /**
+     * A catch-up holds live payloads back while it waits, and each of those was reported handled when it was taken
+     * in. One that gives up on an interrupt has to deliver them, since a handover that is live again takes later
+     * payloads straight past the buffer and nothing would come back for the ones sitting in it.
+     */
+    @Test
+    void an_interrupted_wait_delivers_the_payloads_it_took_in_while_it_waited() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch deliveringL1 = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        CountDownLatch replayStarted = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                deliveringL1.countDown();
+                awaitLatch(releaseL1);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.catchUp(source(List.of(), true));
+        FakeSource replaying = source(List.of("R1"), false);
+        replaying.onReplayStarted = replayStarted::countDown;
+        Thread delivering = new Thread(() -> handover.accept("L1"), "live-delivery");
+        Thread replay = new Thread(() -> handover.catchUp(replaying), "replay");
+
+        delivering.start();
+        awaitLatch(deliveringL1);
+        replay.start();
+        // Waiting for the live delivery above, which is the window a payload lands in the buffer in.
+        assertThat(reachedWithin(replayStarted, 300)).isFalse();
+        handover.accept("L2");
+        replay.interrupt();
+        replay.join(5_000);
+        releaseL1.countDown();
+        delivering.join(5_000);
+        handover.accept("L3");
+
+        assertThat(log).as("the payload taken in while the catch-up waited was delivered")
+                .containsExactly("L1", "L2", "L3");
+    }
+
     private static BlockingHandover<String, String> handover(List<String> delivered) {
         return BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
     }

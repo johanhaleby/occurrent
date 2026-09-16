@@ -501,31 +501,52 @@ public final class BlockingHandover<T, K> {
                 return true;
             }
             boolean stoppedMidReplay = false;
+            boolean interrupted = false;
+            boolean drainAfterInterrupt = false;
             synchronized (lock) {
                 boolean wasLive = live;
                 // Stops a further live delivery from starting, which is what the wait below waits out.
                 live = false;
                 if (!awaitLiveDeliveriesUnderLock()) {
                     // The wait was interrupted, so this call gives up rather than replaying next to a delivery it
-                    // never waited out. Nothing has been signalled yet, so the handover goes back where it was. Live
-                    // is read again for the same reason it is below: a catch-up that went live during the wait did so
-                    // for its own caller, and writing the value read before the wait would take that back.
-                    boolean liveNow = wasLive || live;
-                    live = liveNow;
-                    if (!liveNow) {
+                    // never waited out. Live is read again for the same reason it is below: a catch-up that went live
+                    // during the wait did so for its own caller, and writing the value read before the wait would
+                    // take that back.
+                    interrupted = true;
+                    if (wasLive || live) {
+                        // Claimed under this lock, so the drain below runs the way a catch-up with nothing to replay
+                        // drains, with a replay waiting rather than starting next to it.
+                        liveTransitionsRunning++;
+                        drainAfterInterrupt = true;
+                    } else {
                         stopped = true;
                     }
-                    return false;
+                } else {
+                    // Written after the wait rather than before it, because wait() releases this lock, and a
+                    // catch-up going live in that window sets live back to true, which would put the replay next to
+                    // a live handover. Reading live again here is what makes the two one step.
+                    liveWhenReplayStops = wasLive || live;
+                    live = false;
+                    // Every key belongs to the source a suppression reports to, so a new replay starts from none.
+                    replayedIds.clear();
+                    this.source = source;
+                    replayRunning = true;
                 }
-                // Written after the wait rather than before it, because wait() releases this lock, and a live
-                // transition finishing in that window sets live back to true and would leave the replay running
-                // against a live handover. Reading live again here is what makes the two one step.
-                liveWhenReplayStops = wasLive || live;
-                live = false;
-                // Every key belongs to the source a suppression reports to, so a new replay starts from none.
-                replayedIds.clear();
-                this.source = source;
-                replayRunning = true;
+            }
+            if (interrupted) {
+                if (drainAfterInterrupt) {
+                    try {
+                        // Payloads taken into the buffer while live was false were reported handled, so they are
+                        // delivered here rather than being left behind a handover that is live again.
+                        deliverBufferAndGoLive();
+                    } finally {
+                        synchronized (lock) {
+                            liveTransitionsRunning--;
+                            lock.notifyAll();
+                        }
+                    }
+                }
+                return false;
             }
             source.replayStarted();
             replayOpen = true;
