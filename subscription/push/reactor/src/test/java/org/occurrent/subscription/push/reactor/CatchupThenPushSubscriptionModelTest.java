@@ -152,7 +152,7 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     // A CloudEvent is identified by its id and source together, so two producers can each send an event with id 1.
-    // The replay delivering producer A's says nothing about producer B's, which has to be delivered, and the replay
+    // The replay delivering producer A's event says nothing about producer B's, which has to be delivered, and the
     // callback must not hear about it either, since nothing applied the append it came from.
     @Test
     void a_live_event_sharing_only_its_id_with_a_replayed_event_is_delivered_and_not_reported_as_replayed() {
