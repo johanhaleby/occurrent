@@ -29,6 +29,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -664,8 +666,12 @@ public final class ReactiveHandover<T, K> {
                     // Signalled here rather than beside historyDone, so a listener that frees the id on this cannot
                     // do it while the marker is still unwritten. A buffer with anything in it reaches liveDrained
                     // from the last delivery instead, which also runs after this point.
+                    boolean nothingBuffered;
                     Drain<T> drain = myDrain.get();
-                    if (drain != null && drain.remaining().get() == 0L && drains.remove(drain)) {
+                    synchronized (admission) {
+                        nothingBuffered = drain != null && drain.remaining().get() == 0L && drains.remove(drain);
+                    }
+                    if (nothingBuffered) {
                         source.liveDrained();
                     }
                     catchupDone.tryEmitValue(true);
@@ -755,16 +761,22 @@ public final class ReactiveHandover<T, K> {
     // Counts one delivered payload against the buffered set, and tells the source once that set is exhausted. Only
     // ever counts down from a taken count, so a delivery before the history read finished, or after the drain is
     // over, changes nothing.
-    private void countTowardsDrain(Item<K> item) {
+    // Assumes the admission guard is held, which is what the drain snapshot is taken under. Without that, a delivery
+    // finishing between the snapshot and the registration would be counted into a drain that nothing can decrement,
+    // and that drain would never end. Returns the drains this payload exhausted, so their sources are told outside
+    // the guard rather than under it.
+    private List<Drain<T>> countTowardsDrainUnderAdmission(Item<K> item) {
+        List<Drain<T>> exhausted = new ArrayList<>(1);
         for (Drain<T> drain : drains) {
             if (item.turn() > drain.boundaryTurn()) {
                 continue;
             }
             long left = drain.remaining().updateAndGet(value -> value > 0L ? value - 1L : value);
             if (left == 0L && drains.remove(drain)) {
-                drain.source().liveDrained();
+                exhausted.add(drain);
             }
         }
+        return exhausted;
     }
 
     // Counted after the payload has been delivered rather than before it, so the last buffered one is still part of
@@ -772,10 +784,18 @@ public final class ReactiveHandover<T, K> {
     private Mono<Void> deliver(Item<K> item) {
         Mono<Void> delivery = item.ack() == null ? deliverItem(item) : deliverWhenNoReplayRuns(item);
         return delivery.doFinally(signal -> {
-            if (item.ack() != null) {
-                liveBacklog.decrementAndGet();
+            List<Drain<T>> exhausted;
+            // The count and the backlog move together under the guard the drain snapshot is taken under, so a drain
+            // registered right now either counts this payload and hears about it, or counts neither.
+            synchronized (admission) {
+                if (item.ack() != null) {
+                    liveBacklog.decrementAndGet();
+                }
+                exhausted = countTowardsDrainUnderAdmission(item);
             }
-            countTowardsDrain(item);
+            for (Drain<T> drain : exhausted) {
+                drain.source().liveDrained();
+            }
         });
     }
 
