@@ -33,6 +33,8 @@ import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeMap;
@@ -64,6 +66,42 @@ class StreamCatchupHandoverTest {
         CopyOnWriteArrayList<String> received = deliver(live, store, 1000);
 
         assertThat(received).containsExactly("e1", "e3", "e4", "e5", "e2");
+    }
+
+    @Test
+    void a_live_event_sharing_only_its_id_with_a_reconciled_event_is_delivered_and_not_suppressed() {
+        // e1 from producer A is read during the reconcile phase (the head advances between the bulk read and the
+        // reconcile snapshot) and recorded in the dedup cache. A live event that shares only its id, from producer B,
+        // is a different event under CloudEvents' (id, source) identity and must still be delivered, not suppressed
+        // as a re-delivery of the reconciled one.
+        FakePositionStore store = FakePositionStore.withEventsAt(1).heads(0, 1);
+        CloudEvent fromB = CloudEventBuilder.v1(event("e1")).withSource(URI.create("urn:producer:b")).build();
+        FakeLiveModel live = new FakeLiveModel(List.of(fromB));
+
+        CopyOnWriteArrayList<String> received = deliverCapturingIdentity(live, store, 1000);
+
+        assertThat(received).containsExactly("e1@urn:test", "e1@urn:producer:b");
+    }
+
+    @Test
+    void a_live_event_sharing_only_its_id_with_a_reconciled_event_is_delivered_and_not_suppressed_on_the_time_based_path() {
+        // The mirror of the position-path test above, for the released time-based catch-up (StreamCatchupSubscriptionModel:383),
+        // which a store with no position reads instead. e1 from producer A commits after the bulk read has already
+        // run (during the bulk read itself, so it falls into the reconciliation delta) and is recorded in the dedup
+        // cache. A live event that shares only its id, from producer B, must still be delivered.
+        FakeTimeEventStoreQueries store = new FakeTimeEventStoreQueries();
+        CloudEvent fromA = event("e1");
+        CloudEvent fromB = CloudEventBuilder.v1(fromA).withSource(URI.create("urn:producer:b")).build();
+        store.duringBulkRead(() -> store.append(fromA));
+        FakeLiveModel live = new FakeLiveModel(List.of(fromB));
+
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel catchup = new StreamCatchupSubscriptionModel(live, store, new CatchupSubscriptionModelConfig(1000));
+        boolean started = catchup.subscribeFromBeginningOfTime("subscription", cloudEvent -> received.add(cloudEvent.getId() + "@" + cloudEvent.getSource()))
+                .waitUntilStarted(Duration.ofSeconds(10));
+        assertThat(started).isTrue();
+
+        assertThat(received).containsExactly("e1@urn:test", "e1@urn:producer:b");
     }
 
     @Test
@@ -102,6 +140,17 @@ class StreamCatchupHandoverTest {
         return received;
     }
 
+    // Like deliver(..), but captures the full (id, source) identity instead of just the id, so a test can tell two
+    // events that share an id but not a source apart.
+    private CopyOnWriteArrayList<String> deliverCapturingIdentity(FakeLiveModel live, FakePositionStore store, int ceiling) {
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel catchup = new StreamCatchupSubscriptionModel(live, store, new CatchupSubscriptionModelConfig(ceiling));
+        boolean started = catchup.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> received.add(cloudEvent.getId() + "@" + cloudEvent.getSource()))
+                .waitUntilStarted(Duration.ofSeconds(10));
+        assertThat(started).isTrue();
+        return received;
+    }
+
     private static List<CloudEvent> events(String... ids) {
         return java.util.Arrays.stream(ids).map(StreamCatchupHandoverTest::event).toList();
     }
@@ -120,6 +169,55 @@ class StreamCatchupHandoverTest {
 
     private static CloudEvent event(String id) {
         return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("type").build();
+    }
+
+    // A time-based store (no PositionOrderedReader, so the model stays on the released time-ordered catch-up path)
+    // whose bulk read can trigger a write as a side effect, landing that event in the reconciliation delta instead
+    // of the bulk history, the same overlap FakePositionStore's heads(bulkHead, reconcileHead) produces for the
+    // position path.
+    private static final class FakeTimeEventStoreQueries implements EventStoreQueries {
+        private final List<CloudEvent> events = new ArrayList<>();
+        private Runnable duringBulkRead = () -> {
+        };
+
+        FakeTimeEventStoreQueries duringBulkRead(Runnable sideEffect) {
+            this.duringBulkRead = sideEffect;
+            return this;
+        }
+
+        void append(CloudEvent event) {
+            events.add(event);
+        }
+
+        @Override
+        public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
+            if (skip == 0 && limit == Integer.MAX_VALUE) {
+                // The bulk read (query(filter, sortBy), no paging). Snapshot before running the side effect, so a
+                // write it triggers lands in the reconciliation delta below rather than in this history.
+                List<CloudEvent> bulk = List.copyOf(events);
+                Runnable sideEffect = duringBulkRead;
+                duringBulkRead = () -> {
+                };
+                sideEffect.run();
+                return bulk.stream();
+            }
+            // The reconciliation delta read: newest-window-first, matching SortBy.natural(DESCENDING).
+            List<CloudEvent> newestFirst = new ArrayList<>(events);
+            Collections.reverse(newestFirst);
+            int from = Math.min(skip, newestFirst.size());
+            int to = Math.min(skip + limit, newestFirst.size());
+            return newestFirst.subList(from, to).stream();
+        }
+
+        @Override
+        public long count(Filter filter) {
+            return events.size();
+        }
+
+        @Override
+        public boolean exists(Filter filter) {
+            throw new AssertionError("Not used by this test");
+        }
     }
 
     // A position-ordered store whose currentPosition answers a scripted sequence of heads (bulk head, then reconcile

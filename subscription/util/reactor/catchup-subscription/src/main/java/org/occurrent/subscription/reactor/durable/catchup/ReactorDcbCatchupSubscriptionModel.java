@@ -49,8 +49,8 @@ import static java.util.Objects.requireNonNull;
  * subscription. The replay pages the sequence in {@code position} windows (no count and no time sort, because
  * {@code position} is monotonic and server-assigned), then a reconciliation pass reads the head once more and drains
  * up to that snapshot, delivering events written during the replay in order without letting a continuous write rate
- * keep it from handing over. The handover seam is deduplicated with a bounded id
- * cache so a reconciliation event the live subscription also sees is delivered once.
+ * keep it from handing over. The handover seam is deduplicated with a bounded cache keyed by each event's id and
+ * source together, so a reconciliation event the live subscription also sees is delivered once.
  * <p>
  * Trade-off: if the replay runs longer than the change stream history (the MongoDB oplog window), the captured token
  * ages out and the live resume fails loudly rather than silently dropping an event. Size the oplog for very large
@@ -74,12 +74,12 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
      */
     public static final long DEFAULT_POSITION_WINDOW_SIZE = 1000;
     /**
-     * Default ceiling on the number of event ids kept to dedupe the replay-to-live handover. Only the reconciliation
+     * Default ceiling on the number of events kept to dedupe the replay-to-live handover. Only the reconciliation
      * pass fills it, so it grows with what was written during the replay rather than with total history, and it
      * evicts oldest-first past this ceiling. Exceeding it causes extra duplicate deliveries, never loss
-     * (at-least-once). Raise it to cut duplicates on a large rebuild, or lower it to cap memory, since each id is a
-     * short string. Well above the previous {@code 1000} so a rebuild under heavy concurrent writes no longer evicts
-     * the overlap before live re-delivers it.
+     * (at-least-once). Raise it to cut duplicates on a large rebuild, or lower it to cap memory, since each entry
+     * holds an event's id and source, not just the id. Well above the previous {@code 1000} so a rebuild under
+     * heavy concurrent writes no longer evicts the overlap before live re-delivers it.
      */
     public static final int DEFAULT_HANDOVER_CACHE_SIZE = 100_000;
 

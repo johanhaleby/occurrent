@@ -152,6 +152,28 @@ class ReactorStreamCatchupSubscriptionModelTest {
                 .verify();
     }
 
+    @Test
+    void a_live_event_sharing_only_its_id_with_a_reconciled_event_is_delivered_and_not_suppressed_on_a_named_subscription() {
+        // NamedCatchupSupport.subscribeWithCatchup, which every reactor named stream and DCB subscription actually
+        // runs through, as opposed to the cold PositionCatchupPipeline.catchup() PositionCatchupPipelineTest exercises.
+        // e1 from producer A is read during the reconciliation phase (bulk head 0, reconcile head 1) and recorded in
+        // the dedup cache. A live event sharing only its id, from producer B, must still be delivered.
+        // The live change stream stamps every event with its position, which the model's own livePredicate requires
+        // (getPosition(cloudEvent) > 0), so the fixture must too, unlike the replayed event above.
+        CloudEvent fromB = org.occurrent.cloudevents.OccurrentCloudEventExtension.withPosition(io.cloudevents.core.builder.CloudEventBuilder.v1()
+                .withId("e1").withSource(java.net.URI.create("urn:producer:b")).withType("type").build(), 2);
+        LiveDeliveringNamedSubscriptionModel wrapped = new LiveDeliveringNamedSubscriptionModel(List.of(fromB));
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new BulkEmptyThenOneReconciledEventReader());
+
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId() + "@" + cloudEvent.getSource())));
+
+        StepVerifier.create(subscription.waitUntilStarted()).verifyComplete();
+        assertThat(received).containsExactly("e1@urn:test", "e1@urn:producer:b");
+    }
+
     // One event already there and one more written while the history is being read, so the catch-up has a history to
     // read and something to deliver afterwards. The head grows on the second read, which is what the reconciliation
     // sees.
@@ -267,6 +289,107 @@ class ReactorStreamCatchupSubscriptionModelTest {
         @Override
         public void cancelSubscription(String subscriptionId) {
             cancelCalls.add(subscriptionId);
+        }
+
+        @Override
+        public void stop() {
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+        }
+
+        @Override
+        public boolean isRunning() {
+            return false;
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            throw new AssertionError("resumeSubscription must not be called in this test");
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+        }
+    }
+
+    // Bulk head 0, so the bulk read (startPosition, 0] is empty, then reconcile head 1, so reconcile (0, 1] reads
+    // one event, "e1" from producer A. Mirrors GrowingPositionOrderedReader's two-read shape with a fixed id instead
+    // of one derived from position, so a live event sharing only that id can be built against it.
+    private static final class BulkEmptyThenOneReconciledEventReader implements PositionOrderedReader {
+        private final java.util.concurrent.atomic.AtomicInteger headReads = new java.util.concurrent.atomic.AtomicInteger();
+
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            long from = range.afterPosition().orElse(0L) + 1;
+            long to = range.upToPosition().orElse(0L);
+            if (from > to) {
+                return Flux.empty();
+            }
+            return Flux.just(io.cloudevents.core.builder.CloudEventBuilder.v1()
+                    .withId("e1").withSource(java.net.URI.create("urn:test")).withType("type").build());
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return Mono.fromSupplier(() -> headReads.incrementAndGet() == 1 ? 0L : 1L);
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return true;
+        }
+    }
+
+    // A named subscription model with a resolvable checkpoint whose named subscribe(..) delivers a fixed, finite
+    // list to the action the catch-up hands it (which wraps NamedCatchupSupport's own dedup cache), synchronously,
+    // so the handover's live delivery can be observed deterministically.
+    private static final class LiveDeliveringNamedSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
+        private final List<CloudEvent> live;
+
+        private LiveDeliveringNamedSubscriptionModel(List<CloudEvent> live) {
+            this.live = live;
+        }
+
+        @Override
+        public Mono<Checkpoint> globalCheckpoint() {
+            return Mono.just(new StringBasedCheckpoint("token"));
+        }
+
+        @Override
+        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            return Flux.error(new AssertionError("The cold primitive must not be used by the named catch-up path"));
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            Flux.fromIterable(live).concatMap(action).subscribe();
+            return new Subscription() {
+                @Override
+                public String id() {
+                    return subscriptionId;
+                }
+
+                @Override
+                public Mono<Void> waitUntilStarted() {
+                    return Mono.empty();
+                }
+            };
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
         }
 
         @Override
