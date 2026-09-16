@@ -574,9 +574,21 @@ public final class ReactiveHandover<T, K> {
             liveBacklog.decrementAndGet();
             exhausted = countTowardsDrainUnderAdmission(item);
         }
+        tellDrainedSources(exhausted);
+    }
+
+    // Nothing a source does here reaches the caller whose payload ended the drain. Its acknowledgement is still owed
+    // and the offers behind it still have to be taken to the sink, and on the delivery path the pipeline drops what
+    // is thrown from a doFinally anyway, so a throwing callback is logged rather than carried out of here. The turn
+    // goes back either way.
+    private void tellDrainedSources(List<Drain<T>> exhausted) {
         for (Drain<T> drain : exhausted) {
             try {
                 drain.source().liveDrained();
+            } catch (RuntimeException | Error e) {
+                log.error("The catch-up-then-live handover for this {} failed while telling a source that the live "
+                        + "payloads buffered during its catch-up had been delivered. They were delivered, and the "
+                        + "handover goes on running.", noun, e);
             } finally {
                 releaseReplayTurn(drain.holdsReplayTurn());
             }
@@ -636,6 +648,9 @@ public final class ReactiveHandover<T, K> {
         AtomicBoolean holdsReplayTurn = new AtomicBoolean();
         // Whether this catch-up subscribed the live sink, so a failure of its pipeline is known to end live delivery.
         AtomicBoolean deliversLive = new AtomicBoolean();
+        // Read when this catch-up starts, so the check after the turn asks whether a catch-up failed while this one
+        // waited rather than whether the handover had already failed when the caller asked for this one.
+        Throwable failureBeforeWaiting = terminalError.get();
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
@@ -646,7 +661,16 @@ public final class ReactiveHandover<T, K> {
                 return Mono.empty();
             }
             // Deferred, so the hold is installed once the turn is taken rather than when this pipeline is put together.
-            return awaitReplayTurn(holdsReplayTurn).then(Mono.defer(() -> pauseLiveDelivery(pause))).then(Mono.defer(() -> {
+            return awaitReplayTurn(holdsReplayTurn).then(Mono.defer(() -> {
+                // The catch-up this one waited for failing leaves the handover refusing everything and its caller
+                // told to replace it. So this replay does not start and fold a history into a view its caller was
+                // told to stop using. A caller that asks for a catch-up on a handover that had already failed still
+                // gets one, which is what it asked for.
+                Throwable failed = terminalError.get();
+                return failed == null || failed == failureBeforeWaiting
+                        ? pauseLiveDelivery(pause)
+                        : Mono.<Void>error(catchUpFailed(failed));
+            })).then(Mono.defer(() -> {
                 // Every key belongs to the source a suppression reports to, so a new replay starts from none.
                 replayedIds.clear();
                 replaySource.set(source);
@@ -769,7 +793,9 @@ public final class ReactiveHandover<T, K> {
                         }
                     }
                     abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
-                    terminalError.set(error);
+                    // The first failure is the one that matters, so a later call refusing because of it does not take
+                    // its place and hide the cause.
+                    terminalError.compareAndSet(null, error);
                     // Logged only when the signal cannot carry the failure, which is the live phase, where
                     // catchupDone has already emitted and nothing else tells anyone. Logging unconditionally would
                     // repeat what the caller this signal reaches already logs for itself.
@@ -858,15 +884,7 @@ public final class ReactiveHandover<T, K> {
                 }
                 exhausted = countTowardsDrainUnderAdmission(item);
             }
-            for (Drain<T> drain : exhausted) {
-                try {
-                    drain.source().liveDrained();
-                } finally {
-                    // In a finally because this runs from doFinally, where a throwing callback never reaches the
-                    // error handler that would otherwise give the turn back.
-                    releaseReplayTurn(drain.holdsReplayTurn());
-                }
-            }
+            tellDrainedSources(exhausted);
         });
     }
 
