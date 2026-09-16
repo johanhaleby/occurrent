@@ -541,7 +541,7 @@ public final class ReactiveHandover<T, K> {
                 case FAIL_NON_SERIALIZED -> {
                     if (System.nanoTime() >= pending.deadline()) {
                         pendingOffers.poll();
-                        liveBacklog.decrementAndGet();
+                        dropFromBacklogAndDrains(pending.item());
                         pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
                         continue;
                     }
@@ -553,14 +553,32 @@ public final class ReactiveHandover<T, K> {
                 // path, since that check runs first and catches every way the pipeline ends today.
                 case FAIL_TERMINATED, FAIL_CANCELLED -> {
                     pendingOffers.poll();
-                    liveBacklog.decrementAndGet();
+                    dropFromBacklogAndDrains(pending.item());
                     pending.ack().success(false);
                 }
                 default -> {
                     pendingOffers.poll();
-                    liveBacklog.decrementAndGet();
+                    dropFromBacklogAndDrains(pending.item());
                     pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
                 }
+            }
+        }
+    }
+
+    // The bookkeeping deliver(..) does in its doFinally, for a payload that never reaches it. Without it a drain that
+    // counted the payload never reaches zero, so its source is never told its buffer drained and its replay turn is
+    // never given back, which parks every later replay.
+    private void dropFromBacklogAndDrains(Item<K> item) {
+        List<Drain<T>> exhausted;
+        synchronized (admission) {
+            liveBacklog.decrementAndGet();
+            exhausted = countTowardsDrainUnderAdmission(item);
+        }
+        for (Drain<T> drain : exhausted) {
+            try {
+                drain.source().liveDrained();
+            } finally {
+                releaseReplayTurn(drain.holdsReplayTurn());
             }
         }
     }
@@ -724,8 +742,10 @@ public final class ReactiveHandover<T, K> {
                         }
                         resumeLiveDelivery(pause);
                         releaseReplayTurn(holdsReplayTurn);
-                        // Emitted last, so a caller that reacts to the stop by calling goLive() finds every payload
-                        // this stop dropped already answered rather than answered while that call is running.
+                        // Emitted last, so a caller that reacts to the stop by calling goLive() finds the payloads
+                        // this stop answered already answered rather than answered while that call is running. A
+                        // catch-up going live in the window between the read of live above and this point delivers
+                        // them anyway, which costs the duplicate that goLive() documents.
                         catchupDone.tryEmitValue(false);
                         return;
                     }

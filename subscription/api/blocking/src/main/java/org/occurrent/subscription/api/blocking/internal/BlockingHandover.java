@@ -241,6 +241,11 @@ public final class BlockingHandover<T, K> {
     // replayRunning, which ends when the drain starts, since the drain, the marker and the catch block read and write
     // the replay state this attempt set up.
     private boolean replayTurnHeld = false;
+    // How many catchUp(Source) calls are running, counted from the first thing each one does. An interrupted call
+    // marks the handover stopped only when it is the only one, since every other state where another call owns this
+    // handover (a replay running, a replay waiting for its turn, a catch-up with nothing to replay part way through
+    // going live) is a count above one, and asking the count cannot miss one of them the way a flag per state did.
+    private int catchUpsInProgress = 0;
     // Source.alreadyDeliveredByReplay(..) calls running outside the lock, waited for before a replay starts.
     private int replayCallbacksRunning = 0;
     // How many catch-ups with nothing to replay are taking this handover live right now. A replay waits for all of
@@ -483,6 +488,7 @@ public final class BlockingHandover<T, K> {
             // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying
             // again rather than only by building a new one.
             stopped = false;
+            catchUpsInProgress++;
         }
         // Tracks whether replayStarted() ran and replayCompleted() has not yet closed it out, so the catch block below
         // knows whether there is a replay lifecycle left open to abandon, rather than calling replayAbandoned() after
@@ -530,10 +536,10 @@ public final class BlockingHandover<T, K> {
                         // drains, with a replay waiting rather than starting next to it.
                         liveTransitionsRunning++;
                         drainAfterInterrupt = true;
-                    } else if (!replayTurnHeld) {
-                        // Not when another catch-up owns a running replay. Stopping is this call's answer for its own
-                        // caller, and the handover belongs to that replay, whose buffer the payloads after this belong
-                        // in rather than being dropped.
+                    } else if (catchUpsInProgress == 1) {
+                        // Only when no other catch-up is running. Stopping is this call's answer for its own caller,
+                        // and while another one is going live or waiting for its turn the handover is that call's,
+                        // with the payloads after this belonging in its buffer rather than dropped.
                         stopped = true;
                     }
                 } else {
@@ -661,11 +667,12 @@ public final class BlockingHandover<T, K> {
             }
             throw e;
         } finally {
-            if (holdsReplayTurn) {
-                synchronized (lock) {
+            synchronized (lock) {
+                if (holdsReplayTurn) {
                     replayTurnHeld = false;
-                    lock.notifyAll();
                 }
+                catchUpsInProgress--;
+                lock.notifyAll();
             }
         }
     }

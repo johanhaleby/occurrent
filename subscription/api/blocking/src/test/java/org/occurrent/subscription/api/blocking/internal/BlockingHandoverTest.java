@@ -1291,6 +1291,42 @@ class BlockingHandoverTest {
         assertThat(log).as("the payload joined the running replay's buffer").containsExactly("R1", "R2", "L1");
     }
 
+    /**
+     * The same as the replay above, for a catch-up with nothing to replay that is part way through going live. It owns
+     * the handover too, so an interrupted catch-up waiting behind it must not mark the handover stopped and have the
+     * payloads that arrive next dropped rather than drained by it.
+     */
+    @Test
+    void an_interrupted_wait_behind_a_catch_up_going_live_leaves_that_catch_up_taking_payloads() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch transitionReached = new CountDownLatch(1);
+        CountDownLatch releaseTransition = new CountDownLatch(1);
+        CountDownLatch replayStarted = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = BlockingHandover.create(
+                log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        FakeSource goingLive = source(List.of(), true);
+        goingLive.onHistoryDone = () -> {
+            transitionReached.countDown();
+            awaitLatch(releaseTransition);
+        };
+        FakeSource replaying = source(List.of("R1"), false);
+        replaying.onReplayStarted = replayStarted::countDown;
+        Thread goLive = new Thread(() -> handover.catchUp(goingLive), "go-live");
+        Thread waiting = new Thread(() -> handover.catchUp(replaying), "waiting-catch-up");
+
+        goLive.start();
+        awaitLatch(transitionReached);
+        waiting.start();
+        assertThat(reachedWithin(replayStarted, 300)).isFalse();
+        waiting.interrupt();
+        waiting.join(5_000);
+        handover.accept("L1");
+        releaseTransition.countDown();
+        goLive.join(5_000);
+
+        assertThat(log).as("the payload was drained by the catch-up that was going live").containsExactly("L1");
+    }
+
     private static BlockingHandover<String, String> handover(List<String> delivered) {
         return BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
     }
