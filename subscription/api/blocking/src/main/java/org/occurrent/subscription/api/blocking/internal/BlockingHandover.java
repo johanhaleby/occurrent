@@ -461,6 +461,9 @@ public final class BlockingHandover<T, K> {
      * They are delivered when it ends, whether it completes or is stopped, since a view that buffers during a replay
      * throws that buffer away on a stop. A catch-up with nothing to replay that arrives while a replay runs does not
      * drain the buffer itself. The running replay drains it, and goes live even if it is stopped.
+     * <p>
+     * A replay also waits for a replay already running, so two of them never fold into the view at once. Calling this
+     * from inside a fold of a replay running on this handover deadlocks for that reason.
      *
      * @return {@code true} when the catch-up finished and the handover is live, {@code false} when
      * {@link Source#keepReplaying()} stopped it partway, or when the calling thread was interrupted while waiting for
@@ -589,6 +592,7 @@ public final class BlockingHandover<T, K> {
                     if (!goLive) {
                         stopped = true;
                     }
+                    lock.notifyAll();
                 }
                 if (goLive) {
                     // What buffered while the replay ran reaches the view now that it has thrown its replay batch away.
@@ -631,6 +635,7 @@ public final class BlockingHandover<T, K> {
             synchronized (lock) {
                 catchUpFailure = e;
                 replayRunning = false;
+                lock.notifyAll();
             }
             throw e;
         }
@@ -653,12 +658,14 @@ public final class BlockingHandover<T, K> {
         }
     }
 
-    // Assumes lock is held. Releases it while it waits for every live delivery and replay callback already running, so
-    // the replay about to start is the only thing writing to the view. None starts meanwhile, since live is false.
+    // Assumes lock is held. Releases it while it waits for every live delivery, replay callback and replay already
+    // running, so the replay about to start is the only thing writing to the view. None starts meanwhile, since live
+    // is false. A replay is waited for like the rest: one that finishes takes the handover live, and a second replay
+    // running past that point would have live payloads folded next to it and thrown away if it stops.
     // Answers false when the wait was interrupted, so a caller shutting this down is not held by a fold that never
     // returns. The interrupt stays on the thread for whoever asked for it.
     private boolean awaitLiveDeliveriesUnderLock() {
-        while (!inFlight.isEmpty() || replayCallbacksRunning > 0 || liveTransitionsRunning > 0) {
+        while (!inFlight.isEmpty() || replayCallbacksRunning > 0 || liveTransitionsRunning > 0 || replayRunning) {
             try {
                 lock.wait();
             } catch (InterruptedException e) {
@@ -722,6 +729,7 @@ public final class BlockingHandover<T, K> {
             buffer.clear();
             replayRunning = false;
             live = true;
+            lock.notifyAll();
         }
         // Ahead of the drained deliveries, so a payload the replay already applied is reported before any payload
         // that comes after it.

@@ -829,6 +829,45 @@ class ReactiveHandoverTest {
                 payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
     }
 
+    /**
+     * Two replays folding into the same view at once is the loss the hold before a replay exists to prevent. The
+     * first to finish takes the handover live, and from then on live payloads reach the view next to the second
+     * replay, which throws them away with its batch if it stops.
+     */
+    @Test
+    void a_replay_waits_for_a_replay_already_running() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        CountDownLatch secondReplayStarted = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                foldingR1.countDown();
+                try {
+                    releaseR1.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        FakeSource second = source(List.of("R2"), false);
+        second.onReplayStarted = secondReplayStarted::countDown;
+
+        Mono<Boolean> firstCatchUp = handover.catchUp(source(List.of("R1"), false));
+        assertThat(foldingR1.await(5, TimeUnit.SECONDS)).isTrue();
+        Mono<Boolean> secondCatchUp = handover.catchUp(second);
+        assertThat(secondReplayStarted.await(300, TimeUnit.MILLISECONDS))
+                .as("the second replay waits for the first").isFalse();
+
+        releaseR1.countDown();
+
+        StepVerifier.create(firstCatchUp).expectNext(true).verifyComplete();
+        StepVerifier.create(secondCatchUp).expectNext(true).verifyComplete();
+        assertThat(secondReplayStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(log).containsExactly("R1", "R2");
+    }
+
     private static FakeSource source(List<String> history, boolean alreadyCaughtUp) {
         return new FakeSource(history, alreadyCaughtUp);
     }

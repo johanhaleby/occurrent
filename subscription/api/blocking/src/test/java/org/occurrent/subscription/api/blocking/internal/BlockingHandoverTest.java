@@ -1132,6 +1132,43 @@ class BlockingHandoverTest {
                 .containsExactly("L1", "L2", "L3");
     }
 
+    /**
+     * Two replays folding into the same view at once is the loss the wait before a replay exists to prevent. The
+     * first to finish takes the handover live, and from then on live payloads reach the view next to the second
+     * replay, which throws them away with its batch if it stops.
+     */
+    @Test
+    void a_replay_waits_for_a_replay_already_running() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        CountDownLatch secondReplayStarted = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                foldingR1.countDown();
+                awaitLatch(releaseR1);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        FakeSource first = source(List.of("R1"), false);
+        FakeSource second = source(List.of("R2"), false);
+        second.onReplayStarted = secondReplayStarted::countDown;
+        Thread firstReplay = new Thread(() -> handover.catchUp(first), "first-replay");
+        Thread secondReplay = new Thread(() -> handover.catchUp(second), "second-replay");
+
+        firstReplay.start();
+        awaitLatch(foldingR1);
+        secondReplay.start();
+        assertThat(reachedWithin(secondReplayStarted, 300)).isFalse();
+
+        releaseR1.countDown();
+
+        assertThat(secondReplayStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        firstReplay.join(5_000);
+        secondReplay.join(5_000);
+        assertThat(log).containsExactly("R1", "R2");
+    }
+
     private static BlockingHandover<String, String> handover(List<String> delivered) {
         return BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
     }

@@ -270,6 +270,12 @@ public final class ReactiveHandover<T, K> {
     // Whether the live pipeline is delivering a payload right now, so a replay can wait for it before it starts.
     private boolean liveDelivering = false;
     private Sinks.@Nullable Empty<Void> liveIdle = null;
+    // Guards the field below. A replay takes its turn here and holds it until its catch-up ends, so two replays never
+    // fold into the view at once. The first to finish takes the handover live, and a second replay running past that
+    // point would have live payloads folded next to it and thrown away if it stops.
+    private final Object replayTurn = new Object();
+    // Completes when the replay holding the turn ends, so the next one in line takes it. Null while none is running.
+    private Sinks.@Nullable Empty<Void> replayTurnReleased = null;
     // Acks of live payloads buffered but not yet folded, so a catch-up failure fails them rather than leaving the
     // caller's accept Monos hanging forever. The Boolean each carries is whether the payload was genuinely
     // delivered, not just whether the ack completed without error, see acceptReportingDelivery(..).
@@ -606,6 +612,8 @@ public final class ReactiveHandover<T, K> {
         // This catch-up's own drain, so the payloads buffered while it read its history are counted against it and
         // against no other catch-up.
         AtomicReference<Drain<T>> myDrain = new AtomicReference<>();
+        // Whether this catch-up is the replay holding the turn, so only the one that took it releases it.
+        AtomicBoolean holdsReplayTurn = new AtomicBoolean();
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
@@ -615,7 +623,7 @@ public final class ReactiveHandover<T, K> {
             if (done) {
                 return Mono.empty();
             }
-            return pauseLiveDelivery(pause).then(Mono.defer(() -> {
+            return awaitReplayTurn(holdsReplayTurn).then(pauseLiveDelivery(pause)).then(Mono.defer(() -> {
                 // Every key belongs to the source a suppression reports to, so a new replay starts from none.
                 replayedIds.clear();
                 replaySource.set(source);
@@ -675,6 +683,7 @@ public final class ReactiveHandover<T, K> {
                     if (nothingBuffered) {
                         source.liveDrained();
                     }
+                    releaseReplayTurn(holdsReplayTurn);
                     catchupDone.tryEmitValue(true);
                 })
                 .thenMany(Flux.defer(() -> liveSinkSubscribed.compareAndSet(false, true)
@@ -703,6 +712,7 @@ public final class ReactiveHandover<T, K> {
                             pendingLiveAcks.forEach(sink -> sink.success(false));
                         }
                         resumeLiveDelivery(pause);
+                        releaseReplayTurn(holdsReplayTurn);
                         // Emitted last, so a caller that reacts to the stop by calling goLive() finds every payload
                         // this stop dropped already answered rather than answered while that call is running.
                         catchupDone.tryEmitValue(false);
@@ -734,6 +744,7 @@ public final class ReactiveHandover<T, K> {
                     // signal above still carries the raw cause, since that caller asked about the catch-up itself.
                     pendingLiveAcks.forEach(sink -> sink.error(catchUpFailed(error)));
                     resumeLiveDelivery(pause);
+                    releaseReplayTurn(holdsReplayTurn);
                 });
 
         return catchupDone.asMono();
@@ -839,6 +850,38 @@ public final class ReactiveHandover<T, K> {
     // Completes once no live payload is being delivered, and none starts until the catch-up that owns this pause
     // releases it. The owner is what stops a concurrent catch-up with nothing to replay from opening a running
     // replay's pause and letting live payloads into a view that replay may still discard.
+    // Completes once no other replay is running, with the turn taken. Subscribing again after the holder releases is
+    // how two waiters settle which of them takes it, since both are told at once and only one wins the monitor.
+    private Mono<Void> awaitReplayTurn(AtomicBoolean holdsTurn) {
+        return Mono.defer(() -> {
+            Sinks.Empty<Void> running;
+            synchronized (replayTurn) {
+                if (replayTurnReleased == null) {
+                    replayTurnReleased = Sinks.empty();
+                    holdsTurn.set(true);
+                    return Mono.empty();
+                }
+                running = replayTurnReleased;
+            }
+            return running.asMono().then(Mono.defer(() -> awaitReplayTurn(holdsTurn)));
+        });
+    }
+
+    // Called on every path out of a catch-up that took the turn, so a waiting replay is not held by one that ended.
+    private void releaseReplayTurn(AtomicBoolean holdsTurn) {
+        if (!holdsTurn.compareAndSet(true, false)) {
+            return;
+        }
+        Sinks.Empty<Void> released;
+        synchronized (replayTurn) {
+            released = replayTurnReleased;
+            replayTurnReleased = null;
+        }
+        if (released != null) {
+            released.tryEmitEmpty();
+        }
+    }
+
     private Mono<Void> pauseLiveDelivery(Sinks.Empty<Void> pause) {
         synchronized (liveGate) {
             if (livePaused == null) {
