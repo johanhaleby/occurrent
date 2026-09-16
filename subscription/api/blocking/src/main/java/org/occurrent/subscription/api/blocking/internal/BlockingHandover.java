@@ -631,8 +631,10 @@ public final class BlockingHandover<T, K> {
             }
             boolean deliverBuffer;
             synchronized (lock) {
-                deliverBuffer = replayRunning && liveWhenReplayStops;
-                if (!deliverBuffer) {
+                // Only the call holding the replay turn owns the replay state. One that failed before taking it, its
+                // marker lookup say, would otherwise drain or clear the state of a replay another call is running.
+                deliverBuffer = holdsReplayTurn && replayRunning && liveWhenReplayStops;
+                if (holdsReplayTurn && !deliverBuffer) {
                     // Cleared under the lock that read liveWhenReplayStops, so a catch-up with nothing to replay
                     // arriving now drains the buffer itself rather than leaving it to a replay that no longer will.
                     // With deliverBuffer true the drain below clears it under its own lock.
@@ -650,7 +652,9 @@ public final class BlockingHandover<T, K> {
             }
             synchronized (lock) {
                 catchUpFailure = e;
-                replayRunning = false;
+                if (holdsReplayTurn) {
+                    replayRunning = false;
+                }
             }
             throw e;
         } finally {

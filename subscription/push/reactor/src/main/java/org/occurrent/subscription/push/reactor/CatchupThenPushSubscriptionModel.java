@@ -62,7 +62,7 @@ import java.util.function.Supplier;
  * The replay, a catch-up-complete marker step, and the live feed are composed into one ordered pipeline with
  * {@link Flux#concat}: the replay is consumed first, then the marker is recorded, then the live feed. Live events that
  * arrive during the replay are buffered in a unicast sink until the pipeline reaches them, so nothing is lost across the
- * seam, and the overlap is de-duplicated by event id. Because the whole pipeline is serialized by {@code concatMap}, the
+ * seam, and the overlap is de-duplicated by the CloudEvent id and source together. Because the whole pipeline is serialized by {@code concatMap}, the
  * de-dup cache needs no locking.
  * <p>
  * Contract (see ADR 62 and the blocking model): catch-up is Occurrent's job and runs once per subscription id, guarded

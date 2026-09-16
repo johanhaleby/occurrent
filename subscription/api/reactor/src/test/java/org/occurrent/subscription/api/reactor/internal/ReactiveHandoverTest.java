@@ -936,6 +936,60 @@ class ReactiveHandoverTest {
                 .expectNext(true).expectComplete().verify(Duration.ofSeconds(5));
     }
 
+    /**
+     * A catch-up that fails before it replays owns no drain. If its failure took the drains of earlier catch-ups with
+     * it, their sources would never hear that their buffer drained and their replay turns would be given back while
+     * those payloads are still being delivered.
+     */
+    @Test
+    void a_catch_up_failing_before_its_replay_leaves_an_earlier_drain_to_finish() throws Exception {
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        CountDownLatch deliveringL1 = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        CountDownLatch firstDrained = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("R1")) {
+                self.get().acceptReportingDelivery("L1").subscribe(ignored -> {
+                }, ignored -> {
+                });
+            }
+            if (payload.equals("L1")) {
+                deliveringL1.countDown();
+                try {
+                    releaseL1.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        FakeSource first = source(List.of("R1"), false);
+        first.onLiveDrained = firstDrained::countDown;
+        ReactiveHandover.Source<String> failingLookup = new ReactiveHandover.Source<>() {
+            @Override
+            public Mono<Boolean> isAlreadyCaughtUp() {
+                return Mono.error(new IllegalStateException("marker lookup failed"));
+            }
+
+            @Override
+            public Flux<String> replay() {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> markCaughtUp() {
+                return Mono.empty();
+            }
+        };
+
+        StepVerifier.create(handover.catchUp(first)).expectNext(true).verifyComplete();
+        assertThat(deliveringL1.await(5, TimeUnit.SECONDS)).isTrue();
+        StepVerifier.create(handover.catchUp(failingLookup)).expectError(IllegalStateException.class).verify(Duration.ofSeconds(5));
+        releaseL1.countDown();
+
+        assertThat(firstDrained.await(5, TimeUnit.SECONDS)).as("the earlier drain still reached its source").isTrue();
+    }
+
     private static FakeSource source(List<String> history, boolean alreadyCaughtUp) {
         return new FakeSource(history, alreadyCaughtUp);
     }

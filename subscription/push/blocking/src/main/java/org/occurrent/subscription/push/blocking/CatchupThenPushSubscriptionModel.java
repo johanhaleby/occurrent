@@ -64,8 +64,8 @@ import java.util.stream.Stream;
  *   <li><strong>Catch-up</strong> is Occurrent's job and runs once per subscription id. On subscribe this model
  *       registers on the live feed first and buffers, replays the store {@code position}-ordered up to the head at read
  *       time via {@link PositionOrderedReader}, then drains the buffer and goes live. An event that commits during the
- *       replay is delivered either by the replay or by the buffered feed, and the overlap is de-duplicated by event id
- *       (not by a position watermark: Occurrent positions can commit late and have permanent gaps, so a watermark would
+ *       replay is delivered either by the replay or by the buffered feed, and the overlap is de-duplicated by the
+ *       CloudEvent id and source together (not by a position watermark: Occurrent positions can commit late and have permanent gaps, so a watermark would
  *       drop a late-committing low-position event, see ADR 62). Because buffering starts before the head is read, no
  *       reconcile pass is needed.</li>
  *   <li><strong>Live resume</strong> is the broker's job, not Occurrent's. After catch-up, the listener consumes the

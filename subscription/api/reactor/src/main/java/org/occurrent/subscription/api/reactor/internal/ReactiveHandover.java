@@ -616,6 +616,8 @@ public final class ReactiveHandover<T, K> {
         AtomicReference<Drain<T>> myDrain = new AtomicReference<>();
         // Whether this catch-up is the replay holding the turn, so only the one that took it releases it.
         AtomicBoolean holdsReplayTurn = new AtomicBoolean();
+        // Whether this catch-up subscribed the live sink, so a failure of its pipeline is known to end live delivery.
+        AtomicBoolean deliversLive = new AtomicBoolean();
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
@@ -691,9 +693,13 @@ public final class ReactiveHandover<T, K> {
                     }
                     catchupDone.tryEmitValue(true);
                 })
-                .thenMany(Flux.defer(() -> liveSinkSubscribed.compareAndSet(false, true)
-                        ? liveSink.asFlux().concatMap(this::deliver)
-                        : Flux.<Void>empty()))
+                .thenMany(Flux.defer(() -> {
+                    if (!liveSinkSubscribed.compareAndSet(false, true)) {
+                        return Flux.<Void>empty();
+                    }
+                    deliversLive.set(true);
+                    return liveSink.asFlux().concatMap(this::deliver);
+                }))
                 // This engine subscribes its own pipeline rather than handing it back, so without a scheduler the
                 // replay would run on whoever called catchUp, which is the Spring refresh thread for an annotated
                 // projection. boundedElastic because the replay folds through blocking bridges.
@@ -726,13 +732,21 @@ public final class ReactiveHandover<T, K> {
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.
                     // Fail their acks and reject later ones, so the caller sees the error instead of hanging.
                     abandonReplayWithoutMasking(source, replayOpen);
-                    // Every drain goes with the failure, since nothing is delivered after it. A payload left in the live
-                    // sink would otherwise count one down later and tell a source that its buffer had drained, and a
-                    // drain that never ends would hold its replay turn for good.
+                    // This catch-up's own drain goes with its failure, so a payload left in the live sink cannot count
+                    // it down later and tell a source whose catch-up failed that its buffer drained. Every other drain
+                    // goes too only when this pipeline was the one delivering live, since then nothing ends them and
+                    // each would hold its replay turn for good. Otherwise they end as their payloads are delivered.
                     List<Drain<T>> abandonedDrains = new ArrayList<>();
                     synchronized (admission) {
-                        abandonedDrains.addAll(drains);
-                        drains.clear();
+                        if (deliversLive.get()) {
+                            abandonedDrains.addAll(drains);
+                            drains.clear();
+                        } else {
+                            Drain<T> ownDrain = myDrain.get();
+                            if (ownDrain != null && drains.remove(ownDrain)) {
+                                abandonedDrains.add(ownDrain);
+                            }
+                        }
                     }
                     abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
                     terminalError.set(error);
