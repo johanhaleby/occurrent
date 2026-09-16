@@ -825,8 +825,13 @@ public final class ReactiveHandover<T, K> {
                 exhausted = countTowardsDrainUnderAdmission(item);
             }
             for (Drain<T> drain : exhausted) {
-                drain.source().liveDrained();
-                releaseReplayTurn(drain.holdsReplayTurn());
+                try {
+                    drain.source().liveDrained();
+                } finally {
+                    // In a finally because this runs from doFinally, where a throwing callback never reaches the
+                    // error handler that would otherwise give the turn back.
+                    releaseReplayTurn(drain.holdsReplayTurn());
+                }
             }
         });
     }

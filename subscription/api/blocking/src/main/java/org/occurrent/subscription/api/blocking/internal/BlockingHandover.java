@@ -632,6 +632,12 @@ public final class BlockingHandover<T, K> {
             boolean deliverBuffer;
             synchronized (lock) {
                 deliverBuffer = replayRunning && liveWhenReplayStops;
+                if (!deliverBuffer) {
+                    // Cleared under the lock that read liveWhenReplayStops, so a catch-up with nothing to replay
+                    // arriving now drains the buffer itself rather than leaving it to a replay that no longer will.
+                    // With deliverBuffer true the drain below clears it under its own lock.
+                    replayRunning = false;
+                }
             }
             if (deliverBuffer) {
                 // A payload taken into the buffer during a replay on a live handover was reported handled, so it is

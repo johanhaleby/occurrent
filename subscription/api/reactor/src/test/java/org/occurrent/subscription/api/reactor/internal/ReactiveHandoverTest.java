@@ -910,6 +910,32 @@ class ReactiveHandoverTest {
                 .containsExactly("R1", "L1", "second started", "R2");
     }
 
+    /**
+     * The last delivery of a drain tells the source and gives the replay turn back. A source whose callback throws
+     * must not keep the turn, since that runs where no error handler hears about it and every later replay would wait.
+     */
+    @Test
+    void a_drained_callback_that_throws_still_lets_the_next_replay_start() throws Exception {
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        AtomicReference<CompletableFuture<Boolean>> liveAck = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("R1")) {
+                liveAck.set(self.get().acceptReportingDelivery("L1").toFuture());
+            }
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        FakeSource first = source(List.of("R1"), false);
+        first.onLiveDrained = () -> {
+            throw new IllegalStateException("drained callback failed");
+        };
+
+        StepVerifier.create(handover.catchUp(first)).expectNext(true).verifyComplete();
+        assertThat(liveAck.get().get(5, TimeUnit.SECONDS)).isTrue();
+
+        StepVerifier.create(handover.catchUp(source(List.of("R2"), false)))
+                .expectNext(true).expectComplete().verify(Duration.ofSeconds(5));
+    }
+
     private static FakeSource source(List<String> history, boolean alreadyCaughtUp) {
         return new FakeSource(history, alreadyCaughtUp);
     }
