@@ -211,6 +211,11 @@ public final class RabbitMqDeliveryWorker {
 
     /**
      * Starts no queued delivery and waits up to {@code timeout} for the one already running to finish.
+     * <p>
+     * Waits in nanoseconds rather than milliseconds, because the bridge computes {@code timeout} from its close
+     * deadline and fences acknowledgements on that same deadline. Rounding the wait down to whole milliseconds ended
+     * it up to a millisecond early, which was long enough for an interrupted handler to acknowledge or park while the
+     * deadline the bridge checks had not passed yet.
      *
      * @return {@code false} when a delivery was still running after {@code timeout}, {@code true} otherwise. Always
      * {@code true} when called from the worker thread, which returns at once since waiting there would wait for the
@@ -222,7 +227,7 @@ public final class RabbitMqDeliveryWorker {
             return true;
         }
         try {
-            return executor.awaitTermination(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            return executor.awaitTermination(timeout.toNanos(), TimeUnit.NANOSECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;
