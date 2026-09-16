@@ -44,6 +44,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongConsumer;
@@ -211,7 +212,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     // read under consumeLock, so a handler that returns around the deadline either acknowledges before it or is
     // fenced by it, rather than racing a flag close() would set afterwards. A park or acknowledgement that already
     // holds the lock finishes, since the handler returned before it started. Long.MAX_VALUE until close() runs.
-    private volatile long closeDeadlineNanos = Long.MAX_VALUE;
+    private final AtomicLong closeDeadlineNanos = new AtomicLong(Long.MAX_VALUE);
 
     // Package-private rather than private so RabbitMqCloudEventBridgeOutcomeRoutingTest can build one over a
     // mocked Channel. Nothing here talks to a broker, the builder's own start(..) does that.
@@ -601,7 +602,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     @Override
     public void close() {
         long deadline = System.nanoTime() + closeTimeout.toNanos();
-        closeDeadlineNanos = deadline;
+        bringCloseDeadlineForwardTo(deadline);
         scheduler.shutdownNow();
         // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
         permanentlyStopped = true;
@@ -629,7 +630,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             // The teardown below goes ahead with a delivery still running, either because this thread was interrupted
             // while waiting or because a handler is closing its own bridge, so fence the acknowledgement from here
             // rather than at a deadline that may still be in the future.
-            closeDeadlineNanos = System.nanoTime();
+            bringCloseDeadlineForwardTo(System.nanoTime());
         }
         if (!workerFinished) {
             worker.interruptRunningWork(closeTimeout);
@@ -659,8 +660,15 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         failureAction.close();
     }
 
+    // Only ever moved earlier, so a second close() cannot push a deadline the first one has already passed back into
+    // the future and let a handler that ignored its interrupt acknowledge after all.
+    private void bringCloseDeadlineForwardTo(long deadlineNanos) {
+        closeDeadlineNanos.accumulateAndGet(deadlineNanos,
+                (current, candidate) -> current == Long.MAX_VALUE || candidate - current < 0 ? candidate : current);
+    }
+
     private boolean closeDeadlinePassed() {
-        long deadline = closeDeadlineNanos;
+        long deadline = closeDeadlineNanos.get();
         return deadline != Long.MAX_VALUE && System.nanoTime() - deadline >= 0;
     }
 

@@ -16,6 +16,8 @@
 
 package org.occurrent.broker.rabbitmq.blocking;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
@@ -27,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.time.Duration;
@@ -275,6 +278,59 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
             releaseFirstCall.countDown();
         }
         assertAcknowledged(queue);
+    }
+
+    /**
+     * A second {@code close()}, from a shutdown hook after a try-with-resources say, must not move the deadline the
+     * first one already passed back into the future. A handler that ignored its interrupt would otherwise be allowed
+     * to acknowledge, and would try it on the channel the first close already shut, which fails and is logged as this
+     * bridge failing. The log is the only place that is visible, since the acknowledgement cannot succeed either way.
+     */
+    @Test
+    void a_second_close_does_not_let_a_handler_that_ignored_its_interrupt_through_the_deadline() throws Exception {
+        String queue = declareAndBindQueue("double-close");
+        CountDownLatch handlerEntered = new CountDownLatch(1);
+        CountDownLatch releaseHandler = new CountDownLatch(1);
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        model.subscribe("double-close", cloudEvent -> {
+            handlerEntered.countDown();
+            boolean released = false;
+            while (!released) {
+                try {
+                    released = releaseHandler.await(30, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    // Ignoring the interrupt on purpose, which is what this test is about.
+                }
+            }
+        });
+        ch.qos.logback.classic.Logger bridgeLog = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(RabbitMqCloudEventBridge.class);
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        bridgeLog.addAppender(logged);
+
+        RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue).closeTimeout(Duration.ofMillis(200)).build();
+        try {
+            publish("double-close", "id-1");
+            assertThat(handlerEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            bridge.close();
+            // The second close() waits its own close timeout, and the handler returns inside that window, which is
+            // where a deadline moved back into the future would let it through.
+            CompletableFuture<Void> secondClose = CompletableFuture.runAsync(bridge::close);
+            Thread.sleep(50);
+            releaseHandler.countDown();
+            secondClose.get(10, TimeUnit.SECONDS);
+            // Long enough for the handler to reach the acknowledgement it must not make.
+            Thread.sleep(500);
+
+            assertThat(logged.list).extracting(ILoggingEvent::getFormattedMessage)
+                    .noneMatch(message -> message.contains("failed outside this bridge's delivery failure policy"));
+        } finally {
+            releaseHandler.countDown();
+            bridgeLog.detachAppender(logged);
+        }
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isOne());
     }
 
     @Test

@@ -241,9 +241,9 @@ public final class RabbitMqDeliveryWorker {
      * delivery back on the queue.
      */
     public void interruptRunningWork(Duration timeout) {
-        log.warn("A handler on queue \"{}\" was still running {} after the bridge was asked to close. Closing anyway. " +
-                "Nothing it starts from here acknowledges or parks its delivery, so unless one of those was already " +
-                "under way, RabbitMQ delivers that message again.", queue, timeout);
+        log.warn("A handler on queue \"{}\" was still running when the bridge stopped waiting for it, at most {} after " +
+                "close() began. Closing anyway. Nothing it starts from here acknowledges or parks its delivery, so " +
+                "unless one of those was already under way, RabbitMQ delivers that message again.", queue, timeout);
         executor.shutdownNow();
     }
 
