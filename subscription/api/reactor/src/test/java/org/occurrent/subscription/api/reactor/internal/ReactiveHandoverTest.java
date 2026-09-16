@@ -868,6 +868,48 @@ class ReactiveHandoverTest {
         assertThat(log).containsExactly("R1", "R2");
     }
 
+    /**
+     * The payloads a drain delivers were checked against the keys of the replay before them and are reported to that
+     * replay's source. A replay starting before that drain ends clears those keys and takes over the source, so a
+     * copy still queued is delivered a second time or reported to the wrong replay.
+     */
+    @Test
+    void a_replay_waits_for_the_drain_of_the_catch_up_ahead_of_it() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        AtomicReference<CompletableFuture<Boolean>> liveAck = new AtomicReference<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                liveAck.set(self.get().acceptReportingDelivery("L1").toFuture());
+                foldingR1.countDown();
+                try {
+                    releaseR1.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        FakeSource second = source(List.of("R2"), false);
+        second.onReplayStarted = () -> log.add("second started");
+
+        Mono<Boolean> firstCatchUp = handover.catchUp(source(List.of("R1"), false));
+        assertThat(foldingR1.await(5, TimeUnit.SECONDS)).isTrue();
+        Mono<Boolean> secondCatchUp = handover.catchUp(second);
+        Mono.delay(Duration.ofMillis(300)).block();
+
+        releaseR1.countDown();
+
+        StepVerifier.create(firstCatchUp).expectNext(true).verifyComplete();
+        StepVerifier.create(secondCatchUp).expectNext(true).verifyComplete();
+        assertThat(liveAck.get().get(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(log).as("the first catch-up's drain ends before the second replay starts")
+                .containsExactly("R1", "L1", "second started", "R2");
+    }
+
     private static FakeSource source(List<String> history, boolean alreadyCaughtUp) {
         return new FakeSource(history, alreadyCaughtUp);
     }

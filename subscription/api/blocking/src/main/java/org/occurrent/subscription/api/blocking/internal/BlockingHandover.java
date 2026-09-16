@@ -236,6 +236,11 @@ public final class BlockingHandover<T, K> {
     // Whether a stop of the running replay goes live rather than leaving the handover stopped. True when the handover
     // was live before that replay started, or when a catch-up with nothing to replay arrived while it ran.
     private boolean liveWhenReplayStops = false;
+    // Held by the catch-up whose replay is running, from the moment the replay starts until that catch-up returns or
+    // throws, so its drain, its marker and its failure handling all finish before another replay starts. Separate from
+    // replayRunning, which ends when the drain starts, since the drain, the marker and the catch block read and write
+    // the replay state this attempt set up.
+    private boolean replayTurnHeld = false;
     // Source.alreadyDeliveredByReplay(..) calls running outside the lock, waited for before a replay starts.
     private int replayCallbacksRunning = 0;
     // How many catch-ups with nothing to replay are taking this handover live right now. A replay waits for all of
@@ -462,8 +467,10 @@ public final class BlockingHandover<T, K> {
      * throws that buffer away on a stop. A catch-up with nothing to replay that arrives while a replay runs does not
      * drain the buffer itself. The running replay drains it, and goes live even if it is stopped.
      * <p>
-     * A replay also waits for a replay already running, so two of them never fold into the view at once. Calling this
-     * from inside a fold of a replay running on this handover deadlocks for that reason.
+     * A replay also waits for a catch-up that is already replaying, until that catch-up returns or throws, so two
+     * replays never fold into the view at once and each drain and marker belongs to the replay before it. Calling this
+     * from inside a fold, a drain or a {@link Source} callback of a catch-up replaying on this handover deadlocks for
+     * that reason.
      *
      * @return {@code true} when the catch-up finished and the handover is live, {@code false} when
      * {@link Source#keepReplaying()} stopped it partway, or when the calling thread was interrupted while waiting for
@@ -481,6 +488,8 @@ public final class BlockingHandover<T, K> {
         // knows whether there is a replay lifecycle left open to abandon, rather than calling replayAbandoned() after
         // a clean replayCompleted() has already told the view its batch is durable.
         boolean replayOpen = false;
+        // Whether this call took the replay turn, so only the call that took it gives it back.
+        boolean holdsReplayTurn = false;
         try {
             if (source.isAlreadyCaughtUp()) {
                 synchronized (lock) {
@@ -534,6 +543,8 @@ public final class BlockingHandover<T, K> {
                     replayedIds.clear();
                     this.source = source;
                     replayRunning = true;
+                    replayTurnHeld = true;
+                    holdsReplayTurn = true;
                 }
             }
             if (interrupted) {
@@ -592,7 +603,6 @@ public final class BlockingHandover<T, K> {
                     if (!goLive) {
                         stopped = true;
                     }
-                    lock.notifyAll();
                 }
                 if (goLive) {
                     // What buffered while the replay ran reaches the view now that it has thrown its replay batch away.
@@ -635,9 +645,15 @@ public final class BlockingHandover<T, K> {
             synchronized (lock) {
                 catchUpFailure = e;
                 replayRunning = false;
-                lock.notifyAll();
             }
             throw e;
+        } finally {
+            if (holdsReplayTurn) {
+                synchronized (lock) {
+                    replayTurnHeld = false;
+                    lock.notifyAll();
+                }
+            }
         }
     }
 
@@ -660,12 +676,13 @@ public final class BlockingHandover<T, K> {
 
     // Assumes lock is held. Releases it while it waits for every live delivery, replay callback and replay already
     // running, so the replay about to start is the only thing writing to the view. None starts meanwhile, since live
-    // is false. A replay is waited for like the rest: one that finishes takes the handover live, and a second replay
-    // running past that point would have live payloads folded next to it and thrown away if it stops.
+    // is false. A catch-up that is replaying is waited for like the rest, through its drain and its marker: one that
+    // finishes takes the handover live, and a second replay running past that point would have live payloads folded
+    // next to it and thrown away if it stops.
     // Answers false when the wait was interrupted, so a caller shutting this down is not held by a fold that never
     // returns. The interrupt stays on the thread for whoever asked for it.
     private boolean awaitLiveDeliveriesUnderLock() {
-        while (!inFlight.isEmpty() || replayCallbacksRunning > 0 || liveTransitionsRunning > 0 || replayRunning) {
+        while (!inFlight.isEmpty() || replayCallbacksRunning > 0 || liveTransitionsRunning > 0 || replayTurnHeld) {
             try {
                 lock.wait();
             } catch (InterruptedException e) {
@@ -729,7 +746,6 @@ public final class BlockingHandover<T, K> {
             buffer.clear();
             replayRunning = false;
             live = true;
-            lock.notifyAll();
         }
         // Ahead of the drained deliveries, so a payload the replay already applied is reported before any payload
         // that comes after it.

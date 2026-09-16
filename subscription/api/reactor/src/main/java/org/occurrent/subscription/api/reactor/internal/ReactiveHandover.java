@@ -251,7 +251,8 @@ public final class ReactiveHandover<T, K> {
     // One per catch-up that reached its drain, holding the source to tell once its own buffered set is exhausted, the
     // last turn that belongs to it, and how many of those payloads are left. One per catch-up rather than one set of
     // fields, so a later catch-up neither takes over the drain of the one before it nor ends it early.
-    private record Drain<S>(Source<S> source, long boundaryTurn, java.util.concurrent.atomic.AtomicLong remaining) {
+    private record Drain<S>(Source<S> source, long boundaryTurn, java.util.concurrent.atomic.AtomicLong remaining,
+                            AtomicBoolean holdsReplayTurn) {
     }
 
     private final java.util.Queue<Drain<T>> drains = new java.util.concurrent.ConcurrentLinkedQueue<>();
@@ -270,8 +271,9 @@ public final class ReactiveHandover<T, K> {
     // Whether the live pipeline is delivering a payload right now, so a replay can wait for it before it starts.
     private boolean liveDelivering = false;
     private Sinks.@Nullable Empty<Void> liveIdle = null;
-    // Guards the field below. A replay takes its turn here and holds it until its catch-up ends, so two replays never
-    // fold into the view at once. The first to finish takes the handover live, and a second replay running past that
+    // Guards the field below. A replay takes its turn here and holds it until its drain ends, or until its catch-up
+    // is stopped or fails, so two replays never fold into the view at once and the payloads a drain delivers are
+    // checked against the keys of the replay before it. The first to finish takes the handover live, and a second replay running past that
     // point would have live payloads folded next to it and thrown away if it stops.
     private final Object replayTurn = new Object();
     // Completes when the replay holding the turn ends, so the next one in line takes it. Null while none is running.
@@ -623,7 +625,8 @@ public final class ReactiveHandover<T, K> {
             if (done) {
                 return Mono.empty();
             }
-            return awaitReplayTurn(holdsReplayTurn).then(pauseLiveDelivery(pause)).then(Mono.defer(() -> {
+            // Deferred, so the hold is installed once the turn is taken rather than when this pipeline is put together.
+            return awaitReplayTurn(holdsReplayTurn).then(Mono.defer(() -> pauseLiveDelivery(pause))).then(Mono.defer(() -> {
                 // Every key belongs to the source a suppression reports to, so a new replay starts from none.
                 replayedIds.clear();
                 replaySource.set(source);
@@ -656,7 +659,7 @@ public final class ReactiveHandover<T, K> {
                     // deliveries alone was not enough: a payload taken in after the boundary, delivered before one
                     // taken in before it, would count against the drain and end it early.
                     synchronized (admission) {
-                        Drain<T> drain = new Drain<>(source, admitted.get(), new java.util.concurrent.atomic.AtomicLong(liveBacklog.get()));
+                        Drain<T> drain = new Drain<>(source, admitted.get(), new java.util.concurrent.atomic.AtomicLong(liveBacklog.get()), holdsReplayTurn);
                         myDrain.set(drain);
                         drains.add(drain);
                     }
@@ -682,8 +685,10 @@ public final class ReactiveHandover<T, K> {
                     }
                     if (nothingBuffered) {
                         source.liveDrained();
+                        // Otherwise the last delivery of the drain gives the turn back, since the payloads it holds
+                        // were checked against this replay's keys and are reported to this replay's source.
+                        releaseReplayTurn(holdsReplayTurn);
                     }
-                    releaseReplayTurn(holdsReplayTurn);
                     catchupDone.tryEmitValue(true);
                 })
                 .thenMany(Flux.defer(() -> liveSinkSubscribed.compareAndSet(false, true)
@@ -721,14 +726,15 @@ public final class ReactiveHandover<T, K> {
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.
                     // Fail their acks and reject later ones, so the caller sees the error instead of hanging.
                     abandonReplayWithoutMasking(source, replayOpen);
-                    // The drain goes with the catch-up that registered it. A payload left in the live sink would
-                    // otherwise count it down later and tell a source that failed that its buffer had drained.
-                    Drain<T> failedDrain = myDrain.get();
-                    if (failedDrain != null) {
-                        synchronized (admission) {
-                            drains.remove(failedDrain);
-                        }
+                    // Every drain goes with the failure, since nothing is delivered after it. A payload left in the live
+                    // sink would otherwise count one down later and tell a source that its buffer had drained, and a
+                    // drain that never ends would hold its replay turn for good.
+                    List<Drain<T>> abandonedDrains = new ArrayList<>();
+                    synchronized (admission) {
+                        abandonedDrains.addAll(drains);
+                        drains.clear();
                     }
+                    abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
                     terminalError.set(error);
                     // Logged only when the signal cannot carry the failure, which is the live phase, where
                     // catchupDone has already emitted and nothing else tells anyone. Logging unconditionally would
@@ -820,6 +826,7 @@ public final class ReactiveHandover<T, K> {
             }
             for (Drain<T> drain : exhausted) {
                 drain.source().liveDrained();
+                releaseReplayTurn(drain.holdsReplayTurn());
             }
         });
     }
