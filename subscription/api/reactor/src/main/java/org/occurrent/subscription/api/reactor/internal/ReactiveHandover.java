@@ -674,6 +674,11 @@ public final class ReactiveHandover<T, K> {
                 // Cleared again here, not only when this call was made, because the catch-up it waited for can have
                 // stopped in between. The payloads arriving during this replay belong in its buffer, and a handover
                 // left stopped would drop them.
+                //
+                // Written without the gate's monitor, which holds because this runs in a defer chained after
+                // pauseLiveDelivery(pause) completed. A payload that reads false here is therefore entering a sink
+                // this catch-up has already paused and is the one to resume. Moving this ahead of that pause, or out
+                // of the defer, breaks it.
                 stopped = false;
                 // Every key belongs to the source a suppression reports to, so a new replay starts from none.
                 replayedIds.clear();
@@ -750,6 +755,9 @@ public final class ReactiveHandover<T, K> {
                 // replay would run on whoever called catchUp, which is the Spring refresh thread for an annotated
                 // projection. boundedElastic because the replay folds through blocking bridges.
                 .subscribeOn(Schedulers.boundedElastic())
+                // Nothing keeps this subscription, and the Mono handed back is the catch-up signal rather than the
+                // pipeline, so a caller cancelling what it got drops its own listener and cannot cancel a replay.
+                // That is why no path here restores the replay turn or the stopped flag on a cancel.
                 .subscribe(ignored -> {
                 }, error -> {
                     if (error == CatchupStopped.INSTANCE) {
