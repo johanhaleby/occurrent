@@ -49,8 +49,8 @@ import static java.util.Objects.requireNonNull;
  * subscription. The replay pages the sequence in {@code position} windows (no count and no time sort, because
  * {@code position} is monotonic and server-assigned), then a reconciliation pass reads the head once more and drains
  * up to that snapshot, delivering events written during the replay in order without letting a continuous write rate
- * keep it from handing over. The handover seam is deduplicated with a bounded id
- * cache so a reconciliation event the live subscription also sees is delivered once.
+ * keep it from handing over. The handover seam is deduplicated with a bounded cache keyed by each event's id and
+ * source together, so a reconciliation event the live subscription also sees is delivered once.
  * <p>
  * Trade-off: if the replay runs longer than the change stream history (the MongoDB oplog window), the captured token
  * ages out and the live resume fails loudly rather than silently dropping an event. Size the oplog for very large

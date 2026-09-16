@@ -43,7 +43,7 @@ import static java.util.Objects.requireNonNull;
  * delivered live. The replay pages in {@code position} windows, then reconciles once, draining up to a head
  * snapshotted at reconcile start so writes during replay are delivered in order. It does not chase a moving head,
  * which would never terminate under sustained writes, and anything after the snapshot is left to the live
- * subscription (resuming from the pre-bulk token), deduped by the id cache.
+ * subscription (resuming from the pre-bulk token), deduped by the (id, source) cache.
  * <p>
  * Only the reconciliation pass fills that cache. The history windows fill nothing, so the cache never suppresses a
  * live delivery of an event that only the history read had delivered. See
@@ -106,11 +106,12 @@ final class PositionCatchupPipeline {
 
     /**
      * The replay half on its own: bulk windows then one reconcile pass, with only the reconcile pass recording its
-     * ids in {@code cache}. The history windows record nothing, matching the blocking pipeline, because a position is
-     * reserved before its write commits, so a write in flight when the head was read can be read by a history window
-     * and needs the live delivery that the cache would otherwise suppress. Dedup by id, not position, so an in-flight
-     * event never seen during the replay is still delivered once, live. Used by the cold pipeline above. The named
-     * catch-up path in {@code NamedCatchupSupport} uses {@link #replayApplying} instead, which applies the same rule.
+     * events in {@code cache}. The history windows record nothing, matching the blocking pipeline, because a position
+     * is reserved before its write commits, so a write in flight when the head was read can be read by a history
+     * window and needs the live delivery that the cache would otherwise suppress. Dedup by an event's (id, source),
+     * not position, so an in-flight event never seen during the replay is still delivered once, live. Used by the
+     * cold pipeline above. The named catch-up path in {@code NamedCatchupSupport} uses {@link #replayApplying}
+     * instead, which applies the same rule.
      */
     Flux<CloudEvent> replay(long startPosition, BoundedIdCache<CatchupEventKey> cache) {
         if (startPosition < 0) {
@@ -173,7 +174,7 @@ final class PositionCatchupPipeline {
 
     // Snapshot the head once and drain events up to it in position order. Re-reading a moving head would advance
     // forever under sustained writes and never hand over to live (livelock). Anything after the snapshot is
-    // covered by the live change stream (resumes from the pre-bulk token), deduped by the id cache.
+    // covered by the live change stream (resumes from the pre-bulk token), deduped by the (id, source) cache.
     private Flux<CloudEvent> reconcile(long cursor, BoundedIdCache<CatchupEventKey> cache) {
         return reader.currentHead().flatMapMany(snapshotHead -> windows(cursor, snapshotHead, cache));
     }
