@@ -171,9 +171,6 @@ class StreamCatchupHandoverTest {
         return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("type").build();
     }
 
-    // A position-ordered store whose currentPosition answers a scripted sequence of heads (bulk head, then reconcile
-    // snapshot) so a test can make the head advance mid-replay. readInPositionOrder honors the range bounds. The
-    // time-based query paths must never run in position mode, so they fail loudly.
     // A time-based store (no PositionOrderedReader, so the model stays on the released time-ordered catch-up path)
     // whose bulk read can trigger a write as a side effect, landing that event in the reconciliation delta instead
     // of the bulk history, the same overlap FakePositionStore's heads(bulkHead, reconcileHead) produces for the
@@ -223,6 +220,9 @@ class StreamCatchupHandoverTest {
         }
     }
 
+    // A position-ordered store whose currentPosition answers a scripted sequence of heads (bulk head, then reconcile
+    // snapshot) so a test can make the head advance mid-replay. readInPositionOrder honors the range bounds. The
+    // time-based query paths must never run in position mode, so they fail loudly.
     private static final class FakePositionStore implements EventStoreQueries, PositionOrderedReader {
         private final TreeMap<Long, CloudEvent> byPosition = new TreeMap<>();
         private long[] heads = {0L};
