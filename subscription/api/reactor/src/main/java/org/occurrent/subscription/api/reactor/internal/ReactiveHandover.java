@@ -696,10 +696,13 @@ public final class ReactiveHandover<T, K> {
                             stopped = true;
                         }
                         abandonReplayWithoutMasking(source, replayOpen);
-                        resumeLiveDelivery(pause);
+                        // Answered before the pause is lifted, the same order the failure path below uses, so a
+                        // caller offering a payload again cannot have it delivered while the copy it is replacing is
+                        // still waiting for an answer.
                         if (!wasLive) {
                             pendingLiveAcks.forEach(sink -> sink.success(false));
                         }
+                        resumeLiveDelivery(pause);
                         // Emitted last, so a caller that reacts to the stop by calling goLive() finds every payload
                         // this stop dropped already answered rather than answered while that call is running.
                         catchupDone.tryEmitValue(false);
