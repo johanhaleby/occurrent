@@ -530,7 +530,10 @@ public final class BlockingHandover<T, K> {
                         // drains, with a replay waiting rather than starting next to it.
                         liveTransitionsRunning++;
                         drainAfterInterrupt = true;
-                    } else {
+                    } else if (!replayTurnHeld) {
+                        // Not when another catch-up owns a running replay. Stopping is this call's answer for its own
+                        // caller, and the handover belongs to that replay, whose buffer the payloads after this belong
+                        // in rather than being dropped.
                         stopped = true;
                     }
                 } else {

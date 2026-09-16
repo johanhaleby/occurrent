@@ -1255,6 +1255,42 @@ class BlockingHandoverTest {
         assertThat(log).as("the buffered payload waited for the running replay").containsExactly("R1", "R2", "L1");
     }
 
+    /**
+     * A catch-up that gives up on an interrupt answers for its own caller. Marking the handover stopped while another
+     * catch-up is replaying would answer for that one too, and the payloads arriving after it would be dropped instead
+     * of joining the replay's buffer.
+     */
+    @Test
+    void an_interrupted_wait_behind_another_replay_leaves_that_replay_taking_payloads() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        CountDownLatch secondReplayStarted = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                foldingR1.countDown();
+                awaitLatch(releaseR1);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        FakeSource second = source(List.of("R3"), false);
+        second.onReplayStarted = secondReplayStarted::countDown;
+        Thread replay = new Thread(() -> handover.catchUp(source(List.of("R1", "R2"), false)), "replay");
+        Thread waiting = new Thread(() -> handover.catchUp(second), "waiting-catch-up");
+
+        replay.start();
+        awaitLatch(foldingR1);
+        waiting.start();
+        assertThat(reachedWithin(secondReplayStarted, 300)).isFalse();
+        waiting.interrupt();
+        waiting.join(5_000);
+        handover.accept("L1");
+        releaseR1.countDown();
+        replay.join(5_000);
+
+        assertThat(log).as("the payload joined the running replay's buffer").containsExactly("R1", "R2", "L1");
+    }
+
     private static BlockingHandover<String, String> handover(List<String> delivered) {
         return BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
     }
