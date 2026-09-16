@@ -564,6 +564,10 @@ public final class BlockingHandover<T, K> {
                     replayRunning = true;
                     replayTurnHeld = true;
                     holdsReplayTurn = true;
+                    // Cleared again here, not only when this call was entered, because the catch-up it waited for can
+                    // have stopped in between. The payloads arriving during this replay belong in its buffer, and a
+                    // handover left stopped would drop them.
+                    stopped = false;
                 }
             }
             if (alreadyFailed != null) {

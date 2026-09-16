@@ -671,6 +671,10 @@ public final class ReactiveHandover<T, K> {
                         ? pauseLiveDelivery(pause)
                         : Mono.<Void>error(catchUpFailed(failed));
             })).then(Mono.defer(() -> {
+                // Cleared again here, not only when this call was made, because the catch-up it waited for can have
+                // stopped in between. The payloads arriving during this replay belong in its buffer, and a handover
+                // left stopped would drop them.
+                stopped = false;
                 // Every key belongs to the source a suppression reports to, so a new replay starts from none.
                 replayedIds.clear();
                 replaySource.set(source);

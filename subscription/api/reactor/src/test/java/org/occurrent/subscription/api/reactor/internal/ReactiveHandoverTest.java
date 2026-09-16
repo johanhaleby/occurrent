@@ -1064,6 +1064,48 @@ class ReactiveHandoverTest {
         assertThat(log).as("the queued replay never folded its history").containsExactly("R1");
     }
 
+    /**
+     * The same as the blocking engine. A catch-up waiting for its turn revives the handover again when it gets the
+     * turn, since the catch-up it waited for can have stopped in between and a handover left stopped answers the
+     * payloads arriving during this replay as dropped rather than buffering them.
+     */
+    @Test
+    void a_replay_that_waited_for_a_stopped_catch_up_takes_in_the_payloads_that_arrive_during_it() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        AtomicReference<CompletableFuture<Boolean>> liveAck = new AtomicReference<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                foldingR1.countDown();
+                try {
+                    releaseR1.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            if (payload.equals("R3")) {
+                liveAck.set(self.get().acceptReportingDelivery("L1").toFuture());
+            }
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        FakeSource stopping = source(List.of("R1", "R2"), false);
+        stopping.stopAfter(1);
+
+        Mono<Boolean> stopped = handover.catchUp(stopping);
+        assertThat(foldingR1.await(5, TimeUnit.SECONDS)).isTrue();
+        Mono<Boolean> queued = handover.catchUp(source(List.of("R3"), false));
+        Mono.delay(Duration.ofMillis(300)).block();
+        releaseR1.countDown();
+
+        StepVerifier.create(stopped).expectNext(false).verifyComplete();
+        StepVerifier.create(queued).expectNext(true).verifyComplete();
+        assertThat(liveAck.get().get(5, TimeUnit.SECONDS)).as("the payload was delivered rather than dropped").isTrue();
+        assertThat(log).containsExactly("R1", "R3", "L1");
+    }
+
     private static FakeSource source(List<String> history, boolean alreadyCaughtUp) {
         return new FakeSource(history, alreadyCaughtUp);
     }

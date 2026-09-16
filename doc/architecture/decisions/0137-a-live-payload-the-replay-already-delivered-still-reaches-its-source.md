@@ -148,8 +148,10 @@ payload.
 - A projection declared `@Projection(recordAppliedAppends = true)` on any of the six compositions now records an
   append whose only delivery was the replay's, when the replay applied an event of it, so `waitUntilApplied` answers
   for it.
-- Delivery is unchanged outside decision 6. Four tests assert an event overlapping the handover is applied exactly
-  once, two at the engines and two at the projection DSL, and none of them changed.
+- Delivery of a copy with the same complete key is unchanged outside decision 6. Four tests assert an event
+  overlapping the handover is applied exactly once, two at the engines and two at the projection DSL, and none of
+  them changed. A copy sharing only its id with a replayed event is delivered rather than suppressed, which is the
+  push model key rather than this decision.
 - A recording projection holds up to 10000 append ids per catch-up, one for each append its replay applied an event
   of.
 - A second problem closes with the split. The replay used to flood one bounded cache that evicts the eldest, so

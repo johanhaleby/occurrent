@@ -1368,6 +1368,48 @@ class BlockingHandoverTest {
         assertThat(log).containsExactly("R1", "R2");
     }
 
+    /**
+     * A catch-up revives a handover a previous one stopped, and one waiting for its turn has to revive it again when
+     * it gets the turn. The catch-up it waited for can stop in between, and a handover left stopped drops the payloads
+     * arriving during the replay that follows rather than buffering them for it.
+     */
+    @Test
+    void a_replay_that_waited_for_a_stopped_catch_up_takes_in_the_payloads_that_arrive_during_it() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        CountDownLatch foldingR3 = new CountDownLatch(1);
+        CountDownLatch releaseR3 = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                foldingR1.countDown();
+                awaitLatch(releaseR1);
+            }
+            if (payload.equals("R3")) {
+                foldingR3.countDown();
+                awaitLatch(releaseR3);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        FakeSource stopping = source(List.of("R1", "R2"), false);
+        stopping.stopAfter(1);
+        Thread first = new Thread(() -> handover.catchUp(stopping), "stopping");
+        Thread second = new Thread(() -> handover.catchUp(source(List.of("R3"), false)), "queued");
+
+        first.start();
+        awaitLatch(foldingR1);
+        second.start();
+        releaseR1.countDown();
+        first.join(5_000);
+        awaitLatch(foldingR3);
+        handover.accept("L1");
+        releaseR3.countDown();
+        second.join(5_000);
+
+        assertThat(log).as("the payload was buffered for the replay that was running")
+                .containsExactly("R1", "R3", "L1");
+    }
+
     private static BlockingHandover<String, String> handover(List<String> delivered) {
         return BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
     }
