@@ -711,6 +711,14 @@ public final class ReactiveHandover<T, K> {
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.
                     // Fail their acks and reject later ones, so the caller sees the error instead of hanging.
                     abandonReplayWithoutMasking(source, replayOpen);
+                    // The drain goes with the catch-up that registered it. A payload left in the live sink would
+                    // otherwise count it down later and tell a source that failed that its buffer had drained.
+                    Drain<T> failedDrain = myDrain.get();
+                    if (failedDrain != null) {
+                        synchronized (admission) {
+                            drains.remove(failedDrain);
+                        }
+                    }
                     terminalError.set(error);
                     // Logged only when the signal cannot carry the failure, which is the live phase, where
                     // catchupDone has already emitted and nothing else tells anyone. Logging unconditionally would

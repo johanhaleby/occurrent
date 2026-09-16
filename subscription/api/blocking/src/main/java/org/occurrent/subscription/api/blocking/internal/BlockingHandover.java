@@ -507,9 +507,12 @@ public final class BlockingHandover<T, K> {
                 live = false;
                 if (!awaitLiveDeliveriesUnderLock()) {
                     // The wait was interrupted, so this call gives up rather than replaying next to a delivery it
-                    // never waited out. Nothing has been signalled yet, so the handover goes back where it was.
-                    live = wasLive;
-                    if (!wasLive) {
+                    // never waited out. Nothing has been signalled yet, so the handover goes back where it was. Live
+                    // is read again for the same reason it is below: a catch-up that went live during the wait did so
+                    // for its own caller, and writing the value read before the wait would take that back.
+                    boolean liveNow = wasLive || live;
+                    live = liveNow;
+                    if (!liveNow) {
                         stopped = true;
                     }
                     return false;

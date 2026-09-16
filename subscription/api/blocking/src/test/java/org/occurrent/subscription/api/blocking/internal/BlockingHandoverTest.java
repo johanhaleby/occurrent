@@ -1038,6 +1038,60 @@ class BlockingHandoverTest {
         }
     }
 
+    /**
+     * A catch-up that gives up on an interrupt puts back what it changed before it waited. What it must not put back
+     * is the live flag another catch-up set while it waited, since that catch-up went live for its own caller and a
+     * handover marked stopped here drops every payload that arrives after.
+     */
+    @Test
+    void an_interrupted_wait_leaves_a_handover_that_went_live_meanwhile_still_live() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch historyDoneReached = new CountDownLatch(1);
+        CountDownLatch releaseHistoryDone = new CountDownLatch(1);
+        CountDownLatch bufferDelivering = new CountDownLatch(1);
+        CountDownLatch releaseBufferDelivery = new CountDownLatch(1);
+        CountDownLatch replayStarted = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                // Held inside the drain, so the handover is live while the replay is still waiting for the drain to end.
+                bufferDelivering.countDown();
+                awaitLatch(releaseBufferDelivery);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.accept("L1");
+        FakeSource goingLive = source(List.of(), true);
+        goingLive.onHistoryDone = () -> {
+            historyDoneReached.countDown();
+            awaitLatch(releaseHistoryDone);
+        };
+        FakeSource replaying = source(List.of("R1"), false);
+        replaying.onReplayStarted = replayStarted::countDown;
+        AtomicBoolean caughtUp = new AtomicBoolean(true);
+        AtomicBoolean interruptKept = new AtomicBoolean();
+        Thread goLive = new Thread(() -> handover.catchUp(goingLive), "go-live");
+        Thread replay = new Thread(() -> {
+            caughtUp.set(handover.catchUp(replaying));
+            interruptKept.set(Thread.currentThread().isInterrupted());
+        }, "replay");
+
+        goLive.start();
+        awaitLatch(historyDoneReached);
+        replay.start();
+        assertThat(reachedWithin(replayStarted, 300)).isFalse();
+        releaseHistoryDone.countDown();
+        awaitLatch(bufferDelivering);
+        replay.interrupt();
+        replay.join(5_000);
+        releaseBufferDelivery.countDown();
+        goLive.join(5_000);
+
+        assertThat(caughtUp).as("the interrupted catch-up gave up").isFalse();
+        assertThat(interruptKept).as("the interrupt stayed on the thread").isTrue();
+        handover.accept("L2");
+        assertThat(log).as("the handover the other catch-up made live still delivers").containsExactly("L1", "L2");
+    }
+
     private static BlockingHandover<String, String> handover(List<String> delivered) {
         return BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
     }
