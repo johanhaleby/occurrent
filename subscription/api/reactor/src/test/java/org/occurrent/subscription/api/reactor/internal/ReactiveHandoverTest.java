@@ -1025,6 +1025,45 @@ class ReactiveHandoverTest {
         assertThat(log).as("the queued replay never folded its history").containsExactly("R1", "R2");
     }
 
+    /**
+     * Giving a replay turn back resumes the catch-up waiting for it on the thread that gives it back, so a failure has
+     * to be published first. Otherwise that catch-up reads no failure, replays in full on a handover that refuses
+     * every live payload from then on, and tells its caller the catch-up succeeded.
+     */
+    @Test
+    void a_catch_up_woken_by_a_failure_giving_back_its_turn_sees_that_failure() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                foldingR1.countDown();
+                try {
+                    releaseR1.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        // Fails after its drain is registered, so the failure handling gives that drain's turn back.
+        FakeSource failingMarker = source(List.of("R1"), false);
+        failingMarker.onMarkCaughtUp = () -> {
+            throw new IllegalStateException("marker failed");
+        };
+        FakeSource queued = source(List.of("R2"), false);
+
+        Mono<Boolean> failing = handover.catchUp(failingMarker);
+        assertThat(foldingR1.await(5, TimeUnit.SECONDS)).isTrue();
+        Mono<Boolean> queuedCatchUp = handover.catchUp(queued);
+        Mono.delay(Duration.ofMillis(300)).block();
+        releaseR1.countDown();
+
+        StepVerifier.create(failing).expectError(IllegalStateException.class).verify(Duration.ofSeconds(5));
+        StepVerifier.create(queuedCatchUp).expectError(ReactiveHandover.PreDispatchRefusalException.class).verify(Duration.ofSeconds(5));
+        assertThat(log).as("the queued replay never folded its history").containsExactly("R1");
+    }
+
     private static FakeSource source(List<String> history, boolean alreadyCaughtUp) {
         return new FakeSource(history, alreadyCaughtUp);
     }

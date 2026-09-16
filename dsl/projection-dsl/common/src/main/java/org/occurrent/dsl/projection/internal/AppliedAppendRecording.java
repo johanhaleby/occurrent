@@ -111,10 +111,11 @@ public final class AppliedAppendRecording {
             }
         }
 
-        // get rather than containsKey, so an append a suppression asks about counts as used and outlives one nothing
-        // has asked about since.
+        // containsKey rather than get, so asking about an append does not count as using it. A suppression can be
+        // reported while the replay is still reading its history, and a question about one append would otherwise
+        // make another the oldest and have it forgotten while a copy of its events can still be suppressed.
         private synchronized boolean contains(AppendId appendId) {
-            return appends.get(appendId) != null;
+            return appends.containsKey(appendId);
         }
     }
 

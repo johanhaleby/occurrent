@@ -792,10 +792,14 @@ public final class ReactiveHandover<T, K> {
                             }
                         }
                     }
-                    abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
+                    // Published before the turns go back, because giving a turn back resumes a catch-up waiting for it
+                    // on this thread, and that catch-up reads this to decide whether to replay at all. The blocking
+                    // engine writes its failure under the lock for the same reason.
+                    //
                     // The first failure is the one that matters, so a later call refusing because of it does not take
                     // its place and hide the cause.
                     terminalError.compareAndSet(null, error);
+                    abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
                     // Logged only when the signal cannot carry the failure, which is the live phase, where
                     // catchupDone has already emitted and nothing else tells anyone. Logging unconditionally would
                     // repeat what the caller this signal reaches already logs for itself.
