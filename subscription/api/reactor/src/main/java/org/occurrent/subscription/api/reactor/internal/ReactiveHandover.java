@@ -246,10 +246,13 @@ public final class ReactiveHandover<T, K> {
     // was buffered while that read ran, and counting those down is the only way to know when the drain is over: the
     // live feed never completes, so nothing else marks the end of it.
     private final LinkedBlockingQueue<Item<K>> liveBuffer;
-    // How many buffered payloads are still to be delivered, -1 before the count is taken.
-    private final java.util.concurrent.atomic.AtomicLong remainingInDrain = new java.util.concurrent.atomic.AtomicLong(-1);
-    // The source of the catch-up currently going live, so the drain can tell it when the buffered set is exhausted.
-    private final AtomicReference<Source<T>> drainedSource = new AtomicReference<>();
+    // One per catch-up that reached its drain, holding the source to tell once its own buffered set is exhausted, the
+    // last turn that belongs to it, and how many of those payloads are left. One per catch-up rather than one set of
+    // fields, so a later catch-up neither takes over the drain of the one before it nor ends it early.
+    private record Drain<S>(Source<S> source, long boundaryTurn, java.util.concurrent.atomic.AtomicLong remaining) {
+    }
+
+    private final java.util.Queue<Drain<T>> drains = new java.util.concurrent.ConcurrentLinkedQueue<>();
     // The source whose replay filled replayedIds, so a live payload that replay already delivered can reach it. Set
     // when a replay starts rather than by every catchUp(Source), so a catch-up that replays nothing leaves it in
     // place, and cleared with replayedIds when a replay is abandoned.
@@ -298,7 +301,6 @@ public final class ReactiveHandover<T, K> {
     // right whatever the order turns out to be. Either alone holds the property today, so neither can be
     // falsified by a test while the other is in place, and the pair is what keeps a later change to one of them
     // from quietly ending the drain early.
-    private final java.util.concurrent.atomic.AtomicLong drainBoundaryTurn = new java.util.concurrent.atomic.AtomicLong(-1L);
     private volatile boolean stopped = false;
     // Set once, right before the buffered live payloads are drained on a successful catch-up, and never cleared
     // afterwards, mirroring BlockingHandover's live field. acceptIfLive(..) reads this to refuse a payload outright,
@@ -598,6 +600,9 @@ public final class ReactiveHandover<T, K> {
         // This catch-up's own hold on live delivery, installed only when it actually replays, and the only thing it
         // ever releases.
         Sinks.Empty<Void> pause = Sinks.empty();
+        // This catch-up's own drain, so the payloads buffered while it read its history are counted against it and
+        // against no other catch-up.
+        AtomicReference<Drain<T>> myDrain = new AtomicReference<>();
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
@@ -634,15 +639,15 @@ public final class ReactiveHandover<T, K> {
                 // specifically because a source's own subscriber to it runs inline and may forget the id, and this
                 // running after that would leave state behind that nothing removes.
                 .then(Mono.fromRunnable(() -> {
-                    drainedSource.set(source);
                     source.historyDone();
                     // Taken after historyDone, under the same guard admission uses, so every payload already
                     // taken in has a turn at or below the boundary and every later one is above it. Counting
                     // deliveries alone was not enough: a payload taken in after the boundary, delivered before one
                     // taken in before it, would count against the drain and end it early.
                     synchronized (admission) {
-                        drainBoundaryTurn.compareAndSet(-1L, admitted.get());
-                        remainingInDrain.compareAndSet(-1L, liveBacklog.get());
+                        Drain<T> drain = new Drain<>(source, admitted.get(), new java.util.concurrent.atomic.AtomicLong(liveBacklog.get()));
+                        myDrain.set(drain);
+                        drains.add(drain);
                     }
                 }))
                 .then(recordMarker)
@@ -659,7 +664,8 @@ public final class ReactiveHandover<T, K> {
                     // Signalled here rather than beside historyDone, so a listener that frees the id on this cannot
                     // do it while the marker is still unwritten. A buffer with anything in it reaches liveDrained
                     // from the last delivery instead, which also runs after this point.
-                    if (remainingInDrain.get() == 0L) {
+                    Drain<T> drain = myDrain.get();
+                    if (drain != null && drain.remaining().get() == 0L && drains.remove(drain)) {
                         source.liveDrained();
                     }
                     catchupDone.tryEmitValue(true);
@@ -750,16 +756,14 @@ public final class ReactiveHandover<T, K> {
     // ever counts down from a taken count, so a delivery before the history read finished, or after the drain is
     // over, changes nothing.
     private void countTowardsDrain(Item<K> item) {
-        long remaining = remainingInDrain.get();
-        if (remaining <= 0L) {
-            return;
-        }
-        long boundary = drainBoundaryTurn.get();
-        if (boundary < 0L || item.turn() > boundary) {
-            return;
-        }
-        if (remainingInDrain.decrementAndGet() == 0L) {
-            drainedSource.get().liveDrained();
+        for (Drain<T> drain : drains) {
+            if (item.turn() > drain.boundaryTurn()) {
+                continue;
+            }
+            long left = drain.remaining().updateAndGet(value -> value > 0L ? value - 1L : value);
+            if (left == 0L && drains.remove(drain)) {
+                drain.source().liveDrained();
+            }
         }
     }
 

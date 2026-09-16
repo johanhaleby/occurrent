@@ -729,6 +729,47 @@ class BlockingHandoverTest {
         }
     }
 
+    // A catch-up with nothing to replay claims this handover's live transition before it signals or delivers anything.
+    // A replay starting while that runs waits for it, so the two never write to the view at the same time, and the
+    // payloads this one delivers cannot end up in a batch that replay later throws away.
+    @Test
+    void a_catch_up_with_nothing_to_replay_keeps_a_replay_from_starting_while_it_goes_live() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch replayStarted = new CountDownLatch(1);
+        AtomicBoolean replayStartedDuringTheTransition = new AtomicBoolean();
+        BlockingHandover<String, String> handover = BlockingHandover.create(
+                log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.accept("L1");
+        FakeSource replaying = source(List.of("R1"), false);
+        replaying.onReplayStarted = replayStarted::countDown;
+        FakeSource goingLive = source(List.of(), true);
+        ExecutorService threads = Executors.newSingleThreadExecutor();
+        try {
+            // Between the check that no replay is running and the drain itself, which is where a replay used to slip in.
+            goingLive.onHistoryDone = () -> {
+                threads.submit(() -> handover.catchUp(replaying));
+                replayStartedDuringTheTransition.set(reachedWithin(replayStarted, 300));
+            };
+
+            handover.catchUp(goingLive);
+
+            assertThat(replayStartedDuringTheTransition).isFalse();
+            assertThat(replayStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(log).containsExactly("L1", "R1");
+        } finally {
+            threads.shutdownNow();
+        }
+    }
+
+    private static boolean reachedWithin(CountDownLatch latch, long millis) {
+        try {
+            return latch.await(millis, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
     @Test
     void replay_lifecycle_is_started_then_completed_before_the_buffer_drain_and_the_marker() {
         List<String> log = Collections.synchronizedList(new ArrayList<>());
@@ -904,6 +945,7 @@ class BlockingHandoverTest {
         private Runnable onReplayCompleted;
         private Runnable onReplayAbandoned;
         private Runnable onAlreadyDeliveredByReplay;
+        private Runnable onHistoryDone;
         private int replayCallCount = 0;
         private int markCaughtUpCallCount = 0;
         private int stopAfter = Integer.MAX_VALUE;
@@ -942,6 +984,13 @@ class BlockingHandoverTest {
         @Override
         public boolean isAlreadyCaughtUp() {
             return alreadyCaughtUp;
+        }
+
+        @Override
+        public void historyDone() {
+            if (onHistoryDone != null) {
+                onHistoryDone.run();
+            }
         }
 
         @Override

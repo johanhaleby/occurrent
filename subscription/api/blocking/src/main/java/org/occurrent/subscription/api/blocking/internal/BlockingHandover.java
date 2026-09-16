@@ -238,6 +238,9 @@ public final class BlockingHandover<T, K> {
     private boolean liveWhenReplayStops = false;
     // Source.alreadyDeliveredByReplay(..) calls running outside the lock, waited for before a replay starts.
     private int replayCallbacksRunning = 0;
+    // A catch-up with nothing to replay is taking this handover live right now. A replay waits for it, so the two
+    // never write to the view at the same time.
+    private boolean liveTransitionRunning = false;
     private @Nullable Throwable catchUpFailure = null;
     // The source whose replay filled replayedIds, so a live payload that replay already delivered can reach it, since
     // accept(..) is handed no source of its own. Written when a replay starts rather than by every catchUp(Source), so
@@ -480,8 +483,18 @@ public final class BlockingHandover<T, K> {
                         liveWhenReplayStops = true;
                         return true;
                     }
+                    // Claimed under the same lock that read replayRunning, so a replay cannot start between the two
+                    // and find this call draining into a view it is about to replay into.
+                    liveTransitionRunning = true;
                 }
-                drainBufferAndGoLive(source);
+                try {
+                    drainBufferAndGoLive(source);
+                } finally {
+                    synchronized (lock) {
+                        liveTransitionRunning = false;
+                        lock.notifyAll();
+                    }
+                }
                 return true;
             }
             boolean stoppedMidReplay = false;
@@ -603,7 +616,7 @@ public final class BlockingHandover<T, K> {
     // the replay about to start is the only thing writing to the view. None starts meanwhile, since live is false.
     private void awaitLiveDeliveriesUnderLock() {
         boolean interrupted = false;
-        while (!inFlight.isEmpty() || replayCallbacksRunning > 0) {
+        while (!inFlight.isEmpty() || replayCallbacksRunning > 0 || liveTransitionRunning) {
             try {
                 lock.wait();
             } catch (InterruptedException e) {

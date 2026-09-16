@@ -1031,6 +1031,41 @@ class ReactiveHandoverTest {
         assertThat(log).containsExactly("R1");
     }
 
+    // A catch-up that arrives while an earlier one's buffered payloads are still being delivered counts its own
+    // payloads and tells its own source. The earlier catch-up is still told when its own set is exhausted, which one
+    // shared set of counters could not do, since the later catch-up took them over.
+    @Test
+    void a_catch_up_arriving_during_an_earlier_drain_leaves_that_drain_its_own_source() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch firstDeliveryReached = new CountDownLatch(1);
+        CountDownLatch releaseFirstDelivery = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("L1")) {
+                firstDeliveryReached.countDown();
+                try {
+                    releaseFirstDelivery.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            log.add(payload);
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        handover.accept("L1").subscribe();
+        handover.accept("L2").subscribe();
+        FakeSource first = source(List.of(), false);
+        first.onLiveDrained = () -> log.add("first drained");
+        FakeSource second = source(List.of(), true);
+        second.onLiveDrained = () -> log.add("second drained");
+
+        StepVerifier.create(handover.catchUp(first)).expectNext(true).verifyComplete();
+        assertThat(firstDeliveryReached.await(5, TimeUnit.SECONDS)).isTrue();
+        StepVerifier.create(handover.catchUp(second)).expectNext(true).verifyComplete();
+        releaseFirstDelivery.countDown();
+        Mono.delay(Duration.ofMillis(500)).block();
+
+        assertThat(log).contains("L1", "L2", "first drained", "second drained");
+    }
+
     // A catch-up with nothing to replay runs while another catch-up is replaying, which is what a feed's goLive()
     // racing its catchUp() does. It must not let the live payloads through, since the replay it would release them
     // into can still discard what a view buffered from them.
