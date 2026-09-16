@@ -39,10 +39,10 @@ import java.util.Set;
  * Thread-safe. The catch-up pipelines write on the catch-up thread and read on the live thread at the handover seam.
  */
 @NullMarked
-public final class BoundedIdCache {
+public final class BoundedIdCache<K> {
     private final int maxSize;
-    private final Set<String> ids;
-    private final Queue<String> order;
+    private final Set<K> ids;
+    private final Queue<K> order;
 
     public BoundedIdCache(int maxSize) {
         if (maxSize < 1) {
@@ -55,11 +55,16 @@ public final class BoundedIdCache {
         this.order = new ArrayDeque<>();
     }
 
-    public synchronized boolean contains(String id) {
+    public synchronized boolean contains(K id) {
         return ids.contains(id);
     }
 
-    public synchronized void add(String id) {
+    public synchronized void clear() {
+        ids.clear();
+        order.clear();
+    }
+
+    public synchronized void add(K id) {
         if (ids.add(id)) {
             order.add(id);
             if (order.size() > maxSize) {

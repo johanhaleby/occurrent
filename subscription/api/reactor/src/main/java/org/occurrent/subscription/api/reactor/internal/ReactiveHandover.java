@@ -29,6 +29,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -78,7 +80,7 @@ import java.util.function.Supplier;
  * wait.
  */
 @NullMarked
-public final class ReactiveHandover<T> {
+public final class ReactiveHandover<T, K> {
 
     /**
      * The replay side of a handover: whether the catch-up already ran, the position-ordered replay flux, and how to
@@ -98,10 +100,14 @@ public final class ReactiveHandover<T> {
          * Whether the replay should keep going, asked once per payload before it is folded. Return {@code false} to
          * stop one already in flight, because the model was stopped or is shutting down.
          * <p>
-         * A stop is not a failure. Nothing is drained, the handover does not go live, {@link #markCaughtUp()} is not
-         * called, and no terminal error is recorded, so the next catch-up replays the whole history and the handover
-         * stays usable. Live payloads arriving after a stop are dropped and their acks complete rather than hang, the
-         * same dropped-not-deferred contract a stopped subscription model has (ADR 85).
+         * A stop is not a failure. {@link #markCaughtUp()} is not called and no terminal error is recorded, so the
+         * next catch-up replays the whole history and the handover stays usable.
+         * <p>
+         * What the stop does with the live payloads depends on where the handover stood when the replay started. One
+         * that had not gone live drains nothing and does not go live, and live payloads arriving after the stop are
+         * dropped and their acks complete rather than hang, the same dropped-not-deferred contract a stopped
+         * subscription model has (ADR 85). One that was already live delivers what it held back and goes on
+         * delivering, see {@link ReactiveHandover#catchUp}.
          */
         default boolean keepReplaying() {
             return true;
@@ -130,6 +136,10 @@ public final class ReactiveHandover<T> {
          * The replay was stopped before it finished, that is, {@link #keepReplaying()} returned {@code false}. Called
          * instead of {@link #replayCompleted()}, so anything buffered since {@link #replayStarted()} is discarded
          * rather than written, the same discard-on-stop contract {@link #keepReplaying()} documents. Must not throw.
+         * <p>
+         * Before this call the engine forgets every de-dup key the replay delivered, so a later live copy of one of
+         * those payloads is delivered rather than suppressed. A source that wrote the payload through receives it
+         * twice, which at-least-once delivery allows, and one that discarded it receives it again.
          */
         default void replayAbandoned() {
         }
@@ -165,13 +175,14 @@ public final class ReactiveHandover<T> {
          * second time. Called once per such payload, from the same {@code concatMap} every live payload runs through,
          * so it is serialized against the deliveries around it exactly as a delivery is.
          * <p>
-         * The payload was applied during the replay and is applied exactly once either way, so nothing here should
-         * apply it again. This hook exists for the work a source does on delivery rather than on application, which
-         * for a recording projection is writing down the append the payload came from. Without it that append is
-         * written down by neither delivery, since the replay is inside the history phase where a recorder writes
-         * nothing (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
-         * decision 6) and the live copy is never delivered
-         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
+         * The replay delivered the payload, and it is delivered once either way, so nothing here should deliver it
+         * again. This hook exists for a recording projection, which writes down the append a payload came from once
+         * it has applied it. It writes nothing during the replay, which runs inside the history phase
+         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
+         * decision 6), and the live copy is never delivered
+         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>),
+         * so without this call neither delivery writes the append down. Delivered is not applied, since a projection
+         * can skip an event, so a source that records has to check that its replay applied an event of that append.
          * <p>
          * A payload the replay never delivered, one suppressed because an earlier live delivery already handled it,
          * does not come here. That earlier delivery ran everything a delivery runs, so there is nothing left owing.
@@ -197,14 +208,14 @@ public final class ReactiveHandover<T> {
      * {@code BlockingHandover.PreDispatchRefusalException}.
      */
     public static final class PreDispatchRefusalException extends IllegalStateException {
-        private final ReactiveHandover<?> owner;
+        private final ReactiveHandover<?, ?> owner;
 
-        PreDispatchRefusalException(ReactiveHandover<?> owner, String message) {
+        PreDispatchRefusalException(ReactiveHandover<?, ?> owner, String message) {
             super(message);
             this.owner = owner;
         }
 
-        PreDispatchRefusalException(ReactiveHandover<?> owner, String message, Throwable cause) {
+        PreDispatchRefusalException(ReactiveHandover<?, ?> owner, String message, Throwable cause) {
             super(message, cause);
             this.owner = owner;
         }
@@ -216,13 +227,13 @@ public final class ReactiveHandover<T> {
          *
          * @param handover The engine to compare against.
          */
-        public boolean thrownBy(ReactiveHandover<?> handover) {
+        public boolean thrownBy(ReactiveHandover<?, ?> handover) {
             return owner == handover;
         }
     }
 
     private final Function<T, Mono<Void>> deliver;
-    private final Function<T, String> dedupId;
+    private final Function<T, K> dedupId;
     private final String noun;
     private final int maxBufferedEvents;
     // Two caches rather than one, because the two suppressions they cause are not the same event. A key in
@@ -230,17 +241,43 @@ public final class ReactiveHandover<T> {
     // by the replay, inside the history phase, so suppressing the live copy owes the source a call to
     // Source.alreadyDeliveredByReplay(..) (ADR 137). One cache cannot tell those apart, and the replay's own volume
     // evicting the live keys is what made the live-redelivery de-dup empty exactly when the handover went live.
-    private final BoundedIdCache deliveredIds;
-    private final BoundedIdCache replayedIds;
-    private final Sinks.Many<Item> liveSink;
+    private final BoundedIdCache<K> deliveredIds;
+    private final BoundedIdCache<K> replayedIds;
+    private final Sinks.Many<Item<K>> liveSink;
     // The sink's own queue, held so the drain has a boundary. Everything in it when the history read finishes is what
     // was buffered while that read ran, and counting those down is the only way to know when the drain is over: the
     // live feed never completes, so nothing else marks the end of it.
-    private final LinkedBlockingQueue<Item> liveBuffer;
-    // How many buffered payloads are still to be delivered, -1 before the count is taken.
-    private final java.util.concurrent.atomic.AtomicLong remainingInDrain = new java.util.concurrent.atomic.AtomicLong(-1);
-    // The source of the catch-up currently going live, so the drain can tell it when the buffered set is exhausted.
-    private final AtomicReference<Source<T>> drainedSource = new AtomicReference<>();
+    private final LinkedBlockingQueue<Item<K>> liveBuffer;
+    // One per catch-up that reached its drain, holding the source to tell once its own buffered set is exhausted, the
+    // last turn that belongs to it, and how many of those payloads are left. One per catch-up rather than one set of
+    // fields, so a later catch-up neither takes over the drain of the one before it nor ends it early.
+    private record Drain<S>(Source<S> source, long boundaryTurn, java.util.concurrent.atomic.AtomicLong remaining,
+                            AtomicBoolean holdsReplayTurn) {
+    }
+
+    private final java.util.Queue<Drain<T>> drains = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    // The source whose replay filled replayedIds, so a live payload that replay already delivered can reach it. Set
+    // when a replay starts rather than by every catchUp(Source), so a catch-up that replays nothing leaves it in
+    // place, and cleared with replayedIds when a replay is abandoned.
+    private final AtomicReference<@Nullable Source<T>> replaySource = new AtomicReference<>();
+    // The live sink accepts one subscriber ever. A catch-up on a handover that is already live, a feed's goLive()
+    // after its catchUp(), leaves the running pipeline alone instead of subscribing again, which the sink would
+    // refuse and the error handler would record as a failed catch-up.
+    private final AtomicBoolean liveSinkSubscribed = new AtomicBoolean();
+    // Guards the three fields below. Live payloads wait at livePaused while a replay runs, even on a handover that is
+    // already live, because a view that buffers during a replay throws that buffer away if the replay is stopped.
+    private final Object liveGate = new Object();
+    private Sinks.@Nullable Empty<Void> livePaused = null;
+    // Whether the live pipeline is delivering a payload right now, so a replay can wait for it before it starts.
+    private boolean liveDelivering = false;
+    private Sinks.@Nullable Empty<Void> liveIdle = null;
+    // Guards the field below. A replay takes its turn here and holds it until its drain ends, or until its catch-up
+    // is stopped or fails, so two replays never fold into the view at once and the payloads a drain delivers are
+    // checked against the keys of the replay before it. The first to finish takes the handover live, and a second replay running past that
+    // point would have live payloads folded next to it and thrown away if it stops.
+    private final Object replayTurn = new Object();
+    // Completes when the replay holding the turn ends, so the next one in line takes it. Null while none is running.
+    private Sinks.@Nullable Empty<Void> replayTurnReleased = null;
     // Acks of live payloads buffered but not yet folded, so a catch-up failure fails them rather than leaving the
     // caller's accept Monos hanging forever. The Boolean each carries is whether the payload was genuinely
     // delivered, not just whether the ack completed without error, see acceptReportingDelivery(..).
@@ -255,7 +292,7 @@ public final class ReactiveHandover<T> {
     // long enough not to retry into the same instant.
     private static final java.time.Duration CONCURRENT_EMISSION_RETRY_DELAY = java.time.Duration.ofMillis(1);
     // Offers waiting their turn at the sink, oldest first, so the order they were made is the order they reach it.
-    private final java.util.Queue<PendingOffer> pendingOffers = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.Queue<PendingOffer<K>> pendingOffers = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private final AtomicBoolean offerDrainRunning = new AtomicBoolean();
     // Live payloads taken in and not yet delivered, wherever they are sitting. An offer waits in pendingOffers
     // until the drain hands it to the sink, and then in the sink's own queue until its handler runs, so counting
@@ -274,20 +311,19 @@ public final class ReactiveHandover<T> {
     // right whatever the order turns out to be. Either alone holds the property today, so neither can be
     // falsified by a test while the other is in place, and the pair is what keeps a later change to one of them
     // from quietly ending the drain early.
-    private final java.util.concurrent.atomic.AtomicLong drainBoundaryTurn = new java.util.concurrent.atomic.AtomicLong(-1L);
     private volatile boolean stopped = false;
     // Set once, right before the buffered live payloads are drained on a successful catch-up, and never cleared
     // afterwards, mirroring BlockingHandover's live field. acceptIfLive(..) reads this to refuse a payload outright,
     // without ever touching liveSink, rather than buffering it the way acceptReportingDelivery(..) does.
     private volatile boolean live = false;
 
-    private ReactiveHandover(Function<T, Mono<Void>> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
+    private ReactiveHandover(Function<T, Mono<Void>> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun) {
         this.deliver = deliver;
         this.dedupId = dedupId;
         this.noun = noun;
         this.maxBufferedEvents = options.maxBufferedEvents();
-        this.deliveredIds = new BoundedIdCache(options.dedupCacheSize());
-        this.replayedIds = new BoundedIdCache(options.dedupCacheSize());
+        this.deliveredIds = new BoundedIdCache<>(options.dedupCacheSize());
+        this.replayedIds = new BoundedIdCache<>(options.dedupCacheSize());
         // LinkedBlockingQueue(capacity), not ArrayBlockingQueue(capacity): both cap at maxBufferedEvents (up to 100k by
         // default) and reject past it the same way, but ArrayBlockingQueue pre-allocates its full backing array at
         // construction, roughly 800 KB held for the handover's whole lifetime whether or not the live feed ever
@@ -298,13 +334,14 @@ public final class ReactiveHandover<T> {
 
     /**
      * @param deliver Folds a payload, replayed during the catch-up or live once going live.
-     * @param dedupId Extracts the replay-to-live de-dup key from a payload.
+     * @param dedupId Extracts the replay-to-live de-dup key from a payload. Two payloads count as one only when their
+     *                keys are equal, so the key has to hold everything that identifies a payload.
      * @param options De-dup cache size and live-buffer cap.
      * @param noun    The caller's noun for {@link HandoverMessages#catchUpFailed(String)}, e.g.
      *                {@code "projection feed"} or {@code "subscription"}, the same as the blocking engine takes.
      */
-    public static <T> ReactiveHandover<T> create(
-            Function<T, Mono<Void>> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
+    public static <T, K> ReactiveHandover<T, K> create(
+            Function<T, Mono<Void>> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun) {
         Objects.requireNonNull(deliver, "deliver cannot be null");
         Objects.requireNonNull(dedupId, "dedupId cannot be null");
         Objects.requireNonNull(options, "options cannot be null");
@@ -374,11 +411,12 @@ public final class ReactiveHandover<T> {
                 ackSink.error(catchUpFailed(failure));
                 return;
             }
-            if (!live) {
+            if (!live || liveDeliveryPaused()) {
                 // Refuse without buffering, unlike acceptReportingDelivery. Covers "never started", "still
                 // replaying", and "stopped mid-replay" alike, all three are "not live", and a caller here has
                 // already promised it can redeliver, so there is nothing to gain by holding the payload instead of
-                // asking again later.
+                // asking again later. A replay on a handover that is already live pauses live delivery, and counts
+                // as still replaying here, the same as on the blocking engine.
                 ackSink.success(false);
                 return;
             }
@@ -396,9 +434,10 @@ public final class ReactiveHandover<T> {
             ackSink.error(catchUpFailed(failure));
             return;
         }
-        if (stopped) {
+        if (stopped && !live) {
             // Dropped rather than buffered, and the ack completes rather than failing. The replay that would have
-            // drained this buffer was stopped, so nothing is coming to fold it. Dropped, not deferred (ADR 85).
+            // drained this buffer was stopped, so nothing is coming to fold it. Dropped, not deferred (ADR 85). A
+            // handover that has gone live delivers instead, whatever a stop left behind, since its live pipeline runs.
             ackSink.success(false);
             return;
         }
@@ -411,18 +450,18 @@ public final class ReactiveHandover<T> {
             ackSink.error(catchUpFailed(failure));
             return;
         }
-        if (stopped) {
+        if (stopped && !live) {
             ackSink.success(false);
             return;
         }
-        String key;
+        K key;
         try {
             key = dedupKey(payload);
         } catch (RuntimeException keyFailure) {
             ackSink.error(keyFailure);
             return;
         }
-        Item item = new Item(() -> deliver.apply(payload), () -> alreadyDeliveredByReplay(payload), key, ackSink);
+        Item<K> item = new Item<>(() -> deliver.apply(payload), () -> alreadyDeliveredByReplay(payload), key, ackSink);
         offerToLiveSink(item, ackSink);
     }
 
@@ -440,7 +479,7 @@ public final class ReactiveHandover<T> {
     // One drain at a time also means this engine is the sink's only producer, so FAIL_NON_SERIALIZED cannot happen
     // any more. The handling below stays as defence, not as a path anything reaches today, which is why no test
     // drives it.
-    private void offerToLiveSink(Item item, MonoSink<Boolean> ackSink) {
+    private void offerToLiveSink(Item<K> item, MonoSink<Boolean> ackSink) {
         // Taking a place, stamping the payload with its turn and queueing it are one step. Apart, a payload could
         // take a place and be queued behind one that took its place later, and the drain boundary below counts by
         // turn, so the two have to agree.
@@ -450,8 +489,8 @@ public final class ReactiveHandover<T> {
                 return;
             }
             liveBacklog.incrementAndGet();
-            Item stamped = item.withTurn(admitted.incrementAndGet());
-            pendingOffers.add(new PendingOffer(stamped, ackSink, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
+            Item<K> stamped = item.withTurn(admitted.incrementAndGet());
+            pendingOffers.add(new PendingOffer<>(stamped, ackSink, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
         }
         drainPendingOffers();
     }
@@ -489,7 +528,7 @@ public final class ReactiveHandover<T> {
     // be handed over yet and is waiting for another attempt, false when it emptied the queue.
     private boolean takeQueuedOffersToTheSink() {
         while (true) {
-            PendingOffer pending = pendingOffers.peek();
+            PendingOffer<K> pending = pendingOffers.peek();
             if (pending == null) {
                 return false;
             }
@@ -502,7 +541,7 @@ public final class ReactiveHandover<T> {
                 case FAIL_NON_SERIALIZED -> {
                     if (System.nanoTime() >= pending.deadline()) {
                         pendingOffers.poll();
-                        liveBacklog.decrementAndGet();
+                        dropFromBacklogAndDrains(pending.item());
                         pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
                         continue;
                     }
@@ -514,21 +553,51 @@ public final class ReactiveHandover<T> {
                 // path, since that check runs first and catches every way the pipeline ends today.
                 case FAIL_TERMINATED, FAIL_CANCELLED -> {
                     pendingOffers.poll();
-                    liveBacklog.decrementAndGet();
+                    dropFromBacklogAndDrains(pending.item());
                     pending.ack().success(false);
                 }
                 default -> {
                     pendingOffers.poll();
-                    liveBacklog.decrementAndGet();
+                    dropFromBacklogAndDrains(pending.item());
                     pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
                 }
             }
         }
     }
 
+    // The bookkeeping deliver(..) does in its doFinally, for a payload that never reaches it. Without it a drain that
+    // counted the payload never reaches zero, so its source is never told its buffer drained and its replay turn is
+    // never given back, which parks every later replay.
+    private void dropFromBacklogAndDrains(Item<K> item) {
+        List<Drain<T>> exhausted;
+        synchronized (admission) {
+            liveBacklog.decrementAndGet();
+            exhausted = countTowardsDrainUnderAdmission(item);
+        }
+        tellDrainedSources(exhausted);
+    }
+
+    // Nothing a source does here reaches the caller whose payload ended the drain. Its acknowledgement is still owed
+    // and the offers behind it still have to be taken to the sink, and on the delivery path the pipeline drops what
+    // is thrown from a doFinally anyway, so a throwing callback is logged rather than carried out of here. The turn
+    // goes back either way.
+    private void tellDrainedSources(List<Drain<T>> exhausted) {
+        for (Drain<T> drain : exhausted) {
+            try {
+                drain.source().liveDrained();
+            } catch (RuntimeException | Error e) {
+                log.error("The catch-up-then-live handover for this {} failed while telling a source that the live "
+                        + "payloads buffered during its catch-up had been delivered. They were delivered, and the "
+                        + "handover goes on running.", noun, e);
+            } finally {
+                releaseReplayTurn(drain.holdsReplayTurn());
+            }
+        }
+    }
+
     // An offer waiting its turn at the sink, with the point in time after which this engine stops offering it and
     // reports contention instead.
-    private record PendingOffer(Item item, MonoSink<Boolean> ack, long deadline) {
+    private record PendingOffer<K>(Item<K> item, MonoSink<Boolean> ack, long deadline) {
     }
 
     /**
@@ -549,6 +618,11 @@ public final class ReactiveHandover<T> {
      * live feed. The returned {@link Mono} completes when the replay and marker are done (see the class javadoc for
      * how that relates to the buffered live payloads), emitting {@code true} when the catch-up finished and
      * {@code false} when {@link Source#keepReplaying()} stopped it partway. A failure errors it instead.
+     * <p>
+     * A replay waits for a live payload still being delivered and then holds the live payloads back until it ends,
+     * which matters on a handover that is already live, a feed's {@code catchUp()} after its {@code goLive()}. They are
+     * delivered when it ends, whether it completes or is stopped, since a view that buffers during a replay throws that
+     * buffer away on a stop.
      */
     public Mono<Boolean> catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
@@ -564,6 +638,19 @@ public final class ReactiveHandover<T> {
         // below knows whether there is a replay lifecycle left open to abandon, rather than calling replayAbandoned()
         // after a clean replayCompleted() has already told the view its batch is durable (ADR 110).
         AtomicBoolean replayOpen = new AtomicBoolean(false);
+        // This catch-up's own hold on live delivery, installed only when it actually replays, and the only thing it
+        // ever releases.
+        Sinks.Empty<Void> pause = Sinks.empty();
+        // This catch-up's own drain, so the payloads buffered while it read its history are counted against it and
+        // against no other catch-up.
+        AtomicReference<Drain<T>> myDrain = new AtomicReference<>();
+        // Whether this catch-up is the replay holding the turn, so only the one that took it releases it.
+        AtomicBoolean holdsReplayTurn = new AtomicBoolean();
+        // Whether this catch-up subscribed the live sink, so a failure of its pipeline is known to end live delivery.
+        AtomicBoolean deliversLive = new AtomicBoolean();
+        // Read when this catch-up starts, so the check after the turn asks whether a catch-up failed while this one
+        // waited rather than whether the handover had already failed when the caller asked for this one.
+        Throwable failureBeforeWaiting = terminalError.get();
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
@@ -573,19 +660,43 @@ public final class ReactiveHandover<T> {
             if (done) {
                 return Mono.empty();
             }
-            source.replayStarted();
-            replayOpen.set(true);
-            return source.replay().map(this::replayedItem)
-                    // Checked inside the concatMap function rather than upstream of it. An upstream takeWhile would run
-                    // at emission, and concatMap prefetches, so it could race far ahead of the folds. This is
-                    // serialized per payload with the fold itself, which is the same reason the phases here are
-                    // sequential.
-                    .concatMap(item -> source.keepReplaying() ? deliver(item) : Mono.error(CatchupStopped.INSTANCE))
-                    .then()
-                    // Ordered before the marker and before the live buffer drain, so anything a replay-aware view
-                    // buffered is durable before either runs.
-                    .then(Mono.defer(source::replayCompleted))
-                    .doOnSuccess(ignored -> replayOpen.set(false));
+            // Deferred, so the hold is installed once the turn is taken rather than when this pipeline is put together.
+            return awaitReplayTurn(holdsReplayTurn).then(Mono.defer(() -> {
+                // The catch-up this one waited for failing leaves the handover refusing everything and its caller
+                // told to replace it. So this replay does not start and fold a history into a view its caller was
+                // told to stop using. A caller that asks for a catch-up on a handover that had already failed still
+                // gets one, which is what it asked for.
+                Throwable failed = terminalError.get();
+                return failed == null || failed == failureBeforeWaiting
+                        ? pauseLiveDelivery(pause)
+                        : Mono.<Void>error(catchUpFailed(failed));
+            })).then(Mono.defer(() -> {
+                // Cleared again here, not only when this call was made, because the catch-up it waited for can have
+                // stopped in between. The payloads arriving during this replay belong in its buffer, and a handover
+                // left stopped would drop them.
+                //
+                // Written without the gate's monitor, which holds because this runs in a defer chained after
+                // pauseLiveDelivery(pause) completed. A payload that reads false here is therefore entering a sink
+                // this catch-up has already paused and is the one to resume. Moving this ahead of that pause, or out
+                // of the defer, breaks it.
+                stopped = false;
+                // Every key belongs to the source a suppression reports to, so a new replay starts from none.
+                replayedIds.clear();
+                replaySource.set(source);
+                source.replayStarted();
+                replayOpen.set(true);
+                return source.replay().map(this::replayedItem)
+                        // Checked inside the concatMap function rather than upstream of it. An upstream takeWhile would
+                        // run at emission, and concatMap prefetches, so it could race far ahead of the folds. This is
+                        // serialized per payload with the fold itself, which is the same reason the phases here are
+                        // sequential.
+                        .concatMap(item -> source.keepReplaying() ? deliver(item) : Mono.error(CatchupStopped.INSTANCE))
+                        .then()
+                        // Ordered before the marker and before the live buffer drain, so anything a replay-aware view
+                        // buffered is durable before either runs.
+                        .then(Mono.defer(source::replayCompleted))
+                        .doOnSuccess(ignored -> replayOpen.set(false));
+            }));
         });
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : source.markCaughtUp());
 
@@ -595,15 +706,15 @@ public final class ReactiveHandover<T> {
                 // specifically because a source's own subscriber to it runs inline and may forget the id, and this
                 // running after that would leave state behind that nothing removes.
                 .then(Mono.fromRunnable(() -> {
-                    drainedSource.set(source);
                     source.historyDone();
                     // Taken after historyDone, under the same guard admission uses, so every payload already
                     // taken in has a turn at or below the boundary and every later one is above it. Counting
                     // deliveries alone was not enough: a payload taken in after the boundary, delivered before one
                     // taken in before it, would count against the drain and end it early.
                     synchronized (admission) {
-                        drainBoundaryTurn.compareAndSet(-1L, admitted.get());
-                        remainingInDrain.compareAndSet(-1L, liveBacklog.get());
+                        Drain<T> drain = new Drain<>(source, admitted.get(), new java.util.concurrent.atomic.AtomicLong(liveBacklog.get()), holdsReplayTurn);
+                        myDrain.set(drain);
+                        drains.add(drain);
                     }
                 }))
                 .then(recordMarker)
@@ -612,36 +723,95 @@ public final class ReactiveHandover<T> {
                     // flips its own live field. A payload acceptIfLive(..) sees after this point is treated as live
                     // even while whatever buffered ahead of it during the replay is still being delivered.
                     live = true;
+                    // Held here until the marker is written, not from the end of the replay, so a payload a handover
+                    // that was already live held back is never delivered and acknowledged while a phase that can still
+                    // fail is running. A failure fails its acknowledgement instead, and its caller offers it again.
+                    resumeLiveDelivery(pause);
                     // An empty buffer has nothing to deliver, so its drain is over the moment the handover is.
                     // Signalled here rather than beside historyDone, so a listener that frees the id on this cannot
                     // do it while the marker is still unwritten. A buffer with anything in it reaches liveDrained
                     // from the last delivery instead, which also runs after this point.
-                    if (remainingInDrain.get() == 0L) {
+                    boolean nothingBuffered;
+                    Drain<T> drain = myDrain.get();
+                    synchronized (admission) {
+                        nothingBuffered = drain != null && drain.remaining().get() == 0L && drains.remove(drain);
+                    }
+                    if (nothingBuffered) {
                         source.liveDrained();
+                        // Otherwise the last delivery of the drain gives the turn back, since the payloads it holds
+                        // were checked against this replay's keys and are reported to this replay's source.
+                        releaseReplayTurn(holdsReplayTurn);
                     }
                     catchupDone.tryEmitValue(true);
                 })
-                .thenMany(liveSink.asFlux().concatMap(this::deliver))
+                .thenMany(Flux.defer(() -> {
+                    if (!liveSinkSubscribed.compareAndSet(false, true)) {
+                        return Flux.<Void>empty();
+                    }
+                    deliversLive.set(true);
+                    return liveSink.asFlux().concatMap(this::deliver);
+                }))
                 // This engine subscribes its own pipeline rather than handing it back, so without a scheduler the
                 // replay would run on whoever called catchUp, which is the Spring refresh thread for an annotated
                 // projection. boundedElastic because the replay folds through blocking bridges.
                 .subscribeOn(Schedulers.boundedElastic())
+                // Nothing keeps this subscription, and the Mono handed back is the catch-up signal rather than the
+                // pipeline, so a caller cancelling what it got drops its own listener and cannot cancel a replay.
+                // That is why no path here restores the replay turn or the stopped flag on a cancel.
                 .subscribe(ignored -> {
                 }, error -> {
                     if (error == CatchupStopped.INSTANCE) {
                         // Stopped, not failed. No marker, no drain, and no terminal error, so the handover stays
-                        // usable. The buffered acks still have to be resolved or their callers hang forever; they
-                        // complete rather than fail, because the payload was dropped rather than rejected.
-                        stopped = true;
+                        // usable. A handover that never went live drops what it buffered, and the acks of those
+                        // payloads complete rather than fail, because each was dropped rather than rejected. One that
+                        // was already live goes on delivering them, the same as the blocking engine.
+                        boolean wasLive = live;
+                        if (!wasLive) {
+                            stopped = true;
+                        }
                         abandonReplayWithoutMasking(source, replayOpen);
+                        // Answered before the pause is lifted, the same order the failure path below uses, so a
+                        // caller offering a payload again cannot have it delivered while the copy it is replacing is
+                        // still waiting for an answer.
+                        if (!wasLive) {
+                            pendingLiveAcks.forEach(sink -> sink.success(false));
+                        }
+                        resumeLiveDelivery(pause);
+                        releaseReplayTurn(holdsReplayTurn);
+                        // Emitted last, so a caller that reacts to the stop by calling goLive() finds the payloads
+                        // this stop answered already answered rather than answered while that call is running. A
+                        // catch-up going live in the window between the read of live above and this point delivers
+                        // them anyway, which costs the duplicate that goLive() documents.
                         catchupDone.tryEmitValue(false);
-                        pendingLiveAcks.forEach(sink -> sink.success(false));
                         return;
                     }
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.
                     // Fail their acks and reject later ones, so the caller sees the error instead of hanging.
                     abandonReplayWithoutMasking(source, replayOpen);
-                    terminalError.set(error);
+                    // This catch-up's own drain goes with its failure, so a payload left in the live sink cannot count
+                    // it down later and tell a source whose catch-up failed that its buffer drained. Every other drain
+                    // goes too only when this pipeline was the one delivering live, since then nothing ends them and
+                    // each would hold its replay turn for good. Otherwise they end as their payloads are delivered.
+                    List<Drain<T>> abandonedDrains = new ArrayList<>();
+                    synchronized (admission) {
+                        if (deliversLive.get()) {
+                            abandonedDrains.addAll(drains);
+                            drains.clear();
+                        } else {
+                            Drain<T> ownDrain = myDrain.get();
+                            if (ownDrain != null && drains.remove(ownDrain)) {
+                                abandonedDrains.add(ownDrain);
+                            }
+                        }
+                    }
+                    // Published before the turns go back, because giving a turn back resumes a catch-up waiting for it
+                    // on this thread, and that catch-up reads this to decide whether to replay at all. The blocking
+                    // engine writes its failure under the lock for the same reason.
+                    //
+                    // The first failure is the one that matters, so a later call refusing because of it does not take
+                    // its place and hide the cause.
+                    terminalError.compareAndSet(null, error);
+                    abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
                     // Logged only when the signal cannot carry the failure, which is the live phase, where
                     // catchupDone has already emitted and nothing else tells anyone. Logging unconditionally would
                     // repeat what the caller this signal reaches already logs for itself.
@@ -655,6 +825,8 @@ public final class ReactiveHandover<T> {
                     // here is what to do" message whichever side of the failure its payload arrived on. The catch-up
                     // signal above still carries the raw cause, since that caller asked about the catch-up itself.
                     pendingLiveAcks.forEach(sink -> sink.error(catchUpFailed(error)));
+                    resumeLiveDelivery(pause);
+                    releaseReplayTurn(holdsReplayTurn);
                 });
 
         return catchupDone.asMono();
@@ -666,6 +838,11 @@ public final class ReactiveHandover<T> {
     // an abandon call for a lifecycle that already closed successfully.
     private void abandonReplayWithoutMasking(Source<T> source, AtomicBoolean replayOpen) {
         if (replayOpen.compareAndSet(true, false)) {
+            // A view that buffers during a replay discards that buffer here, so a key the replay left behind would
+            // suppress the only copy of an event the read model never got. Forgetting it costs a view that wrote
+            // through a second delivery, which at-least-once delivery allows.
+            replayedIds.clear();
+            replaySource.set(null);
             try {
                 source.replayAbandoned();
             } catch (RuntimeException | Error ignored) {
@@ -691,32 +868,147 @@ public final class ReactiveHandover<T> {
     // Counts one delivered payload against the buffered set, and tells the source once that set is exhausted. Only
     // ever counts down from a taken count, so a delivery before the history read finished, or after the drain is
     // over, changes nothing.
-    private void countTowardsDrain(Item item) {
-        long remaining = remainingInDrain.get();
-        if (remaining <= 0L) {
-            return;
+    // Assumes the admission guard is held, which is what the drain snapshot is taken under. Without that, a delivery
+    // finishing between the snapshot and the registration would be counted into a drain that nothing can decrement,
+    // and that drain would never end. Returns the drains this payload exhausted, so their sources are told outside
+    // the guard rather than under it.
+    private List<Drain<T>> countTowardsDrainUnderAdmission(Item<K> item) {
+        List<Drain<T>> exhausted = new ArrayList<>(1);
+        for (Drain<T> drain : drains) {
+            if (item.turn() > drain.boundaryTurn()) {
+                continue;
+            }
+            long left = drain.remaining().updateAndGet(value -> value > 0L ? value - 1L : value);
+            if (left == 0L && drains.remove(drain)) {
+                exhausted.add(drain);
+            }
         }
-        long boundary = drainBoundaryTurn.get();
-        if (boundary < 0L || item.turn() > boundary) {
-            return;
-        }
-        if (remainingInDrain.decrementAndGet() == 0L) {
-            drainedSource.get().liveDrained();
-        }
+        return exhausted;
     }
 
     // Counted after the payload has been delivered rather than before it, so the last buffered one is still part of
     // the drain while it is being handled.
-    private Mono<Void> deliver(Item item) {
-        return deliverItem(item).doFinally(signal -> {
-            if (item.ack() != null) {
-                liveBacklog.decrementAndGet();
+    private Mono<Void> deliver(Item<K> item) {
+        Mono<Void> delivery = item.ack() == null ? deliverItem(item) : deliverWhenNoReplayRuns(item);
+        return delivery.doFinally(signal -> {
+            List<Drain<T>> exhausted;
+            // The count and the backlog move together under the guard the drain snapshot is taken under, so a drain
+            // registered right now either counts this payload and hears about it, or counts neither.
+            synchronized (admission) {
+                if (item.ack() != null) {
+                    liveBacklog.decrementAndGet();
+                }
+                exhausted = countTowardsDrainUnderAdmission(item);
             }
-            countTowardsDrain(item);
+            tellDrainedSources(exhausted);
         });
     }
 
-    private Mono<Void> deliverItem(Item item) {
+    // A live payload waits here while a replay runs, and is delivered once that replay has ended, completed or stopped.
+    private Mono<Void> deliverWhenNoReplayRuns(Item<K> item) {
+        return Mono.defer(() -> {
+            if (terminalError.get() != null) {
+                // A failed catch-up has already failed this payload's acknowledgement, so its caller offers it again
+                // and delivering it here as well would apply it twice. Checked for every payload, not only one waiting
+                // at the pause, since the failure opens the pause and the rest arrive here without ever waiting.
+                return Mono.<Void>empty();
+            }
+            Sinks.Empty<Void> paused;
+            synchronized (liveGate) {
+                paused = livePaused;
+                if (paused == null) {
+                    liveDelivering = true;
+                }
+            }
+            if (paused != null) {
+                return paused.asMono().then(deliverWhenNoReplayRuns(item));
+            }
+            return deliverItem(item).doFinally(signal -> liveDeliveryEnded());
+        });
+    }
+
+    // Completes once no live payload is being delivered, and none starts until the catch-up that owns this pause
+    // releases it. The owner is what stops a concurrent catch-up with nothing to replay from opening a running
+    // replay's pause and letting live payloads into a view that replay may still discard.
+    // Completes once no other replay is running, with the turn taken. Subscribing again after the holder releases is
+    // how two waiters settle which of them takes it, since both are told at once and only one wins the monitor.
+    private Mono<Void> awaitReplayTurn(AtomicBoolean holdsTurn) {
+        return Mono.defer(() -> {
+            Sinks.Empty<Void> running;
+            synchronized (replayTurn) {
+                if (replayTurnReleased == null) {
+                    replayTurnReleased = Sinks.empty();
+                    holdsTurn.set(true);
+                    return Mono.empty();
+                }
+                running = replayTurnReleased;
+            }
+            return running.asMono().then(Mono.defer(() -> awaitReplayTurn(holdsTurn)));
+        });
+    }
+
+    // Called on every path out of a catch-up that took the turn, so a waiting replay is not held by one that ended.
+    private void releaseReplayTurn(AtomicBoolean holdsTurn) {
+        if (!holdsTurn.compareAndSet(true, false)) {
+            return;
+        }
+        Sinks.Empty<Void> released;
+        synchronized (replayTurn) {
+            released = replayTurnReleased;
+            replayTurnReleased = null;
+        }
+        if (released != null) {
+            released.tryEmitEmpty();
+        }
+    }
+
+    private Mono<Void> pauseLiveDelivery(Sinks.Empty<Void> pause) {
+        synchronized (liveGate) {
+            if (livePaused == null) {
+                livePaused = pause;
+            }
+            if (!liveDelivering) {
+                return Mono.empty();
+            }
+            if (liveIdle == null) {
+                liveIdle = Sinks.empty();
+            }
+            return liveIdle.asMono();
+        }
+    }
+
+    private boolean liveDeliveryPaused() {
+        synchronized (liveGate) {
+            return livePaused != null;
+        }
+    }
+
+    private void liveDeliveryEnded() {
+        Sinks.Empty<Void> idle;
+        synchronized (liveGate) {
+            liveDelivering = false;
+            idle = liveIdle;
+            liveIdle = null;
+        }
+        if (idle != null) {
+            idle.tryEmitEmpty();
+        }
+    }
+
+    private void resumeLiveDelivery(Sinks.Empty<Void> pause) {
+        boolean owned;
+        synchronized (liveGate) {
+            owned = livePaused == pause;
+            if (owned) {
+                livePaused = null;
+            }
+        }
+        if (owned) {
+            pause.tryEmitEmpty();
+        }
+    }
+
+    private Mono<Void> deliverItem(Item<K> item) {
         MonoSink<Boolean> ack = item.ack();
         if (ack != null) {
             if (deliveredIds.contains(item.dedupKey())) {
@@ -749,15 +1041,15 @@ public final class ReactiveHandover<T> {
         return Mono.defer(item.deliver()).doOnSuccess(v -> replayedIds.add(item.dedupKey()));
     }
 
-    private Item replayedItem(T replayed) {
-        return new Item(() -> deliver.apply(replayed), Mono::empty, dedupKey(replayed), null);
+    private Item<K> replayedItem(T replayed) {
+        return new Item<>(() -> deliver.apply(replayed), Mono::empty, dedupKey(replayed), null);
     }
 
     // Resolved when the suppression happens rather than when the item was made, because a payload buffered during the
-    // replay is made before catchUp has a source to hand. Every live delivery runs after drainedSource is set, so the
-    // null branch is only ever reached by a caller that never ran a catch-up at all.
+    // replay is made before that replay has started. A key in replayedIds means a replay set replaySource, so the null
+    // branch is only reached when an abandon cleared both between the key check and this call.
     private Mono<Void> alreadyDeliveredByReplay(T payload) {
-        Source<T> source = drainedSource.get();
+        Source<T> source = replaySource.get();
         return source == null ? Mono.empty() : source.alreadyDeliveredByReplay(payload);
     }
 
@@ -769,26 +1061,26 @@ public final class ReactiveHandover<T> {
     }
 
     @SuppressWarnings("ConstantValue") // The function is declared non-null, but it is caller-supplied and unenforced.
-    private String dedupKey(T payload) {
-        String key = dedupId.apply(payload);
+    private K dedupKey(T payload) {
+        K key = dedupId.apply(payload);
         if (key == null) {
             throw new PreDispatchRefusalException(this, HandoverMessages.dedupKeyRequired());
         }
         return key;
     }
 
-    // A replayed payload has a null ack; a live payload carries the MonoSink whose completion (with whether it was
+    // A replayed payload has a null ack. A live payload carries the MonoSink whose completion (with whether it was
     // genuinely delivered) lets the caller acknowledge. Both suppliers are bound to the payload at creation time, so
-    // Item needs no type parameter of its own.
-    private record Item(Supplier<Mono<Void>> deliver, Supplier<Mono<Void>> alreadyDeliveredByReplay, String dedupKey,
+    // the key is the only type Item needs.
+    private record Item<K>(Supplier<Mono<Void>> deliver, Supplier<Mono<Void>> alreadyDeliveredByReplay, K dedupKey,
                        @Nullable MonoSink<Boolean> ack, long turn) {
-        private Item(Supplier<Mono<Void>> deliver, Supplier<Mono<Void>> alreadyDeliveredByReplay, String dedupKey,
+        private Item(Supplier<Mono<Void>> deliver, Supplier<Mono<Void>> alreadyDeliveredByReplay, K dedupKey,
                      @Nullable MonoSink<Boolean> ack) {
             this(deliver, alreadyDeliveredByReplay, dedupKey, ack, Long.MAX_VALUE);
         }
 
-        private Item withTurn(long turn) {
-            return new Item(deliver, alreadyDeliveredByReplay, dedupKey, ack, turn);
+        private Item<K> withTurn(long turn) {
+            return new Item<>(deliver, alreadyDeliveredByReplay, dedupKey, ack, turn);
         }
     }
 }

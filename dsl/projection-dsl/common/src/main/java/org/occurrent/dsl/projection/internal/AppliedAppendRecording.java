@@ -21,10 +21,12 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.eventstore.api.AppendId;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
@@ -83,8 +85,43 @@ public final class AppliedAppendRecording {
     // Both signals write only this, never the store and never clearLock, because they run on the thread that drives
     // the catch-up. Taking clearLock there would block a replay behind a store call, since clearLock is held across
     // store.clear and store.recordApplied.
-    private record Catchup(Object episode, boolean readingHistory) {
+    //
+    // It also holds the appends the replay applied an event of, since that set belongs to one catch-up and a new
+    // one has to start from nothing.
+    private record Catchup(Object episode, boolean readingHistory, RecentAppends appliedByReplay) {
     }
+
+    // The appends a replay applied an event of, bounded, and ordered by when each was last used rather than by when it
+    // was first added. An append with several events is applied again while a live copy of an earlier one of them can
+    // still be suppressed, so first-added order would forget it while the handover still remembers those events.
+    private static final class RecentAppends {
+        private final int capacity;
+        private final LinkedHashMap<AppendId, Boolean> appends = new LinkedHashMap<>(16, 0.75f, true);
+
+        private RecentAppends(int capacity) {
+            this.capacity = capacity;
+        }
+
+        private synchronized void add(AppendId appendId) {
+            appends.put(appendId, Boolean.TRUE);
+            if (appends.size() > capacity) {
+                Iterator<AppendId> oldest = appends.keySet().iterator();
+                oldest.next();
+                oldest.remove();
+            }
+        }
+
+        // containsKey rather than get, so asking about an append does not count as using it. A suppression can be
+        // reported while the replay is still reading its history, and a question about one append would otherwise
+        // make another the oldest and have it forgotten while a copy of its events can still be suppressed.
+        private synchronized boolean contains(AppendId appendId) {
+            return appends.containsKey(appendId);
+        }
+    }
+
+    // Matches the handover's default replay cache, which holds one entry per event rather than per append, so at that
+    // default no append is forgotten while a live copy of one of its events can still be suppressed.
+    private static final int MAX_APPLIED_BY_REPLAY = CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE;
 
     private final AtomicReference<@Nullable Catchup> catchup = new AtomicReference<>();
     // The catch-up whose clear and buffer drop have already been done. Read and written only under clearLock, which
@@ -313,7 +350,7 @@ public final class AppliedAppendRecording {
      */
     public void catchupStarted(Object episode) {
         requireNonNull(episode, "episode cannot be null");
-        catchup.set(new Catchup(episode, true));
+        catchup.set(new Catchup(episode, true, new RecentAppends(MAX_APPLIED_BY_REPLAY)));
     }
 
     /**
@@ -329,7 +366,61 @@ public final class AppliedAppendRecording {
         if (current != null && current.episode() == episode && current.readingHistory()) {
             // Compared and swapped rather than written, so a catch-up that started while this call was in flight is
             // not moved past a history it has not read.
-            catchup.compareAndSet(current, new Catchup(episode, false));
+            catchup.compareAndSet(current, new Catchup(episode, false, current.appliedByReplay()));
+        }
+    }
+
+    /**
+     * As {@link #historyRead(Object)}, for a history read that was stopped before it finished. Also forgets which
+     * appends the replay applied, because a view that buffers during a replay discards that buffer when the replay
+     * is stopped, so none of those appends is known to be in the read model.
+     */
+    public void historyAbandoned(Object episode) {
+        requireNonNull(episode, "episode cannot be null");
+        Catchup current = catchup.get();
+        if (current != null && current.episode() == episode && current.readingHistory()) {
+            catchup.compareAndSet(current, new Catchup(episode, false, new RecentAppends(MAX_APPLIED_BY_REPLAY)));
+        }
+    }
+
+    /**
+     * The projection applied the event {@code metadata} describes. While a catch-up is reading its history, this
+     * remembers the event's append, so {@link #appliedByReplay(EventMetadata)} can later tell a live copy of an event
+     * the replay applied from one the replay only delivered. Performs no store call.
+     */
+    public void applied(EventMetadata metadata) {
+        requireNonNull(metadata, "metadata cannot be null");
+        Catchup current = catchup.get();
+        if (current == null || !current.readingHistory()) {
+            return;
+        }
+        AppendId appendId = appendIdOrNull(metadata);
+        if (appendId != null) {
+            current.appliedByReplay().add(appendId);
+        }
+    }
+
+    /**
+     * Whether the current catch-up's replay applied an event of the append {@code metadata} names. A live copy the
+     * replay already delivered records its append only when this answers {@code true}, because a delivered event is
+     * not necessarily an applied one, for example when {@code Projection.id} returns {@code null} for it.
+     * <p>
+     * Up to ten thousand appends are remembered per catch-up, and past that the oldest are forgotten, so a wait for
+     * one of those times out rather than answering {@code true}. They are also forgotten when a new catch-up starts,
+     * and by {@link #historyAbandoned(Object)}. Performs no store call.
+     */
+    public boolean appliedByReplay(EventMetadata metadata) {
+        requireNonNull(metadata, "metadata cannot be null");
+        Catchup current = catchup.get();
+        AppendId appendId = appendIdOrNull(metadata);
+        return current != null && appendId != null && current.appliedByReplay().contains(appendId);
+    }
+
+    private static @Nullable AppendId appendIdOrNull(EventMetadata metadata) {
+        try {
+            return AppendId.from(metadata).orElse(null);
+        } catch (IllegalArgumentException e) {
+            return null;
         }
     }
 

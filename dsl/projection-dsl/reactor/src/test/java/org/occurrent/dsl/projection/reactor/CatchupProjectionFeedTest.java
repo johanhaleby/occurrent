@@ -25,6 +25,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
+import org.occurrent.dsl.projection.MaterializedViewOptions;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.AppendId;
@@ -45,8 +46,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
+import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -212,6 +217,117 @@ class CatchupProjectionFeedTest {
             assertThat(repo.get("counter")).isEqualTo(2);
             assertThat(appliedAppends.hasApplied("counter", appendId)).isTrue();
         });
+    }
+
+    // Projection.id returning null skips an event, so the replay can deliver an event without applying it. Its live
+    // copy is still suppressed as a duplicate of that delivery, and must not record the append, because nothing in
+    // the read model came from it.
+    @Test
+    void an_event_the_replay_skipped_is_not_recorded_as_applied_when_its_live_copy_is_suppressed() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        AppendId appendId = new AppendId(UUID.randomUUID());
+        AppliedAppendStore appliedAppends = AppliedAppendStore.inMemory();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter",
+                Projections.recordingAppliedAppends(
+                        Projections.reactiveUpdateWithMetadata(skippingEveryEvent(), repository, "counter"), "counter", appliedAppends),
+                Filter.all(), stampedReader(appendId, "1"), converter, Counted::eventId, null);
+        EventMetadata liveCopy = EventMetadata.from(stamped(appendId, "1"));
+
+        // One copy buffers during the catch-up and one arrives after it, the two moments a copy can be suppressed.
+        // The live sink delivers in order, so once the second has been handled the first has too.
+        feed.accept(liveCopy, new Counted("1")).subscribe();
+        feed.catchUp().block();
+        feed.accept(liveCopy, new Counted("1")).block(ofSeconds(5));
+
+        assertThat(repo).isEmpty();
+        assertThat(appliedAppends.hasApplied("counter", appendId)).isFalse();
+    }
+
+    // A stopped replay discards what a coalescing view buffered. The live copy of an event that replay delivered has
+    // to be applied after goLive(), not skipped as a duplicate of a delivery whose work was thrown away.
+    @Test
+    void an_event_a_stopped_replay_delivered_is_applied_when_its_live_copy_arrives_after_go_live() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        AppendId appendId = new AppendId(UUID.randomUUID());
+        AppliedAppendStore appliedAppends = AppliedAppendStore.inMemory();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        // A batch larger than the history, so the view writes nothing before the stop discards what it buffered.
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter",
+                Projections.recordingAppliedAppends(
+                        Projections.reactiveUpdateWithMetadata(stoppingTheReplayAtTheFirstEvent(feedRef), repository, new MaterializedViewOptions(100)),
+                        "counter", appliedAppends),
+                Filter.all(), stampedReader(appendId, "1", "2"), converter, Counted::eventId, null);
+        feedRef.set(feed);
+
+        feed.catchUp().block(ofSeconds(5));
+        assertThat(repo).isEmpty();
+
+        feed.goLive().block(ofSeconds(5));
+        feed.accept(EventMetadata.from(stamped(appendId, "1")), new Counted("1")).block(ofSeconds(5));
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(repo.get("counter")).isEqualTo(1);
+            assertThat(appliedAppends.hasApplied("counter", appendId)).isTrue();
+        });
+    }
+
+    // goLive() after a finished catch-up replays nothing. The live copy of an event that replay applied is still
+    // suppressed, and its append is still recorded, because the copy reaches the source whose replay applied it.
+    @Test
+    void go_live_after_a_finished_catch_up_still_records_an_append_whose_live_copy_is_suppressed() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        AppendId appendId = new AppendId(UUID.randomUUID());
+        AppliedAppendStore appliedAppends = AppliedAppendStore.inMemory();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter",
+                Projections.recordingAppliedAppends(
+                        Projections.reactiveUpdateWithMetadata(projection(), repository, "counter"), "counter", appliedAppends),
+                Filter.all(), stampedReader(appendId, "1", "2"), converter, Counted::eventId, null);
+
+        feed.catchUp().block(ofSeconds(5));
+        feed.goLive().block(ofSeconds(5));
+        feed.accept(EventMetadata.from(stamped(appendId, "2")), new Counted("2")).block(ofSeconds(5));
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(repo.get("counter")).isEqualTo(2);
+            assertThat(appliedAppends.hasApplied("counter", appendId)).isTrue();
+        });
+
+        // goLive() found the feed already live and left its pipeline running, so a later event is still applied. A
+        // refusal would arrive after goLive() completed, hence the pause.
+        Mono.delay(ofMillis(500)).block();
+        feed.accept(EventMetadata.from(stamped(appendId, "3")), new Counted("3")).block(ofSeconds(5));
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(3));
+    }
+
+    // catchUp() after goLive() runs a replay on a live feed. Events that arrive live while it runs, a copy of an event
+    // the replay already delivered and one it never reads, must reach the read model when the replay is stopped,
+    // though a coalescing view throws away everything it buffered during that replay.
+    @Test
+    void events_that_arrive_live_while_a_replay_runs_on_a_live_feed_are_applied_after_that_replay_is_stopped() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        // A batch larger than the history, so the view writes nothing before the stop discards what it buffered.
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter",
+                Projections.reactiveUpdateWithMetadata(receivingLiveEventsThenStoppingTheReplayAtTheSecondEvent(feedRef), repository, new MaterializedViewOptions(100)),
+                Filter.all(), reader("1", "2", "3"), converter, Counted::eventId, null);
+        feedRef.set(feed);
+
+        feed.goLive().block(ofSeconds(5));
+        feed.catchUp().block(ofSeconds(5));
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(2));
     }
 
     @Test
@@ -405,6 +521,50 @@ class CatchupProjectionFeedTest {
     private static Projection<Integer, Counted, String> projection() {
         return Projection.<Integer, Counted, String>builder(0)
                 .id(event -> "counter")
+                .on(Counted.class, (state, event) -> state + 1)
+                .build();
+    }
+
+    // Stops the replay from inside the first event's id lookup, so that event is buffered and then discarded.
+    private static Projection<Integer, Counted, String> stoppingTheReplayAtTheFirstEvent(AtomicReference<CatchupProjectionFeed<Counted>> feed) {
+        AtomicBoolean stopped = new AtomicBoolean();
+        return Projection.<Integer, Counted, String>builder(0)
+                .id(event -> {
+                    if (stopped.compareAndSet(false, true)) {
+                        feed.get().stopCatchUp();
+                    }
+                    return "counter";
+                })
+                .on(Counted.class, (state, event) -> state + 1)
+                .build();
+    }
+
+    // While the replay reads its second event, the feed receives two live events, a copy of the first event and one
+    // the replay never reads, and the replay is then stopped. The live pipeline delivers on its own thread, so the
+    // pause gives it the time it would need to reach the view before the stop.
+    private static Projection<Integer, Counted, String> receivingLiveEventsThenStoppingTheReplayAtTheSecondEvent(AtomicReference<CatchupProjectionFeed<Counted>> feed) {
+        AtomicInteger lookups = new AtomicInteger();
+        return Projection.<Integer, Counted, String>builder(0)
+                .id(event -> {
+                    if (lookups.incrementAndGet() == 2) {
+                        feed.get().accept(new Counted("1")).subscribe();
+                        feed.get().accept(new Counted("live")).subscribe();
+                        try {
+                            Thread.sleep(300);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        feed.get().stopCatchUp();
+                    }
+                    return "counter";
+                })
+                .on(Counted.class, (state, event) -> state + 1)
+                .build();
+    }
+
+    private static Projection<Integer, Counted, String> skippingEveryEvent() {
+        return Projection.<Integer, Counted, String>builder(0)
+                .id(event -> null)
                 .on(Counted.class, (state, event) -> state + 1)
                 .build();
     }

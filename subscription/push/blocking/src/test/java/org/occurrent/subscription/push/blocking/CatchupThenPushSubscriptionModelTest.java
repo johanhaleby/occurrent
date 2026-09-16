@@ -175,6 +175,39 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(delivered).containsExactly("1", "2", "3");
     }
 
+    // A CloudEvent is identified by its id and source together, so two producers can each send an event with id 1.
+    // The replay delivering producer A's event says nothing about producer B's, which has to be delivered, and the
+    // callback must not hear about it either, since nothing applied the append it came from.
+    @Test
+    void a_live_event_sharing_only_its_id_with_a_replayed_event_is_delivered_and_not_reported_as_replayed() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CloudEvent fromA = cloudEvent("1", "Created");
+        CloudEvent fromB = CloudEventBuilder.v1(fromA).withSource(URI.create("urn:producer:b")).build();
+        PositionOrderedReader reader = reader(() -> Stream.of(fromA).peek(__ -> feed.accept(fromB)), 1);
+
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        List<String> reportedAsReplayed = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        model.listenForCatchup("proj", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+            }
+
+            @Override
+            public void alreadyDeliveredByReplay(CloudEvent event) {
+                reportedAsReplayed.add(event.getSource().toString());
+            }
+        });
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getSource().toString())).waitUntilStarted();
+
+        assertThat(delivered).containsExactly("urn:occurrent:test", "urn:producer:b");
+        assertThat(reportedAsReplayed).isEmpty();
+    }
+
     @Test
     void a_late_committing_event_not_in_the_replay_arrives_via_the_feed_and_is_not_lost() {
         PushSubscriptionModel feed = new PushSubscriptionModel();

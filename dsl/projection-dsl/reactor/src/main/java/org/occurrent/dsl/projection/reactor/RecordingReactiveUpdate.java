@@ -82,7 +82,13 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
 
     @Override
     public Mono<Void> apply(EventMetadata metadata, E event) {
-        return applyDelegate(metadata, event).flatMap(wasApplied -> wasApplied ? recordOnBoundedElastic(metadata) : Mono.empty());
+        return applyDelegate(metadata, event).flatMap(wasApplied -> {
+            if (!wasApplied) {
+                return Mono.empty();
+            }
+            recording.applied(metadata);
+            return recordOnBoundedElastic(metadata);
+        });
     }
 
     // The unchecked cast is safe: only a CoalescingMaterializedUpdate<?, E, ?> for this same E ever implements
@@ -114,16 +120,20 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
         recording.historyRead(episode);
     }
 
-    // The two overloads are the same fact reaching this update from the two compositions that can produce it, and both
-    // record. A subscription model holds this as a CatchupListener and has a CloudEvent, a pull feed holds it as a
-    // ReactiveReplayAware and has whatever metadata the live copy carried (ADR 137).
+    // The two overloads are the same fact reaching this update from the two compositions that can produce it. A
+    // subscription model holds this as a CatchupListener and has a CloudEvent, a pull feed holds it as a
+    // ReactiveReplayAware and has whatever metadata the live copy carried (ADR 137). Both record only an append the
+    // replay applied an event of, since the replay delivering an event says nothing about whether it was applied.
     //
     // Only the pull-feed overload forwards. A delegate's replay lifecycle is driven by that feed and by nothing else,
     // so forwarding the subscription-model overload would hand a delegate a call from a lifecycle it never sees,
     // which is why catchupStarted and historyRead do not forward either.
     @Override
     public void alreadyDeliveredByReplay(CloudEvent event) {
-        recording.recordIfReady(EventMetadata.from(event));
+        EventMetadata metadata = EventMetadata.from(event);
+        if (recording.appliedByReplay(metadata)) {
+            recording.recordIfReady(metadata);
+        }
     }
 
     @Override
@@ -131,7 +141,7 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
         Mono<Void> delegateCall = delegate instanceof ReactiveReplayAware replayAware
                 ? replayAware.alreadyDeliveredByReplay(metadata)
                 : Mono.empty();
-        return delegateCall.then(recordOnBoundedElastic(metadata));
+        return delegateCall.then(Mono.defer(() -> recording.appliedByReplay(metadata) ? recordOnBoundedElastic(metadata) : Mono.empty()));
     }
 
     @Override
@@ -182,7 +192,7 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
         // new one announces itself.
         Object started = feedEpisode.getAndSet(null);
         if (started != null) {
-            recording.historyRead(started);
+            recording.historyAbandoned(started);
         }
     }
 }

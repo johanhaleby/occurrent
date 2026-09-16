@@ -19,6 +19,7 @@ package org.occurrent.dsl.projection.internal;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
@@ -513,6 +514,53 @@ class AppliedAppendRecordingTest {
             Thread.currentThread().interrupt();
             throw new AssertionError(e);
         }
+    }
+
+    // An append with several events is applied more than once during one replay, and the handover remembers events
+    // rather than appends, so an append whose later events are still in the handover's cache has to still be here.
+    // Forgetting it would leave a suppressed live copy of one of those events unrecorded and its wait timing out.
+    @Test
+    void an_append_applied_again_outlives_the_appends_added_before_it() {
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, AppliedAppendStore.inMemory());
+        Object episode = new Object();
+        recording.catchupStarted(episode);
+        AppendId shared = AppendId.mint();
+        recording.applied(metadataWithAppendId(shared));
+        for (int i = 0; i < CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE - 1; i++) {
+            recording.applied(metadataWithAppendId(AppendId.mint()));
+        }
+
+        // A second event of the same append, then one more append, which is what pushes the oldest entry out.
+        recording.applied(metadataWithAppendId(shared));
+        recording.applied(metadataWithAppendId(AppendId.mint()));
+
+        assertThat(recording.appliedByReplay(metadataWithAppendId(shared)))
+                .as("the append was applied again, so it is not the oldest entry any more").isTrue();
+    }
+
+    // Asking about an append is not using it. A suppression can be reported while the replay is still reading its
+    // history, so questions about other appends would otherwise make this one the oldest and have it forgotten while a
+    // live copy of its events can still be suppressed.
+    @Test
+    void asking_about_other_appends_does_not_make_an_applied_one_the_oldest() {
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, AppliedAppendStore.inMemory());
+        Object episode = new Object();
+        recording.catchupStarted(episode);
+        AppendId shared = AppendId.mint();
+        recording.applied(metadataWithAppendId(shared));
+        List<AppendId> others = new ArrayList<>();
+        for (int i = 0; i < CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE - 1; i++) {
+            AppendId other = AppendId.mint();
+            others.add(other);
+            recording.applied(metadataWithAppendId(other));
+        }
+        recording.applied(metadataWithAppendId(shared));
+
+        others.forEach(other -> recording.appliedByReplay(metadataWithAppendId(other)));
+        recording.applied(metadataWithAppendId(AppendId.mint()));
+
+        assertThat(recording.appliedByReplay(metadataWithAppendId(shared)))
+                .as("the questions about the other appends did not make this one the oldest").isTrue();
     }
 
     private static EventMetadata metadataWithAppendId(AppendId appendId) {

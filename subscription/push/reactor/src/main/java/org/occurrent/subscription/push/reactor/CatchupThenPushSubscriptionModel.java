@@ -44,6 +44,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Set;
@@ -61,7 +62,7 @@ import java.util.function.Supplier;
  * The replay, a catch-up-complete marker step, and the live feed are composed into one ordered pipeline with
  * {@link Flux#concat}: the replay is consumed first, then the marker is recorded, then the live feed. Live events that
  * arrive during the replay are buffered in a unicast sink until the pipeline reaches them, so nothing is lost across the
- * seam, and the overlap is de-duplicated by event id. Because the whole pipeline is serialized by {@code concatMap}, the
+ * seam, and the overlap is de-duplicated by the CloudEvent id and source together. Because the whole pipeline is serialized by {@code concatMap}, the
  * de-dup cache needs no locking.
  * <p>
  * Contract (see ADR 62 and the blocking model): catch-up is Occurrent's job and runs once per subscription id, guarded
@@ -159,7 +160,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Fail fast on a filter that cannot be replayed, before registering anything on the live feed.
         Filter replayFilter = ReplayFilters.replayFilterFor(filter);
 
-        ReactiveHandover<CloudEvent> handover = ReactiveHandover.create(action, CloudEvent::getId, options, "subscription");
+        ReactiveHandover<CloudEvent, CloudEventKey> handover = ReactiveHandover.create(action, CloudEventKey::of, options, "subscription");
 
         // Register on the live feed first, so events committing during the replay are buffered in the sink, not
         // lost. Buffering, the write path, uses acceptReportingDelivery(..), never acceptIfLive(..), which would
@@ -202,7 +203,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // Relaunching is safe despite the handover's unicast live sink: it is subscribed only after the marker phase, and
     // a stop errors the pipeline before that, so an interrupted replay left it untouched. A replay that finished is
     // never relaunched, which is the case that would fail.
-    private Sinks.One<Boolean> launchReplay(String subscriptionId, ReactiveHandover<CloudEvent> handover, Filter replayFilter,
+    private Sinks.One<Boolean> launchReplay(String subscriptionId, ReactiveHandover<CloudEvent, CloudEventKey> handover, Filter replayFilter,
                                             AtomicReference<Supplier<Sinks.One<Boolean>>> ownLaunch) {
         // Registered before the replay is handed to the handover, which subscribes it on boundedElastic straight away.
         // isRunning(id) and keepReplaying() therefore answer for this subscription from the moment subscribe returns,
@@ -672,5 +673,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         Sinks.One<Boolean> done = Sinks.one();
         done.tryEmitValue(true);
         return done;
+    }
+
+    // A CloudEvent is identified by its id and source together, so the same id from two producers is two events.
+    // Null for an event with no id, which the handover refuses.
+    private record CloudEventKey(String id, URI source) {
+        private static @Nullable CloudEventKey of(CloudEvent event) {
+            String id = event.getId();
+            return id == null ? null : new CloudEventKey(id, event.getSource());
+        }
     }
 }
