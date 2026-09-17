@@ -778,12 +778,15 @@ class SagaQuarantineTest {
         }
 
         /**
-         * A runner on a feed that cannot promise to hold what it delivers has no budget, so there is nothing to pace a
-         * repeat by. The first failure is still said, naming the event, so the saga is not stopped with nothing in the
-         * log to say why.
+         * A runner on a feed that cannot promise to hold what it delivers has no quarantine budget, but the repeated
+         * ERROR is paced on {@link SagaRunnerConfig#DEFAULT_QUARANTINE_AFTER} instead of going silent, so it is not
+         * due yet within this short a window. {@link #falls_back_to_the_default_budget_when_none_is_configured} proves
+         * that interval is what is actually used, and {@link #says_so_once_per_budget_rather_than_every_time_the_event_is_offered}
+         * proves the pacing itself fires once that interval elapses, whatever its value. A test that instead waited out
+         * the real five minutes here would only re-prove both at once, slowly.
          */
         @Test
-        void still_says_so_once_when_the_quarantine_budget_is_switched_off() throws Exception {
+        void still_says_so_once_within_a_window_shorter_than_the_default_budget_when_quarantine_is_switched_off() throws Exception {
             uncorrelatableEventId = "3";
             ListAppender<ILoggingEvent> appender = new ListAppender<>();
             appender.start();
@@ -808,6 +811,30 @@ class SagaQuarantineTest {
                 executionLog.detachAppender(appender);
                 appender.stop();
             }
+        }
+
+        /**
+         * The interval {@link #still_says_so_once_within_a_window_shorter_than_the_default_budget_when_quarantine_is_switched_off}
+         * relies on staying quiet, and the one {@link #says_so_once_per_budget_rather_than_every_time_the_event_is_offered}
+         * relies on the pacing mechanism honouring whatever it is given. Together they are the reason a saga stuck on
+         * an unroutable event still gets louder over time on a subscription model {@code SagaRunner} switches
+         * quarantine off for, without a test having to wait out five real minutes to see it.
+         */
+        @Test
+        void the_unroutable_error_interval_is_the_configured_quarantine_budget_when_one_is_set() {
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution =
+                    new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter, CONFIG, event -> true);
+
+            assertThat(execution.unroutableErrorInterval()).isEqualTo(BUDGET);
+        }
+
+        @Test
+        void falls_back_to_the_default_budget_when_none_is_configured() {
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution =
+                    new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter,
+                            CONFIG.withQuarantineAfter(null), event -> true);
+
+            assertThat(execution.unroutableErrorInterval()).isEqualTo(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER);
         }
 
         @Test

@@ -208,8 +208,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
 
     /**
      * Say that this delivery failed before the saga could work out which instance it belongs to, and that it is
-     * refused. It is refused on every redelivery, however long it has been failing, and the budget changes nothing
-     * about that.
+     * refused. It is refused on every redelivery, however long it has been failing, and the pacing below changes
+     * nothing about that.
      * <p>
      * Acknowledging it is what would lose it. An event the saga cannot route may still belong to an instance, and the
      * next event for that instance moves the instance's watermark past it, so feeding the repaired event to the saga
@@ -217,10 +217,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * instance to write on. So the saga waits behind it, which blocks this saga and no other, and once the converter or
      * the id extractor can read it the event is applied in the order it was written, with nothing to feed again.
      * <p>
-     * The budget only sets how often that is said. The first failure is a warning, and after that it is logged at ERROR
-     * once per {@link SagaRunnerConfig#quarantineAfter()} for as long as the event keeps being offered, rather than
-     * every time the source offers it. Without a budget the warning is said once and not repeated. An event carrying no
-     * redelivery key is named by its CloudEvent id and source instead.
+     * The first failure is a warning, and after that it is logged at ERROR once per {@link #unroutableErrorInterval()}
+     * for as long as the event keeps being offered, rather than every time the source offers it. That interval is the
+     * quarantine budget when one is configured, and a fixed five-minute default otherwise, so an operator alerting on
+     * ERROR is paged whether or not this saga's subscription model can quarantine at all. See
+     * {@link #unroutableErrorInterval()} for why. An event carrying no redelivery key is named by its CloudEvent id
+     * and source instead.
      */
     private void refuseUnroutableDelivery(EventMeta meta, CloudEvent cloudEvent, Throwable failure) {
         if (!SagaExecutionSupport.isAttributableToTheInstance(failure)) {
@@ -234,14 +236,28 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     subscriptionId, redeliveryKey, failure);
             return;
         }
-        Duration quarantineAfter = config.quarantineAfter();
-        if (quarantineAfter == null
-            || Duration.between(existing.lastLoggedAt(), now).compareTo(quarantineAfter) < 0
+        Duration interval = unroutableErrorInterval();
+        if (Duration.between(existing.lastLoggedAt(), now).compareTo(interval) < 0
             || !unroutableDeliveries.replace(redeliveryKey, existing, new UnroutableDelivery(existing.firstFailedAt(), now))) {
             return;
         }
         log.error("Saga '{}' has been unable to work out which instance the event '{}' belongs to for {}, and every instance of this saga is still waiting behind it. The event is refused rather than skipped, because acknowledging it would lose it, and no instance is quarantined, because the event reached none. Repair the converter or the id extractor and the event is applied in the order it was written, with nothing to feed to the saga again.",
                 subscriptionId, redeliveryKey, Duration.between(existing.firstFailedAt(), now), failure);
+    }
+
+    /**
+     * How often {@link #refuseUnroutableDelivery} repeats its ERROR once the first failure has already been warned
+     * about. An event the saga cannot route is refused whether or not {@link SagaRunnerConfig#quarantineAfter()} is
+     * set, because nothing here ever quarantines an instance for it (see {@link #refuseUnroutableDelivery}), so pacing
+     * this ERROR on that budget alone would leave every subscription model {@code SagaRunner} switches quarantine off
+     * for, meaning push feeds and the broker bridges, warning once and then staying silent for good. Using the
+     * configured budget when there is one keeps one number for an operator to reason about, and
+     * {@link SagaRunnerConfig#DEFAULT_QUARANTINE_AFTER} otherwise gives every other model the same five-minute cadence
+     * rather than inventing a second tunable for it.
+     */
+    Duration unroutableErrorInterval() {
+        Duration quarantineAfter = config.quarantineAfter();
+        return quarantineAfter != null ? quarantineAfter : SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER;
     }
 
     /**
