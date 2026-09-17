@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Ten things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
+Eleven things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -32,9 +32,13 @@ things about the saga API at once. `SagaEnvelope` gains two record components an
 Then a reactor catch-up subscription now delivers an event a second time when a write that was in flight during the
 replay was read by a history window, which needs a handler that is safe to run twice on the same event. Read
 [section 9](#9-a-reactor-catch-up-subscription-can-deliver-a-concurrent-write-twice).
-Finally, if your application ever called `updateEvent` while running 0.33.0 or earlier, some of your stored
+Then, if your application ever called `updateEvent` while running 0.33.0 or earlier, some of your stored
 events are damaged and a one-off repair puts them back. Read
 [section 10](#10-events-updateevent-damaged-before-0340-need-a-one-off-repair).
+Finally, a subscription handler Spring's proxy cannot invoke now fails startup instead of silently losing its advice,
+and every annotation-based handler registers later, once singleton construction has finished, so a live-only
+subscription no longer sees an event a bean wrote from its own startup. Read
+[section 11](#11-a-subscription-handler-spring-cannot-invoke-now-fails-startup-and-a-live-subscription-can-miss-a-startup-write).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -658,8 +662,10 @@ One case has no instance to quarantine, and it keeps the 0.33.0 behaviour. An ev
 throws never reaches an instance, so the subscription is never let past it, whatever the budget. It may still belong to
 an instance, and once the subscription moved past it the next event for that instance would mark the instance as
 having handled it, so the event would be lost. Every instance of that saga waits behind it instead, and the first
-failure is logged at `WARN` and after that at `ERROR` once per budget, naming the event and what stopped it. Repair the
-converter or the id extractor and the saga applies the event in the order it was written.
+failure is logged at `WARN` and after that at `ERROR` once per interval, naming the event and what stopped it. That
+interval is the quarantine budget when the saga has one, and a fixed five-minute default when it does not, so the
+`ERROR` still repeats on a subscription model this saga cannot quarantine anything on. Repair the converter or the id
+extractor and the saga applies the event in the order it was written.
 
 A quarantined instance receives no further events and fires no timers, and its redelivery watermarks stop moving, so
 nothing it skipped is recorded as handled. What it stopped on stays on the record instead of being lost.

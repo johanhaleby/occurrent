@@ -61,22 +61,31 @@ public interface CatchupListener {
 
     /**
      * A live copy arrived of an event this catch-up's history read already delivered, so the model did not deliver it
-     * a second time. This is not a delivery, and nothing here should apply the event again. It is the only chance the
-     * projection gets to write down the append that event came from, since the history read wrote nothing down
+     * a second time. This is not a delivery, and nothing here should apply the event again. Where it is sent at all,
+     * it is the only chance the projection gets to write down the append that event came from, since the history read
+     * wrote nothing down
      * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
      * The history read delivering the event does not mean the projection applied it, since a projection can skip an
      * event, so a recording projection writes the append down only when the history read applied an event of it.
+     * <p>
+     * Not every catch-up model sends this. ADR 137 covers the push handover, and only
+     * {@code CatchupThenPushSubscriptionModel} (blocking and reactor) is that handover. It holds the live copy in a
+     * cache the history read shares, finds it there, and calls this instead of delivering it again. The stream and DCB
+     * catch-up models (blocking and reactor) run no such handover. They suppress the live copy against their own
+     * cache and never call this at all, so a recording projection behind one of them does not learn of that append
+     * through this call and, having nowhere else to learn of it either, never records it. Its
+     * {@code waitUntilApplied} for such an append times out rather than returning.
      * <p>
      * Sent only after {@link #historyRead(Object)}, and only for an event the history read itself delivered. An event
      * an earlier live delivery already handled is not sent here, because that delivery wrote down what it owed. Sent
      * again for every further copy the source offers, so an implementation records rather than counts.
      * <p>
-     * Unlike the two calls above, a failure here is meant to escape rather than be swallowed. This call is the only
-     * chance the append gets, so swallowing a failed write acknowledges an append nothing wrote down. What a thrown
-     * exception reaches is whatever the model does with a failed delivery at that moment, an event's own failed
-     * acknowledgement or the catch-up itself, and never an acknowledgement of the event. It still has to return
-     * promptly, since it runs on a thread the subscription needs back. The default does nothing, which is what a
-     * listener that records nothing per event wants.
+     * Unlike the two calls above, a failure here is meant to escape rather than be swallowed. Where this is sent at
+     * all it is the only chance the append gets, so swallowing a failed write acknowledges an append nothing wrote
+     * down. What a thrown exception reaches is whatever the model does with a failed delivery at that moment, an
+     * event's own failed acknowledgement or the catch-up itself, and never an acknowledgement of the event. It still
+     * has to return promptly, since it runs on a thread the subscription needs back. The default does nothing, which
+     * is what a listener that records nothing per event wants.
      *
      * @param event The event that was not delivered a second time.
      */

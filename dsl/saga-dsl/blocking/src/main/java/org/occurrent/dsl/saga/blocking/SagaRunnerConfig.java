@@ -48,7 +48,10 @@ import static java.util.Objects.requireNonNull;
  *                             {@link OutOfMemoryError} the one exclusion, since that is the process failing rather than
  *                             this instance's work. A delivery that fails before the saga can work out which instance
  *                             it belongs to is never let past, because acknowledging it would lose it, so it is
- *                             refused on every redelivery and this only sets how often that is logged. A runner
+ *                             refused on every redelivery regardless of this setting, and the repeated ERROR that
+ *                             refusal logs is paced on this budget when it is set and on a fixed five-minute default
+ *                             when it is not, so that ERROR still fires on a subscription model this switches
+ *                             quarantine off for. A runner
  *                             ignores this and keeps rethrowing unless its subscription model guarantees that it holds
  *                             every event it delivers, since a quarantined instance skips everything addressed to it
  *                             afterwards and skipping acknowledges. Being able to answer for one event is not enough on

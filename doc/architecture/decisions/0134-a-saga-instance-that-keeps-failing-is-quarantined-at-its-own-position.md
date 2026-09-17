@@ -15,6 +15,11 @@ Amended in place a second time for [#1042](https://github.com/johanhaleby/occurr
 Decision point 3 let the subscription past an event the saga could not route, and that the event was lost when a later
 event for the same instance arrived first. This has not shipped either, so the correction is in Decision point 3.
 
+Amended in place a third time for [#1061](https://github.com/johanhaleby/occurrent/issues/1061), which found that
+pacing the unroutable-delivery `ERROR` on the budget alone left it unfired on every subscription model the budget is
+switched off for, which is push feeds and the broker bridges. The paragraph below now says the `ERROR` is paced on the
+budget when one is configured and on a fixed five-minute default otherwise. This has not shipped either.
+
 The three questions this decision could not settle on its own were ruled at that gate and are recorded in
 **Rulings at the design gate** near the end of this file. One of them, the non-replayable source, ships as a
 narrowing rather than a closure, and [#918](https://github.com/johanhaleby/occurrent/issues/918) is its recorded
@@ -298,9 +303,12 @@ or well logged.
 So the budget applies only to a delivery that reached an instance. An unroutable delivery is refused every time it is
 offered, which is what 0.33.0 did, and every instance of this saga waits behind it. The same rule permits that,
 because it applies per consumer, and no other saga, projection or subscription waits with it. Once the converter or
-the id extractor is repaired the event is applied in the order it was written, with nothing to feed again. The budget
-only paces the logging, a `WARN` on the first failure and an `ERROR` once per budget after that, so an operator hears
-about it at a rate they can read rather than at the redelivery cadence.
+the id extractor is repaired the event is applied in the order it was written, with nothing to feed again. The logging
+is paced independently of whether the budget is switched on for this saga, a `WARN` on the first failure and an
+`ERROR` once per interval after that, so an operator hears about it at a rate they can read rather than at the
+redelivery cadence. That interval is the budget when one is configured, and a fixed five-minute default when it is
+not, because the model this decision most needs to be loud on, a push feed or a broker bridge with no way to hold an
+event it delivers, is exactly the model the budget is switched off for.
 
 The first implementation skipped the delivery past the budget instead, logging an error and writing nothing, and
 relied on the retention check to make refeeding a recovery. [#1042](https://github.com/johanhaleby/occurrent/issues/1042)
