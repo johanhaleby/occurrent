@@ -231,6 +231,7 @@ class RabbitMqDomainEventBridgeConnectionRecoveryTest {
                 await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(handled).contains(new TestOrderPlaced("order-2")));
             } finally {
                 releaseOrder1.countDown();
+                bridgeLogger.detachAppender(bridgeLog);
             }
         }
     }

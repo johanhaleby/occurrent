@@ -354,6 +354,7 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
                 await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(handled).contains("id-2"));
             } finally {
                 releaseFirstCall.countDown();
+                bridgeLogger.detachAppender(bridgeLog);
             }
         }
     }
