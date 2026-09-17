@@ -16,6 +16,8 @@
 
 package org.occurrent.broker.rabbitmq.blocking;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
@@ -32,6 +34,7 @@ import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -277,8 +280,9 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
      * A handler that finishes after the connection has dropped but before its recovery has started acknowledges on a
      * closed channel, which throws. The other tests here release their handler only once recovery has finished, when
      * the acknowledgement goes to the replacement channel and the client skips it without a word. The connection gets
-     * a recovery interval of five seconds so the handler can finish inside that gap, and the test checks that the
-     * recovery had not started yet by the time it had.
+     * a recovery interval of five seconds so the handler can finish inside that gap. The test then waits for the
+     * bridge to log what it did with the failed acknowledgement, and checks that the recovery had not started by
+     * then, so the acknowledgement really did go to the closed channel.
      */
     @Test
     void a_handler_finishing_before_recovery_starts_does_not_stop_the_bridge_from_consuming_after_recovery() throws Exception {
@@ -318,6 +322,11 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
                 }
             });
 
+            ch.qos.logback.classic.Logger bridgeLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(RabbitMqCloudEventBridge.class);
+            ListAppender<ILoggingEvent> bridgeLog = new ListAppender<>();
+            bridgeLog.start();
+            bridgeLogger.addAppender(bridgeLog);
+
             try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(slowRecoveryConnection, model, outcomeChannel, queue)
                     .declareTopology(false)
                     .pollInterval(Duration.ofMillis(200))
@@ -328,9 +337,15 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
                 forceCloseAllConnectionsOrFail();
                 await().atMost(Duration.ofSeconds(5)).until(() -> !slowRecoveryConnection.isOpen());
                 releaseFirstCall.countDown();
-                sleep(Duration.ofSeconds(1));
+                // Waits for the bridge's own decision about the failed acknowledgement, rather than for a fixed
+                // moment, so this test is in the window it exists for whichever decision the bridge makes. The
+                // acknowledgement it logs is the one that went to the closed channel, since the assertion below
+                // shows the recovery had not started, and therefore no replacement channel existed yet.
+                await().atMost(Duration.ofSeconds(4)).until(() -> bridgeLog.list.stream().anyMatch(event ->
+                        event.getFormattedMessage().contains("dropped before delivery tag")
+                                || event.getFormattedMessage().contains("failed outside this bridge's delivery failure policy")));
                 assertThat(recoveryStarted.getCount())
-                        .as("the handler must have finished and acknowledged before the connection's recovery started")
+                        .as("the handler must have tried to acknowledge before the connection's recovery started")
                         .isOne();
 
                 assertThat(recoveryComplete.await(30, TimeUnit.SECONDS)).isTrue();
