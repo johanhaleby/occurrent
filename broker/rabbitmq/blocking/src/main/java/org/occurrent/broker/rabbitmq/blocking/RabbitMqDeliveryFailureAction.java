@@ -19,7 +19,9 @@ package org.occurrent.broker.rabbitmq.blocking;
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.Recoverable;
 import com.rabbitmq.client.ShutdownSignalException;
+import com.rabbitmq.client.impl.recovery.AutorecoveringConnection;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.subscription.RoutingOutcome;
@@ -182,6 +184,35 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
         } catch (IOException e) {
             throw new RabbitMqBridgeException("Failed to acknowledge delivery tag " + deliveryTag, e);
         }
+    }
+
+    /**
+     * Whether {@code failure}, thrown by {@link #ack(long)}, {@link #redeliver(long)} or
+     * {@link #apply(long, BasicProperties, byte[])}, means the connection under the delivery's channel went away and
+     * the RabbitMQ client is going to recover it. A bridge does not stop for such a failure and does not acknowledge
+     * the delivery either, since RabbitMQ puts it back on the queue when the connection drops and delivers it again on
+     * the recovered channel, and closing the channel to put it back would take that channel out of recovery for good.
+     * <p>
+     * True only for a channel from a connection with automatic recovery enabled, and then for two failures. One is a
+     * {@link ShutdownSignalException}, {@code AlreadyClosedException} included, for the whole connection rather than
+     * only the channel, that {@link AutorecoveringConnection#DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION}
+     * recovers from. A connection closed by the application is not recovered by that condition, and a channel the
+     * broker closed on its own is never recovered at all. The other is a {@link RabbitMqBridgeException} caused by an
+     * {@link IOException}, which is a failed write to the connection's socket, and a recovering connection closes
+     * and recovers itself after one. A connection without automatic recovery never comes back, so every failure on
+     * it is false here.
+     * <p>
+     * A {@code ConnectionFactory} given its own recovery triggering condition is judged by the default condition
+     * anyway, since the client does not expose the one a connection was built with.
+     */
+    public boolean isLostToConnectionRecovery(Throwable failure) {
+        if (!(consumeChannel instanceof Recoverable)) {
+            return false;
+        }
+        if (failure instanceof ShutdownSignalException shutdown) {
+            return shutdown.isHardError() && AutorecoveringConnection.DEFAULT_CONNECTION_RECOVERY_TRIGGERING_CONDITION.test(shutdown);
+        }
+        return failure instanceof RabbitMqBridgeException && failure.getCause() instanceof IOException;
     }
 
     /**

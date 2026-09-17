@@ -158,8 +158,15 @@ import static java.util.Objects.requireNonNull;
  * offsets its own delivery tags past everything the channel it replaced ever issued, so {@code basicAck} and
  * {@code basicNack} send nothing at all for a tag from the dead channel. A connection that never recovers
  * automatically cannot produce such a tag either, since its channel stays dead and no further delivery arrives on
- * it. So this bridge acknowledges or negatively acknowledges every delivery it is handed and never abandons one
- * unacknowledged, whatever happened to the connection underneath it.
+ * it.
+ * <p>
+ * <strong>A delivery finishing while the connection is down is left for RabbitMQ to deliver again.</strong> Its
+ * acknowledgement cannot be sent, since the channel it would go on is closed, and RabbitMQ has put the delivery back
+ * on the queue for the dropped connection. On a connection with automatic recovery this bridge logs that at
+ * {@code warn} and keeps consuming, and the recovered channel delivers the message again. Stopping instead would mean
+ * closing the channel, which takes it out of the connection's recovery, so this bridge would never consume again
+ * while every other bridge on the connection did. A connection without automatic recovery never comes back, so on
+ * one of those this bridge stops for good, as it does for an {@link Error} a handler throws.
  * <p>
  * Under {@link DeliveryFailurePolicy#PARK} that costs one duplicate. A delivery that fails while the connection is
  * recovering is published to the parking destination, and the acknowledgement that normally follows the park does
@@ -370,17 +377,23 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         worker.submit(deliveryTag, () -> handleDeliveryOrStop(delivery, deliveryTag));
     }
 
-    // handleDelivery routes a handler's own RuntimeException and AssertionError through the delivery failure policy,
-    // so anything escaping it is this bridge failing rather than the handler, either an Error the handler threw or an
-    // acknowledgement this bridge could not issue. The RabbitMQ client used to close the channel for exactly that,
-    // since the delivery ran on its own callback thread, and closing the channel is what puts the delivery back on
-    // the queue. Without it the delivery would sit unacknowledged on a consumer the broker sends nothing further to.
-    // Not rethrown, since the cause is logged here and the delivery is back on the queue, and rethrowing would only
-    // end the worker thread of a bridge that has already stopped.
+    // handleDelivery routes a handler's own RuntimeException and AssertionError through the delivery failure policy, so
+    // anything escaping it is either an Error the handler threw or an acknowledgement this bridge could not issue. An
+    // acknowledgement that failed because the connection dropped and is being recovered does not stop this bridge,
+    // since RabbitMQ puts the delivery back on the queue when the connection drops, and closing this channel would take
+    // it out of the connection's recovery so the bridge never consumed again. Anything else stops this bridge and
+    // closes the channel, which is what puts the delivery back on the queue. Without that the delivery would sit
+    // unacknowledged on a consumer the broker sends nothing further to. Not rethrown, since the cause is logged here,
+    // and rethrowing would only end the worker thread.
     private void handleDeliveryOrStop(Delivery delivery, long deliveryTag) {
         try {
             handleDelivery(delivery);
         } catch (RuntimeException | Error e) {
+            if (failureAction.isLostToConnectionRecovery(e)) {
+                log.warn("The connection under queue \"{}\" dropped before delivery tag {} could be acknowledged or "
+                        + "rejected. RabbitMQ delivers it again once the connection has recovered.", queue, deliveryTag, e);
+                return;
+            }
             log.error("Handling delivery tag {} on queue \"{}\" failed outside this bridge's delivery failure policy. "
                     + "Stopping this bridge and closing its channel, which puts that delivery back on the queue.",
                     deliveryTag, queue, e);

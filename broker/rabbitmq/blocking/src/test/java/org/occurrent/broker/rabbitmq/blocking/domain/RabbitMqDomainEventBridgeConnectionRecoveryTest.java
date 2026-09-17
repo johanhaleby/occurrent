@@ -151,6 +151,74 @@ class RabbitMqDomainEventBridgeConnectionRecoveryTest {
         }
     }
 
+    /**
+     * A projection that finishes after the connection has dropped but before its recovery has started is acknowledged
+     * on a closed channel, which throws. The connection gets a recovery interval of five seconds so the projection can
+     * finish inside that gap, and the test checks that the recovery had not started yet by the time it had.
+     */
+    @Test
+    void a_projection_finishing_before_recovery_starts_does_not_stop_the_bridge_from_consuming_after_recovery() throws Exception {
+        String queue = "test-queue-" + UUID.randomUUID();
+        adminChannel.queueDeclare(queue, false, false, false, null);
+        adminChannel.queueBind(queue, exchange, TestOrderPlaced.class.getName());
+
+        ConnectionFactory slowRecoveryFactory = new ConnectionFactory();
+        slowRecoveryFactory.setUri(rabbitMQContainer.getAmqpUrl());
+        slowRecoveryFactory.setAutomaticRecoveryEnabled(true);
+        slowRecoveryFactory.setNetworkRecoveryInterval(5000);
+        try (Connection slowRecoveryConnection = slowRecoveryFactory.newConnection()) {
+            CountDownLatch recoveryStarted = new CountDownLatch(1);
+            CountDownLatch recoveryComplete = new CountDownLatch(1);
+            ((Recoverable) slowRecoveryConnection).addRecoveryListener(new RecoveryListener() {
+                @Override
+                public void handleRecoveryStarted(Recoverable recoverable) {
+                    recoveryStarted.countDown();
+                }
+
+                @Override
+                public void handleRecovery(Recoverable recoverable) {
+                    recoveryComplete.countDown();
+                }
+            });
+
+            CountDownLatch order1Started = new CountDownLatch(1);
+            CountDownLatch releaseOrder1 = new CountDownLatch(1);
+            List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+            DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+            feed.register("proj", event -> {
+                handled.add(event);
+                if (handled.size() == 1) {
+                    order1Started.countDown();
+                    awaitLatch(releaseOrder1);
+                }
+            }, Filter.type(TestOrderPlaced.class.getName()));
+            feed.goLive("proj");
+
+            try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = RabbitMqDomainEventBridge.builder(slowRecoveryConnection, feed, queue)
+                    .declareTopology(false)
+                    .pollInterval(Duration.ofMillis(200))
+                    .build()) {
+                publish("order-1");
+                assertThat(order1Started.await(15, TimeUnit.SECONDS)).isTrue();
+
+                forceCloseAllConnectionsOrFail();
+                await().atMost(Duration.ofSeconds(5)).until(() -> !slowRecoveryConnection.isOpen());
+                releaseOrder1.countDown();
+                Thread.sleep(1000);
+                assertThat(recoveryStarted.getCount())
+                        .as("the projection must have finished and been acknowledged before the connection's recovery started")
+                        .isOne();
+
+                assertThat(recoveryComplete.await(30, TimeUnit.SECONDS)).isTrue();
+                publish("order-2");
+
+                await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(handled).contains(new TestOrderPlaced("order-2")));
+            } finally {
+                releaseOrder1.countDown();
+            }
+        }
+    }
+
     private void forceCloseAllConnectionsOrFail() throws Exception {
         Container.ExecResult closeResult = rabbitMQContainer.execInContainer(
                 "rabbitmqctl", "close_all_connections", "forced-by-connection-recovery-test");

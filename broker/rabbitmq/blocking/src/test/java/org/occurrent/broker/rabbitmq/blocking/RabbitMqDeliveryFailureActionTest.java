@@ -18,7 +18,10 @@ package org.occurrent.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.AlreadyClosedException;
 import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.Recoverable;
+import com.rabbitmq.client.ShutdownSignalException;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
@@ -38,6 +41,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.withSettings;
 
 /**
  * Unit tests for {@link RabbitMqDeliveryFailureAction} against mocked RabbitMQ client types and a mocked
@@ -198,5 +202,29 @@ class RabbitMqDeliveryFailureActionTest {
         verify(parkingPublisher).publish(eq("exchange"), eq("routingKey"), parkedPropertiesCaptor.capture(), eq(originalBody));
         assertThat(parkedPropertiesCaptor.getValue().getHeaders())
                 .containsEntry("parked-reason", "destination-value");
+    }
+
+    /**
+     * Only a failure the client recovers the connection from lets a bridge wait for the delivery to arrive again
+     * instead of stopping. For each other case here that wait would be for a channel that never comes back.
+     */
+    @Test
+    void isLostToConnectionRecovery_is_true_only_for_a_connection_failure_the_client_recovers_from() {
+        RabbitMqDeliveryFailureAction recovering = new RabbitMqDeliveryFailureAction(mock(Channel.class, withSettings().extraInterfaces(Recoverable.class)),
+                DeliveryFailurePolicy.REDELIVER, null, null, LoggerFactory.getLogger(getClass()));
+        RabbitMqDeliveryFailureAction notRecovering = new RabbitMqDeliveryFailureAction(mock(Channel.class),
+                DeliveryFailurePolicy.REDELIVER, null, null, LoggerFactory.getLogger(getClass()));
+        ShutdownSignalException connectionDropped = new ShutdownSignalException(true, false, null, null);
+
+        assertThat(recovering.isLostToConnectionRecovery(new AlreadyClosedException(connectionDropped))).isTrue();
+        assertThat(recovering.isLostToConnectionRecovery(connectionDropped)).isTrue();
+        assertThat(recovering.isLostToConnectionRecovery(new RabbitMqBridgeException("ack failed", new IOException("broken pipe")))).isTrue();
+
+        assertThat(recovering.isLostToConnectionRecovery(new ShutdownSignalException(true, true, null, null))).as("connection closed by the application").isFalse();
+        assertThat(recovering.isLostToConnectionRecovery(new AlreadyClosedException(new ShutdownSignalException(false, false, null, null)))).as("channel closed by the broker").isFalse();
+        assertThat(recovering.isLostToConnectionRecovery(new RabbitMqBridgeException("no cause"))).isFalse();
+        assertThat(recovering.isLostToConnectionRecovery(new IllegalStateException("unrelated"))).isFalse();
+        assertThat(recovering.isLostToConnectionRecovery(new OutOfMemoryError())).isFalse();
+        assertThat(notRecovering.isLostToConnectionRecovery(new AlreadyClosedException(connectionDropped))).as("connection without automatic recovery").isFalse();
     }
 }

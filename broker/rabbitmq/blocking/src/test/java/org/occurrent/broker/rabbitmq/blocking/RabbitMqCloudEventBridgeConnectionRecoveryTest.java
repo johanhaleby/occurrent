@@ -273,6 +273,76 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero());
     }
 
+    /**
+     * A handler that finishes after the connection has dropped but before its recovery has started acknowledges on a
+     * closed channel, which throws. The other tests here release their handler only once recovery has finished, when
+     * the acknowledgement goes to the replacement channel and the client skips it without a word. The connection gets
+     * a recovery interval of five seconds so the handler can finish inside that gap, and the test checks that the
+     * recovery had not started yet by the time it had.
+     */
+    @Test
+    void a_handler_finishing_before_recovery_starts_does_not_stop_the_bridge_from_consuming_after_recovery() throws Exception {
+        String queue = "test-queue-" + UUID.randomUUID();
+        adminChannel.queueDeclare(queue, false, false, false, null);
+        adminChannel.queueBind(queue, exchange, OrderPlaced.class.getName());
+
+        ConnectionFactory slowRecoveryFactory = new ConnectionFactory();
+        slowRecoveryFactory.setUri(rabbitMQContainer.getAmqpUrl());
+        slowRecoveryFactory.setAutomaticRecoveryEnabled(true);
+        slowRecoveryFactory.setNetworkRecoveryInterval(5000);
+        try (Connection slowRecoveryConnection = slowRecoveryFactory.newConnection()) {
+            CountDownLatch recoveryStarted = new CountDownLatch(1);
+            CountDownLatch recoveryComplete = new CountDownLatch(1);
+            ((Recoverable) slowRecoveryConnection).addRecoveryListener(new RecoveryListener() {
+                @Override
+                public void handleRecoveryStarted(Recoverable recoverable) {
+                    recoveryStarted.countDown();
+                }
+
+                @Override
+                public void handleRecovery(Recoverable recoverable) {
+                    recoveryComplete.countDown();
+                }
+            });
+
+            RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+            PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+            CountDownLatch firstCallEntered = new CountDownLatch(1);
+            CountDownLatch releaseFirstCall = new CountDownLatch(1);
+            List<String> handled = new CopyOnWriteArrayList<>();
+            model.subscribe("proj", ce -> {
+                handled.add(ce.getId());
+                if (handled.size() == 1) {
+                    firstCallEntered.countDown();
+                    awaitLatch(releaseFirstCall);
+                }
+            });
+
+            try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(slowRecoveryConnection, model, outcomeChannel, queue)
+                    .declareTopology(false)
+                    .pollInterval(Duration.ofMillis(200))
+                    .build()) {
+                publish(OrderPlaced.class.getName(), "id-1");
+                assertThat(firstCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+                forceCloseAllConnectionsOrFail();
+                await().atMost(Duration.ofSeconds(5)).until(() -> !slowRecoveryConnection.isOpen());
+                releaseFirstCall.countDown();
+                sleep(Duration.ofSeconds(1));
+                assertThat(recoveryStarted.getCount())
+                        .as("the handler must have finished and acknowledged before the connection's recovery started")
+                        .isOne();
+
+                assertThat(recoveryComplete.await(30, TimeUnit.SECONDS)).isTrue();
+                publish(OrderPlaced.class.getName(), "id-2");
+
+                await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(handled).contains("id-2"));
+            } finally {
+                releaseFirstCall.countDown();
+            }
+        }
+    }
+
     private static void sleep(Duration duration) {
         try {
             Thread.sleep(duration.toMillis());
