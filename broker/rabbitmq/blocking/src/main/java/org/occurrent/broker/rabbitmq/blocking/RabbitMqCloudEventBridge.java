@@ -166,7 +166,9 @@ import static java.util.Objects.requireNonNull;
  * {@code warn} and keeps consuming, and the recovered channel delivers the message again. Stopping instead would mean
  * closing the channel, which takes it out of the connection's recovery, so this bridge would never consume again
  * while every other bridge on the connection did. A connection without automatic recovery never comes back, so on
- * one of those this bridge stops for good, as it does for an {@link Error} a handler throws.
+ * one of those this bridge stops for good, as it does for an {@link Error} a handler throws, an
+ * {@link AssertionError} aside, which goes through {@link DeliveryFailurePolicy} like any other handler
+ * failure.
  * <p>
  * Under {@link DeliveryFailurePolicy#PARK} that costs one duplicate. A delivery that fails while the connection is
  * recovering is published to the parking destination, and the acknowledgement that normally follows the park does
