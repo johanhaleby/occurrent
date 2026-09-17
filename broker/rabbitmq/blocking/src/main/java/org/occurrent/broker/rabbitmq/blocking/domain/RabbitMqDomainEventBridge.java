@@ -177,14 +177,15 @@ import static java.util.Objects.requireNonNull;
  * it.
  * <p>
  * <strong>A delivery finishing while the connection is down is left for RabbitMQ to deliver again.</strong> Its
- * acknowledgement cannot be sent, since the channel it would go on is closed, and RabbitMQ has put the delivery back
- * on the queue for the dropped connection. On a connection with automatic recovery this bridge logs that at
- * {@code warn} and keeps consuming, and the recovered channel delivers the message again. Stopping instead would mean
- * closing the channel, which takes it out of the connection's recovery, so this bridge would never consume again
- * while every other bridge on the connection did. A connection without automatic recovery never comes back, so on
- * one of those this bridge stops for good, as it does for an {@link Error} a projection throws, an
- * {@link AssertionError} aside, which goes through {@link DeliveryFailurePolicy} like any other projection
- * failure.
+ * acknowledgement cannot be sent, since the channel it would go on is closed, and RabbitMQ has put the delivery back on
+ * the queue for the dropped connection. On a connection with automatic recovery this bridge logs that at {@code warn}
+ * and keeps its channel, and the recovered channel delivers the message again once the recovery has registered the
+ * consumer on it. That takes topology recovery, which a {@code ConnectionFactory} has on by default. With it turned off
+ * nothing registers the consumer again, after this or any other recovery. Stopping instead would mean closing the
+ * channel, which takes it out of the connection's recovery, so this bridge would never consume again while every other
+ * bridge on the connection did. A connection without automatic recovery never comes back, so on one of those this
+ * bridge stops for good, as it does for an {@link Error} a projection throws, an {@link AssertionError} aside, which
+ * goes through {@link DeliveryFailurePolicy} like any other projection failure.
  * <p>
  * Under {@link DeliveryFailurePolicy#PARK} that costs one duplicate. A delivery that fails while the connection is
  * recovering is published to the parking destination, and the acknowledgement that normally follows the park does

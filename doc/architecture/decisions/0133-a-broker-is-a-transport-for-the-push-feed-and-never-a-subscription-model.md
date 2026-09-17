@@ -1278,10 +1278,12 @@ worker does not stop the bridge when `RabbitMqDeliveryFailureAction.isLostToConn
 going to recover the connection under it. That is a `ShutdownSignalException` for the whole connection that the
 client's default recovery condition recovers from, or an `IOException` from writing to the socket, which makes a
 recovering connection close and recover itself. The bridge logs it at `warn` and keeps its channel, and RabbitMQ,
-which put the delivery back on the queue when the connection dropped, delivers it again on the recovered channel. A
-connection without automatic recovery never comes back, so a failure on one of those still stops the bridge, the same
-as an `Error` other than an `AssertionError`, a channel the broker closed on its own, or a connection the application
-closed.
+which put the delivery back on the queue when the connection dropped, delivers it again on the recovered channel once
+the recovery has registered the consumer on it. That takes topology recovery, which a `ConnectionFactory` has on by
+default and the client gives no way to check. With it turned off nothing registers the consumer again, after this or
+any other recovery, so the bridge stops consuming whether or not a handler was running. A connection without
+automatic recovery never comes back, so a failure on one of those still stops the bridge, the same as an `Error`
+other than an `AssertionError`, a channel the broker closed on its own, or a connection the application closed.
 
 The decision sits in the worker's wrapper rather than in `ack` and `redeliver`. Those two keep throwing, so a caller
 never logs a park as acknowledged when it was not, and a bridge on a connection without recovery still stops. A

@@ -188,10 +188,12 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
 
     /**
      * Whether {@code failure}, thrown by {@link #ack(long)}, {@link #redeliver(long)} or
-     * {@link #apply(long, BasicProperties, byte[])}, means the connection under the delivery's channel went away and
-     * the RabbitMQ client is going to recover it. A bridge does not stop for such a failure and does not acknowledge
-     * the delivery either, since RabbitMQ puts it back on the queue when the connection drops and delivers it again on
-     * the recovered channel, and closing the channel to put it back would take that channel out of recovery for good.
+     * {@link #apply(long, BasicProperties, byte[])}, means the connection under the delivery's channel went away and the
+     * RabbitMQ client is going to recover it. A bridge does not stop for such a failure and does not acknowledge the delivery either,
+     * since RabbitMQ puts it back on the queue when the connection drops and delivers it again on the recovered
+     * channel, and closing the channel to put it back would take that channel out of recovery for good. The message
+     * only arrives again if topology recovery registers the consumer on the recovered channel, which this does not
+     * check, since the client does not expose whether a connection has it turned on.
      * <p>
      * True only for a channel from a connection with automatic recovery enabled, and then for two failures. One is a
      * {@link ShutdownSignalException}, {@code AlreadyClosedException} included, for the whole connection rather than
