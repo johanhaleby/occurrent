@@ -111,7 +111,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // The deliveries the saga could not work out an instance for, keyed by redelivery key, or by CloudEvent id and source
     // for an event carrying none, holding when the routing
     // started failing and when that was last logged. Only the logging reads it, so a delivery the source re-offers every
-    // few milliseconds is logged once per budget rather than at that cadence. Dropped as soon as the event routes.
+    // few milliseconds is logged once per interval rather than at that cadence. Dropped as soon as the event routes.
     private final ConcurrentHashMap<String, UnroutableDelivery> unroutableDeliveries = new ConcurrentHashMap<>();
     // The extension names already reported as unreadable, so the warning is said once per name rather than per event.
     private final Set<String> unreadableExtensionsWarned = ConcurrentHashMap.newKeySet();

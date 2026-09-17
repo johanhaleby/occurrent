@@ -60,8 +60,9 @@ import java.lang.annotation.*;
  * whichever event it stopped on, and the subscription moves past the event so the saga's other instances keep going.
  * An event it could not route, because the converter or the id extractor threw, is refused on every redelivery
  * instead, because acknowledging it would lose it. This saga waits behind it until the converter or the id extractor
- * is repaired, and the refusal is logged once per budget naming the event. The javadoc on {@code SagaRunner}, the executor the framework builds
- * for this saga, and
+ * is repaired, and the refusal is logged once per interval naming the event, the budget when it is set and a fixed
+ * five minutes when it is not, so the refusal keeps getting louder even where the budget is switched off. The
+ * javadoc on {@code SagaRunner}, the executor the framework builds for this saga, and
  * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0134-a-saga-instance-that-keeps-failing-is-quarantined-at-its-own-position.md">ADR 134</a>
  * have the rest, including what a quarantined instance does afterwards and how to find one.
  * <p>
