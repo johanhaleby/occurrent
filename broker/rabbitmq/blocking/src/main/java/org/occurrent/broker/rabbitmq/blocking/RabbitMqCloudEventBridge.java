@@ -394,7 +394,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         } catch (RuntimeException | Error e) {
             if (failureAction.isLostToConnectionRecovery(e)) {
                 log.warn("The connection under queue \"{}\" dropped before delivery tag {} could be acknowledged or "
-                        + "rejected. RabbitMQ delivers it again once the connection has recovered.", queue, deliveryTag, e);
+                        + "rejected. RabbitMQ puts it back on the queue, and this bridge receives it again once the "
+                        + "connection's recovery has registered its consumer again, which needs topology recovery turned on.",
+                        queue, deliveryTag, e);
                 return;
             }
             log.error("Handling delivery tag {} on queue \"{}\" failed outside this bridge's delivery failure policy. "
