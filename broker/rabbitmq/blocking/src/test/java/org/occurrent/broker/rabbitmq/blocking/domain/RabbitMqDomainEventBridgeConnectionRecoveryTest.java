@@ -16,6 +16,8 @@
 
 package org.occurrent.broker.rabbitmq.blocking.domain;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
@@ -32,6 +34,7 @@ import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventMapper;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -148,6 +151,88 @@ class RabbitMqDomainEventBridgeConnectionRecoveryTest {
             // order-3 is what this test is really after. At the default prefetch of one, an order-2 left
             // unacknowledged means order-3 is never delivered at all.
             await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(handled).contains(new TestOrderPlaced("order-3")));
+        }
+    }
+
+    /**
+     * A projection that finishes after the connection has dropped but before its recovery has started is acknowledged
+     * on a closed channel, which throws. The connection gets a recovery interval of five seconds so the projection can
+     * finish inside that gap. The test then waits for the bridge to log what it did with the failed acknowledgement,
+     * and checks that the recovery had not started by then, so the acknowledgement really did go to the closed
+     * channel.
+     */
+    @Test
+    void a_projection_finishing_before_recovery_starts_does_not_stop_the_bridge_from_consuming_after_recovery() throws Exception {
+        String queue = "test-queue-" + UUID.randomUUID();
+        adminChannel.queueDeclare(queue, false, false, false, null);
+        adminChannel.queueBind(queue, exchange, TestOrderPlaced.class.getName());
+
+        ConnectionFactory slowRecoveryFactory = new ConnectionFactory();
+        slowRecoveryFactory.setUri(rabbitMQContainer.getAmqpUrl());
+        slowRecoveryFactory.setAutomaticRecoveryEnabled(true);
+        slowRecoveryFactory.setNetworkRecoveryInterval(5000);
+        try (Connection slowRecoveryConnection = slowRecoveryFactory.newConnection()) {
+            CountDownLatch recoveryStarted = new CountDownLatch(1);
+            CountDownLatch recoveryComplete = new CountDownLatch(1);
+            ((Recoverable) slowRecoveryConnection).addRecoveryListener(new RecoveryListener() {
+                @Override
+                public void handleRecoveryStarted(Recoverable recoverable) {
+                    recoveryStarted.countDown();
+                }
+
+                @Override
+                public void handleRecovery(Recoverable recoverable) {
+                    recoveryComplete.countDown();
+                }
+            });
+
+            CountDownLatch order1Started = new CountDownLatch(1);
+            CountDownLatch releaseOrder1 = new CountDownLatch(1);
+            List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+            DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+            feed.register("proj", event -> {
+                handled.add(event);
+                if (handled.size() == 1) {
+                    order1Started.countDown();
+                    awaitLatch(releaseOrder1);
+                }
+            }, Filter.type(TestOrderPlaced.class.getName()));
+            feed.goLive("proj");
+
+            ch.qos.logback.classic.Logger bridgeLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(RabbitMqDomainEventBridge.class);
+            ListAppender<ILoggingEvent> bridgeLog = new ListAppender<>();
+            bridgeLog.start();
+            bridgeLogger.addAppender(bridgeLog);
+
+            try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = RabbitMqDomainEventBridge.builder(slowRecoveryConnection, feed, queue)
+                    .declareTopology(false)
+                    .pollInterval(Duration.ofMillis(200))
+                    .build()) {
+                publish("order-1");
+                assertThat(order1Started.await(15, TimeUnit.SECONDS)).isTrue();
+
+                forceCloseAllConnectionsOrFail();
+                await().atMost(Duration.ofSeconds(5)).until(() -> !slowRecoveryConnection.isOpen());
+                releaseOrder1.countDown();
+                // Waits for the bridge's own decision about the failed acknowledgement, rather than for a fixed
+                // moment, so this test is in the window it exists for whichever decision the bridge makes. The
+                // acknowledgement it logs is the one that went to the closed channel, since the assertion below
+                // shows the recovery had not started, and therefore no replacement channel existed yet.
+                await().atMost(Duration.ofSeconds(4)).until(() -> bridgeLog.list.stream().anyMatch(event ->
+                        event.getFormattedMessage().contains("dropped before delivery tag")
+                                || event.getFormattedMessage().contains("failed outside this bridge's delivery failure policy")));
+                assertThat(recoveryStarted.getCount())
+                        .as("the projection must have finished and its acknowledgement been tried before the recovery started")
+                        .isOne();
+
+                assertThat(recoveryComplete.await(30, TimeUnit.SECONDS)).isTrue();
+                publish("order-2");
+
+                await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(handled).contains(new TestOrderPlaced("order-2")));
+            } finally {
+                releaseOrder1.countDown();
+                bridgeLogger.detachAppender(bridgeLog);
+            }
         }
     }
 

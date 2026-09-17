@@ -1269,6 +1269,27 @@ same, because the delivery ran on its callback thread and its exception handler 
 escapes. Without it the delivery would sit unacknowledged on a consumer the broker sends nothing further to at the
 default `prefetchCount` of one, which is a bridge that has stopped without saying so.
 
+A failed acknowledgement is not always the bridge failing, though. A handler that finishes after the connection has
+dropped, and before its recovery has started, acknowledges on a closed channel, and `basicAck` throws
+`AlreadyClosedException`. Stopping for that closed the channel, and closing an `AutorecoveringChannel` takes it out
+of the connection's recovery for good. The connection came back and every other bridge on it kept consuming, but the
+bridge that stopped never consumed again. See [#1060](https://github.com/johanhaleby/occurrent/issues/1060). So the
+worker does not stop the bridge when `RabbitMqDeliveryFailureAction.isLostToConnectionRecovery` says the client is
+going to recover the connection under it. That is a `ShutdownSignalException` for the whole connection that the
+client's default recovery condition recovers from, or an `IOException` from writing to the socket, which makes a
+recovering connection close and recover itself. The bridge logs it at `warn` and keeps its channel, and RabbitMQ,
+which put the delivery back on the queue when the connection dropped, delivers it again on the recovered channel once
+the recovery has registered the consumer on it. That takes topology recovery, which a `ConnectionFactory` has on by
+default and the client gives no way to check. With it turned off nothing registers the consumer again, after this or
+any other recovery, so the bridge stops consuming whether or not a handler was running. A connection without
+automatic recovery never comes back, so a failure on one of those still stops the bridge, the same as an `Error`
+other than an `AssertionError`, a channel the broker closed on its own, or a connection the application closed.
+
+The decision sits in the worker's wrapper rather than in `ack` and `redeliver`. Those two keep throwing, so a caller
+never logs a park as acknowledged when it was not, and a bridge on a connection without recovery still stops. A
+`ConnectionFactory` given its own recovery condition is judged by the client's default one, since the connection does
+not expose the condition it was built with.
+
 One thread per bridge keeps deliveries handled one at a time and in the order the broker sent them, which is what the
 callback gave each channel before. The worker's queue holds at most `prefetchCount` deliveries from the current
 channel. The broker sends no more than that many unacknowledged deliveries to one consumer, but it counts them per
@@ -1328,3 +1349,7 @@ asserts the message is handled twice rather than three times, and `RabbitMqDomai
 the domain bridge's recovery listener by hand to check the same thing, including a callback from the dead channel that
 arrives after the recovery started. `RabbitMqCloudEventBridgeWorkerThreadTest` also checks that under `PARK` a
 delivery whose handler `close()` interrupted is neither parked nor acknowledged.
+`RabbitMqCloudEventBridgeConnectionRecoveryTest` and `RabbitMqDomainEventBridgeConnectionRecoveryTest` each give a
+connection a recovery interval of five seconds, let a handler finish after the connection drops and before the
+recovery starts, and assert that a message published after the recovery is still handled. Both fail when a failed
+acknowledgement stops the bridge.
