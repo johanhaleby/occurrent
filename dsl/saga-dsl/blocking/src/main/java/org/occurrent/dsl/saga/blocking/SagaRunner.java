@@ -114,9 +114,10 @@ import static java.util.Objects.requireNonNull;
  *       refused on every redelivery instead, as every version up to 0.33.0 did, and every instance of this saga waits
  *       behind it while other sagas and subscriptions keep going. The first failure is logged at WARN and, after that,
  *       at ERROR once per {@code quarantineAfter} when it is set or a fixed five-minute default when it is not, naming
- *       the event and the exception that stopped it, so that ERROR fires whatever this saga's subscription model is.
- *       Once the converter
- *       or the id extractor is repaired the event is applied in the order it was written, with nothing to feed again.
+ *       the event and the exception that stopped it, so that ERROR fires for as long as the event keeps being offered,
+ *       never on a subscription model that drops a refused delivery instead of redelivering it, which gets only the
+ *       first WARN. Once the converter or the id extractor is repaired the event is applied in the order it was
+ *       written, with nothing to feed again.
  *       <p>
  *       Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of blocking indefinitely instead,
  *       which is also what a subscription model that does not guarantee it holds every event it delivers gets, since
