@@ -113,13 +113,15 @@ import static java.util.Objects.requireNonNull;
  *       past, whatever the budget. Not being able to say which instance it belongs to does not mean it belongs to none,
  *       and once the subscription moved past it the next event for that instance would move the instance's watermark
  *       beyond it, so feeding it to the saga again would be ignored as a redelivery and the event would be lost. It is
- *       refused on every redelivery instead, as every version up to 0.33.0 did, and every instance of this saga waits
- *       behind it while other sagas and subscriptions keep going. The first failure is logged at WARN and, after that,
- *       at ERROR once per {@code quarantineAfter} when it is set or a fixed five-minute default when it is not, naming
- *       the event and the exception that stopped it, so that ERROR fires for as long as the event keeps being offered,
- *       never on a subscription model that drops a refused delivery instead of redelivering it, which gets only the
- *       first WARN. Once the converter or the id extractor is repaired the event is applied in the order it was
- *       written, with nothing to feed again.
+ *       refused on every redelivery instead, as every version up to 0.33.0 did. Where the subscription offers it
+ *       again, every instance of this saga waits behind it while other sagas and subscriptions keep going, and once
+ *       the converter or the id extractor is repaired the event is applied in the order it was written, with nothing
+ *       to feed again. A broker bridge that parks the delivery instead of redelivering it moves the event to its
+ *       parking destination and goes on with the next one, so a repaired converter never sees it there. The first
+ *       failure is logged at WARN and, after that, at ERROR once per {@code quarantineAfter} when it is set or a
+ *       fixed five-minute default when it is not, naming the event and the exception that stopped it, so that ERROR
+ *       fires for as long as the event keeps being offered, never on a
+ *       subscription model that drops a refused delivery instead of redelivering it, which gets only the first WARN.
  *       <p>
  *       Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of blocking indefinitely instead,
  *       which is also what a subscription model that does not guarantee it holds every event it delivers gets, since

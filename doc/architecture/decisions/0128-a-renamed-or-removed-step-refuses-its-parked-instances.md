@@ -45,11 +45,13 @@ name or a branch index the current build does not have. There is nothing left fo
 
 **The two guarded call sites do not carry the same cost when they refuse.** `SagaRunner`'s own javadoc documents
 that an exception on the event path propagates to the subscription model, which redelivers the event and retries
-the whole step, and that the subscription is a single ordered channel shared by every instance the saga handles, so
-while one event keeps failing the events behind it wait. One instance parked on a gone step is what holds that
-channel. That is not a new failure mode this decision introduces, it is the same accepted architecture ADR
-123's own refusal already lives with. The timer path is different. `SagaExecution.pollTimers` catches a failing
-timeout per instance, logs it, and leaves it due for the next poll.
+the whole step unless it is a broker bridge that parks the delivery instead of redelivering it, and that the
+subscription is a single ordered channel shared by every instance the saga handles, so while one event keeps being
+redelivered and failing the events behind it wait. One instance parked on a gone step is what holds that channel,
+and a bridge configured with `DeliveryFailurePolicy.PARK` moves the delivery to its parking destination instead, so
+the channel is not held there. That is not a new failure mode this decision introduces, it is the same accepted
+architecture ADR 123's own refusal already lives with. The timer path is different. `SagaExecution.pollTimers`
+catches a failing timeout per instance, logs it, and leaves it due for the next poll.
 
 **Amended for [#998](https://github.com/johanhaleby/occurrent/issues/998).** This paragraph used to end "A missing
 step firing a timer costs one stuck instance", which was wrong in the same way ADR 134's Context was. The timer
@@ -68,6 +70,12 @@ quarantined at `quarantineAfter` wherever four conditions hold, and `SagaRunner`
 hold for an instance parked on a renamed step is a separate question neither record answers, and one configuration
 where the budget elapses and the instance is quarantined instead is enough to falsify an "until fixed". What this
 record no longer asserts is that the wait always runs until somebody intervenes.
+
+**Amended for [#1071](https://github.com/johanhaleby/occurrent/issues/1071).** The paragraph attributed an
+unconditional redelivery to `SagaRunner`'s javadoc. A consume-side broker bridge sends a failed delivery through its
+`DeliveryFailurePolicy`, so under `PARK` the delivery goes to the bridge's parking destination and the bridge goes on
+with the next event. The held channel is the cost this record compares the two call sites on, and a parking bridge
+does not pay it.
 
 **The decision below still stands, on a reason neither amendment touches.** It never rested on how long an
 event-path refusal blocks, only on that refusal costing what any other event-path exception in this architecture
