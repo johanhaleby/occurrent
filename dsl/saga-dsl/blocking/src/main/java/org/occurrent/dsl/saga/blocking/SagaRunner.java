@@ -81,7 +81,7 @@ import static java.util.Objects.requireNonNull;
  *   <li><strong>Event path.</strong> A failure (including a {@link SagaConcurrencyException} once the retries are
  *       exhausted) propagates to the subscription model, which redelivers the event and retries the whole step. The
  *       event is not lost. A broker bridge that parks the delivery instead of redelivering it moves the event to its
- *       parking destination and goes on with the next one, so nothing waits behind it there. The
+ *       parking destination and goes on with the next one. The
  *       subscription is a single ordered channel shared by every instance this saga handles, so while one event keeps
  *       failing the events queued behind it wait. Four things have to hold for that wait to end at
  *       {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. The budget has to be set. The

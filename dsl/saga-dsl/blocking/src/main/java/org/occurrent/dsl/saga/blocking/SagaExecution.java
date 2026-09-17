@@ -542,8 +542,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // one, so this means a feed that dropped the extensions on the way in, which it does for every event, not just this
     // one. Under REQUIRED that is refused rather than reacted to, so the throw reaches the subscription model and the
     // feed offers the event again until somebody looks. A broker bridge that parks the delivery instead of redelivering
-    // it moves the event to its parking destination and does not offer it again. Under BEST_EFFORT the duplication is
-    // accepted knowingly, so the warning says so once per runner rather than once per event.
+    // it moves the event to its parking destination. Under BEST_EFFORT the duplication is accepted knowingly, so the
+    // warning says so once per runner rather than once per event.
     private void refuseOrWarnIfRedeliveryCannotBeDetected(EventMeta meta) {
         if (meta.carriesRedeliveryKey()) {
             return;

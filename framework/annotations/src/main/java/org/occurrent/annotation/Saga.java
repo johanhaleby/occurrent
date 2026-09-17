@@ -46,8 +46,7 @@ import java.lang.annotation.*;
  * The two input paths fail differently. A failing event propagates to the subscription, which redelivers the event and
  * retries the whole step. That subscription is a single ordered channel shared by every instance of this saga, so while
  * one event keeps failing the events behind it wait, which is head-of-line blocking. A broker bridge that parks the
- * delivery instead of redelivering it moves the event to its parking destination and goes on with the next one, so
- * nothing waits behind it there.
+ * delivery instead of redelivering it moves the event to its parking destination and goes on with the next one.
  * <p>
  * Four things have to hold for that wait to end at the quarantine budget, five minutes by default and set by
  * {@code occurrent.saga.quarantine-after} on this path. The budget has to be set. The subscription model has to

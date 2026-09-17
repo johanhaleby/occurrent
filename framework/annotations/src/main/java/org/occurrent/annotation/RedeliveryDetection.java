@@ -31,7 +31,7 @@ public enum RedeliveryDetection {
      * redelivery protection. A broker hands the same message over more than once as a matter of course, so it offers
      * this one again and the saga refuses it again until the listener is fixed or this attribute is set to
      * {@link #BEST_EFFORT}. A broker bridge that parks the delivery instead of redelivering it moves the event to its
-     * parking destination on the first refusal and does not offer it again.
+     * parking destination on the first refusal.
      */
     REQUIRED,
     /**
