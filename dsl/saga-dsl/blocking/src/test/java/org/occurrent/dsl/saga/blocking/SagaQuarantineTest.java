@@ -56,6 +56,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -780,10 +781,11 @@ class SagaQuarantineTest {
         /**
          * A runner on a feed that cannot promise to hold what it delivers has no quarantine budget, but the repeated
          * ERROR is paced on {@link SagaRunnerConfig#DEFAULT_QUARANTINE_AFTER} instead of going silent, so it is not
-         * due yet within this short a window. {@link #falls_back_to_the_default_budget_when_none_is_configured} proves
-         * that interval is what is actually used, and {@link #says_so_once_per_budget_rather_than_every_time_the_event_is_offered}
-         * proves the pacing itself fires once that interval elapses, whatever its value. A test that instead waited out
-         * the real five minutes here would only re-prove both at once, slowly.
+         * due yet within this short a window. This alone does not tell a fallback interval apart from no pacing at
+         * all, since both stay quiet here.
+         * {@link #fires_the_error_past_the_fallback_interval_even_though_quarantine_is_switched_off} is what actually
+         * bite-proves the fallback fires, by moving a fake clock across the interval instead of waiting out five real
+         * minutes.
          */
         @Test
         void still_says_so_once_within_a_window_shorter_than_the_default_budget_when_quarantine_is_switched_off() throws Exception {
@@ -813,13 +815,6 @@ class SagaQuarantineTest {
             }
         }
 
-        /**
-         * The interval {@link #still_says_so_once_within_a_window_shorter_than_the_default_budget_when_quarantine_is_switched_off}
-         * relies on staying quiet, and the one {@link #says_so_once_per_budget_rather_than_every_time_the_event_is_offered}
-         * relies on the pacing mechanism honouring whatever it is given. Together they are the reason a saga stuck on
-         * an unroutable event still gets louder over time on a subscription model {@code SagaRunner} switches
-         * quarantine off for, without a test having to wait out five real minutes to see it.
-         */
         @Test
         void the_unroutable_error_interval_is_the_configured_quarantine_budget_when_one_is_set() {
             SagaExecution<OrderEvent, OrderState, OrderCommand> execution =
@@ -835,6 +830,53 @@ class SagaQuarantineTest {
                             CONFIG.withQuarantineAfter(null), event -> true);
 
             assertThat(execution.unroutableErrorInterval()).isEqualTo(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER);
+        }
+
+        /**
+         * The bite proof for this whole fix. A fake clock crosses {@link SagaRunnerConfig#DEFAULT_QUARANTINE_AFTER}
+         * without a real sleep, so an execution with no configured budget still has to emit the ERROR, on that
+         * interval and no faster. Reverting {@code refuseUnroutableDelivery} to its old
+         * {@code quarantineAfter == null} early return leaves every other test in this class green while this one
+         * fails, because those either configure a budget or never advance the clock far enough to tell "paced on the
+         * fallback" apart from "never fires".
+         */
+        @Test
+        void fires_the_error_past_the_fallback_interval_even_though_quarantine_is_switched_off() {
+            uncorrelatableEventId = "3";
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
+                SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
+                        "orders", orderFulfillment(), stateStore, dispatched::add, converter,
+                        CONFIG.withQuarantineAfter(null), event -> true, now::get);
+                CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
+
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                now.set(now.get().plus(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER).plusSeconds(1));
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                now.set(now.get().plusSeconds(1));
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                now.set(now.get().plus(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER));
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+                List<ILoggingEvent> logged;
+                synchronized (appender) {
+                    logged = new ArrayList<>(appender.list);
+                }
+                assertThat(logged)
+                        .filteredOn(event -> event.getFormattedMessage().contains("which instance the event '" + POISON + "@2'"))
+                        .extracting(ILoggingEvent::getLevel)
+                        .containsExactly(Level.WARN, Level.ERROR, Level.ERROR);
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
         }
 
         @Test

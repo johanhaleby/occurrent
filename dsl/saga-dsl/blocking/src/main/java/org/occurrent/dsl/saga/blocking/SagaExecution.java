@@ -39,6 +39,7 @@ import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -115,9 +116,18 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private final ConcurrentHashMap<String, UnroutableDelivery> unroutableDeliveries = new ConcurrentHashMap<>();
     // The extension names already reported as unreadable, so the warning is said once per name rather than per event.
     private final Set<String> unreadableExtensionsWarned = ConcurrentHashMap.newKeySet();
+    // Where refuseUnroutableDelivery reads the current instant from. Real wall-clock time in production; a test
+    // supplies its own so it can cross the fallback interval without sleeping out five real minutes.
+    private final Supplier<Instant> clock;
 
     SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
                   CloudEventConverter<E> converter, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable) {
+        this(subscriptionId, saga, stateStore, dispatcher, converter, config, stillObtainable, Instant::now);
+    }
+
+    SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
+                  CloudEventConverter<E> converter, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable,
+                  Supplier<Instant> clock) {
         this.stillObtainable = stillObtainable;
         this.subscriptionId = subscriptionId;
         this.saga = saga;
@@ -125,6 +135,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         this.dispatcher = dispatcher;
         this.converter = converter;
         this.config = config;
+        this.clock = clock;
         this.casRetry = RetryStrategy.retry()
                 .backoff(Backoff.none())
                 .maxAttempts(config.maxCasAttempts())
@@ -229,7 +240,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             return;
         }
         String redeliveryKey = unroutableKey(meta, cloudEvent);
-        Instant now = Instant.now();
+        Instant now = clock.get();
         UnroutableDelivery existing = unroutableDeliveries.putIfAbsent(redeliveryKey, new UnroutableDelivery(now, now));
         if (existing == null) {
             log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, so the event is refused and the subscription offers it again. Every instance of this saga waits behind it until the converter or the id extractor can read it, and the event is then applied in the order it was written. It is never skipped, because an event the saga cannot route may still belong to an instance and acknowledging it would lose it.",
