@@ -664,8 +664,9 @@ an instance, and once the subscription moved past it the next event for that ins
 having handled it, so the event would be lost. Every instance of that saga waits behind it instead, and the first
 failure is logged at `WARN` and after that at `ERROR` once per interval, naming the event and what stopped it. That
 interval is the quarantine budget when the saga has one, and a fixed five-minute default when it does not, so the
-`ERROR` still repeats on a subscription model this saga cannot quarantine anything on. Repair the converter or the id
-extractor and the saga applies the event in the order it was written.
+`ERROR` still repeats on a subscription model this saga cannot quarantine anything on, for as long as that model keeps
+redelivering the event. A broker bridge that parks the delivery instead of redelivering it gets only the first `WARN`.
+Repair the converter or the id extractor and the saga applies the event in the order it was written.
 
 A quarantined instance receives no further events and fires no timers, and its redelivery watermarks stop moving, so
 nothing it skipped is recorded as handled. What it stopped on stays on the record instead of being lost.

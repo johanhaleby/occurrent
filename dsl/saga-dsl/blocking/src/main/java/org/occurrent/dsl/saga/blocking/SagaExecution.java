@@ -116,8 +116,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private final ConcurrentHashMap<String, UnroutableDelivery> unroutableDeliveries = new ConcurrentHashMap<>();
     // The extension names already reported as unreadable, so the warning is said once per name rather than per event.
     private final Set<String> unreadableExtensionsWarned = ConcurrentHashMap.newKeySet();
-    // Where refuseUnroutableDelivery reads the current instant from. Real wall-clock time in production; a test
-    // supplies its own so it can cross the fallback interval without sleeping out five real minutes.
+    // Where this class reads the current instant from, wherever it needs one, rather than calling Instant.now()
+    // directly. Real wall-clock time in production. A test supplies its own so it can cross an interval or a
+    // quarantine budget without sleeping out real minutes.
     private final Supplier<Instant> clock;
 
     SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
@@ -297,7 +298,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      */
     private boolean quarantine(String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure, Duration quarantineAfter) {
         try {
-            Instant now = Instant.now();
+            Instant now = clock.get();
             // Read without the state, because nothing on this path applies it and an instance whose state no longer
             // decodes is the one that most needs to reach its budget. Loading it whole threw, the catch below swallowed
             // that, and no failure record was ever written.
@@ -407,7 +408,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         // Catch Throwable so a failure never lets the scheduled task die and stop all future polling. The schedule stays
         // alive and the next tick recovers.
         try {
-            Instant now = Instant.now();
+            Instant now = clock.get();
             long nowMillis = now.toEpochMilli();
             List<SagaEnvelope<S>> due = stateStore.findWithDueTimers(now, config.timerBatchLimit());
             for (SagaEnvelope<S> envelope : due) {
@@ -445,7 +446,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         ? new SagaConcurrencyException("Failed to save saga '" + sagaId + "' after " + config.maxCasAttempts() + " attempts due to concurrent modification")
                         : error)
                 .execute((RetryInfo attempt) -> {
-                    Instant now = Instant.now();
+                    Instant now = clock.get();
                     SagaEnvelope<S> current;
                     try {
                         current = stateStore.find(sagaId).orElse(null);

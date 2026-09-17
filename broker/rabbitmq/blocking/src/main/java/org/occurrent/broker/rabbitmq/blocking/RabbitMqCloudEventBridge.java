@@ -103,8 +103,8 @@ import static java.util.Objects.requireNonNull;
  * returns. A handler that blocks, waiting on a database that is down say, holds up only the bridge it belongs to,
  * never another bridge built on the same {@link Connection}. That one thread handles deliveries one at a time and in
  * the order the broker sent them, and about {@link Builder#prefetchCount(int)} of them wait for it. An {@code Error}
- * a handler throws, or an acknowledgement this bridge cannot issue, stops this bridge and closes its channel, which
- * puts the delivery back on the queue.
+ * a handler throws, {@link AssertionError} aside, or an acknowledgement this bridge cannot issue for a reason other
+ * than a connection recovery, stops this bridge and closes its channel, which puts the delivery back on the queue.
  * <p>
  * <strong>Coarse lifecycle.</strong> A background poll, {@link Builder#pollInterval(Duration)} apart (one second by
  * default), reads {@link PushSubscriptionModel#subscriptionIds()} and {@link PushSubscriptionModel#isRunning(String)}

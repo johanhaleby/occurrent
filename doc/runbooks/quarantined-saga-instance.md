@@ -42,10 +42,12 @@ Nothing is written for it, so `findByStatus(QUARANTINED, ..)` does not list it a
 apply. What you get is a `WARN` from `SagaExecution` on the first failure and an `ERROR` once per interval after that,
 each saying the saga could not work out which instance the event belongs to and logging what stopped it. That interval
 is the quarantine budget when one is configured, and a fixed five-minute default when it is not, so this `ERROR` still
-fires on a subscription model this saga cannot quarantine anything on, such as a push feed or a broker bridge. The
-event is named by its redelivery key when it has one, and otherwise by its CloudEvent id and source, which stay
-the same from one delivery of it to the next. Repair the converter or the id extractor and the saga applies the event
-in the order it was written, with nothing to feed to it again. Other sagas and subscriptions keep going meanwhile.
+fires on a subscription model this saga cannot quarantine anything on, such as a push feed or a broker bridge, for as
+long as that model keeps redelivering the event. A broker bridge that parks the delivery instead of redelivering it
+gets only the first `WARN`. The event is named by its redelivery key when it has one, and otherwise by its CloudEvent
+id and source, which stay the same from one delivery of it to the next. Repair the converter or the id extractor and
+the saga applies the event in the order it was written, with nothing to feed to it again. Other sagas and
+subscriptions keep going meanwhile.
 
 `OutOfMemoryError` is the other thing that never quarantines. It says the JVM ran out of heap while some instance held
 the thread rather than anything about that instance, so it is rethrown and the instance keeps its state. Every other
