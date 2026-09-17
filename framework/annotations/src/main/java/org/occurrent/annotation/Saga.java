@@ -44,8 +44,10 @@ import java.lang.annotation.*;
  * {@code @Component}. This is a blocking-stack feature, the reactive starter does not register {@code @Saga}.
  * <p>
  * The two input paths fail differently. A failing event propagates to the subscription, which redelivers the event and
- * retries the whole step. That subscription is a single ordered channel shared by every instance of this saga, so while
- * one event keeps failing the events behind it wait, which is head-of-line blocking.
+ * retries the whole step, unless a broker bridge parks the delivery instead of redelivering it, which moves the event
+ * to its parking destination and goes on with the next one. That subscription is a single ordered channel shared by
+ * every instance of this saga, so while one event keeps being redelivered and failing the events behind it wait, which
+ * is head-of-line blocking.
  * <p>
  * Four things have to hold for that wait to end at the quarantine budget, five minutes by default and set by
  * {@code occurrent.saga.quarantine-after} on this path. The budget has to be set. The subscription model has to
@@ -59,10 +61,10 @@ import java.lang.annotation.*;
  * Only an event the saga routed to an instance can end the wait. That instance is marked {@code QUARANTINED} on
  * whichever event it stopped on, and the subscription moves past the event so the saga's other instances keep going.
  * An event it could not route, because the converter or the id extractor threw, is refused on every redelivery
- * instead, because acknowledging it would lose it. This saga waits behind it until the converter or the id extractor
- * is repaired, and the refusal is logged once per interval naming the event, the budget when it is set and a fixed
- * five minutes when it is not, so the refusal keeps getting louder even where the budget is switched off. The
- * javadoc on {@code SagaRunner}, the executor the framework builds for this saga, and
+ * instead, because acknowledging it would lose it. Where the subscription offers it again, this saga waits behind it
+ * until the converter or the id extractor is repaired, and the refusal is logged once per interval naming the event, the
+ * budget when it is set and a fixed five minutes when it is not, so the refusal keeps getting louder even where the
+ * budget is switched off. The javadoc on {@code SagaRunner}, the executor the framework builds for this saga, and
  * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0134-a-saga-instance-that-keeps-failing-is-quarantined-at-its-own-position.md">ADR 134</a>
  * have the rest, including what a quarantined instance does afterwards and how to find one.
  * <p>
