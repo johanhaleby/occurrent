@@ -226,15 +226,17 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * Acknowledging it is what would lose it. An event the saga cannot route may still belong to an instance, and the
      * next event for that instance moves the instance's watermark past it, so feeding the repaired event to the saga
      * again afterwards is taken for a redelivery and ignored. Nothing can be written for it either, since there is no
-     * instance to write on. So the saga waits behind it, which blocks this saga and no other, and once the converter or
-     * the id extractor can read it the event is applied in the order it was written, with nothing to feed again.
+     * instance to write on. Where the subscription offers it again, the saga waits behind it, which blocks this saga
+     * and no other, and once the converter or the id extractor can read it the event is applied in the order it was
+     * written, with nothing to feed again.
      * <p>
      * The first failure is a warning, and after that it is logged at ERROR once per {@link #unroutableErrorInterval()}
      * for as long as the event keeps being offered, rather than every time the source offers it. That interval is the
      * quarantine budget when one is configured, and a fixed five-minute default otherwise, so an operator alerting on
-     * ERROR is paged whether or not this saga's subscription model can quarantine at all. See
-     * {@link #unroutableErrorInterval()} for why. An event carrying no redelivery key is named by its CloudEvent id
-     * and source instead.
+     * ERROR is paged on a subscription model this saga cannot quarantine anything on, for as long as that model keeps
+     * offering the event. A broker bridge that parks the delivery instead of redelivering it gets only the first WARN.
+     * See {@link #unroutableErrorInterval()} for why. An event carrying no redelivery key is named by its CloudEvent
+     * id and source instead.
      */
     private void refuseUnroutableDelivery(EventMeta meta, CloudEvent cloudEvent, Throwable failure) {
         if (!SagaExecutionSupport.isAttributableToTheInstance(failure)) {
@@ -244,7 +246,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         Instant now = clock.get();
         UnroutableDelivery existing = unroutableDeliveries.putIfAbsent(redeliveryKey, new UnroutableDelivery(now, now));
         if (existing == null) {
-            log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, so the event is refused and the subscription offers it again. Every instance of this saga waits behind it until the converter or the id extractor can read it, and the event is then applied in the order it was written. It is never skipped, because an event the saga cannot route may still belong to an instance and acknowledging it would lose it.",
+            log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, so it refused the event rather than acknowledging it, because an event the saga cannot route may still belong to an instance and acknowledging it would lose it. Where the subscription offers the event again, every instance of this saga waits behind it until the converter or the id extractor can read it, and the event is then applied in the order it was written. A broker bridge that parks refused deliveries puts it in its parking destination instead.",
                     subscriptionId, redeliveryKey, failure);
             return;
         }
@@ -261,11 +263,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * How often {@link #refuseUnroutableDelivery} repeats its ERROR once the first failure has already been warned
      * about. An event the saga cannot route is refused whether or not {@link SagaRunnerConfig#quarantineAfter()} is
      * set, because nothing here ever quarantines an instance for it (see {@link #refuseUnroutableDelivery}), so pacing
-     * this ERROR on that budget alone would leave every subscription model {@code SagaRunner} switches quarantine off
-     * for, meaning push feeds and the broker bridges, warning once and then staying silent for good. Using the
-     * configured budget when there is one keeps one number for an operator to reason about, and
-     * {@link SagaRunnerConfig#DEFAULT_QUARANTINE_AFTER} otherwise gives every other model the same five-minute cadence
-     * rather than inventing a second tunable for it.
+     * this ERROR on that budget alone would leave a saga on a subscription model {@code SagaRunner} switches quarantine
+     * off for, such as a push feed or a broker bridge, warning once and then staying silent for good even while that
+     * model keeps offering the event. A broker bridge that parks the delivery instead of redelivering it gets only the
+     * first WARN either way. Using the configured budget when there is one keeps one number for an operator to reason
+     * about, and {@link SagaRunnerConfig#DEFAULT_QUARANTINE_AFTER} otherwise gives every other model the same
+     * five-minute cadence rather than inventing a second tunable for it.
      */
     Duration unroutableErrorInterval() {
         Duration quarantineAfter = config.quarantineAfter();
