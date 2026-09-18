@@ -8,6 +8,16 @@ Accepted. Resolves #583, from the post-0.31.0 API review. Amends
 [ADR 96](0096-a-push-fed-saga-may-have-no-history-to-replay.md), which decided which feeds a `@Saga` accepts but left
 what happens per event unchanged.
 
+Amended on 2026-09-18 by
+[ADR 138](0138-a-refused-saga-event-does-not-come-back-on-its-own.md). Read the Decision and the Consequences below
+against that record.
+
+> Two sentences here say a refused event is offered again, and they are wrong for different reasons. The Decision's
+> "A push feed offers it again, the saga refuses it again, and the application stays stuck on it" was wrong on the day
+> it was written. The Consequence's "A refused event is not acknowledged, so a broker will keep offering it" was true
+> then, and 0.34.0's broker bridges are what make it false. Whether a refused event comes back is the subscription
+> model's own business, and the saga only declines to acknowledge it.
+
 ## Context
 
 A saga tells a redelivered event from a new one by its `streamid` together with its `streamversion`, or by its
@@ -42,12 +52,10 @@ stay expressible. It just must not stay silent.
 
 **An event carrying no redelivery key is refused, and refusing is the default.** `SagaExecution` throws
 `SagaRedeliveryDetectionException` before the reaction runs. The throw reaches the subscription model, so under ADR 104
-the saga does not acknowledge the event, and whether it is offered again is that model's own business. A
-`PushSubscriptionModel` hands the acknowledge-or-redeliver decision to the listener that called `accept`, and on a
-consume-side broker bridge `DeliveryFailurePolicy` is where the choice is configured. Where the event is offered again
-the saga refuses it again and the application stays stuck on it. Where it is not, the duplicate commands are still not
-issued, and that is the part this decision owns. A saga whose feed drops the metadata is broken in a way that costs
-correctness, and the failure is visible from the first event rather than from a warning nobody read.
+the event is not acknowledged. A push feed offers it again, the saga refuses it again, and the application stays stuck
+on it rather than quietly issuing duplicate commands past it. That is the point. A saga whose feed drops the metadata
+is broken in a way that costs correctness, and the failure is visible from the first event rather than from a warning
+nobody read.
 
 **The opt-out is one attribute, `redeliveryDetection = REQUIRED | BEST_EFFORT`.** `BEST_EFFORT` restores the previous
 behaviour, warning once and taking the event. It exists for the other application's broker above, and its javadoc says
@@ -85,41 +93,12 @@ it does not correlate to any instance is ignored as before, so a feed with no me
 it delivers something the saga would have reacted to. That is deliberate. A saga sharing a broker topic with unrelated
 traffic should not fail on the traffic it was always going to skip.
 
-The saga acknowledges no refused event, and whether the event comes back is the subscription model's own business.
-Where it does come back, on a queue with no dead-letter policy, meaning no separate destination for messages that keep
-failing, it blocks the events behind it. That is the same trade ADR 104 made, for the same reason, that an event a saga
-cannot handle correctly is better stuck and visible than consumed and wrong. A consume-side broker bridge configured
-with `DeliveryFailurePolicy.PARK` takes the other side of it, republishing the refused event to the parking destination
-and acknowledging it out of the source queue once that republish is confirmed, so there the event is normally gone from
-the source on the first refusal rather than stuck in front of the events behind it. Where the trade is not wanted at
-all, `BEST_EFFORT` is the answer, and it is the answer precisely because it makes the choice visible in the code rather
-than in a log file.
+A refused event is not acknowledged, so a broker will keep offering it. On a queue with no dead-letter policy, meaning
+no separate destination for messages that keep failing, that blocks the events behind it. This is the same trade
+ADR 104 made, for the same reason, that an event a saga cannot handle correctly is better stuck and visible than
+consumed and wrong. Where that trade is not wanted, `BEST_EFFORT` is the
+answer, and it is the answer precisely because it makes the choice visible in the code rather than in a log file.
 
 Nothing changes for the catch-up leg of a push saga or for an event-store saga. Both read from the event store, whose
 events always carry the metadata, so neither can reach the refusal. The check costs one already-computed null test per
 delivered event.
-
-## Amendment (2026-09-18): a refused event does not come back on its own
-
-Two sentences in this record said a refused event is offered again. They were wrong for different reasons, so this
-amendment keeps them apart rather than telling one story about both.
-
-The Decision said "A push feed offers it again, the saga refuses it again, and the application stays stuck on it".
-That was wrong on the day it was written. `PushSubscriptionModel`'s javadoc said, in the same commit `8a9311fd6` of
-2026-08-10, that a handler exception propagates to the caller so the listener can decide whether to acknowledge or
-redeliver, and the javadoc is the one the code implements. The model behaved that way at `occurrent-0.33.0` too, so
-no later work falsified this sentence. It was never true.
-
-The Consequence said "A refused event is not acknowledged, so a broker will keep offering it", hedged only by a queue
-with a dead-letter policy. That one was true when it was written, because no broker bridge existed on 2026-08-10.
-0.34.0 is what makes it false. A bridge configured with `DeliveryFailurePolicy.PARK` republishes the refused event to
-the parking destination and acknowledges it out of the source queue once that republish is confirmed, so the event is
-normally gone from the source on the first refusal. A park publish that fails redelivers the original instead, which
-is one way `PARK` can still end in a redelivery. The dead-letter hedge does not cover parking, because dead-lettering
-is the broker's own policy and parking is the bridge's.
-
-The second one costs the argument for `REQUIRED` being the default. That argument is that an event the saga cannot
-handle correctly is better stuck and visible than consumed and wrong, and on a parking bridge it is neither stuck nor
-visible where a reader of this record would look for it. Someone choosing `REQUIRED` there is promised a trade they do
-not get. Both sentences now say what the saga does and leave what happens to the event afterwards to the
-subscription model. See [#1079](https://github.com/johanhaleby/occurrent/issues/1079).

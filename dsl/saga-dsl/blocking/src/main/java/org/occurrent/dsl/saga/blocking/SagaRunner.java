@@ -83,10 +83,10 @@ import static java.util.Objects.requireNonNull;
  *       the event again. Whether it does is the model's own business. A push feed lets the listener decide, and on
  *       a consume-side broker bridge the choice is set with {@code DeliveryFailurePolicy}. The subscription is a
  *       single ordered channel shared by every instance this saga handles, so while one event keeps being redelivered
- *       and failing the events queued behind it wait. Four things have to hold for that wait to end, and it ends at
- *       the first delivery after {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default, rather than at
- *       the budget itself, because the quarantine is decided on a delivery rather than on a clock. The budget has to
- *       be set. The
+ *       and failing the events queued behind it wait. A later delivery that succeeds ends that wait. Four things
+ *       have to hold for quarantine to end it instead, at the first delivery after
+ *       {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default, rather than at the budget itself,
+ *       because the quarantine is decided on a delivery rather than on a clock. The budget has to be set. The
  *       subscription model has to guarantee it holds every event it delivers. The event has to arrive with a stream id
  *       and version or a global position, since nothing tells one delivery of an event carrying neither from the next.
  *       And the model has to confirm, for that one event, that acknowledging it is not what would destroy the last
