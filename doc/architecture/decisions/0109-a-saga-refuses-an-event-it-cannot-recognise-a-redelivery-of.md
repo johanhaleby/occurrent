@@ -12,11 +12,12 @@ Amended on 2026-09-18 by
 [ADR 138](0138-a-refused-saga-event-does-not-come-back-on-its-own.md). Read the Decision and the Consequences below
 against that record.
 
-> Two sentences here say a refused event is offered again, and they are wrong for different reasons. The Decision's
-> "A push feed offers it again, the saga refuses it again, and the application stays stuck on it" was wrong on the day
-> it was written. The Consequence's "A refused event is not acknowledged, so a broker will keep offering it" was true
-> then, and 0.34.0's broker bridges are what make it false. Whether a refused event comes back is the subscription
-> model's own business, and the saga only declines to acknowledge it.
+> Two sentences here say a refused event is offered again, and both skip the step where whatever fed the event
+> decides whether to acknowledge it. The Decision's "A push feed offers it again, the saga refuses it again, and the
+> application stays stuck on it" contradicted `PushSubscriptionModel`'s own javadoc, which already gave that decision
+> to the listener. The Consequence's "A refused event is not acknowledged, so a broker will keep offering it" assumed
+> a listener that does not acknowledge, and 0.34.0's parking bridge makes the other side a supported configuration.
+> The saga declines to acknowledge a refused event, and nothing here decides what happens to it next.
 
 ## Context
 

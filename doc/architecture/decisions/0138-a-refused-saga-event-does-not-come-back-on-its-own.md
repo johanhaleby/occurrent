@@ -16,27 +16,30 @@ it again, and the application stays stuck on it". The Consequences say "A refuse
 broker will keep offering it", hedged only by a queue with a dead-letter policy, meaning a separate destination for
 messages that keep failing.
 
-The two are wrong for different reasons, which is why they are corrected here together rather than told as one
-story. An ADR records what was decided and when, so an amendment that flattens a claim that was false from the start
-into a claim that a later release falsified would itself be inaccurate.
+Both skip the same step, that whatever fed the event decides whether to acknowledge it, and they overstate by
+different amounts. They are corrected here together rather than as one story, because an ADR records what was
+decided and when, and running the two into a single explanation would itself be inaccurate.
 
-**The Decision's sentence was wrong on the day it was written.** `PushSubscriptionModel`'s javadoc has said since
-`2df6988a5` of 2026-07-19 that a handler exception propagates to the caller so the listener can decide whether to
-acknowledge or redeliver. That is nearly three weeks before this decision was taken in `3a2cca842` on 2026-08-07, the
-javadoc is the one the code implements, and the model still behaved that way at `occurrent-0.33.0`, so nothing
-released since falsified the sentence. It was never true. A test that asks whether later work touched a claim can
-only find claims later work falsified, which is why three passes over this family of surfaces left the sentence
-alone.
+**The Decision's sentence contradicted a documented contract.** It names a push feed and says that feed offers the
+event again. `PushSubscriptionModel`'s javadoc has said since `2df6988a5` of 2026-07-19 that a handler exception
+propagates to the caller so the listener can decide whether to acknowledge or redeliver, and it still said so at
+`occurrent-0.32.0`, the release this decision shipped in. So the sentence asserted an outcome about the one model it
+names, against that model's own contract, nineteen days after the contract was written. A test that asks whether
+later work touched a claim can only find claims later work falsified, which is why three passes over this family of
+surfaces left it alone.
 
-**The Consequence's sentence was true when it was written.** No consume-side bridge existed on 2026-08-07.
-`43af19f9f` added the transport-neutral broker API on 2026-08-18, `DeliveryFailurePolicy` among it, and the first
-bridge that applies the policy is the RabbitMQ one in `bf72e48d0` a day after that. A bridge configured with
-`DeliveryFailurePolicy.PARK` republishes a refused event to the parking destination and acknowledges it out of the
-source queue once that republish is confirmed, so on such a bridge the event is normally gone from the source on the
-first refusal. A park
-publish that fails redelivers the original instead, which is one way `PARK` can still end in a redelivery. The
-dead-letter hedge does not cover parking, because dead-lettering is the broker's own policy and parking is the
-bridge's.
+**The Consequence's sentence assumed a listener that does not acknowledge, and did not say so.** It says a refused
+event is not acknowledged, which is true of the saga, and infers that a broker will keep offering it, which needs
+whatever fed the event to leave it unacknowledged as well. The sentence needed a condition it did not state, since
+the same javadoc gave the listener that choice.
+
+0.34.0 makes it wrong in a stronger way. Occurrent now ships a consume-side bridge, `43af19f9f` adding the
+transport-neutral API on 2026-08-18 and `bf72e48d0` the first RabbitMQ bridge a day later, and under
+`DeliveryFailurePolicy.PARK` that bridge republishes a refused event to the parking destination and acknowledges it
+out of the source queue once the republish is confirmed. The acknowledging side is now a configuration Occurrent
+supplies and documents rather than something a listener might happen to do. A park publish that fails redelivers the
+original instead, which is one way `PARK` can still end in a redelivery. The dead-letter hedge does not cover
+parking, because dead-lettering is the broker's own policy and parking is the bridge's.
 
 ## Decision
 
