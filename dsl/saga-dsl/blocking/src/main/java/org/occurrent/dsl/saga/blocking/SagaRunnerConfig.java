@@ -127,8 +127,9 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
 
     /**
      * A copy of this configuration with a different quarantine budget, or with {@code null} to never quarantine. Pass
-     * {@code null} only when you would rather one faulty instance kept blocking every other instance of the same saga
-     * than have it suspended, since that is the behaviour it restores.
+     * {@code null} only when you would rather one faulty instance kept blocking every other instance of the same saga,
+     * for as long as the subscription model offers the failed event again, than have it suspended. That is the
+     * behaviour it restores.
      */
     public SagaRunnerConfig withQuarantineAfter(@Nullable Duration quarantineAfter) {
         return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter);

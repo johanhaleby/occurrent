@@ -775,8 +775,9 @@ case SagaEnvelope(String sagaId, var state, var status, long version, var timers
 
 **`SagaRunnerConfig` gains a fifth record component, `quarantineAfter`.** The four-argument form stays as a
 constructor that defaults it to five minutes, so a call site written against 0.33.0 compiles unchanged and gets the
-new behaviour. A record pattern over `SagaRunnerConfig` has to name the fifth component. Pass `null` to keep the
-0.33.0 behaviour of retrying forever.
+new behaviour. A record pattern over `SagaRunnerConfig` has to name the fifth component. Pass `null` to never
+quarantine, so the saga keeps rethrowing for as long as the subscription model offers the event again, which is the
+0.33.0 behaviour.
 
 ```java
 SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(null);
