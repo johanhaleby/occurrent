@@ -717,7 +717,7 @@ public class OccurrentProperties {
 
         /**
          * How long one saga instance may keep failing before it is quarantined and the subscription moves past the
-         * event it stopped on, so the saga's other instances stop waiting behind it. The clock belongs to the instance
+         * event it stopped on, so the saga's other instances keep going. The clock belongs to the instance
          * rather than to one event, so an instance where two events both fail keeps the instant it started failing and
          * a second event can reach the budget on its first failure. Defaults to five minutes, matching
          * {@code SagaRunnerConfig.defaults()}.

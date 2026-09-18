@@ -31,8 +31,8 @@ import java.util.Optional;
  * <p>
  * This is the minimal contract the executor needs. Two of its six methods are {@code default}, and both are about
  * reading and writing an instance without its application state, which is how the executor quarantines an instance
- * whose state no longer decodes. A store inherits them and works, and a store that overrides them also stops such an
- * instance from blocking the saga's other instances.
+ * whose state no longer decodes. A store inherits them and works, and a store that overrides them also lets such an
+ * instance reach its budget and be quarantined.
  * <p>
  * Observing instances is an optional capability layered on top. A store that also implements
  * {@link SagaStateStoreQueries} can be enumerated, which is what a progress view or a stuck-instance sweep needs. A
@@ -54,8 +54,8 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * suspend is very often the instance whose state no longer decodes. A renamed event class, a converter change, or
      * state written by a version of the application nobody runs any more all leave an instance that throws on
      * {@link #find(String)} while the rest of its document reads perfectly well. Such an instance used to keep failing
-     * without ever recording that it was failing, so it never reached its budget and went on blocking every other
-     * instance of the saga.
+     * without ever recording that it was failing, so it never reached its budget, and wherever the subscription model
+     * offered the failing event again it went on blocking every other instance of the saga.
      * <p>
      * A caller therefore must not read {@link SagaEnvelope#state()} off the result. A store that answers without
      * decoding leaves it {@code null} even for a healthy instance, exactly as a
@@ -64,8 +64,8 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * populated either way. Use {@link #find(String)} when the state itself is wanted.
      * <p>
      * The default reads the whole instance through {@link #find(String)}, so a store written against 0.33.0 keeps
-     * compiling and keeps behaving as it did, which means it also keeps the blocking behaviour for an instance it
-     * cannot decode. The executor cannot read an instance without its state on a store that only reads it whole.
+     * compiling and keeps behaving as it did, which means an instance it cannot decode still never reaches its
+     * budget. The executor cannot read an instance without its state on a store that only reads it whole.
      * <p>
      * A store that overrides this must override {@link #compareAndSaveWithoutState(String, SagaEnvelope, long)} too.
      * The executor saves what it read, so a store that hands back a {@code null} state here and then writes the

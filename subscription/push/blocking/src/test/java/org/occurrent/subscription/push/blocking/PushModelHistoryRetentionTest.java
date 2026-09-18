@@ -42,7 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * What each push model answers when asked whether it still holds an event, which is what a saga asks before it stops
- * retrying one. The catch-up model is the reason the question is asked per event rather than once for the model.
+ * rethrowing one. The catch-up model is the reason the question is asked per event rather than once for the model.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class PushModelHistoryRetentionTest {
@@ -50,7 +50,7 @@ class PushModelHistoryRetentionTest {
     /**
      * A bare feed is handed events from outside and stores none of them, so it cannot answer at all and does not
      * implement the capability. This is the saga configured with {@code catchup = NONE}, and it is why such a saga
-     * keeps the blocking behaviour it had before 0.34.0.
+     * keeps the pre-0.34.0 behaviour of never quarantining.
      */
     @Test
     void a_push_feed_on_its_own_cannot_say_and_declares_nothing() {
@@ -95,7 +95,7 @@ class PushModelHistoryRetentionTest {
 
     /**
      * An event with no id cannot be looked up, and an unanswerable question reads as a no rather than as an exception
-     * reaching the saga, so an instance keeps blocking instead of losing its event.
+     * reaching the saga, so an instance goes on failing instead of losing its event.
      */
     @Test
     void an_event_that_cannot_be_looked_up_answers_no() {
@@ -126,8 +126,8 @@ class PushModelHistoryRetentionTest {
 
     /**
      * The path that decides what a store outage costs. A reader that throws cannot say whether the event is there, and
-     * an unanswerable question has to read as a no, so the instance keeps blocking rather than acknowledging an event
-     * that may be the only copy. Asserted rather than assumed, because this branch runs exactly when something is
+     * an unanswerable question has to read as a no, so the instance goes on failing rather than acknowledging an
+     * event that may be the only copy. Asserted rather than assumed, because this branch runs exactly when something is
      * already wrong and nothing else would catch it going the other way.
      */
     @Test

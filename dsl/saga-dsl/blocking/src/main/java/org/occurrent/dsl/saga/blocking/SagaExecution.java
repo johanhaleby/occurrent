@@ -50,11 +50,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link SagaExecutionSupport} step, dispatches commands before saving (at-least-once), and retries a lost compare-and-set
  * save. Timeouts re-enter the same path, fenced so a timer no longer present on the (reloaded) envelope is skipped.
  * <p>
- * An instance that keeps failing is quarantined rather than retried forever. Its first failure records when the
- * failing started and rethrows, which is what every version up to 0.33.0 did. Once the instance has been failing for
- * at least {@link SagaRunnerConfig#quarantineAfter()}, it is marked
+ * An instance that keeps failing is quarantined rather than left to fail for as long as the subscription model
+ * offers the event again. Its first failure records when the failing started and rethrows, which is what every
+ * version up to 0.33.0 did. Once the instance has been failing for at least
+ * {@link SagaRunnerConfig#quarantineAfter()}, it is marked
  * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} on whichever event it is failing on then and this class returns
- * normally, so the subscription acknowledges that event and the saga's other instances stop waiting behind it.
+ * normally, so the subscription acknowledges that event and the saga's other instances keep going.
  * <p>
  * Every step from reading the CloudEvent to saving the result runs inside one {@code try} that catches
  * {@link Throwable}, so once an event has reached an instance, what failed and where it was thrown decide nothing
@@ -71,7 +72,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * The quarantine decision reads and writes the instance without its application state, through
  * {@link SagaStateStore#findWithoutState} and {@link SagaStateStore#compareAndSaveWithoutState}. An instance whose state
  * no longer decodes is one of the instances most in need of quarantining, so deciding on a read that throws on it would
- * leave it blocking the saga forever. A store that only reads an instance whole keeps that behaviour, because nothing
+ * leave it failing on every delivery, blocking the saga's other instances wherever the subscription model offers the
+ * failing event again. A store that only reads an instance whole keeps that behaviour, because nothing
  * here can read an instance it can only hand over whole.
  * <p>
  * Dispatch amplification: commands are dispatched before the save, and a lost compare-and-set retries the whole step, so a
@@ -284,7 +286,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * <p>
      * The failure is a {@link Throwable} because the instance is stuck on it either way. An {@code Error} out of a
      * reaction stops the instance making progress exactly as a {@code RuntimeException} does, and an instance stopped by
-     * one blocks the saga's other instances for exactly as long.
+     * one blocks the saga's other instances for exactly as long wherever the subscription model offers the event
+     * again.
      * <p>
      * Only the event path calls this, and it is not because the timer path has nothing to gain from it. A timeout
      * has no redelivery key of its own, so there is nothing to quarantine it on.
@@ -318,12 +321,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 // reporting the budget as the elapsed time understates how long the instance has been stuck.
                 Duration failingFor = failingFor(record, now);
                 // Checked before the write, not after, because quarantining returns normally and that acknowledges the
-                // event to whatever fed it. An unconfirmed answer is treated as a no, so the instance keeps blocking
-                // and the exception propagates as it did before 0.34.0. Nothing is saved, which leaves the failure
-                // record the earlier attempts wrote and lets the next redelivery ask again. Retention is rechecked
-                // every time so a store coming back is noticed, while the warning is said once per instance.
+                // event to whatever fed it. An unconfirmed answer is treated as a no, so the exception propagates as
+                // it did before 0.34.0 and the instance goes on failing wherever the model offers the event again.
+                // Nothing is saved, which leaves the failure record the earlier attempts wrote and lets the next
+                // redelivery ask again. Retention is rechecked every time so a store coming back is noticed, while
+                // the warning is said once per instance.
                 if (firstRefusalForThisInstance) {
-                    log.warn("Saga '{}' instance '{}' has been failing for {}, which is past its budget of {}, and is stopped on the event '{}', and it is not quarantined, because the subscription could not confirm that acknowledging the event is safe to do. Either acknowledging is what would drop the only copy of it, or the check could not be completed, and quarantining acknowledges the event. This instance keeps blocking the saga's other instances instead. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+                    log.warn("Saga '{}' instance '{}' has been failing for {}, which is past its budget of {}, and is stopped on the event '{}', and it is not quarantined, because the subscription could not confirm that acknowledging the event is safe to do. Either acknowledging is what would drop the only copy of it, or the check could not be completed, and quarantining acknowledges the event. This instance goes on failing instead, and it blocks the saga's other instances for as long as the subscription model offers the event again. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                             subscriptionId, sagaId, failingFor, quarantineAfter, meta.redeliveryKey(), failure);
                 }
                 return false;
@@ -341,11 +345,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return false;
             }
             if (!record.quarantined()) {
-                log.warn("Saga '{}' instance '{}' failed on the event '{}' and is being retried by the subscription. It is quarantined once it has been failing for {}, measured from this first failure rather than from any one event.",
+                log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is the subscription model's to decide, and where it is offered again, the instance is quarantined once it has been failing for {}, measured from this first failure rather than from any one event.",
                         subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                 return false;
             }
-            log.error("Saga '{}' instance '{}' has been failing for {}, past its budget of {}, and is now QUARANTINED, stopped on the event '{}'. The time is how long the instance has been failing, which can be longer than this one event has. It skips every further event and fires no timers, so the saga's other instances are no longer blocked behind it. Find it with findByStatus(QUARANTINED, ..).",
+            log.error("Saga '{}' instance '{}' has been failing for {}, past its budget of {}, and is now QUARANTINED, stopped on the event '{}'. The time is how long the instance has been failing, which can be longer than this one event has. It skips every further event and fires no timers, so the saga's other instances keep going. Find it with findByStatus(QUARANTINED, ..).",
                     subscriptionId, sagaId, failingFor(record, now), quarantineAfter, meta.redeliveryKey(), failure);
             return true;
         } catch (Throwable storeFailure) {

@@ -343,7 +343,7 @@ class SagaQuarantineTest {
 
         /**
          * A model whose guarantee is wrong is caught on the event it is about to acknowledge. Quarantine was enabled
-         * on the guarantee, the check disagreed for this event, and the instance keeps blocking rather than having
+         * on the guarantee, the check disagreed for this event, and the instance goes on failing rather than having
          * that event acknowledged away. Distinct from the feed that declares nothing, since here quarantine was
          * available and was refused on the event.
          */
@@ -910,7 +910,7 @@ class SagaQuarantineTest {
         }
 
         /**
-         * An event carrying no redelivery key still blocks the saga, so it is still said, naming the event by its
+         * An event carrying no redelivery key is refused just the same, so it is still said, naming the event by its
          * CloudEvent id and source, which stay the same from one delivery to the next.
          */
         @Test

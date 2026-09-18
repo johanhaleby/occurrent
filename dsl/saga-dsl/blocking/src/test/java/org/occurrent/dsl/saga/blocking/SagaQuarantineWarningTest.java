@@ -130,7 +130,7 @@ class SagaQuarantineWarningTest {
     /**
      * Answering for one event is not enough to quarantine on, because a quarantined instance skips everything
      * addressed to it afterwards and skipping acknowledges. A model holding only some of what it delivers could have
-     * one of those later events as its only copy, so it keeps the blocking behaviour and is told why.
+     * one of those later events as its only copy, so quarantine stays off for it and it is told why.
      */
     @Test
     void switches_quarantine_off_when_the_model_cannot_guarantee_it_holds_everything() {
@@ -145,7 +145,7 @@ class SagaQuarantineWarningTest {
     }
 
     /**
-     * A saga that switched the budget off asked for the blocking behaviour, so it has given nothing up and is not
+     * A saga that switched the budget off asked for the pre-0.34.0 behaviour, so it has given nothing up and is not
      * warned. Without this the message would fire for every saga that deliberately opted out.
      */
     @Test
