@@ -105,8 +105,10 @@ import static java.util.Objects.requireNonNull;
  *       <p>
  *       Past the budget, what happens turns on whether the event reached an instance at all. An event the saga
  *       correlated is charged to that instance, which becomes
- *       {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} on whichever event it is failing on then. The executor
- *       stops rethrowing and the subscription moves past the event so the saga's other instances keep going. The budget
+ *       {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} on whichever event it is failing on then, where the
+ *       four conditions above hold and the write recording it succeeds. The executor then stops rethrowing and the
+ *       subscription moves past the event so the saga's other instances keep going. Where that write loses its
+ *       compare-and-set, or the store fails, the instance stays active and the next failing delivery asks again. The budget
  *       is the instance's rather than one event's, so an instance where two events both fail keeps the instant it
  *       started failing and the record names whichever event it stopped on. The quarantined instance stops there, and
  *       0.34.0 has no operation that brings it back, so {@code SagaStateStore.delete(sagaId)} is how you abandon it.

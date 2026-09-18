@@ -24,16 +24,16 @@ into a claim that a later release falsified would itself be inaccurate.
 `2df6988a5` of 2026-07-19 that a handler exception propagates to the caller so the listener can decide whether to
 acknowledge or redeliver. That is nearly three weeks before this decision was taken in `3a2cca842` on 2026-08-07, the
 javadoc is the one the code implements, and the model still behaved that way at `occurrent-0.33.0`, so nothing
-released since falsified the sentence. It was never true. A test that asks
-whether later work touched a claim can only find claims later work falsified, which is why three passes over this
-family of surfaces left the sentence alone.
+released since falsified the sentence. It was never true. A test that asks whether later work touched a claim can
+only find claims later work falsified, which is why three passes over this family of surfaces left the sentence
+alone.
 
 **The Consequence's sentence was true when it was written.** No consume-side bridge existed on 2026-08-07.
 `43af19f9f` added the transport-neutral broker API on 2026-08-18, `DeliveryFailurePolicy` among it, and the first
 bridge that applies the policy is the RabbitMQ one in `bf72e48d0` a day after that. A bridge configured with
-`DeliveryFailurePolicy.PARK`
-republishes a refused event to the parking destination and acknowledges it out of the source queue once that
-republish is confirmed, so on such a bridge the event is normally gone from the source on the first refusal. A park
+`DeliveryFailurePolicy.PARK` republishes a refused event to the parking destination and acknowledges it out of the
+source queue once that republish is confirmed, so on such a bridge the event is normally gone from the source on the
+first refusal. A park
 publish that fails redelivers the original instead, which is one way `PARK` can still end in a redelivery. The
 dead-letter hedge does not cover parking, because dead-lettering is the broker's own policy and parking is the
 bridge's.
@@ -44,12 +44,15 @@ bridge's.
 model.** A `PushSubscriptionModel` hands the acknowledge-or-redeliver decision to the listener that called `accept`,
 and on a consume-side broker bridge `DeliveryFailurePolicy` is where the choice is configured. For as long as the
 model keeps offering the event, the saga refuses it again and the application stays stuck on it, which is what
-ADR 109 described.
-Where it is not, the saga still issues no duplicate commands, and that is the part the decision owns either way.
+ADR 109 described. Where it is not, the saga still issues no duplicate commands, and that is the part the decision
+owns either way.
 
 This is the same rule [#1076](https://github.com/johanhaleby/occurrent/issues/1076) settled on for the 0.34.0 saga
-surfaces, applied to the one record those passes ruled out of scope. No surface says a refused or failing delivery
-comes back, or blocks what is behind it, without that depending on the subscription model offering it again.
+surfaces, applied to the one record those passes ruled out of scope. No public saga API and no saga documentation
+says a refused or failing delivery comes back, or blocks what is behind it, without that depending on the
+subscription model offering it again. Internal comments, test comments and `PushSubscriptionModel`'s own fan-out
+justification still do, and [#1080](https://github.com/johanhaleby/occurrent/issues/1080) on milestone 0.35.0 holds
+them.
 
 ## Consequences
 

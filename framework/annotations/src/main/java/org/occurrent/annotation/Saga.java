@@ -64,8 +64,11 @@ import java.lang.annotation.*;
  * the dispatcher and the store alike, with {@code OutOfMemoryError} the one exclusion, since that says the JVM ran out
  * of heap rather than anything about the saga's work.
  * <p>
- * Only an event the saga routed to an instance can end the wait. That instance is marked {@code QUARANTINED} on
- * whichever event it stopped on, and the subscription moves past the event so the saga's other instances keep going.
+ * Only an event the saga routed to an instance can end the wait by quarantining it. That instance is marked
+ * {@code QUARANTINED} on whichever event it stopped on, where the four conditions above hold and the write recording
+ * it succeeds, and the subscription then moves past the event so the saga's other instances keep going. Where that
+ * write loses its compare-and-set, or the store fails, the instance stays active and the next failing delivery asks
+ * again.
  * An event it could not route, because the converter or the id extractor threw, is refused on every redelivery
  * instead, because acknowledging it would lose it. Where the subscription offers it again, this saga waits behind it
  * until the converter or the id extractor is repaired, and the refusal is logged once per interval naming the event, the
