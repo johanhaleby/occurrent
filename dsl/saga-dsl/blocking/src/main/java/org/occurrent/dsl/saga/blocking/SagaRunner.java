@@ -79,9 +79,9 @@ import static java.util.Objects.requireNonNull;
  * reaction or a dispatch throws.
  * <ul>
  *   <li><strong>Event path.</strong> A failure (including a {@link SagaConcurrencyException} once the retries are
- *       exhausted) propagates to the subscription model, which redelivers the event and retries the whole step,
- *       unless it is a broker bridge that parks the delivery instead of redelivering it, which moves the event to its
- *       parking destination and goes on with the next one. Either way the event is not lost. The subscription is a
+ *       exhausted) propagates to the subscription model, and the whole step is retried wherever that model offers
+ *       the event again. Whether it does is the model's own business. A push feed lets the listener decide, and on
+ *       a consume-side broker bridge the choice is set with {@code DeliveryFailurePolicy}. The subscription is a
  *       single ordered channel shared by every instance this saga handles, so while one event keeps being redelivered
  *       and failing the events queued behind it wait. Four things have to hold for that wait to end at
  *       {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. The budget has to be set. The
@@ -91,8 +91,8 @@ import static java.util.Objects.requireNonNull;
  *       copy of it, which catches a guarantee made wrongly before the event is acknowledged away. That is a question
  *       about what the acknowledgement costs rather than about what the source holds at this instant, so it answers yes
  *       for an event an operator has already erased, since saying no would strand an instance on an event nobody can
- *       supply. Where any of those is missing the wait is the one every version
- *       up to 0.33.0 had, which is unbounded.
+ *       supply. Where any of those is missing nothing bounds the wait, as in every version
+ *       up to 0.33.0, so it runs for as long as the model offers the event again.
  *       <p>
  *       What is <em>not</em> among them is what failed or where it was thrown, once the saga has worked out which
  *       instance the event belongs to. Every failure from there counts, from the redelivery check, {@code evolve},
@@ -116,15 +116,16 @@ import static java.util.Objects.requireNonNull;
  *       refused on every redelivery instead, as every version up to 0.33.0 did. Where the subscription offers it
  *       again, every instance of this saga waits behind it while other sagas and subscriptions keep going, and once
  *       the converter or the id extractor is repaired the event is applied in the order it was written, with nothing
- *       to feed again. A broker bridge that parks the delivery instead of redelivering it moves the event to its
- *       parking destination and goes on with the next one, so a repaired converter never sees it there. The first
+ *       to feed again. Whether it is offered again is the subscription model's to decide, and
+ *       {@code DeliveryFailurePolicy} is where a consume-side broker bridge's choice is configured. The first
  *       failure is logged at WARN and, after that, at ERROR once per {@code quarantineAfter} when it is set or a
  *       fixed five-minute default when it is not, naming the event and the exception that stopped it, so that ERROR
  *       fires for as long as the event keeps being offered, never on a
- *       subscription model that drops a refused delivery instead of redelivering it, which gets only the first WARN.
+ *       subscription model that does not offer a refused delivery again, which gets only the first WARN.
  *       <p>
- *       Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of blocking indefinitely instead,
- *       which is also what a subscription model that does not guarantee it holds every event it delivers gets, since
+ *       Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of never quarantining instead, so
+ *       the saga keeps refusing the event for as long as the model offers it again. That is also what a subscription
+ *       model that does not guarantee it holds every event it delivers gets, since
  *       the event could not be obtained again there.</li>
  *   <li><strong>Timer path.</strong> A failing timeout is caught per instance, logged, and left due, so it stays
  *       eligible for a later poll to retry. Which poll is not promised, for the reason below. It does not propagate

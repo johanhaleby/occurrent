@@ -40,7 +40,9 @@ import static java.util.Objects.requireNonNull;
  * @param redeliveryDetection  what to do with an event the runner cannot recognise a redelivery of
  * @param quarantineAfter      how long one instance may keep failing before it is quarantined on whichever event it is
  *                             failing on when the budget runs out, so that the subscription is allowed past that event,
- *                             or {@code null} to keep rethrowing forever, which is what every version up to 0.33.0 did.
+ *                             or {@code null} to never quarantine, so the saga keeps rethrowing for as long as the
+ *                             subscription model offers the event again, which is what every version up to 0.33.0
+ *                             did.
  *                             The clock belongs to the instance rather than to one event, so a second event that starts
  *                             failing inherits the elapsed time instead of restarting the budget. It covers everything
  *                             after the saga has worked out which instance the event belongs to, through to the store
@@ -51,8 +53,8 @@ import static java.util.Objects.requireNonNull;
  *                             refused on every redelivery regardless of this setting, and the repeated ERROR that
  *                             refusal logs is paced on this budget when it is set and on a fixed five-minute default
  *                             when it is not, so that ERROR still fires on a subscription model this switches
- *                             quarantine off for. A runner
- *                             ignores this and keeps rethrowing unless its subscription model guarantees that it holds
+ *                             quarantine off for, while that model keeps offering the event. A runner
+ *                             ignores this and never quarantines unless its subscription model guarantees that it holds
  *                             every event it delivers, since a quarantined instance skips everything addressed to it
  *                             afterwards and skipping acknowledges. Being able to answer for one event is not enough on
  *                             its own, though the event an instance stops on is checked as well before it is
@@ -67,7 +69,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
         if (quarantineAfter != null && (quarantineAfter.isZero() || quarantineAfter.isNegative())) {
             // Zero is refused rather than read as "quarantine on the first failure", because the Spring property reads
             // zero as never, and one literal meaning opposite things on the two paths is worse than refusing it here.
-            throw new IllegalArgumentException("quarantineAfter must be positive, or null to keep rethrowing forever");
+            throw new IllegalArgumentException("quarantineAfter must be positive, or null to never quarantine");
         }
         if (timerPollInterval.isZero() || timerPollInterval.isNegative()) {
             throw new IllegalArgumentException("timerPollInterval must be positive");
@@ -125,8 +127,9 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
 
     /**
      * A copy of this configuration with a different quarantine budget, or with {@code null} to never quarantine. Pass
-     * {@code null} only when you would rather one faulty instance kept blocking every other instance of the same saga
-     * than have it suspended, since that is the behaviour it restores.
+     * {@code null} only when you would rather one faulty instance kept blocking every other instance of the same saga,
+     * for as long as the subscription model offers the failed event again, than have it suspended. That is the
+     * behaviour it restores.
      */
     public SagaRunnerConfig withQuarantineAfter(@Nullable Duration quarantineAfter) {
         return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, redeliveryDetection, quarantineAfter);

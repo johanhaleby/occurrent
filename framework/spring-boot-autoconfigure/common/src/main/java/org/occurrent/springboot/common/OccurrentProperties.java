@@ -728,8 +728,9 @@ public class OccurrentProperties {
          * before the saga can work out which instance it belongs to is never let past, because acknowledging it would
          * lose it. It is refused on every redelivery, and this only sets how often that is logged.
          * <p>
-         * Set it to zero to keep the pre-0.34.0 behaviour, where the event is retried forever and every other instance
-         * of that saga waits behind it. A negative value is rejected at startup rather than read as zero. Quarantine is switched off on its own,
+         * Set it to zero to keep the pre-0.34.0 behaviour, where the saga is never quarantined, so every other
+         * instance of that saga waits behind the event for as long as the subscription model offers it again. A
+         * negative value is rejected at startup rather than read as zero. Quarantine is switched off on its own,
          * with a warning at startup, unless the subscription model guarantees that it holds every event it delivers,
          * because a quarantined instance skips everything addressed to it afterwards and skipping acknowledges. A
          * model that can answer for one event but cannot make that guarantee gets no quarantine either. The event an

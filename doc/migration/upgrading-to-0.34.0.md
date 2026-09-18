@@ -661,12 +661,15 @@ instance back out of quarantine.
 One case has no instance to quarantine, and it keeps the 0.33.0 behaviour. An event whose converter or id extractor
 throws never reaches an instance, so the subscription is never let past it, whatever the budget. It may still belong to
 an instance, and once the subscription moved past it the next event for that instance would mark the instance as
-having handled it, so the event would be lost. Every instance of that saga waits behind it instead, and the first
+having handled it, so the event would be lost. Every instance of that saga waits behind it instead, for as long as the
+subscription model offers it again, and the first
 failure is logged at `WARN` and after that at `ERROR` once per interval, naming the event and what stopped it. That
 interval is the quarantine budget when the saga has one, and a fixed five-minute default when it does not, so the
 `ERROR` still repeats on a subscription model this saga cannot quarantine anything on, for as long as that model keeps
-redelivering the event. A broker bridge that parks the delivery instead of redelivering it gets only the first `WARN`.
-Repair the converter or the id extractor and the saga applies the event in the order it was written.
+offering the event. A model that does not offer a refused delivery again gets only the first `WARN`, and
+`DeliveryFailurePolicy` is where a consume-side broker bridge's choice is configured.
+Where the event is offered again, repair the converter or the id extractor and the saga applies it in the order it was
+written.
 
 A quarantined instance receives no further events and fires no timers, and its redelivery watermarks stop moving, so
 nothing it skipped is recorded as handled. What it stopped on stays on the record instead of being lost.
@@ -772,8 +775,9 @@ case SagaEnvelope(String sagaId, var state, var status, long version, var timers
 
 **`SagaRunnerConfig` gains a fifth record component, `quarantineAfter`.** The four-argument form stays as a
 constructor that defaults it to five minutes, so a call site written against 0.33.0 compiles unchanged and gets the
-new behaviour. A record pattern over `SagaRunnerConfig` has to name the fifth component. Pass `null` to keep the
-0.33.0 behaviour of retrying forever.
+new behaviour. A record pattern over `SagaRunnerConfig` has to name the fifth component. Pass `null` to never
+quarantine, so the saga keeps rethrowing for as long as the subscription model offers the event again, which is the
+0.33.0 behaviour.
 
 ```java
 SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(null);

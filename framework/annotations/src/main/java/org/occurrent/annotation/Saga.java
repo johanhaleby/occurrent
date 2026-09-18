@@ -43,17 +43,20 @@ import java.lang.annotation.*;
  * The method may live on any Spring bean: a {@code @Bean} in a {@code @Configuration}, or a method on a
  * {@code @Component}. This is a blocking-stack feature, the reactive starter does not register {@code @Saga}.
  * <p>
- * The two input paths fail differently. A failing event propagates to the subscription, which redelivers the event and
- * retries the whole step, unless a broker bridge parks the delivery instead of redelivering it, which moves the event
- * to its parking destination and goes on with the next one. That subscription is a single ordered channel shared by
- * every instance of this saga, so while one event keeps being redelivered and failing the events behind it wait, which
- * is head-of-line blocking.
+ * The two input paths fail differently. A failing event propagates to the subscription, and the whole step is retried
+ * wherever the subscription model offers the event again. Whether it does is that model's own business. A push feed
+ * lets the listener decide, and on a consume-side broker bridge the choice is set with
+ * {@code DeliveryFailurePolicy}.
+ * That subscription is a single ordered
+ * channel shared by every instance of this saga, so while one event keeps being redelivered and failing the events
+ * behind it wait, which is head-of-line blocking.
  * <p>
  * Four things have to hold for that wait to end at the quarantine budget, five minutes by default and set by
  * {@code occurrent.saga.quarantine-after} on this path. The budget has to be set. The subscription model has to
  * guarantee it holds every event it delivers. The event has to arrive with a stream id and version or a global position.
  * And the model has to confirm, for that one event, that acknowledging it is not what would destroy the last copy of it.
- * Where any of them is missing the wait is the one every version up to 0.33.0 had, which is unbounded. Every failure
+ * Where any of them is missing nothing bounds the wait, as in every version up to 0.33.0, so it runs for as long as
+ * the subscription offers the event again. Every failure
  * after the saga has worked out which instance an event belongs to spends the budget, {@code evolve}, {@code react},
  * the dispatcher and the store alike, with {@code OutOfMemoryError} the one exclusion, since that says the JVM ran out
  * of heap rather than anything about the saga's work.
