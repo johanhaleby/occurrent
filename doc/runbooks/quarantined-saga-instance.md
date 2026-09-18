@@ -13,7 +13,7 @@ already have one.
 ## Why an instance stops
 
 A saga has one subscription and every instance of that saga is fed by it. When handling an event for one instance
-throws, the executor rethrows, and on a subscription model that redelivers the event the instance tries again. Usually that is
+throws, the executor rethrows, and on a subscription model that offers the event again the instance tries again. Usually that is
 the instance's `evolve`, its `react`, or its command dispatcher, and it can also be the read that loads the instance,
 which is how an instance whose state no longer decodes ends up here. Up to 0.33.0 that went on without limit, so one correlation id that could never make progress stopped every
 other correlation id behind it.
@@ -44,7 +44,7 @@ apply. What you get is a `WARN` from `SagaExecution` on the first failure and an
 each saying the saga could not work out which instance the event belongs to and logging what stopped it. That interval
 is the quarantine budget when one is configured, and a fixed five-minute default when it is not, so this `ERROR` still
 fires on a subscription model this saga cannot quarantine anything on, such as a push feed, including one a broker
-bridge feeds, for as long as that model keeps redelivering the event. A model that does not offer a refused delivery again gets only the
+bridge feeds, for as long as that model keeps offering the event. A model that does not offer a refused delivery again gets only the
 first `WARN`, and `DeliveryFailurePolicy` is where a consume-side broker bridge's choice is configured. The event is named by its
 redelivery key when it has one, and otherwise by its CloudEvent
 id and source, which stay the same from one delivery of it to the next. Where the event is offered again, repair the
