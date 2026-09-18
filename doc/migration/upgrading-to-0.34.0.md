@@ -700,9 +700,9 @@ Protecting the failing event alone would leave the ones behind it unprotected.
 
 That is deliberate rather than an omission. Quarantining means returning normally, which acknowledges the event to
 whatever fed it, and on a push feed behind a broker bridge that is what stages the offset and moves past the record.
-The one copy this saga could ever be given would be gone at the moment of quarantine. Between an instance that goes
-on failing and an event this saga would be acknowledging away, this refuses the acknowledgement and leaves what
-happens to the event to whatever fed it.
+The one copy this saga could ever be given would be gone at the moment of quarantine. Between an instance left active
+and an event this saga would be acknowledging away, this refuses the acknowledgement and leaves what happens to the
+event to whatever fed it.
 
 **An event with no redelivery key is not quarantined either.** The failure record identifies the failing event by its
 stream id with its stream version, or by its global position when it has no stream metadata. An event with neither

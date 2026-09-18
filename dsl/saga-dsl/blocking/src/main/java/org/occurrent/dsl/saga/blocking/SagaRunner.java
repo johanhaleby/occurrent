@@ -311,7 +311,7 @@ public final class SagaRunner<E, C> {
      * Refusing it rather than warning about it is the point. Quarantining means returning normally, which acknowledges
      * the event to whatever fed it. On a feed that keeps nothing, a queue reached through a broker bridge, that is what
      * stages the offset and moves past the record, so the one copy this saga could ever be given is gone at the moment
-     * of quarantine. Between an instance that goes on failing and an event this saga would be acknowledging away,
+     * of quarantine. Between an instance left active and an event this saga would be acknowledging away,
      * this refuses the acknowledgement and leaves what happens to the event to whatever fed it. It says so at
      * startup rather than leaving it to be discovered during the incident.
      * <p>

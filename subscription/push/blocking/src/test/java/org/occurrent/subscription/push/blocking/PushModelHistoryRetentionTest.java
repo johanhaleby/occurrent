@@ -127,8 +127,8 @@ class PushModelHistoryRetentionTest {
 
     /**
      * The path that decides what a store outage costs. A reader that throws cannot say whether the event is there, and
-     * an unanswerable question has to read as a no, so the instance goes on failing rather than acknowledging an
-     * event that may be the only copy. Asserted rather than assumed, because this branch runs exactly when something is
+     * an unanswerable question has to read as a no, so the saga rethrows rather than acknowledging an event that may
+     * be the only copy. Asserted rather than assumed, because this branch runs exactly when something is
      * already wrong and nothing else would catch it going the other way.
      */
     @Test

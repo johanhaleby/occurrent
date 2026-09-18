@@ -78,9 +78,9 @@ When the budget elapses, the same logger logs an `ERROR` saying the instance is 
 one to alert on. It names two durations, how long the instance had been failing and then the budget, in that order.
 
 The third line is a `WARN` for the case where the budget elapsed and the instance was not quarantined, because the
-subscription could not confirm it still holds the failing event. That instance goes on failing, blocking the saga's
-other instances for as long as the subscription model offers the event again, and while that lasts it does not appear
-in step 1, so this line is the only thing that says so.
+subscription could not confirm it still holds the failing event. That instance stays `ACTIVE`, and it blocks the
+saga's other instances for as long as whatever feeds the subscription offers the event again. While that lasts it does
+not appear in step 1, so this line is the only thing that says so.
 
 That refusal is not final. The runner asks the subscription again on every redelivery, so a check that failed because
 a store was briefly unreachable can succeed later and quarantine the same instance then. That recovery needs a later
