@@ -230,8 +230,9 @@ implementation was what disagreed.
 
 The reasoning that a state change may unblock the event still holds wherever the subscription model offers the event
 again, since the event still clears the record when it succeeds. What the narrower rule removes is an unrelated
-input's ability to hide an event that never succeeds. So a lost compare-and-set on the failure write starts the budget over only for the first failure
-of an input, which has no record to keep, and a later one keeps the record the winning write left in place.
+input's ability to hide an event that never succeeds. So a lost compare-and-set on the failure write starts the budget
+over only for the first failure of an input, which has no record to keep, and a later one keeps the record the winning
+write left in place.
 
 **The failing side needs the same rule, and the paragraph above is where its absence showed.** A record survives an
 input it does not name, so a successful input cannot put the clock back. A *failing* input could, because the first
@@ -697,8 +698,8 @@ budget's default was never among them, it is decided at five minutes in Decision
    today's behaviour, which Decision point 3 states rather than implies.
 3. **A source that cannot promise to hold everything it delivers.** The behaviour stands, meaning the quarantine is
    refused and the instance keeps blocking wherever the subscription model offers the event again. The framing does
-   not. This ships as a narrowing of the isolation rule
-   rather than as its end state, and [#918](https://github.com/johanhaleby/occurrent/issues/918) on milestone 0.35.0
+   not. This ships as a narrowing of the isolation rule rather than as its end state,
+   and [#918](https://github.com/johanhaleby/occurrent/issues/918) on milestone 0.35.0
    is the recorded path to closing it. It reaches every push saga rather than only `catchup = NONE`, because being
    able to answer for the event an instance stopped on is not enough when the instance goes on to skip everything
    addressed to it afterwards. Decision point 7.

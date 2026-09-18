@@ -52,9 +52,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>
  * An instance that keeps failing can be quarantined rather than left to fail for as long as the subscription model
  * offers the event again. Its first failure records when the failing started and rethrows, which is what every
- * version up to 0.33.0 did. Once the instance has been failing for at least
+ * version up to 0.33.0 did. On the first delivery that fails once the instance has been failing for at least
  * {@link SagaRunnerConfig#quarantineAfter()}, it is marked
- * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} on whichever event it is failing on then and this class returns
+ * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} on that event and this class returns
  * normally, so the subscription acknowledges that event and the saga's other instances keep going.
  * <p>
  * Every step from reading the CloudEvent to saving the result runs inside one {@code try} that catches
