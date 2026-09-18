@@ -44,8 +44,9 @@ import java.lang.annotation.*;
  * {@code @Component}. This is a blocking-stack feature, the reactive starter does not register {@code @Saga}.
  * <p>
  * The two input paths fail differently. A failing event propagates to the subscription, and the whole step is retried
- * wherever the subscription model offers the event again. Whether it does is that model's own business, left to the
- * listener on a push feed and configured through {@code DeliveryFailurePolicy} on a consume-side broker bridge.
+ * wherever the subscription model offers the event again. Whether it does is that model's own business. A push feed
+ * lets the listener decide, and on a consume-side broker bridge the choice is set with
+ * {@code DeliveryFailurePolicy}.
  * That subscription is a single ordered
  * channel shared by every instance of this saga, so while one event keeps being redelivered and failing the events
  * behind it wait, which is head-of-line blocking.
