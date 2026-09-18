@@ -23,8 +23,8 @@ package org.occurrent.dsl.saga.blocking;
  * every redelivery.
  * <p>
  * It propagates to the subscription model rather than being logged, so the feed offers the event again, unless it comes
- * through a broker bridge that parks the delivery instead of redelivering it, which moves the event to its parking
- * destination. The fix is to forward the Occurrent CloudEvent extensions from the listener feeding the saga. A feed
+ * through a broker bridge whose {@code DeliveryFailurePolicy} does not
+ * redeliver. The fix is to forward the Occurrent CloudEvent extensions from the listener feeding the saga. A feed
  * that genuinely carries none of them, together with reactions that are idempotent, is what
  * {@link RedeliveryDetection#BEST_EFFORT} is for.
  */

@@ -13,7 +13,7 @@ already have one.
 ## Why an instance stops
 
 A saga has one subscription and every instance of that saga is fed by it. When handling an event for one instance
-throws, the executor rethrows, the subscription redelivers the event, and the instance tries again. Usually that is
+throws, the executor rethrows, and on a subscription model that redelivers the event the instance tries again. Usually that is
 the instance's `evolve`, its `react`, or its command dispatcher, and it can also be the read that loads the instance,
 which is how an instance whose state no longer decodes ends up here. Up to 0.33.0 that went on without limit, so one correlation id that could never make progress stopped every
 other correlation id behind it.
@@ -33,7 +33,8 @@ is what that costs.
 
 One thing that looks like a stuck instance is not one. The saga reads the CloudEvent and asks its id extractor which
 instance the event belongs to before anything else happens, so a converter or an id extractor that throws gives the
-runner no instance to stop. That event blocks every instance of the saga, and it keeps blocking them past the budget,
+runner no instance to stop. For as long as the subscription model offers that event again it blocks every instance of
+the saga, and it keeps blocking them past the budget,
 because the runner never lets the subscription past it. An event the saga cannot route may still belong to an
 instance, and once the subscription moved past it the next event for that instance would mark the instance as having
 handled it, so it could not be fed to the saga again.
@@ -43,10 +44,11 @@ apply. What you get is a `WARN` from `SagaExecution` on the first failure and an
 each saying the saga could not work out which instance the event belongs to and logging what stopped it. That interval
 is the quarantine budget when one is configured, and a fixed five-minute default when it is not, so this `ERROR` still
 fires on a subscription model this saga cannot quarantine anything on, such as a push feed or a broker bridge, for as
-long as that model keeps redelivering the event. A broker bridge that parks the delivery instead of redelivering it
-gets only the first `WARN`. The event is named by its redelivery key when it has one, and otherwise by its CloudEvent
-id and source, which stay the same from one delivery of it to the next. Repair the converter or the id extractor and
-the saga applies the event in the order it was written, with nothing to feed to it again. Other sagas and
+long as that model keeps redelivering the event. A model that does not offer a refused delivery again gets only the
+first `WARN`, and a consume-side broker bridge decides that by its `DeliveryFailurePolicy`. The event is named by its
+redelivery key when it has one, and otherwise by its CloudEvent
+id and source, which stay the same from one delivery of it to the next. Where the event is offered again, repair the
+converter or the id extractor and the saga applies it in the order it was written, with nothing to feed to it again. Other sagas and
 subscriptions keep going meanwhile.
 
 `OutOfMemoryError` is the other thing that never quarantines. It says the JVM ran out of heap while some instance held
@@ -297,8 +299,9 @@ Lower it when you would rather find out sooner and are willing to quarantine an 
 only briefly unavailable. Raise it when your dispatcher talks to something that is routinely down for longer than five
 minutes, so an instance is not quarantined for an outage that would have resolved.
 
-Turning quarantine off restores the 0.33.0 behaviour, where the event is retried forever and every other instance of
-that saga waits behind it. How you say that differs by path. Set the property to zero, and pass `null` for
+Turning quarantine off restores the 0.33.0 behaviour, where the saga never stops rethrowing, so every other instance
+of that saga waits behind the event for as long as the subscription model offers it again. How you say that differs by
+path. Set the property to zero, and pass `null` for
 `SagaRunnerConfig.quarantineAfter`. `Duration.ZERO` is refused there with an `IllegalArgumentException`, deliberately,
 so that one literal does not mean opposite things on the two paths.
 

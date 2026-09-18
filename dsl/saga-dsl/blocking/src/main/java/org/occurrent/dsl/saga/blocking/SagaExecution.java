@@ -60,7 +60,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link Throwable}, so once an event has reached an instance, what failed and where it was thrown decide nothing
  * about its budget. A delivery that fails before the saga can say which instance it
  * belongs to has no instance to charge and no instance to hold it, so it is never let past. It is refused on every
- * redelivery and the saga waits behind it. See {@link #letTheSubscriptionPast} for the conditions and
+ * redelivery, and where the subscription offers it again the saga waits behind it. See
+ * {@link #letTheSubscriptionPast} for the conditions and
  * {@link #refuseUnroutableDelivery} for why the unroutable delivery is the exception.
  * <p>
  * The budget is the instance's rather than one event's. An instance where two events both fail keeps the instant it
@@ -234,7 +235,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * for as long as the event keeps being offered, rather than every time the source offers it. That interval is the
      * quarantine budget when one is configured, and a fixed five-minute default otherwise, so an operator alerting on
      * ERROR is paged on a subscription model this saga cannot quarantine anything on, for as long as that model keeps
-     * offering the event. A broker bridge that parks the delivery instead of redelivering it gets only the first WARN.
+     * offering the event. A model that does not offer a refused delivery again gets only the first WARN.
      * See {@link #unroutableErrorInterval()} for why. An event carrying no redelivery key is named by its CloudEvent
      * id and source instead.
      */
@@ -246,7 +247,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         Instant now = clock.get();
         UnroutableDelivery existing = unroutableDeliveries.putIfAbsent(redeliveryKey, new UnroutableDelivery(now, now));
         if (existing == null) {
-            log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, so it refused the event rather than acknowledging it, because an event the saga cannot route may still belong to an instance and acknowledging it would lose it. Where the subscription offers the event again, every instance of this saga waits behind it until the converter or the id extractor can read it, and the event is then applied in the order it was written. A broker bridge that parks refused deliveries puts it in its parking destination instead.",
+            log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, so it refused the event rather than acknowledging it, because an event the saga cannot route may still belong to an instance and acknowledging it would lose it. Where the subscription offers the event again, every instance of this saga waits behind it until the converter or the id extractor can read it, and the event is then applied in the order it was written. Whether it is offered again is up to the subscription model, and a consume-side broker bridge decides that by its DeliveryFailurePolicy.",
                     subscriptionId, redeliveryKey, failure);
             return;
         }
@@ -265,7 +266,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * set, because nothing here ever quarantines an instance for it (see {@link #refuseUnroutableDelivery}), so pacing
      * this ERROR on that budget alone would leave a saga on a subscription model {@code SagaRunner} switches quarantine
      * off for, such as a push feed or a broker bridge, warning once and then staying silent for good even while that
-     * model keeps offering the event. A broker bridge that parks the delivery instead of redelivering it gets only the
+     * model keeps offering the event. A model that does not offer a refused delivery again gets only the
      * first WARN either way. Using the configured budget when there is one keeps one number for an operator to reason
      * about, and {@link SagaRunnerConfig#DEFAULT_QUARANTINE_AFTER} otherwise gives every other model the same
      * five-minute cadence rather than inventing a second tunable for it.
@@ -541,8 +542,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // against, so the reaction would run again and issue its commands again. Occurrent's own stored events always carry
     // one, so this means a feed that dropped the extensions on the way in, which it does for every event, not just this
     // one. Under REQUIRED that is refused rather than reacted to, so the throw reaches the subscription model. The feed
-    // offers the event again until somebody looks, unless it comes through a broker bridge that parks the delivery
-    // instead of redelivering it, which moves the event to its parking destination. Under BEST_EFFORT the duplication
+    // offers the event again until somebody looks, unless it comes through a broker bridge whose
+    // DeliveryFailurePolicy does not redeliver. Under BEST_EFFORT the duplication
     // is accepted knowingly, so the warning says so once per runner rather than once per event.
     private void refuseOrWarnIfRedeliveryCannotBeDetected(EventMeta meta) {
         if (meta.carriesRedeliveryKey()) {
