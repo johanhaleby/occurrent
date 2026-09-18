@@ -48,8 +48,8 @@ that an exception on the event path propagates to the subscription model, which 
 the whole step, and that the
 subscription is a single ordered channel shared by every instance the saga handles, so while one event keeps being
 redelivered and failing the events behind it wait. One instance parked on a gone step is what holds that channel. A
-consume-side broker bridge sends the failed delivery through its `DeliveryFailurePolicy` instead, and a bridge whose
-policy does not redeliver never holds that channel. That is not a new failure mode this decision introduces, it is the same accepted
+consume-side broker bridge need not hold it, since `DeliveryFailurePolicy` is where its choice of what to do with a
+failed delivery is configured. That is not a new failure mode this decision introduces, it is the same accepted
 architecture ADR 123's own refusal already lives with. The timer path is different. `SagaExecution.pollTimers`
 catches a failing timeout per instance, logs it, and leaves it due for the next poll.
 
@@ -73,8 +73,8 @@ record no longer asserts is that the wait always runs until somebody intervenes.
 
 **Amended for [#1071](https://github.com/johanhaleby/occurrent/issues/1071).** The paragraph attributed an
 unconditional redelivery to `SagaRunner`'s javadoc. A consume-side broker bridge sends a failed delivery through its
-`DeliveryFailurePolicy`, and only the redelivering choice offers the event again. The held channel is the cost this
-record compares the two call sites on, and a bridge whose policy does not redeliver never pays it.
+`DeliveryFailurePolicy`, so a redelivery is not something this record can assume. The held channel is the cost this
+record compares the two call sites on, and a bridge need not pay it.
 
 **The decision below still stands, on a reason neither amendment touches.** It never rested on how long an
 event-path refusal blocks, only on that refusal costing what any other event-path exception in this architecture

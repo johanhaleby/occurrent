@@ -79,9 +79,9 @@ import static java.util.Objects.requireNonNull;
  * reaction or a dispatch throws.
  * <ul>
  *   <li><strong>Event path.</strong> A failure (including a {@link SagaConcurrencyException} once the retries are
- *       exhausted) propagates to the subscription model, which redelivers the event and retries the whole step. A
- *       consume-side broker bridge sends the failed delivery through its {@code DeliveryFailurePolicy} instead, which
- *       documents what each policy does to the delivery. The subscription is a
+ *       exhausted) propagates to the subscription model, which redelivers the event and retries the whole step. On a
+ *       consume-side broker bridge a redelivery is not something the saga can promise, and
+ *       {@code DeliveryFailurePolicy} is where that bridge's choice is configured. The subscription is a
  *       single ordered channel shared by every instance this saga handles, so while one event keeps being redelivered
  *       and failing the events queued behind it wait. Four things have to hold for that wait to end at
  *       {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. The budget has to be set. The
@@ -116,8 +116,8 @@ import static java.util.Objects.requireNonNull;
  *       refused on every redelivery instead, as every version up to 0.33.0 did. Where the subscription offers it
  *       again, every instance of this saga waits behind it while other sagas and subscriptions keep going, and once
  *       the converter or the id extractor is repaired the event is applied in the order it was written, with nothing
- *       to feed again. Whether it is offered again is the subscription model's to decide, and a consume-side broker
- *       bridge decides it by its {@code DeliveryFailurePolicy}. The first
+ *       to feed again. Whether it is offered again is the subscription model's to decide, and
+ *       {@code DeliveryFailurePolicy} is where a consume-side broker bridge's choice is configured. The first
  *       failure is logged at WARN and, after that, at ERROR once per {@code quarantineAfter} when it is set or a
  *       fixed five-minute default when it is not, naming the event and the exception that stopped it, so that ERROR
  *       fires for as long as the event keeps being offered, never on a

@@ -19,10 +19,10 @@ package org.occurrent.dsl.saga.blocking;
 /**
  * Thrown when a saga's state cannot be saved because a concurrent writer kept winning the compare-and-set, exhausting
  * the configured retries. For an event this propagates to the subscription model. Whether the event is offered again
- * is that model's to decide, and a consume-side broker bridge decides it by its {@code DeliveryFailurePolicy}. Where
- * the event is offered again, it holds up the events queued behind it for as long as it keeps failing here,
- * since the subscription is one ordered channel shared by every instance the saga handles, and {@link SagaRunner}
- * describes when that ends. For a timeout the poller catches it, logs it, and leaves the timer due for the next poll.
+ * is that model's to decide, and {@code DeliveryFailurePolicy} is where a consume-side broker bridge's choice is
+ * configured. Where the event is offered again, it holds up the events queued behind it for as long as it keeps
+ * failing here, since the subscription is one ordered channel shared by every instance the saga handles, and
+ * {@link SagaRunner} describes when that ends. For a timeout the poller catches it, logs it, and leaves the timer due for the next poll.
  * Nothing isolates it from the saga's other instances, because a poll fires a limited number of them and nothing
  * requires a store to give a different instance a turn. See
  * <a href="https://github.com/johanhaleby/occurrent/issues/1003">#1003</a>.

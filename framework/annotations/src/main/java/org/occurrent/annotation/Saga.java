@@ -44,11 +44,10 @@ import java.lang.annotation.*;
  * {@code @Component}. This is a blocking-stack feature, the reactive starter does not register {@code @Saga}.
  * <p>
  * The two input paths fail differently. A failing event propagates to the subscription, which redelivers the event and
- * retries the whole step. A consume-side broker bridge sends the failed delivery through its
- * {@code DeliveryFailurePolicy} instead, which documents what each policy does to the
- * delivery. That subscription is a single ordered channel shared by
- * every instance of this saga, so while one event keeps being redelivered and failing the events behind it wait, which
- * is head-of-line blocking.
+ * retries the whole step. On a consume-side broker bridge a redelivery is not something the saga can promise, and
+ * {@code DeliveryFailurePolicy} is where that bridge's choice is configured. That subscription is a single ordered
+ * channel shared by every instance of this saga, so while one event keeps being redelivered and failing the events
+ * behind it wait, which is head-of-line blocking.
  * <p>
  * Four things have to hold for that wait to end at the quarantine budget, five minutes by default and set by
  * {@code occurrent.saga.quarantine-after} on this path. The budget has to be set. The subscription model has to

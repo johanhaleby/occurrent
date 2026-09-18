@@ -666,8 +666,8 @@ subscription model offers it again, and the first
 failure is logged at `WARN` and after that at `ERROR` once per interval, naming the event and what stopped it. That
 interval is the quarantine budget when the saga has one, and a fixed five-minute default when it does not, so the
 `ERROR` still repeats on a subscription model this saga cannot quarantine anything on, for as long as that model keeps
-redelivering the event. A model that does not offer a refused delivery again gets only the first `WARN`, and a
-consume-side broker bridge decides that by its `DeliveryFailurePolicy`.
+redelivering the event. A model that does not offer a refused delivery again gets only the first `WARN`, and
+`DeliveryFailurePolicy` is where a consume-side broker bridge's choice is configured.
 Where the event is offered again, repair the converter or the id extractor and the saga applies it in the order it was
 written.
 

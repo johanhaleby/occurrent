@@ -45,7 +45,7 @@ each saying the saga could not work out which instance the event belongs to and 
 is the quarantine budget when one is configured, and a fixed five-minute default when it is not, so this `ERROR` still
 fires on a subscription model this saga cannot quarantine anything on, such as a push feed or a broker bridge, for as
 long as that model keeps redelivering the event. A model that does not offer a refused delivery again gets only the
-first `WARN`, and a consume-side broker bridge decides that by its `DeliveryFailurePolicy`. The event is named by its
+first `WARN`, and `DeliveryFailurePolicy` is where a consume-side broker bridge's choice is configured. The event is named by its
 redelivery key when it has one, and otherwise by its CloudEvent
 id and source, which stay the same from one delivery of it to the next. Where the event is offered again, repair the
 converter or the id extractor and the saga applies it in the order it was written, with nothing to feed to it again. Other sagas and

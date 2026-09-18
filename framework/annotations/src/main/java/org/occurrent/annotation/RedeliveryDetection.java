@@ -28,9 +28,9 @@ public enum RedeliveryDetection {
     /**
      * The default. An event with no {@code streamid}/{@code streamversion} and no {@code position} is refused rather
      * than reacted to, so the feed that dropped the metadata announces itself instead of quietly costing the saga its
-     * redelivery protection. Unless a broker bridge's {@code DeliveryFailurePolicy} stops the delivery being
-     * redelivered, the broker offers the message again and the saga refuses
-     * it again until the listener is fixed or this attribute is set to {@link #BEST_EFFORT}.
+     * redelivery protection. The broker offers the message again and the saga refuses
+     * it again until the listener is fixed or this attribute is set to {@link #BEST_EFFORT}. A broker bridge promises
+     * no such redelivery, and {@code DeliveryFailurePolicy} is where its choice is configured.
      */
     REQUIRED,
     /**

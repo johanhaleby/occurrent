@@ -311,8 +311,8 @@ is paced independently of whether the budget is switched on for this saga, a `WA
 rate they can read rather than at the redelivery cadence. That interval is the budget when one is configured, and a
 fixed five-minute default when it is not, because the model this decision most needs to be loud on, a push feed or a
 broker bridge with no way to hold an event it delivers, is exactly the model the budget is switched off for. A model
-that does not offer a refused delivery again never repeats past the first `WARN`, and a consume-side broker bridge
-decides that by its `DeliveryFailurePolicy`.
+that does not offer a refused delivery again never repeats past the first `WARN`, and `DeliveryFailurePolicy` is
+where a consume-side broker bridge's choice is configured.
 
 The first implementation skipped the delivery past the budget instead, logging an error and writing nothing, and
 relied on the retention check to make refeeding a recovery. [#1042](https://github.com/johanhaleby/occurrent/issues/1042)
