@@ -872,8 +872,10 @@ Only relevant if you run a saga off a push feed, either with `@Saga(source = PUS
 A saga tells a redelivered event from a new one by its `streamid` together with its `streamversion`, or by its
 `position`. An event carrying none of those leaves nothing to compare against, so the saga used to react to every
 delivery of it and issue that reaction's commands again each time, having logged one warning about it when the first
-such event arrived. It now throws `SagaRedeliveryDetectionException` before the reaction runs. The exception reaches
-the feed, so the event is not acknowledged and your broker offers it again.
+such event arrived. It now throws `SagaRedeliveryDetectionException` before the reaction runs, once your id
+extractor has given the event a saga id. An event it returns `null` for is ignored as before, with no instance looked
+up at all. The exception reaches the feed, and nothing in the saga acknowledges the event, so whether the event is
+offered again is for whatever feeds the saga to decide.
 
 Events read from the event store always carry the metadata, so an event-store saga cannot reach this, and neither can
 the catch-up leg in front of a push feed. It is the live leg that depends on what your listener forwards.

@@ -8,6 +8,17 @@ Accepted. Resolves #583, from the post-0.31.0 API review. Amends
 [ADR 96](0096-a-push-fed-saga-may-have-no-history-to-replay.md), which decided which feeds a `@Saga` accepts but left
 what happens per event unchanged.
 
+Amended on 2026-09-18 by
+[ADR 138](0138-a-refused-saga-event-does-not-come-back-on-its-own.md). Read the Decision and the Consequences below
+against that record.
+
+> Two sentences here say a refused event is offered again, and both skip the step where whatever fed the event
+> decides whether to acknowledge it. The Decision's "A push feed offers it again, the saga refuses it again, and the
+> application stays stuck on it" contradicted `PushSubscriptionModel`'s own javadoc, which already gave that decision
+> to the listener. The Consequence's "A refused event is not acknowledged, so a broker will keep offering it" assumed
+> a listener that does not acknowledge, and 0.34.0's parking bridge makes the other side a supported configuration.
+> The saga declines to acknowledge a refused event, and nothing here decides what happens to it next.
+
 ## Context
 
 A saga tells a redelivered event from a new one by its `streamid` together with its `streamversion`, or by its
