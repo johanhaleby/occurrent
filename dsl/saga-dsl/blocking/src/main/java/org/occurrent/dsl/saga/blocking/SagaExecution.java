@@ -326,7 +326,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 // redelivery ask again. Retention is rechecked every time so a store coming back is noticed, while
                 // the warning is said once per instance.
                 if (firstRefusalForThisInstance) {
-                    log.warn("Saga '{}' instance '{}' has been failing for {}, which is past its budget of {}, and is stopped on the event '{}', and it is not quarantined, because the subscription could not confirm that acknowledging the event is safe to do. Either acknowledging is what would drop the only copy of it, or the check could not be completed, and quarantining acknowledges the event. This instance goes on failing instead, and it blocks the saga's other instances for as long as the subscription model offers the event again. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+                    log.warn("Saga '{}' instance '{}' has been failing for {}, which is past its budget of {}, and is stopped on the event '{}', and it is not quarantined, because the subscription could not confirm that acknowledging the event is safe to do. Either acknowledging is what would drop the only copy of it, or the check could not be completed, and quarantining acknowledges the event. This instance goes on failing instead, and it blocks the saga's other instances for as long as whatever feeds this subscription offers the event again. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                             subscriptionId, sagaId, failingFor, quarantineAfter, meta.redeliveryKey(), failure);
                 }
                 return false;

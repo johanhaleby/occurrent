@@ -62,8 +62,8 @@ Three log lines from `org.occurrent.dsl.saga.blocking.SagaExecution`, all naming
 instance's saga id, and all logging the exception with its stack trace. There is no metric and no health indicator for
 any of this in 0.34.0.
 
-The first `WARN` says the instance failed on an event and leaves it to the subscription model whether the event is
-offered again. The duration in that line is the budget it has to exhaust, not how long it has been failing so far.
+The first `WARN` says the instance failed on an event and leaves it to whatever feeds the subscription whether the
+event is offered again. The duration in that line is the budget it has to exhaust, not how long it has been failing so far.
 
 That line does not repeat for every redelivery. The runner only logs it when it writes a failure record, and the same
 input failing again inside the budget records nothing new, so the redeliveries after the first are silent. A different

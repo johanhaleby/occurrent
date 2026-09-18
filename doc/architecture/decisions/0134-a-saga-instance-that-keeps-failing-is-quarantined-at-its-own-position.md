@@ -191,7 +191,7 @@ five minutes means five minutes on both.
 minutes is on the order of a hundred and fifty attempts, which is ample evidence that an input is not going to
 succeed. It also spans the failures worth surviving without quarantining anything. A replica-set election takes
 seconds and a rolling restart takes a minute or two, and both finish well inside it. Against that, where the saga does
-quarantine, the block on the rest of its instances ends at the first delivery after the budget rather than running on.
+quarantine, any block on the rest of its instances ends at the first delivery after the budget rather than running on.
 
 **A transport that never re-offers the input cannot be quarantined by this mechanism, and the design does not pretend
 otherwise.** `PushSubscriptionModel` has no retrying, no checkpoint and no position, and its javadoc says a handler
