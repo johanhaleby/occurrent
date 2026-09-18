@@ -124,7 +124,7 @@ import static java.util.Objects.requireNonNull;
  *       subscription model that does not offer a refused delivery again, which gets only the first WARN.
  *       <p>
  *       Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of never quarantining instead, so
- *       the saga keeps rethrowing for as long as the model offers the event again. That is also what a subscription
+ *       the saga keeps refusing the event for as long as the model offers it again. That is also what a subscription
  *       model that does not guarantee it holds every event it delivers gets, since
  *       the event could not be obtained again there.</li>
  *   <li><strong>Timer path.</strong> A failing timeout is caught per instance, logged, and left due, so it stays

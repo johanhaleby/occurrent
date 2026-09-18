@@ -48,8 +48,8 @@ that an exception on the event path propagates to the subscription model, that t
 that model offers the event again, and that the
 subscription is a single ordered channel shared by every instance the saga handles, so while one event keeps being
 redelivered and failing the events behind it wait. One instance parked on a gone step is what holds that channel. A
-consume-side broker bridge need not hold it, since `DeliveryFailurePolicy` is where its choice of what to do with a
-failed delivery is configured. That is not a new failure mode this decision introduces, it is the same accepted
+consume-side broker bridge need not hold it, since it need not offer the event again, and `DeliveryFailurePolicy` is
+where that choice is configured. That is not a new failure mode this decision introduces, it is the same accepted
 architecture ADR 123's own refusal already lives with. The timer path is different. `SagaExecution.pollTimers`
 catches a failing timeout per instance, logs it, and leaves it due for the next poll.
 

@@ -299,7 +299,7 @@ Lower it when you would rather find out sooner and are willing to quarantine an 
 only briefly unavailable. Raise it when your dispatcher talks to something that is routinely down for longer than five
 minutes, so an instance is not quarantined for an outage that would have resolved.
 
-Turning quarantine off restores the 0.33.0 behaviour, where the saga never stops rethrowing, so every other instance
+Turning quarantine off restores the 0.33.0 behaviour, where the saga is never quarantined, so every other instance
 of that saga waits behind the event for as long as the subscription model offers it again. How you say that differs by
 path. Set the property to zero, and pass `null` for
 `SagaRunnerConfig.quarantineAfter`. `Duration.ZERO` is refused there with an `IllegalArgumentException`, deliberately,

@@ -543,7 +543,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // one, so this means a feed that dropped the extensions on the way in, which it does for every event, not just this
     // one. Under REQUIRED that is refused rather than reacted to, so the throw reaches the subscription model.
     // Whether the event comes back until somebody looks is the model's own business, the listener's call on a push
-    // feed and DeliveryFailurePolicy's on a broker bridge. Under BEST_EFFORT the duplication
+    // feed and a DeliveryFailurePolicy setting on a broker bridge. Under BEST_EFFORT the duplication
     // is accepted knowingly, so the warning says so once per runner rather than once per event.
     private void refuseOrWarnIfRedeliveryCannotBeDetected(EventMeta meta) {
         if (meta.carriesRedeliveryKey()) {
