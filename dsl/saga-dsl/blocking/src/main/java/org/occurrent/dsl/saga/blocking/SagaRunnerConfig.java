@@ -53,8 +53,8 @@ import static java.util.Objects.requireNonNull;
  *                             refused on every redelivery regardless of this setting, and the repeated ERROR that
  *                             refusal logs is paced on this budget when it is set and on a fixed five-minute default
  *                             when it is not, so that ERROR still fires on a subscription model this switches
- *                             quarantine off for. A runner
- *                             ignores this and keeps rethrowing unless its subscription model guarantees that it holds
+ *                             quarantine off for, while that model keeps offering the event. A runner
+ *                             ignores this and never quarantines unless its subscription model guarantees that it holds
  *                             every event it delivers, since a quarantined instance skips everything addressed to it
  *                             afterwards and skipping acknowledges. Being able to answer for one event is not enough on
  *                             its own, though the event an instance stops on is checked as well before it is
