@@ -265,7 +265,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * about. An event the saga cannot route is refused whether or not {@link SagaRunnerConfig#quarantineAfter()} is
      * set, because nothing here ever quarantines an instance for it (see {@link #refuseUnroutableDelivery}), so pacing
      * this ERROR on that budget alone would leave a saga on a subscription model {@code SagaRunner} switches quarantine
-     * off for, such as a push feed or a broker bridge, warning once and then staying silent for good even while that
+     * off for, such as a push feed, including one a broker bridge feeds, warning once and then staying silent for good
+     * even while that
      * model keeps offering the event. A model that does not offer a refused delivery again gets only the
      * first WARN either way. Using the configured budget when there is one keeps one number for an operator to reason
      * about, and {@link SagaRunnerConfig#DEFAULT_QUARANTINE_AFTER} otherwise gives every other model the same

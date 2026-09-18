@@ -309,8 +309,9 @@ the id extractor is repaired the event is applied in the order it was written, w
 is paced independently of whether the budget is switched on for this saga, a `WARN` on the first failure and an
 `ERROR` once per interval after that for as long as the event keeps being offered, so an operator hears about it at a
 rate they can read rather than at the redelivery cadence. That interval is the budget when one is configured, and a
-fixed five-minute default when it is not, because the model this decision most needs to be loud on, a push feed or a
-broker bridge with no way to hold an event it delivers, is exactly the model the budget is switched off for. A model
+fixed five-minute default when it is not, because the model this decision most needs to be loud on, a push feed with
+no way to hold an event it delivers, including one a broker bridge feeds, is exactly the model the budget is switched
+off for. A model
 that does not offer a refused delivery again never repeats past the first `WARN`, and `DeliveryFailurePolicy` is
 where a consume-side broker bridge's choice is configured.
 
