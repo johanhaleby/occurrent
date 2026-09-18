@@ -190,8 +190,8 @@ five minutes means five minutes on both.
 **The default budget is five minutes.** Once the MongoDB backoff saturates it retries every two seconds, so five
 minutes is on the order of a hundred and fifty attempts, which is ample evidence that an input is not going to
 succeed. It also spans the failures worth surviving without quarantining anything. A replica-set election takes
-seconds and a rolling restart takes a minute or two, and both finish well inside it. Against that, it holds the block
-on the rest of the saga's instances to five minutes instead of forever.
+seconds and a rolling restart takes a minute or two, and both finish well inside it. Against that, where the saga does
+quarantine, any block on the rest of its instances ends at the first delivery after the budget rather than running on.
 
 **A transport that never re-offers the input cannot be quarantined by this mechanism, and the design does not pretend
 otherwise.** `PushSubscriptionModel` has no retrying, no checkpoint and no position, and its javadoc says a handler
@@ -384,15 +384,15 @@ for, so a quarantined instance must be enumerable without reading its state.
 instance has to be reachable without its state as well as enumerable without it, because the executor decides the
 quarantine from a by-id read, and an instance whose state no longer decodes is the instance that most needs the
 decision made. Deciding it from a read that throws on such an instance left it failing with nothing recorded, so it
-never reached the budget and went on blocking every other instance of the saga, which is the one outcome this decision
-exists to remove.
+never reached the budget, and wherever the subscription model offered the failing event again it went on blocking
+every other instance of the saga, which is the one outcome this decision exists to remove.
 
 `SagaStateStore` therefore gains `findWithoutState` and `compareAndSaveWithoutState`, both `default` and delegating to
 `find` and `compareAndSave`. They are `default` rather than abstract because `SagaStateStore` shipped in 0.33.0 and the
 compatibility breaks this release takes are the ones Consequences lists, which do not include a new abstract method. A
-store written against 0.33.0 inherits them and behaves exactly as it did, which means it also keeps the blocking
-behaviour for an instance it cannot decode, and nothing the executor does can change that for a store that only reads
-an instance whole. `SpringMongoSagaStateStore` overrides both, the read as the projection the enumeration queries
+store written against 0.33.0 inherits them and behaves exactly as it did, which means an instance it cannot decode
+still never reaches its budget, and nothing the executor does can change that for a store that only reads an instance
+whole. `SpringMongoSagaStateStore` overrides both, the read as the projection the enumeration queries
 already use and the write as a `findAndModify` that does not touch the stored state, so the state the instance stopped
 on is still there for whoever repairs the converter. The two are overridden together, because the executor saves what
 it read, and a store that answers the read with no state and then writes the envelope whole would erase the state it

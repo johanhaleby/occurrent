@@ -62,8 +62,8 @@ Three log lines from `org.occurrent.dsl.saga.blocking.SagaExecution`, all naming
 instance's saga id, and all logging the exception with its stack trace. There is no metric and no health indicator for
 any of this in 0.34.0.
 
-The first `WARN` says the instance failed on an event and is being retried. The duration in that line is the budget it
-has to exhaust, not how long it has been failing so far.
+The first `WARN` says the instance failed on an event and leaves it to whatever feeds the subscription whether the
+event is offered again. The duration in that line is the budget it has to exhaust, not how long it has been failing so far.
 
 That line does not repeat for every redelivery. The runner only logs it when it writes a failure record, and the same
 input failing again inside the budget records nothing new, so the redeliveries after the first are silent. A different
@@ -78,12 +78,14 @@ When the budget elapses, the same logger logs an `ERROR` saying the instance is 
 one to alert on. It names two durations, how long the instance had been failing and then the budget, in that order.
 
 The third line is a `WARN` for the case where the budget elapsed and the instance was not quarantined, because the
-subscription could not confirm it still holds the failing event. That instance goes on blocking the saga's other
-instances, and while that lasts it does not appear in step 1, so this line is the only thing that says so.
+subscription could not confirm it still holds the failing event. That instance stays `ACTIVE`, and it blocks the
+saga's other instances for as long as whatever feeds the subscription offers the event again. While that lasts it does
+not appear in step 1, so this line is the only thing that says so.
 
 That refusal is not final. The runner asks the subscription again on every redelivery, so a check that failed because
-a store was briefly unreachable can succeed later and quarantine the same instance then. Keep looking for it in step 1
-rather than treating this warning as the end of the story.
+a store was briefly unreachable can succeed later and quarantine the same instance then. That recovery needs a later
+delivery to the instance, which for the event it stopped on means the subscription model offering that event again.
+Keep looking for it in step 1 rather than treating this warning as the end of the story.
 
 That third line is not logged on every redelivery. The runner holds the instance's id in memory and logs it once per
 run of refusals, so it says nothing on the redeliveries that follow. It says it again after any event that instance
@@ -209,8 +211,9 @@ so a store written against 0.33.0 keeps working without them. `SpringMongoSagaSt
 document, so nothing there can fail to decode.
 
 A store of your own that overrides neither cannot quarantine an instance whose state does not decode, because the
-executor's own read throws for the same reason yours does, so that instance goes on blocking the saga's other
-instances the way it did in 0.33.0. The contract for an override is in
+executor's own read throws for the same reason yours does, so that instance never reaches its budget, and it blocks
+the saga's other instances the way it did in 0.33.0 for as long as the subscription model offers the failing event
+again. The contract for an override is in
 [section 8 of the upgrade guide](../migration/upgrading-to-0.34.0.md#the-five-breaks).
 
 ### 4. [you] Fix the cause, or decide there is nothing to fix

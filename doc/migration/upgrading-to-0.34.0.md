@@ -25,9 +25,9 @@ a second compile-time break, and comparing either whole for equality fails silen
 `DurableSubscriptionModel` wraps a MongoDB subscription model on a shared Atlas cluster, a fresh subscription that
 used to start without a recorded position is now refused at `subscribe(..)`. Read
 [section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
-Then a saga instance whose event keeps failing is now suspended instead of retried forever, which changes five
-things about the saga API at once. `SagaEnvelope` gains two record components and `SagaRunnerConfig` gains one,
-`SagaInstance` gains a method, and `SagaStatus` gains a constant that `findByStatus(ACTIVE, ..)` no longer returns. Read
+Then a saga instance whose event keeps failing can now be quarantined instead of left active and failing
+indefinitely, which changes five things about the saga API at once. `SagaEnvelope` gains
+two record components and `SagaRunnerConfig` gains one, `SagaInstance` gains a method, and `SagaStatus` gains a constant that `findByStatus(ACTIVE, ..)` no longer returns. Read
 [section 8](#8-a-saga-instance-that-keeps-failing-is-quarantined-and-four-saga-types-change-with-it).
 Then a reactor catch-up subscription now delivers an event a second time when a write that was in flight during the
 replay was read by a history window, which needs a handler that is safe to run twice on the same event. Read
@@ -638,9 +638,9 @@ cluster gets the same no-code-change path out of the refusal it has had since 0.
 ## 8. A saga instance that keeps failing is quarantined, and four saga types change with it
 
 A saga has one subscription, and every instance of that saga is fed by it. Up to 0.33.0, an event that a saga's
-`evolve`, its `react` or its command dispatcher could not handle propagated to the subscription model, which
-redelivered it and tried again, without limit. One correlation id that could never make progress therefore stopped
-every other correlation id behind it, for as long as nobody noticed.
+`evolve`, its `react` or its command dispatcher could not handle propagated to the subscription model, and wherever
+that model offered the event again the saga tried again, without limit, and one correlation id that could never make
+progress therefore stopped every other correlation id behind it, for as long as nobody noticed.
 
 From 0.34.0 the executor times the failing rather than counting the attempts. The instance's first failure records the
 instant it started failing and rethrows, exactly as before. Once that instance has kept failing for at least
@@ -688,7 +688,9 @@ which it declares by implementing `HistoryRetainingSubscriptions`. `NativeMongoS
 `DurableSubscriptionModel`, `CompetingConsumerSubscriptionModel` or `CatchupSubscriptionModel`, since a wrapper that
 declares nothing itself is answered by the model it wraps. On a model that declares nothing at all, a bare
 `PushSubscriptionModel` being the one you are most likely to meet, the runner switches the budget off at startup and
-logs why, so the saga keeps the 0.33.0 behaviour of blocking.
+logs why, so the saga keeps the 0.33.0 behaviour of never quarantining. That model hands the acknowledge-or-redeliver
+decision to the listener that called `accept`, so whether the failing event then blocks the instances behind it is
+that listener's call.
 
 A model that cannot promise to hold everything gets no quarantine either, even where it can answer for the event an
 instance actually stopped on. `CatchupThenPushSubscriptionModel` is that case, since it replays an event store and
@@ -698,13 +700,15 @@ Protecting the failing event alone would leave the ones behind it unprotected.
 
 That is deliberate rather than an omission. Quarantining means returning normally, which acknowledges the event to
 whatever fed it, and on a push feed behind a broker bridge that is what stages the offset and moves past the record.
-The one copy this saga could ever be given would be gone at the moment of quarantine. Between an instance that blocks
-and an event that cannot be asked for again, this keeps the event.
+The one copy this saga could ever be given would be gone at the moment of quarantine. Between an instance left active
+and an event this saga would be acknowledging away, this refuses the acknowledgement and leaves what happens to the
+event to whatever fed it.
 
 **An event with no redelivery key is not quarantined either.** The failure record identifies the failing event by its
 stream id with its stream version, or by its global position when it has no stream metadata. An event with neither
 cannot be told apart from its own redelivery, so the budget could never elapse for it, and the saga keeps the 0.33.0
-behaviour of blocking.
+behaviour of never quarantining, which blocks the instances behind the event for as long as the subscription model
+offers it again.
 
 A feed that drops the Occurrent CloudEvent extensions on the way in is how an event ends up like that.
 `SagaRunnerConfig.redeliveryDetection` already refuses such an event under `REQUIRED`, its default, before the saga
@@ -751,7 +755,8 @@ compiles without them.** They both inherit to `find` and `compareAndSave`, so a 
 0.34.0 exactly as it did in 0.33.0. Override them if you want a quarantine to work on an instance whose state can no
 longer be decoded, which a renamed event class or a changed converter produces. The executor decides and records a
 quarantine through these two rather than through `find`, because loading such an instance throws, and an instance that
-throws on every load records nothing, never reaches its budget, and goes on blocking every other instance of the saga.
+throws on every load records nothing and never reaches its budget, so it goes on blocking every other instance of the
+saga wherever the subscription model offers the failing event again.
 In a store that overrides them, `findWithoutState` answers with an envelope whose `state` is `null` and every other
 member populated, the way `findByStatus` already does, and `compareAndSaveWithoutState` saves under the same
 compare-and-set rule while leaving the stored state where it is. That is the contract for an override and not what you

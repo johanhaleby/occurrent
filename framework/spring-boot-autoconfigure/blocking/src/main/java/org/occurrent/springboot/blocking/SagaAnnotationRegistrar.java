@@ -642,8 +642,8 @@ class SagaAnnotationRegistrar {
 
     // Zero is how a Duration property says "never", since an unset property binds to the default rather than to null,
     // and null is what SagaRunnerConfig takes for a saga that is never quarantined. A negative value is passed on
-    // untouched so SagaRunnerConfig rejects it, because reading a typo as "never" would quietly restore the blocking
-    // this feature removes.
+    // untouched so SagaRunnerConfig rejects it, because reading a typo as "never" would quietly switch quarantine
+    // off.
     static @Nullable Duration quarantineBudgetOf(@Nullable Duration configured) {
         return configured == null || configured.isZero() ? null : configured;
     }

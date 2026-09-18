@@ -100,8 +100,9 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * The default quarantine budget. Once a MongoDB subscription model's backoff saturates it retries every two
      * seconds, so five minutes is on the order of a hundred and fifty attempts, which is ample evidence that an input
      * is not going to succeed. It also spans the failures worth surviving without quarantining anything, because a replica-set
-     * election takes seconds and a rolling restart a minute or two, and both finish well inside it. Against that, it
-     * holds the block on the saga's other instances to five minutes rather than forever.
+     * election takes seconds and a rolling restart a minute or two, and both finish well inside it. Against that,
+     * where the saga does quarantine, any block on its other instances ends at the first delivery after the budget
+     * rather than running on.
      */
     public static final Duration DEFAULT_QUARANTINE_AFTER = Duration.ofMinutes(5);
 
