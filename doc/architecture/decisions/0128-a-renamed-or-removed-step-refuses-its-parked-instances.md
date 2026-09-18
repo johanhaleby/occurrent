@@ -44,8 +44,8 @@ Guard the lookup, and `reactToBranch`, `reactToJoin` and `armTimeoutIfAny` can n
 name or a branch index the current build does not have. There is nothing left for a second fix to do there.
 
 **The two guarded call sites do not carry the same cost when they refuse.** `SagaRunner`'s own javadoc documents
-that an exception on the event path propagates to the subscription model, which redelivers the event and retries
-the whole step, and that the
+that an exception on the event path propagates to the subscription model, that the whole step is retried wherever
+that model offers the event again, and that the
 subscription is a single ordered channel shared by every instance the saga handles, so while one event keeps being
 redelivered and failing the events behind it wait. One instance parked on a gone step is what holds that channel. A
 consume-side broker bridge need not hold it, since `DeliveryFailurePolicy` is where its choice of what to do with a

@@ -22,8 +22,9 @@ package org.occurrent.dsl.saga.blocking;
  * redelivered event from a new one, so reacting to it would run the reaction again and issue its commands again on
  * every redelivery.
  * <p>
- * It propagates to the subscription model rather than being logged, so the feed offers the event again. A broker
- * bridge promises no such thing, and {@code DeliveryFailurePolicy} is where its choice is configured. The fix is to
+ * It propagates to the subscription model rather than being logged, and whether the feed offers the event again is
+ * that model's own business. A push feed lets the listener that handed the event over decide, and on a broker
+ * bridge {@code DeliveryFailurePolicy} is where the choice is configured. The fix is to
  * forward the Occurrent CloudEvent extensions from the listener feeding the saga. A feed
  * that genuinely carries none of them, together with reactions that are idempotent, is what
  * {@link RedeliveryDetection#BEST_EFFORT} is for.

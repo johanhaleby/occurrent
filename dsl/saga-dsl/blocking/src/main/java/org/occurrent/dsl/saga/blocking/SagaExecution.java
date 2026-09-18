@@ -541,9 +541,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // An event carrying neither a stream id with a version nor a position leaves nothing to compare a redelivery
     // against, so the reaction would run again and issue its commands again. Occurrent's own stored events always carry
     // one, so this means a feed that dropped the extensions on the way in, which it does for every event, not just this
-    // one. Under REQUIRED that is refused rather than reacted to, so the throw reaches the subscription model. The feed
-    // offers the event again until somebody looks. A broker bridge promises no such thing, and DeliveryFailurePolicy
-    // is where its choice is configured. Under BEST_EFFORT the duplication
+    // one. Under REQUIRED that is refused rather than reacted to, so the throw reaches the subscription model.
+    // Whether the event comes back until somebody looks is the model's own business, the listener's call on a push
+    // feed and DeliveryFailurePolicy's on a broker bridge. Under BEST_EFFORT the duplication
     // is accepted knowingly, so the warning says so once per runner rather than once per event.
     private void refuseOrWarnIfRedeliveryCannotBeDetected(EventMeta meta) {
         if (meta.carriesRedeliveryKey()) {

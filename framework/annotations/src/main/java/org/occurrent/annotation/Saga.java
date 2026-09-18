@@ -43,9 +43,10 @@ import java.lang.annotation.*;
  * The method may live on any Spring bean: a {@code @Bean} in a {@code @Configuration}, or a method on a
  * {@code @Component}. This is a blocking-stack feature, the reactive starter does not register {@code @Saga}.
  * <p>
- * The two input paths fail differently. A failing event propagates to the subscription, which redelivers the event and
- * retries the whole step. On a consume-side broker bridge a redelivery is not something the saga can promise, and
- * {@code DeliveryFailurePolicy} is where that bridge's choice is configured. That subscription is a single ordered
+ * The two input paths fail differently. A failing event propagates to the subscription, and the whole step is retried
+ * wherever the subscription model offers the event again. Whether it does is that model's own business, left to the
+ * listener on a push feed and configured through {@code DeliveryFailurePolicy} on a consume-side broker bridge.
+ * That subscription is a single ordered
  * channel shared by every instance of this saga, so while one event keeps being redelivered and failing the events
  * behind it wait, which is head-of-line blocking.
  * <p>
