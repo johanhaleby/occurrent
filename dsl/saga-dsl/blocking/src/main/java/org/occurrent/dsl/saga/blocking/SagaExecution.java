@@ -52,13 +52,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>
  * An instance that keeps failing can be quarantined rather than left to fail for as long as the subscription model
  * offers the event again. Its first failure records when the failing started and rethrows, which is what every
- * version up to 0.33.0 did. A delivery that fails once the instance has been failing for at least
- * {@link SagaRunnerConfig#quarantineAfter()} is eligible for quarantine rather than certain to quarantine. Where
- * {@link #letTheSubscriptionPast} agrees and the write recording it succeeds, the instance is marked
- * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} on that event and this class returns
- * normally, so the subscription acknowledges that event and the saga's other instances keep going. Where the
- * retention check cannot confirm, or that write loses its compare-and-set, or the store fails, the instance stays
- * active and the next eligible delivery asks again.
+ * version up to 0.33.0 did. Once the instance has been failing for at least
+ * {@link SagaRunnerConfig#quarantineAfter()}, it is marked
+ * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} on whichever event it is failing on then and this class returns
+ * normally, so the subscription acknowledges that event and the saga's other instances keep going.
  * <p>
  * Every step from reading the CloudEvent to saving the result runs inside one {@code try} that catches
  * {@link Throwable}, so once an event has reached an instance, what failed and where it was thrown decide nothing
@@ -347,7 +344,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return false;
             }
             if (!record.quarantined()) {
-                log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is for whatever feeds this subscription to decide. Where it is, the instance is quarantined on a later failing delivery once it has been failing for {}, measured from this first failure rather than from any one event. That quarantine can still be refused if the subscription cannot confirm by then that it still holds the event, or if the write recording it loses a compare-and-set or fails against the store.",
+                log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is for whatever feeds this subscription to decide. Where it is, the instance is quarantined once it has been failing for {}, measured from this first failure rather than from any one event, unless the subscription cannot confirm by then that it still holds the event.",
                         subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                 return false;
             }

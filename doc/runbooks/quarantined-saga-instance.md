@@ -6,27 +6,21 @@ You run a saga on 0.34.0 or later, an instance of it has stopped, and you want t
 do with it. The `SagaStatus.QUARANTINED` state is new in 0.34.0, so nothing before that release can produce one.
 
 If you are deciding whether to turn quarantine on at all, that question is in
-[section 8 of Upgrading to
-0.34.0](../migration/upgrading-to-0.34.0.md#8-a-saga-instance-that-keeps-failing-is-quarantined-and-four-saga-types-change-with-it),
+[section 8 of Upgrading to 0.34.0](../migration/upgrading-to-0.34.0.md#8-a-saga-instance-that-keeps-failing-is-quarantined-and-four-saga-types-change-with-it),
 which also covers the two cases where a saga never quarantines anything. This runbook starts from the point where you
 already have one.
 
 ## Why an instance stops
 
 A saga has one subscription and every instance of that saga is fed by it. When handling an event for one instance
-throws, the executor rethrows, and on a subscription model that offers the event again the instance tries again.
-Usually that is
+throws, the executor rethrows, and on a subscription model that offers the event again the instance tries again. Usually that is
 the instance's `evolve`, its `react`, or its command dispatcher, and it can also be the read that loads the instance,
-which is how an instance whose state no longer decodes ends up here. Up to 0.33.0 that went on without limit, so one
-correlation id that could never make progress stopped every
+which is how an instance whose state no longer decodes ends up here. Up to 0.33.0 that went on without limit, so one correlation id that could never make progress stopped every
 other correlation id behind it.
 
-From 0.34.0 the executor times how long the instance has been failing. Past
-`SagaRunnerConfig.quarantineAfter`, five minutes by default, a failing delivery the saga routes to that instance is
-eligible to quarantine it. Where the subscription can confirm it still holds the event and the write recording the
-quarantine succeeds, the instance moves to `SagaStatus.QUARANTINED` and the executor stops rethrowing, so the
-subscription acknowledges the event and goes on delivering to everybody else. The rest of this runbook is about
-reading which of those happened.
+From 0.34.0 the executor times how long the instance has been failing. Once that reaches
+`SagaRunnerConfig.quarantineAfter`, five minutes by default, the instance moves to `SagaStatus.QUARANTINED` and the
+executor stops rethrowing, so the subscription acknowledges the event and goes on delivering to everybody else.
 
 A quarantined instance applies no further events and fires no timers, and its redelivery watermarks stop moving, so
 nothing it skipped is recorded as handled. The subscription still delivers those events, and the runner still reads
@@ -50,14 +44,11 @@ apply. What you get is a `WARN` from `SagaExecution` on the first failure and an
 each saying the saga could not work out which instance the event belongs to and logging what stopped it. That interval
 is the quarantine budget when one is configured, and a fixed five-minute default when it is not, so this `ERROR` still
 fires on a subscription model this saga cannot quarantine anything on, such as a push feed, including one a broker
-bridge feeds, for as long as that model keeps offering the event. A model that does not offer a refused delivery again
-gets only the
-first `WARN`, and `DeliveryFailurePolicy` is where a consume-side broker bridge's choice is configured. The event is
-named by its
+bridge feeds, for as long as that model keeps offering the event. A model that does not offer a refused delivery again gets only the
+first `WARN`, and `DeliveryFailurePolicy` is where a consume-side broker bridge's choice is configured. The event is named by its
 redelivery key when it has one, and otherwise by its CloudEvent
 id and source, which stay the same from one delivery of it to the next. Where the event is offered again, repair the
-converter or the id extractor and the saga applies it in the order it was written, with nothing to feed to it again.
-Other sagas and
+converter or the id extractor and the saga applies it in the order it was written, with nothing to feed to it again. Other sagas and
 subscriptions keep going meanwhile.
 
 `OutOfMemoryError` is the other thing that never quarantines. It says the JVM ran out of heap while some instance held
@@ -72,8 +63,7 @@ instance's saga id, and all logging the exception with its stack trace. There is
 any of this in 0.34.0.
 
 The first `WARN` says the instance failed on an event and leaves it to whatever feeds the subscription whether the
-event is offered again. The duration in that line is the budget it has to exhaust, not how long it has been failing so
-far.
+event is offered again. The duration in that line is the budget it has to exhaust, not how long it has been failing so far.
 
 That line does not repeat for every redelivery. The runner only logs it when it writes a failure record, and the same
 input failing again inside the budget records nothing new, so the redeliveries after the first are silent. A different
@@ -84,16 +74,8 @@ So silence after that first line tells you nothing on its own. The instance may 
 a later delivery may have succeeded and cleared the record, which the runner does without logging anything. Read the
 instance's status with step 1 rather than reading the quiet either way.
 
-An `ERROR` from the same logger says the instance is now `QUARANTINED`, and that line is the one to alert on. It
-needs a failing delivery the saga routes to that instance once the budget has elapsed, since the quarantine is
-decided on a delivery rather than on a clock. It need not be another delivery of the event it stopped on, but it does
-have to carry a redelivery key and fail in a way the instance is charged for, which excludes an event whose
-extensions were dropped, and excludes `OutOfMemoryError`. Several things stop the line arriving even then, a
-subscription that offers nothing further, a retention check the subscription cannot answer, which gets you the `WARN`
-below with the instance left `ACTIVE`, and a quarantine write that loses its compare-and-set or fails against the
-store, both of which are silent. Alert on the line, and read step 1 rather than
-its absence. The `ERROR` names two durations, how long the instance had been failing and then the budget, in that
-order.
+When the budget elapses, the same logger logs an `ERROR` saying the instance is now `QUARANTINED`. That line is the
+one to alert on. It names two durations, how long the instance had been failing and then the budget, in that order.
 
 The third line is a `WARN` for the case where the budget elapsed and the instance was not quarantined, because the
 subscription could not confirm it still holds the failing event. That instance stays `ACTIVE`, and it blocks the
@@ -336,8 +318,7 @@ refuses an event with no redelivery key before the saga sees it.
 ## Rollback considerations
 
 Downgrading to 0.33.0 does not remove the quarantined instances from the store, and 0.33.0 does not know the status.
-What that does depends on your store. `SpringMongoSagaStateStore` on 0.33.0 reads `status` with `SagaStatus.valueOf`,
-which
+What that does depends on your store. `SpringMongoSagaStateStore` on 0.33.0 reads `status` with `SagaStatus.valueOf`, which
 throws `IllegalArgumentException` on the string `QUARANTINED`, so every read of such an instance fails and the
 subscription blocks on it exactly as it did before quarantine existed. Delete the quarantined instances before you
 downgrade, under the same rule as step 5, or accept that.

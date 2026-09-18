@@ -65,9 +65,8 @@ forever", and that attribution was wrong on the day it was written. On 2026-08-1
 behind a failing one wait "until it succeeds or someone intervenes", and the file has never contained the word
 "forever" or the phrase "retries the same event". The paragraph also used to end "A missing step reached by an
 event can cost the whole subscription until fixed", which 0.34.0 superseded. An instance that keeps failing is
-quarantined at the first delivery after `quarantineAfter` wherever four conditions hold, and `SagaRunner`'s Event
-path section and [ADR 134](0134-a-saga-instance-that-keeps-failing-is-quarantined-at-its-own-position.md)
-list them. Whether they
+quarantined at `quarantineAfter` wherever four conditions hold, and `SagaRunner`'s Event path section and
+[ADR 134](0134-a-saga-instance-that-keeps-failing-is-quarantined-at-its-own-position.md) list them. Whether they
 hold for an instance parked on a renamed step is a separate question neither record answers, and one configuration
 where the budget elapses and the instance is quarantined instead is enough to falsify an "until fixed". What this
 record no longer asserts is that the wait always runs until somebody intervenes.
