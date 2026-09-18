@@ -20,15 +20,18 @@ The two are wrong for different reasons, which is why they are corrected here to
 story. An ADR records what was decided and when, so an amendment that flattens a claim that was false from the start
 into a claim that a later release falsified would itself be inaccurate.
 
-**The Decision's sentence was wrong on the day it was written.** `PushSubscriptionModel`'s javadoc arrived in the same
-commit, `8a9311fd6` of 2026-08-10, saying a handler exception propagates to the caller so the listener can decide
-whether to acknowledge or redeliver. The javadoc is the one the code implements, and the model behaved that way at
-`occurrent-0.33.0` as well, so nothing released since falsified the sentence. It was never true. A test that asks
+**The Decision's sentence was wrong on the day it was written.** `PushSubscriptionModel`'s javadoc has said since
+`2df6988a5` of 2026-07-19 that a handler exception propagates to the caller so the listener can decide whether to
+acknowledge or redeliver. That is nearly three weeks before this decision was taken in `3a2cca842` on 2026-08-07, the
+javadoc is the one the code implements, and the model still behaved that way at `occurrent-0.33.0`, so nothing
+released since falsified the sentence. It was never true. A test that asks
 whether later work touched a claim can only find claims later work falsified, which is why three passes over this
 family of surfaces left the sentence alone.
 
-**The Consequence's sentence was true when it was written.** No broker bridge existed on 2026-08-10, the first one
-landing in `43af19f9f` eight days later. A consume-side bridge configured with `DeliveryFailurePolicy.PARK`
+**The Consequence's sentence was true when it was written.** No consume-side bridge existed on 2026-08-07.
+`43af19f9f` added the transport-neutral broker API on 2026-08-18, `DeliveryFailurePolicy` among it, and the first
+bridge that applies the policy is the RabbitMQ one in `bf72e48d0` a day after that. A bridge configured with
+`DeliveryFailurePolicy.PARK`
 republishes a refused event to the parking destination and acknowledges it out of the source queue once that
 republish is confirmed, so on such a bridge the event is normally gone from the source on the first refusal. A park
 publish that fails redelivers the original instead, which is one way `PARK` can still end in a redelivery. The
@@ -39,8 +42,9 @@ bridge's.
 
 **The saga declines to acknowledge a refused event, and what happens to it afterwards belongs to the subscription
 model.** A `PushSubscriptionModel` hands the acknowledge-or-redeliver decision to the listener that called `accept`,
-and on a consume-side broker bridge `DeliveryFailurePolicy` is where the choice is configured. Where the event is
-offered again, the saga refuses it again and the application stays stuck on it, which is what ADR 109 described.
+and on a consume-side broker bridge `DeliveryFailurePolicy` is where the choice is configured. For as long as the
+model keeps offering the event, the saga refuses it again and the application stays stuck on it, which is what
+ADR 109 described.
 Where it is not, the saga still issues no duplicate commands, and that is the part the decision owns either way.
 
 This is the same rule [#1076](https://github.com/johanhaleby/occurrent/issues/1076) settled on for the 0.34.0 saga

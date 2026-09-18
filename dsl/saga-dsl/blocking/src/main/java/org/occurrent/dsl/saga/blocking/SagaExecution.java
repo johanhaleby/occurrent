@@ -344,7 +344,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return false;
             }
             if (!record.quarantined()) {
-                log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is for whatever feeds this subscription to decide. Where it is, the instance is quarantined once it has been failing for {}, measured from this first failure rather than from any one event, unless the subscription cannot confirm by then that it still holds the event.",
+                log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is for whatever feeds this subscription to decide. Where it is, the instance is quarantined on a later failing delivery once it has been failing for {}, measured from this first failure rather than from any one event. That quarantine can still be refused if the subscription cannot confirm by then that it still holds the event, or if the write recording it loses a compare-and-set or fails against the store.",
                         subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                 return false;
             }

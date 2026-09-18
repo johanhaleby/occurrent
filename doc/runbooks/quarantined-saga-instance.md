@@ -74,12 +74,14 @@ So silence after that first line tells you nothing on its own. The instance may 
 a later delivery may have succeeded and cleared the record, which the runner does without logging anything. Read the
 instance's status with step 1 rather than reading the quiet either way.
 
-On the first failing delivery to the instance once the budget has elapsed, the same logger logs an `ERROR` saying
-the instance is now `QUARANTINED`, and that line is the one to alert on. Any failing delivery to the instance will do,
-not only another of the event it stopped on, and the quarantine is decided on a delivery rather than on a clock, so
-where nothing more is delivered to that instance the line never comes. Where the subscription cannot confirm it still
-holds the failing event you get the `WARN` below instead, and the instance stays `ACTIVE`. The `ERROR` names two
-durations, how long the instance had been failing and then the budget, in that order.
+An `ERROR` from the same logger says the instance is now `QUARANTINED`, and that line is the one to alert on. It
+needs a failing delivery to the instance once the budget has elapsed, since the quarantine is decided on a delivery
+rather than on a clock, and any failing delivery will do rather than only another of the event it stopped on. Several
+things stop it arriving even then, a subscription that offers nothing further, a retention check the subscription
+cannot answer, which gets you the `WARN` below with the instance left `ACTIVE`, and a quarantine write that loses its
+compare-and-set or fails against the store, both of which are silent. Alert on the line, and read step 1 rather than
+its absence. The `ERROR` names two durations, how long the instance had been failing and then the budget, in that
+order.
 
 The third line is a `WARN` for the case where the budget elapsed and the instance was not quarantined, because the
 subscription could not confirm it still holds the failing event. That instance stays `ACTIVE`, and it blocks the
