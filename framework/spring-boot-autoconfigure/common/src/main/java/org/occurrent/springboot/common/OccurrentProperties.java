@@ -716,8 +716,8 @@ public class OccurrentProperties {
         private Duration timerPollInterval = Duration.ofSeconds(15);
 
         /**
-         * How long one saga instance may keep failing before it is quarantined and the subscription moves past the
-         * event it stopped on, so the saga's other instances keep going. The clock belongs to the instance
+         * How long one saga instance may keep failing before it can be quarantined and the subscription moves past
+         * the event it stopped on, so the saga's other instances keep going. The clock belongs to the instance
          * rather than to one event, so an instance where two events both fail keeps the instant it started failing and
          * a second event can reach the budget on its first failure. Defaults to five minutes, matching
          * {@code SagaRunnerConfig.defaults()}.

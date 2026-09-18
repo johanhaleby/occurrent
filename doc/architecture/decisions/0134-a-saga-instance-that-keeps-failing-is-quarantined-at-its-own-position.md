@@ -190,8 +190,8 @@ five minutes means five minutes on both.
 **The default budget is five minutes.** Once the MongoDB backoff saturates it retries every two seconds, so five
 minutes is on the order of a hundred and fifty attempts, which is ample evidence that an input is not going to
 succeed. It also spans the failures worth surviving without quarantining anything. A replica-set election takes
-seconds and a rolling restart takes a minute or two, and both finish well inside it. Against that, wherever the
-subscription model keeps offering the event, it holds the block on the rest of the saga's instances to five minutes.
+seconds and a rolling restart takes a minute or two, and both finish well inside it. Against that, where the saga does
+quarantine, it holds the block on the rest of its instances to five minutes.
 
 **A transport that never re-offers the input cannot be quarantined by this mechanism, and the design does not pretend
 otherwise.** `PushSubscriptionModel` has no retrying, no checkpoint and no position, and its javadoc says a handler

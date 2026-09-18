@@ -25,8 +25,8 @@ a second compile-time break, and comparing either whole for equality fails silen
 `DurableSubscriptionModel` wraps a MongoDB subscription model on a shared Atlas cluster, a fresh subscription that
 used to start without a recorded position is now refused at `subscribe(..)`. Read
 [section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
-Then a saga instance whose event keeps failing is now suspended instead of left to fail for as long as its
-subscription model offers the event again, which changes five things about the saga API at once. `SagaEnvelope` gains
+Then a saga instance whose event keeps failing can now be quarantined instead of left failing on it indefinitely,
+which changes five things about the saga API at once. `SagaEnvelope` gains
 two record components and `SagaRunnerConfig` gains one, `SagaInstance` gains a method, and `SagaStatus` gains a constant that `findByStatus(ACTIVE, ..)` no longer returns. Read
 [section 8](#8-a-saga-instance-that-keeps-failing-is-quarantined-and-four-saga-types-change-with-it).
 Then a reactor catch-up subscription now delivers an event a second time when a write that was in flight during the
@@ -638,9 +638,9 @@ cluster gets the same no-code-change path out of the refusal it has had since 0.
 ## 8. A saga instance that keeps failing is quarantined, and four saga types change with it
 
 A saga has one subscription, and every instance of that saga is fed by it. Up to 0.33.0, an event that a saga's
-`evolve`, its `react` or its command dispatcher could not handle propagated to the subscription model, which
-redelivered it and tried again, without limit. One correlation id that could never make progress therefore stopped
-every other correlation id behind it, for as long as nobody noticed.
+`evolve`, its `react` or its command dispatcher could not handle propagated to the subscription model, and wherever
+that model offered the event again the saga tried again, without limit. One correlation id that could never make
+progress therefore stopped every other correlation id behind it, for as long as nobody noticed.
 
 From 0.34.0 the executor times the failing rather than counting the attempts. The instance's first failure records the
 instant it started failing and rethrows, exactly as before. Once that instance has kept failing for at least
@@ -701,7 +701,8 @@ Protecting the failing event alone would leave the ones behind it unprotected.
 That is deliberate rather than an omission. Quarantining means returning normally, which acknowledges the event to
 whatever fed it, and on a push feed behind a broker bridge that is what stages the offset and moves past the record.
 The one copy this saga could ever be given would be gone at the moment of quarantine. Between an instance that goes
-on failing and an event that cannot be asked for again, this keeps the event.
+on failing and an event this saga would be acknowledging away, this refuses the acknowledgement and leaves what
+happens to the event to whatever fed it.
 
 **An event with no redelivery key is not quarantined either.** The failure record identifies the failing event by its
 stream id with its stream version, or by its global position when it has no stream metadata. An event with neither

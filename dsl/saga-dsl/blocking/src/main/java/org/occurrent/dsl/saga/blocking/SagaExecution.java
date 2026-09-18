@@ -50,7 +50,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link SagaExecutionSupport} step, dispatches commands before saving (at-least-once), and retries a lost compare-and-set
  * save. Timeouts re-enter the same path, fenced so a timer no longer present on the (reloaded) envelope is skipped.
  * <p>
- * An instance that keeps failing is quarantined rather than left to fail for as long as the subscription model
+ * An instance that keeps failing can be quarantined rather than left to fail for as long as the subscription model
  * offers the event again. Its first failure records when the failing started and rethrows, which is what every
  * version up to 0.33.0 did. Once the instance has been failing for at least
  * {@link SagaRunnerConfig#quarantineAfter()}, it is marked
@@ -345,7 +345,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return false;
             }
             if (!record.quarantined()) {
-                log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is the subscription model's to decide, and where it is offered again, the instance is quarantined once it has been failing for {}, measured from this first failure rather than from any one event.",
+                log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is the subscription model's to decide. Where it is, the instance is quarantined once it has been failing for {}, measured from this first failure rather than from any one event, unless the subscription cannot confirm by then that it still holds the event.",
                         subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                 return false;
             }

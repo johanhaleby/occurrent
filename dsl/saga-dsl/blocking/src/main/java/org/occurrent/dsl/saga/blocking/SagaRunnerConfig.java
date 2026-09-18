@@ -101,8 +101,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * seconds, so five minutes is on the order of a hundred and fifty attempts, which is ample evidence that an input
      * is not going to succeed. It also spans the failures worth surviving without quarantining anything, because a replica-set
      * election takes seconds and a rolling restart a minute or two, and both finish well inside it. Against that,
-     * wherever the subscription model keeps offering the event, it holds the block on the saga's other instances to
-     * five minutes.
+     * where the saga does quarantine, it holds the block on its other instances to five minutes.
      */
     public static final Duration DEFAULT_QUARANTINE_AFTER = Duration.ofMinutes(5);
 
