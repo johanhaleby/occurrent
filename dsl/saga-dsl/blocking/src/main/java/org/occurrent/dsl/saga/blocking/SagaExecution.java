@@ -285,9 +285,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * the shared channel keeps going. A false answer means the exception propagates exactly as it always has.
      * <p>
      * The failure is a {@link Throwable} because the instance is stuck on it either way. An {@code Error} out of a
-     * reaction stops the instance making progress exactly as a {@code RuntimeException} does, and an instance stopped by
-     * one blocks the saga's other instances for exactly as long wherever the subscription model offers the event
-     * again.
+     * reaction stops the instance making progress exactly as a {@code RuntimeException} does, and it costs the saga's
+     * other instances exactly the same.
      * <p>
      * Only the event path calls this, and it is not because the timer path has nothing to gain from it. A timeout
      * has no redelivery key of its own, so there is nothing to quarantine it on.
@@ -345,7 +344,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return false;
             }
             if (!record.quarantined()) {
-                log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is the subscription model's to decide. Where it is, the instance is quarantined once it has been failing for {}, measured from this first failure rather than from any one event, unless the subscription cannot confirm by then that it still holds the event.",
+                log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is for whatever feeds this subscription to decide. Where it is, the instance is quarantined once it has been failing for {}, measured from this first failure rather than from any one event, unless the subscription cannot confirm by then that it still holds the event.",
                         subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                 return false;
             }

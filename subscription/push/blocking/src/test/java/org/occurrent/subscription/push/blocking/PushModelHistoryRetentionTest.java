@@ -95,7 +95,8 @@ class PushModelHistoryRetentionTest {
 
     /**
      * An event with no id cannot be looked up, and an unanswerable question reads as a no rather than as an exception
-     * reaching the saga, so an instance goes on failing instead of losing its event.
+     * reaching the saga, so the saga refuses the quarantine rather than acknowledging an event it may not be able to
+     * ask for again.
      */
     @Test
     void an_event_that_cannot_be_looked_up_answers_no() {

@@ -25,8 +25,8 @@ a second compile-time break, and comparing either whole for equality fails silen
 `DurableSubscriptionModel` wraps a MongoDB subscription model on a shared Atlas cluster, a fresh subscription that
 used to start without a recorded position is now refused at `subscribe(..)`. Read
 [section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
-Then a saga instance whose event keeps failing can now be quarantined instead of left failing on it indefinitely,
-which changes five things about the saga API at once. `SagaEnvelope` gains
+Then a saga instance whose event keeps failing can now be quarantined instead of left active and failing
+indefinitely, which changes five things about the saga API at once. `SagaEnvelope` gains
 two record components and `SagaRunnerConfig` gains one, `SagaInstance` gains a method, and `SagaStatus` gains a constant that `findByStatus(ACTIVE, ..)` no longer returns. Read
 [section 8](#8-a-saga-instance-that-keeps-failing-is-quarantined-and-four-saga-types-change-with-it).
 Then a reactor catch-up subscription now delivers an event a second time when a write that was in flight during the
@@ -639,7 +639,7 @@ cluster gets the same no-code-change path out of the refusal it has had since 0.
 
 A saga has one subscription, and every instance of that saga is fed by it. Up to 0.33.0, an event that a saga's
 `evolve`, its `react` or its command dispatcher could not handle propagated to the subscription model, and wherever
-that model offered the event again the saga tried again, without limit. One correlation id that could never make
+that model offered the event again the saga tried again, without limit, and one correlation id that could never make
 progress therefore stopped every other correlation id behind it, for as long as nobody noticed.
 
 From 0.34.0 the executor times the failing rather than counting the attempts. The instance's first failure records the

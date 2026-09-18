@@ -31,8 +31,8 @@ import java.util.Optional;
  * <p>
  * This is the minimal contract the executor needs. Two of its six methods are {@code default}, and both are about
  * reading and writing an instance without its application state, which is how the executor quarantines an instance
- * whose state no longer decodes. A store inherits them and works, and a store that overrides them also lets such an
- * instance reach its budget and be quarantined.
+ * whose state no longer decodes. A store inherits them and works, and only a store that overrides them lets such an
+ * instance be considered for quarantine at all.
  * <p>
  * Observing instances is an optional capability layered on top. A store that also implements
  * {@link SagaStateStoreQueries} can be enumerated, which is what a progress view or a stuck-instance sweep needs. A

@@ -343,8 +343,8 @@ class SagaQuarantineTest {
 
         /**
          * A model whose guarantee is wrong is caught on the event it is about to acknowledge. Quarantine was enabled
-         * on the guarantee, the check disagreed for this event, and the instance goes on failing rather than having
-         * that event acknowledged away. Distinct from the feed that declares nothing, since here quarantine was
+         * on the guarantee, the check disagreed for this event, and the instance goes on failing rather than this
+         * saga acknowledging that event away. Distinct from the feed that declares nothing, since here quarantine was
          * available and was refused on the event.
          */
         @Test
