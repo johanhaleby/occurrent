@@ -46,9 +46,9 @@ parking, because dead-lettering is the broker's own policy and parking is the br
 **The saga declines to acknowledge a refused event, and what happens to it afterwards belongs to the subscription
 model.** A `PushSubscriptionModel` hands the acknowledge-or-redeliver decision to the listener that called `accept`,
 and on a consume-side broker bridge `DeliveryFailurePolicy` is where the choice is configured. For as long as the
-model keeps offering the event, the saga refuses it again and the application stays stuck on it, which is what
-ADR 109 described. Where it is not, the saga still issues no duplicate commands, and that is the part the decision
-owns either way.
+model keeps offering the event, the saga refuses it again, which is the outcome ADR 109 described. What that costs
+the events behind it is the feed's, and this record says nothing about it. Where the event is not offered again, the
+saga still issues no duplicate commands, and that is the part this decision owns either way.
 
 This is the same rule [#1076](https://github.com/johanhaleby/occurrent/issues/1076) settled on for the 0.34.0 saga
 surfaces, applied to the one record those passes ruled out of scope. No public saga API and no saga documentation
