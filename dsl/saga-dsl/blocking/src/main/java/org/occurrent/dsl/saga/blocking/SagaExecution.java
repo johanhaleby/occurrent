@@ -256,7 +256,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             || !unroutableDeliveries.replace(redeliveryKey, existing, new UnroutableDelivery(existing.firstFailedAt(), now))) {
             return;
         }
-        log.error("Saga '{}' has been unable to work out which instance the event '{}' belongs to for {}, and every instance of this saga is still waiting behind it. The event is refused rather than skipped, because acknowledging it would lose it, and no instance is quarantined, because the event reached none. Repair the converter or the id extractor and the event is applied in the order it was written, with nothing to feed to the saga again.",
+        log.error("Saga '{}' has been unable to work out which instance the event '{}' belongs to for {}, and for as long as the subscription model offers it again every instance of this saga waits behind it. The event is refused rather than skipped, because acknowledging it would lose it, and no instance is quarantined, because the event reached none. Where the event is offered again, repair the converter or the id extractor and it is applied in the order it was written, with nothing to feed to the saga again.",
                 subscriptionId, redeliveryKey, Duration.between(existing.firstFailedAt(), now), failure);
     }
 

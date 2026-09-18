@@ -72,8 +72,8 @@ where the budget elapses and the instance is quarantined instead is enough to fa
 record no longer asserts is that the wait always runs until somebody intervenes.
 
 **Amended for [#1071](https://github.com/johanhaleby/occurrent/issues/1071).** The paragraph attributed an
-unconditional redelivery to `SagaRunner`'s javadoc. A consume-side broker bridge sends a failed delivery through its
-`DeliveryFailurePolicy`, so a redelivery is not something this record can assume. The held channel is the cost this
+unconditional redelivery to `SagaRunner`'s javadoc. `DeliveryFailurePolicy` is where a consume-side broker bridge's
+choice is configured, so a redelivery is not something this record can assume. The held channel is the cost this
 record compares the two call sites on, and a bridge need not pay it.
 
 **The decision below still stands, on a reason neither amendment touches.** It never rested on how long an

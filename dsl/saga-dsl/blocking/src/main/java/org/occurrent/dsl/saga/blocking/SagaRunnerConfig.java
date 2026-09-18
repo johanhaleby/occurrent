@@ -40,7 +40,9 @@ import static java.util.Objects.requireNonNull;
  * @param redeliveryDetection  what to do with an event the runner cannot recognise a redelivery of
  * @param quarantineAfter      how long one instance may keep failing before it is quarantined on whichever event it is
  *                             failing on when the budget runs out, so that the subscription is allowed past that event,
- *                             or {@code null} to keep rethrowing forever, which is what every version up to 0.33.0 did.
+ *                             or {@code null} to never quarantine, so the saga keeps rethrowing for as long as the
+ *                             subscription model offers the event again, which is what every version up to 0.33.0
+ *                             did.
  *                             The clock belongs to the instance rather than to one event, so a second event that starts
  *                             failing inherits the elapsed time instead of restarting the budget. It covers everything
  *                             after the saga has worked out which instance the event belongs to, through to the store
@@ -67,7 +69,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
         if (quarantineAfter != null && (quarantineAfter.isZero() || quarantineAfter.isNegative())) {
             // Zero is refused rather than read as "quarantine on the first failure", because the Spring property reads
             // zero as never, and one literal meaning opposite things on the two paths is worse than refusing it here.
-            throw new IllegalArgumentException("quarantineAfter must be positive, or null to keep rethrowing forever");
+            throw new IllegalArgumentException("quarantineAfter must be positive, or null to never quarantine");
         }
         if (timerPollInterval.isZero() || timerPollInterval.isNegative()) {
             throw new IllegalArgumentException("timerPollInterval must be positive");
