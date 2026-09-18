@@ -51,10 +51,12 @@ import java.lang.annotation.*;
  * channel shared by every instance of this saga, so while one event keeps being redelivered and failing the events
  * behind it wait, which is head-of-line blocking.
  * <p>
- * Four things have to hold for that wait to end at the quarantine budget, five minutes by default and set by
- * {@code occurrent.saga.quarantine-after} on this path. The budget has to be set. The subscription model has to
- * guarantee it holds every event it delivers. The event has to arrive with a stream id and version or a global position.
- * And the model has to confirm, for that one event, that acknowledging it is not what would destroy the last copy of it.
+ * Four things have to hold for that wait to end, and it ends at the first delivery after the quarantine budget rather
+ * than at the budget itself, because the quarantine is decided on a delivery rather than on a clock. The budget has to
+ * be set, which on this path means {@code occurrent.saga.quarantine-after}, five minutes by default. The subscription
+ * model has to guarantee it holds every event it delivers. The event has to arrive with a stream id and version or a
+ * global position. And the model has to confirm, for that one event, that acknowledging it is not what would destroy
+ * the last copy of it.
  * Where any of them is missing nothing bounds the wait, as in every version up to 0.33.0, so it runs for as long as
  * the subscription offers the event again. Every failure
  * after the saga has worked out which instance an event belongs to spends the budget, {@code evolve}, {@code react},

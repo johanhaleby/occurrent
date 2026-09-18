@@ -222,14 +222,15 @@ succeed. The failure record is therefore discarded on a lost compare-and-set and
 **Only the input a record names clears it, and the paragraph above reasoned about a timer that fires once.** A saga
 re-arms its timers explicitly, with a `StartTimeout` effect from a reaction, so a timer can fire far more often than
 the budget. Clearing the record on any successful input then puts the clock back to zero on every tick, and an event
-that never succeeds never reaches the budget, so it keeps blocking every other instance of that saga. That is the
+that never succeeds never reaches the budget, so wherever the subscription model offers it again it keeps blocking
+every other instance of that saga. That is the
 block this decision exists to remove, so a record now survives an input it does not name, `firstFailedAt` included,
 and only the failing input getting through clears it. `SagaFailure`'s own contract already said this, and the first
 implementation was what disagreed.
 
-The reasoning that a state change may unblock the event still holds, because the event is still redelivered and still
-clears the record when it succeeds. What the narrower rule removes is an unrelated input's ability to hide an event
-that never succeeds. So a lost compare-and-set on the failure write starts the budget over only for the first failure
+The reasoning that a state change may unblock the event still holds wherever the subscription model offers the event
+again, since the event still clears the record when it succeeds. What the narrower rule removes is an unrelated
+input's ability to hide an event that never succeeds. So a lost compare-and-set on the failure write starts the budget over only for the first failure
 of an input, which has no record to keep, and a later one keeps the record the winning write left in place.
 
 **The failing side needs the same rule, and the paragraph above is where its absence showed.** A record survives an
@@ -506,7 +507,8 @@ wrong, on the one event it is about to acknowledge, and it cannot do more than t
 quarantined instance skips are never offered to it. So it checks a promise rather than standing in for one.
 
 The failure directions are deliberate. An event with no id, and a read that throws, both answer no, so an
-unanswerable question costs the event nothing and the instance keeps blocking. A reader with no position needs no
+unanswerable question costs the event nothing and the instance keeps blocking wherever the subscription model offers
+the event again. A reader with no position needs no
 answer, since `CatchupThenPushSubscriptionModel` refuses one at construction.
 
 Retention means the event remains obtainable from that source, not that the model fetches it again by itself. A
@@ -518,7 +520,8 @@ the transport differences in Decision point 3. A push feed behind the Kafka brid
 which is enough to reach the budget, and it is still not enough to release afterwards, because recording the
 quarantine is what stages the offset and moves past the record.
 
-So for such a source the executor keeps rethrowing and the instance keeps blocking, which is today's behaviour.
+So for such a source the executor keeps rethrowing, and wherever the subscription model offers the event again the
+instance keeps blocking, which is today's behaviour.
 
 **Repositioning was the wrong question even though it reached the right answer.** The first implementation gated on
 `RepositionableSubscriptions`, which is a different property. A model can be repositionable without keeping what it
@@ -693,7 +696,8 @@ budget's default was never among them, it is decided at five minutes in Decision
    this decision removes. A transport that never re-offers the input therefore cannot reach the budget and keeps
    today's behaviour, which Decision point 3 states rather than implies.
 3. **A source that cannot promise to hold everything it delivers.** The behaviour stands, meaning the quarantine is
-   refused and the instance keeps blocking. The framing does not. This ships as a narrowing of the isolation rule
+   refused and the instance keeps blocking wherever the subscription model offers the event again. The framing does
+   not. This ships as a narrowing of the isolation rule
    rather than as its end state, and [#918](https://github.com/johanhaleby/occurrent/issues/918) on milestone 0.35.0
    is the recorded path to closing it. It reaches every push saga rather than only `catchup = NONE`, because being
    able to answer for the event an instance stopped on is not enough when the instance goes on to skip everything
