@@ -222,10 +222,12 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
     void an_error_from_a_handler_stops_the_bridge_and_puts_its_delivery_back_on_the_queue() throws Exception {
         String queue = declareAndBindQueue("erroring");
         AtomicBoolean firstCall = new AtomicBoolean(true);
+        CountDownLatch handlerFailed = new CountDownLatch(1);
         RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
         model.subscribe("erroring", cloudEvent -> {
             if (firstCall.compareAndSet(true, false)) {
+                handlerFailed.countDown();
                 throw new Error("boom");
             }
         });
@@ -234,6 +236,10 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
             publish("erroring", "id-1");
             publish("erroring", "id-2");
 
+            // Waits for the failure itself before reading the queue, since both messages are ready on it until the
+            // bridge takes the first one, and a count of two taken then would be the state before anything happened
+            // rather than the requeue this asserts.
+            assertThat(handlerFailed.await(5, TimeUnit.SECONDS)).as("the handler failed").isTrue();
             // Both back on the queue, which only a closed channel does. The bridge acknowledged neither, and with
             // prefetch one the second was never even sent to it.
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(2));
@@ -252,10 +258,12 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
     void a_checked_exception_from_a_handler_stops_the_bridge_and_puts_its_delivery_back_on_the_queue() throws Exception {
         String queue = declareAndBindQueue("checked");
         AtomicBoolean firstCall = new AtomicBoolean(true);
+        CountDownLatch handlerFailed = new CountDownLatch(1);
         RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
         model.subscribe("checked", cloudEvent -> {
             if (firstCall.compareAndSet(true, false)) {
+                handlerFailed.countDown();
                 sneakyThrow(new IOException("the store this handler writes to is down"));
             }
         });
@@ -264,6 +272,10 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
             publish("checked", "id-1");
             publish("checked", "id-2");
 
+            // Waits for the failure itself before reading the queue, since both messages are ready on it until the
+            // bridge takes the first one, and a count of two taken then would be the state before anything happened
+            // rather than the requeue this asserts.
+            assertThat(handlerFailed.await(5, TimeUnit.SECONDS)).as("the handler failed").isTrue();
             // Both back on the queue, which only a closed channel does. The bridge acknowledged neither, and with
             // prefetch one the second was never even sent to it.
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(2));
