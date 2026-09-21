@@ -43,8 +43,9 @@ public enum SagaStatus {
      * saga, some of them, or none. A push feed hands an event pushed to it live to the saga on the thread that pushed
      * it, so what waits for a live event that fails is up to the listener that pushed it, and a broker bridge is such a
      * listener. For a record the saga fails on with a {@link RuntimeException} or an {@link AssertionError}, the Kafka
-     * bridge holds back no partition but that record's. Any other {@link Error} the saga rethrows stops that bridge, and
-     * the RabbitMQ bridge as well.
+     * bridge holds back at most that record's partition, and none once the record is parked. The RabbitMQ bridge holds
+     * nothing back itself once it has requeued or parked the message, so what the broker sends it next is the broker's
+     * choice. Any other {@link Error} the saga rethrows stops either bridge.
      * <p>
      * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
      * which input the instance stopped on, when it started failing, and what the saga threw.
