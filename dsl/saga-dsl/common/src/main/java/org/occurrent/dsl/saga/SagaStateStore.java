@@ -54,8 +54,7 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * suspend is very often the instance whose state no longer decodes. A renamed event class, a converter change, or
      * state written by a version of the application nobody runs any more all leave an instance that throws on
      * {@link #find(String)} while the rest of its document reads perfectly well. Such an instance used to keep failing
-     * without ever recording that it was failing, so it never reached its budget, and wherever the subscription model
-     * offered the failing event again it went on blocking every other instance of the saga.
+     * without ever recording that it was failing, so it never reached its budget.
      * <p>
      * A caller therefore must not read {@link SagaEnvelope#state()} off the result. A store that answers without
      * decoding leaves it {@code null} even for a healthy instance, exactly as a

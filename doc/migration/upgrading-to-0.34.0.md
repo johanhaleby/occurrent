@@ -639,8 +639,10 @@ cluster gets the same no-code-change path out of the refusal it has had since 0.
 
 A saga has one subscription, and every instance of that saga is fed by it. Up to 0.33.0, an event that a saga's
 `evolve`, its `react` or its command dispatcher could not handle propagated to the subscription model, and wherever
-that model offered the event again the saga tried again, without limit, and one correlation id that could never make
-progress therefore stopped every other correlation id behind it, for as long as nobody noticed.
+that model offered the event again the saga tried again, without limit.
+
+What the failing event holds up in the meantime is decided by whatever feeds the subscription, and the javadoc on
+`SagaStatus.QUARANTINED` says what that can be.
 
 From 0.34.0 the executor times the failing rather than counting the attempts. The instance's first failure tries to write down
 the instant it started failing, and rethrows whether or not that write succeeds, exactly as before. Where nothing was
@@ -665,9 +667,7 @@ instance back out of quarantine.
 One case has no instance to quarantine, and it keeps the 0.33.0 behaviour. An event whose converter or id extractor
 throws never reaches an instance, so the subscription is never let past it, whatever the budget. It may still belong to
 an instance, and once the subscription moved past it the next event for that instance would mark the instance as
-having handled it, so the event would be lost. Every instance of that saga waits behind it instead, for as long as the
-subscription model offers it again, and the first
-failure is logged at `WARN` and after that at `ERROR` once per interval, naming the event and what stopped it. That
+having handled it, so the event would be lost. It is refused instead, and the first failure is logged at `WARN` and after that at `ERROR` once per interval, naming the event and what stopped it. That
 interval is the quarantine budget when the saga has one, and a fixed five-minute default when it does not, so the
 `ERROR` still repeats on a subscription model this saga cannot quarantine anything on, for as long as that model keeps
 offering the event. A model that does not offer a refused delivery again gets only the first `WARN`, and
@@ -693,8 +693,7 @@ which it declares by implementing `HistoryRetainingSubscriptions`. `NativeMongoS
 declares nothing itself is answered by the model it wraps. On a model that declares nothing at all, a bare
 `PushSubscriptionModel` being the one you are most likely to meet, the runner switches the budget off at startup and
 logs why, so the saga keeps the 0.33.0 behaviour of never quarantining. That model hands the acknowledge-or-redeliver
-decision to the listener that called `accept`, so whether the failing event then blocks the instances behind it is
-that listener's call.
+decision to the listener that called `accept`. What the failing event holds up is that listener's call as well.
 
 A model that cannot promise to hold everything gets no quarantine either, even where it can answer for the event an
 instance actually stopped on. `CatchupThenPushSubscriptionModel` is that case, since it replays an event store and
@@ -711,8 +710,7 @@ event to whatever fed it.
 **An event with no redelivery key is not quarantined either.** The failure record identifies the failing event by its
 stream id with its stream version, or by its global position when it has no stream metadata. An event with neither
 cannot be told apart from its own redelivery, so the budget could never elapse for it, and the saga keeps the 0.33.0
-behaviour of never quarantining, which blocks the instances behind the event for as long as the subscription model
-offers it again.
+behaviour of never quarantining.
 
 A feed that drops the Occurrent CloudEvent extensions on the way in is how an event ends up like that.
 `SagaRunnerConfig.redeliveryDetection` already refuses such an event under `REQUIRED`, its default, before the saga
@@ -759,8 +757,7 @@ compiles without them.** They both inherit to `find` and `compareAndSave`, so a 
 0.34.0 exactly as it did in 0.33.0. Override them if you want a quarantine to work on an instance whose state can no
 longer be decoded, which a renamed event class or a changed converter produces. The executor decides and records a
 quarantine through these two rather than through `find`, because loading such an instance throws, and an instance that
-throws on every load records nothing and never reaches its budget, so it goes on blocking every other instance of the
-saga wherever the subscription model offers the failing event again.
+throws on every load records nothing and never reaches its budget.
 In a store that overrides them, `findWithoutState` answers with an envelope whose `state` is `null` and every other
 member populated, the way `findByStatus` already does, and `compareAndSaveWithoutState` saves under the same
 compare-and-set rule while leaving the stored state where it is. That is the contract for an override and not what you

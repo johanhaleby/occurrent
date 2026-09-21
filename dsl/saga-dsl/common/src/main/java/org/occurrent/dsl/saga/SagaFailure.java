@@ -32,9 +32,8 @@ import static java.util.Objects.requireNonNull;
  * instance started failing, which is not always the same moment. An instance where two inputs fail in turn has the
  * record renamed to whichever one failed last and keeps the earlier instant, because the budget belongs to the
  * instance rather than to one of its inputs. Letting each input restart the clock meant such an instance never reached
- * its budget, and wherever the subscription model offered the failing event again it went on blocking every other
- * instance of the saga. So read {@code firstFailedAt} as the start of this
- * instance's current run of failing, and not as the first time {@code input} failed.
+ * its budget. So read {@code firstFailedAt} as the start of this instance's current run of failing, and not as the
+ * first time {@code input} failed.
  * <p>
  * The record outliving a single attempt is the point. An input that fails once and succeeds on redelivery clears it,
  * an input that keeps failing past the runner's quarantine budget can turn the instance {@link SagaStatus#QUARANTINED},

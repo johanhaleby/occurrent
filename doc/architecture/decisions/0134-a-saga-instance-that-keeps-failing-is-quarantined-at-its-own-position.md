@@ -39,8 +39,9 @@ subscription's own cursor thread. `DurableSubscriptionModel`, `CompetingConsumer
 models add no retrying of their own, but `DurableSubscriptionModel` can only wrap a `CheckpointAwareSubscriptionModel`
 and the only two implementations of that are the MongoDB models, so behind it the retrying happens anyway. In `NativeMongoSubscriptionModel` the `currentStartAt.set(...)` call sits after the handler call in
 the same lambda, so the in-memory position does not move either, and `DurableSubscriptionModel` writes its checkpoint
-only after the action returns, so the durable checkpoint does not move. One instance whose input will never succeed
-stops the whole subscription, and a saga has exactly one subscription, so it stops every other instance of that saga.
+only after the action returns, so the durable checkpoint does not move. On either MongoDB model, one instance whose
+input will never succeed stops the whole subscription, and a saga has exactly one subscription, so it stops every
+other instance of that saga.
 
 This is the first of AGENTS.md's design intentions, and it is written there as a constraint rather than a preference.
 No saga, projection or subscription may be blocked by another one being faulty, and no design may lose events. The
@@ -91,9 +92,9 @@ The symmetry is not free, and the reason is what the rest of this decision is bu
 A timer is durable input the saga already owns. It sits in `SagaEnvelope.timers()`, addressed by saga id, so leaving
 it due discards nothing. The next poll finds it in the same place.
 
-An event is not the saga's to own. It arrives on one ordered channel shared by every instance of the saga, and the
-only handle on that channel is the subscription's position. Skipping an event moves a position that belongs to all of
-those instances at once, and once it has moved the saga has no way to ask for that event a second time.
+An event is not the saga's to own. It arrives on the one subscription every instance of the saga shares, and the only
+handle on it is the subscription's position. Once skipping an event has moved that position, the saga has no way to
+ask for that event a second time.
 
 So "catch it and move on" preserves the input on the timer path and only half answers the event path. The missing
 half there is a durable record of what was skipped and where the instance stopped.
@@ -224,9 +225,8 @@ succeed. The failure record is therefore discarded on a lost compare-and-set and
 **Only the input a record names clears it, and the paragraph above reasoned about a timer that fires once.** A saga
 re-arms its timers explicitly, with a `StartTimeout` effect from a reaction, so a timer can fire far more often than
 the budget. Clearing the record on any successful input then puts the clock back to zero on every tick, and an event
-that never succeeds never reaches the budget, so wherever the subscription model offers it again it keeps blocking
-every other instance of that saga. That is the
-block this decision exists to remove, so a record now survives an input it does not name, `firstFailedAt` included,
+that never succeeds never reaches the budget, so its instance is never quarantined. That is what this decision exists
+to change, so a record now survives an input it does not name, `firstFailedAt` included,
 and only the failing input getting through clears it. `SagaFailure`'s own contract already said this, and the first
 implementation was what disagreed.
 
@@ -277,8 +277,7 @@ converted the CloudEvent, asked the saga for the instance id, read the delivery 
 before opening the `try`, and caught `RuntimeException` rather than `Throwable`. So two conditions were enforced that
 this decision never named. The failure had to be a `RuntimeException`, and it had to come from inside `process`. A saga
 whose id extractor reads a correlation field that is null on one old event satisfies every condition written down here
-and was still never quarantined, because `sagaId` threw outside the `try`. Every other instance of that saga waited
-behind the redelivery forever, which is the outcome this decision exists to remove. The whole delivery now runs inside
+and was still never quarantined, because `sagaId` threw outside the `try`. The whole delivery now runs inside
 one `try` that catches `Throwable`, so once an event has reached an instance, where a failure was thrown decides
 nothing, and what it was decides nothing beyond
 the single exclusion the next paragraph names. The rest of the conditions are listed on `SagaStatus.QUARANTINED`. [#997](https://github.com/johanhaleby/occurrent/issues/997) is where that was
@@ -305,10 +304,9 @@ for a redelivery and ignored. That is loss, and the isolation rule in `AGENTS.md
 or well logged.
 
 So the budget applies only to a delivery that reached an instance. An unroutable delivery is refused every time it is
-offered, which is what 0.33.0 did, and for as long as the subscription model offers it again every instance of this
-saga waits behind it. The same rule permits that,
-because it applies per consumer, and no other saga, projection or subscription waits with it. Where it is offered
-again, once the converter or
+offered, which is what 0.33.0 did. The same rule permits that, because it applies per consumer. What the refused
+delivery holds up is decided by whatever feeds the subscription, and `SagaStatus.QUARANTINED` says what that can be.
+Where it is offered again, once the converter or
 the id extractor is repaired the event is applied in the order it was written, with nothing to feed again. The logging
 is paced independently of whether the budget is switched on for this saga, a `WARN` on the first failure and an
 `ERROR` once per interval after that for as long as the event keeps being offered, so an operator hears about it at a
@@ -340,7 +338,7 @@ record that this instance failed before it began, and a later redelivery of its 
 
 The alternative was to exclude start-event failures from quarantine and leave them on today's path. That was rejected
 because it is a hole in exactly the rule this decision exists to keep. A saga whose first event throws for one
-correlation id would still stop every other instance, and the isolation rule in AGENTS.md has no severity ladder.
+correlation id would still never be quarantined, and the isolation rule in AGENTS.md has no severity ladder.
 
 ### 5. A quarantined instance is inert, and its watermarks stop moving
 
@@ -388,8 +386,7 @@ for, so a quarantined instance must be enumerable without reading its state.
 instance has to be reachable without its state as well as enumerable without it, because the executor decides the
 quarantine from a by-id read, and an instance whose state no longer decodes is the instance that most needs the
 decision made. Deciding it from a read that throws on such an instance left it failing with nothing recorded, so it
-never reached the budget, and wherever the subscription model offered the failing event again it went on blocking
-every other instance of the saga, which is the one outcome this decision exists to remove.
+never reached the budget and was never quarantined, which is the one outcome this decision exists to remove.
 
 `SagaStateStore` therefore gains `findWithoutState` and `compareAndSaveWithoutState`, both `default` and delegating to
 `find` and `compareAndSave`. They are `default` rather than abstract because `SagaStateStore` shipped in 0.33.0 and the
@@ -510,7 +507,7 @@ wrong, on the one event it is about to acknowledge, and it cannot do more than t
 quarantined instance skips are never offered to it. So it checks a promise rather than standing in for one.
 
 The failure directions are deliberate. An event with no id, and a read that throws, both answer no, so an
-unanswerable question costs the event nothing and the instance keeps blocking wherever the subscription model offers
+unanswerable question costs the event nothing and the instance keeps failing wherever the subscription model offers
 the event again. A reader with no position needs no
 answer, since `CatchupThenPushSubscriptionModel` refuses one at construction.
 
@@ -524,7 +521,7 @@ which is enough to reach the budget, and it is still not enough to release after
 quarantine is what stages the offset and moves past the record.
 
 So for such a source the executor keeps rethrowing, and wherever the subscription model offers the event again the
-instance keeps blocking, which is today's behaviour.
+instance keeps failing, which is today's behaviour.
 
 **Repositioning was the wrong question even though it reached the right answer.** The first implementation gated on
 `RepositionableSubscriptions`, which is a different property. A model can be repositionable without keeping what it
@@ -702,7 +699,7 @@ budget's default was never among them, it is decided at five minutes in Decision
    this decision removes. A transport that never re-offers the input therefore cannot reach the budget and keeps
    today's behaviour, which Decision point 3 states rather than implies.
 3. **A source that cannot promise to hold everything it delivers.** The behaviour stands, meaning the quarantine is
-   refused and the instance keeps blocking wherever the subscription model offers the event again. The framing does
+   refused and the instance keeps failing wherever the subscription model offers the event again. The framing does
    not. This ships as a narrowing of the isolation rule rather than as its end state,
    and [#918](https://github.com/johanhaleby/occurrent/issues/918) on milestone 0.35.0
    is the recorded path to closing it. It reaches every push saga rather than only `catchup = NONE`, because being

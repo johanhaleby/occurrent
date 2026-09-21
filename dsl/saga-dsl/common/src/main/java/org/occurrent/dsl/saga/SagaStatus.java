@@ -35,7 +35,17 @@ public enum SagaStatus {
 
     /**
      * The instance is suspended on an input it could not handle. It skips every event addressed to it and fires no
-     * timers, so the subscription it shares with every other instance of the same saga is free to move on.
+     * timers.
+     * <p>
+     * What a failing event holds up while the runner rethrows its failure is not the runner's to decide. That goes for
+     * an instance that is failing and not quarantined, and for an event the saga could not route to any instance. Whatever
+     * feeds the saga's subscription decides what else waits for that event, which can be every other instance of the
+     * saga, some of them, or none. A push feed hands an event pushed to it live to the saga on the thread that pushed
+     * it, so what waits for a live event that fails is up to the listener that pushed it, and a broker bridge is such a
+     * listener. For a record the saga fails on with a {@link RuntimeException} or an {@link AssertionError}, the Kafka
+     * bridge holds back at most that record's partition, and none once the record is parked. The RabbitMQ bridge holds
+     * nothing back itself once it has requeued or parked the message, so what the broker sends it next is the broker's
+     * choice. Any other {@link Error} the saga rethrows stops either bridge.
      * <p>
      * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
      * which input the instance stopped on, when it started failing, and what the saga threw.
