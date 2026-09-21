@@ -190,8 +190,8 @@ five minutes means five minutes on both.
 **The default budget is five minutes.** Once the MongoDB backoff saturates it retries every two seconds, so five
 minutes is on the order of a hundred and fifty attempts, which is ample evidence that an input is not going to
 succeed. It also spans the failures worth surviving without quarantining anything. A replica-set election takes
-seconds and a rolling restart takes a minute or two, and both finish well inside it. Against that, where the saga does
-quarantine, any block on the rest of its instances ends at the first delivery after the budget rather than running on.
+seconds and a rolling restart takes a minute or two, and both finish well inside it. Against that, it is also the
+earliest a failing instance can be quarantined.
 
 **A transport that never re-offers the input cannot be quarantined by this mechanism, and the design does not pretend
 otherwise.** `PushSubscriptionModel` has no retrying, no checkpoint and no position, and its javadoc says a handler
@@ -278,8 +278,8 @@ whose id extractor reads a correlation field that is null on one old event satis
 and was still never quarantined, because `sagaId` threw outside the `try`. Every other instance of that saga waited
 behind the redelivery forever, which is the outcome this decision exists to remove. The whole delivery now runs inside
 one `try` that catches `Throwable`, so once an event has reached an instance, where a failure was thrown decides
-nothing, what it was decides nothing beyond
-the single exclusion the next paragraph names, and the conditions are the four this decision states and no others. [#997](https://github.com/johanhaleby/occurrent/issues/997) is where that was
+nothing, and what it was decides nothing beyond
+the single exclusion the next paragraph names. The rest of the conditions are listed on `SagaStatus.QUARANTINED`. [#997](https://github.com/johanhaleby/occurrent/issues/997) is where that was
 found.
 
 **A failure is the instance's unless it is a condition of the process, and the test is on what was thrown rather than

@@ -49,7 +49,7 @@ import static java.util.Objects.requireNonNull;
  *                          this rather than whether a document exists
  * @param failure           the input this instance is failing on, or {@code null} when it is not failing on anything.
  *                          Present from the first failure onwards, so it outlives a single attempt; {@code status}
- *                          says whether the failing has lasted past the runner's quarantine budget
+ *                          says whether the instance was quarantined for it
  * @param currentStep       the step a flow saga is waiting in, derived from {@code state} whenever it is present. A
  *                          store may pass this directly, but only when it passes a {@code null} state: that is how a
  *                          store answers {@link SagaInstance#currentStep()} from a projected read without loading the

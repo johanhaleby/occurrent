@@ -52,10 +52,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>
  * An instance that keeps failing can be quarantined rather than left to fail for as long as the subscription model
  * offers the event again. Its first failure records when the failing started and rethrows, which is what every
- * version up to 0.33.0 did. Once the instance has been failing for at least
- * {@link SagaRunnerConfig#quarantineAfter()}, it is marked
- * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} on whichever event it is failing on then and this class returns
- * normally, so the subscription acknowledges that event and the saga's other instances keep going.
+ * version up to 0.33.0 did. Whether a later failure is considered for quarantine, and whether a considered one is then
+ * quarantined, are separate conditions, and {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} lists both. When
+ * the instance is quarantined, this class returns normally instead of rethrowing.
  * <p>
  * Every step from reading the CloudEvent to saving the result runs inside one {@code try} that catches
  * {@link Throwable}, so once an event has reached an instance, what failed and where it was thrown decide nothing
@@ -190,17 +189,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * and {@link #refuseUnroutableDelivery} says why. Only a delivery that reached an instance can be let past, and
      * only by quarantining that instance.
      * <p>
-     * Four conditions decide that, and they are the same four whichever step after routing threw. They are
-     * also the same four whatever the failure was, with the one exclusion
-     * {@link SagaExecutionSupport#isAttributableToTheInstance} names, which is a failure of the JVM rather than of this
-     * instance's work.
-     * <p>
-     * {@link SagaRunnerConfig#quarantineAfter()} has to be set, and {@code SagaRunner} switches it off at startup for a
-     * model that cannot guarantee it holds every event it delivers, so a budget that is set also means the model made
-     * that guarantee. The failing delivery has to have been failing for at least that budget. The event has to
-     * carry a redelivery key, meaning a stream id with its version or a global position, since without one nothing tells
-     * one delivery of it from the next and the budget could never elapse. And the model has to confirm, for that one
-     * event, that acknowledging it is not what would destroy the last copy of it.
+     * The conditions {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} lists decide that, and they are the same
+     * whichever step after routing threw. This method checks the ones that need no store read, and {@link #quarantine}
+     * checks the rest.
      */
     private boolean letTheSubscriptionPast(@Nullable String sagaId, CloudEvent cloudEvent, EventMeta meta, Throwable failure) {
         if (sagaId == null) {
@@ -344,7 +335,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return false;
             }
             if (!record.quarantined()) {
-                log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is for whatever feeds this subscription to decide. Where it is, the instance is quarantined once it has been failing for {}, measured from this first failure rather than from any one event, unless the subscription cannot confirm by then that it still holds the event.",
+                log.warn("Saga '{}' instance '{}' failed on the event '{}'. Whether the event is offered again is for whatever feeds this subscription to decide. The instance can be quarantined once it has been failing for {}, measured from when it started failing rather than from this event, but that is not the only condition, so read the instance's status to know whether it was.",
                         subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                 return false;
             }

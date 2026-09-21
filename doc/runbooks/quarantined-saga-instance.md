@@ -19,8 +19,11 @@ which is how an instance whose state no longer decodes ends up here. Up to 0.33.
 other correlation id behind it.
 
 From 0.34.0 the executor times how long the instance has been failing. Once that reaches
-`SagaRunnerConfig.quarantineAfter`, five minutes by default, the instance moves to `SagaStatus.QUARANTINED` and the
-executor stops rethrowing, so the subscription acknowledges the event and goes on delivering to everybody else.
+`SagaRunnerConfig.quarantineAfter`, five minutes by default, the instance can move to `SagaStatus.QUARANTINED`, and
+when it does the executor stops rethrowing.
+
+Reaching the budget is not enough on its own. The javadoc on `SagaStatus.QUARANTINED` lists what else has to hold, so
+an instance past its budget can still be `ACTIVE`. Read its status rather than working it out from the time.
 
 A quarantined instance applies no further events and fires no timers, and its redelivery watermarks stop moving, so
 nothing it skipped is recorded as handled. The subscription still delivers those events, and the runner still reads
@@ -295,8 +298,8 @@ which is the race in step 5.
 
 ## Preventing the next one
 
-`SagaRunnerConfig.quarantineAfter` is how long an instance may keep failing before it is quarantined, five minutes by
-default. On the annotation path it is `occurrent.saga.quarantine-after` instead.
+`SagaRunnerConfig.quarantineAfter` is how long an instance has to keep failing before it can be quarantined, five
+minutes by default. On the annotation path it is `occurrent.saga.quarantine-after` instead.
 
 Lower it when you would rather find out sooner and are willing to quarantine an instance whose downstream service was
 only briefly unavailable. Raise it when your dispatcher talks to something that is routinely down for longer than five

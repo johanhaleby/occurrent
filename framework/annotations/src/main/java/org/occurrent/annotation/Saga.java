@@ -51,20 +51,18 @@ import java.lang.annotation.*;
  * channel shared by every instance of this saga, so while one event keeps being redelivered and failing the events
  * behind it wait, which is head-of-line blocking.
  * <p>
- * Four things have to hold for that wait to end at the quarantine budget, five minutes by default and set by
- * {@code occurrent.saga.quarantine-after} on this path. The budget has to be set. The subscription model has to
- * guarantee it holds every event it delivers. The event has to arrive with a stream id and version or a global position.
- * And the model has to confirm, for that one event, that acknowledging it is not what would destroy the last copy of it.
- * Where any of them is missing nothing bounds the wait, as in every version up to 0.33.0, so it runs for as long as
- * the subscription offers the event again. Every failure
- * after the saga has worked out which instance an event belongs to spends the budget, {@code evolve}, {@code react},
- * the dispatcher and the store alike, with {@code OutOfMemoryError} the one exclusion, since that says the JVM ran out
- * of heap rather than anything about the saga's work.
+ * An instance that keeps failing can be quarantined instead, with a budget of five minutes by default, set by
+ * {@code occurrent.saga.quarantine-after} on this path. Whether a failing event is considered for quarantine and
+ * whether a considered one is actually quarantined are separate conditions, and the javadoc on
+ * {@code SagaStatus.QUARANTINED} lists both. An instance can be past its budget and still {@code ACTIVE}, so read its
+ * status rather than inferring it from the budget. Every failure after the saga has worked out which instance an event
+ * belongs to spends the budget, {@code evolve}, {@code react}, the dispatcher and the store alike, with
+ * {@code OutOfMemoryError} the one exclusion, since that says the JVM ran out of heap rather than anything about the
+ * saga's work.
  * <p>
- * Only an event the saga routed to an instance can end the wait. That instance is marked {@code QUARANTINED} on
- * whichever event it stopped on, and the subscription moves past the event so the saga's other instances keep going.
- * An event it could not route, because the converter or the id extractor threw, is refused on every redelivery
- * instead, because acknowledging it would lose it. Where the subscription offers it again, this saga waits behind it
+ * Only an event the saga routed to an instance is charged to that instance, and a quarantine records whichever event
+ * the instance stopped on. An event it could not route, because the converter or the id extractor threw, is refused
+ * on every redelivery instead, because acknowledging it would lose it. Where the subscription offers it again, this saga waits behind it
  * until the converter or the id extractor is repaired, and the refusal is logged once per interval naming the event, the
  * budget when it is set and a fixed five minutes when it is not, so the refusal keeps getting louder even where the
  * budget is switched off. The javadoc on {@code SagaRunner}, the executor the framework builds for this saga, and

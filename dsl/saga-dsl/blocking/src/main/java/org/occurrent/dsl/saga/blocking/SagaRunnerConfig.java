@@ -38,9 +38,10 @@ import static java.util.Objects.requireNonNull;
  * @param maxCasAttempts       the maximum compare-and-set attempts for one input before failing, also the maximum number
  *                             of times that input's commands can be re-dispatched
  * @param redeliveryDetection  what to do with an event the runner cannot recognise a redelivery of
- * @param quarantineAfter      how long one instance may keep failing before it is quarantined on whichever event it is
- *                             failing on when the budget runs out, so that the subscription is allowed past that event,
- *                             or {@code null} to never quarantine, so the saga keeps rethrowing for as long as the
+ * @param quarantineAfter      how long one instance has to keep failing before it can be quarantined on whichever
+ *                             event it is failing on then, or {@code null} to never quarantine. Reaching it is not
+ *                             enough on its own, and {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} lists what
+ *                             else has to hold. With {@code null} the saga keeps rethrowing for as long as the
  *                             subscription model offers the event again, which is what every version up to 0.33.0
  *                             did.
  *                             The clock belongs to the instance rather than to one event, so a second event that starts
@@ -100,9 +101,8 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
      * The default quarantine budget. Once a MongoDB subscription model's backoff saturates it retries every two
      * seconds, so five minutes is on the order of a hundred and fifty attempts, which is ample evidence that an input
      * is not going to succeed. It also spans the failures worth surviving without quarantining anything, because a replica-set
-     * election takes seconds and a rolling restart a minute or two, and both finish well inside it. Against that,
-     * where the saga does quarantine, any block on its other instances ends at the first delivery after the budget
-     * rather than running on.
+     * election takes seconds and a rolling restart a minute or two, and both finish well inside it. Against that, it is
+     * also the earliest a failing instance can be quarantined.
      */
     public static final Duration DEFAULT_QUARANTINE_AFTER = Duration.ofMinutes(5);
 

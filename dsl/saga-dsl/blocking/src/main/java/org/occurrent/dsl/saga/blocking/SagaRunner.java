@@ -83,31 +83,25 @@ import static java.util.Objects.requireNonNull;
  *       the event again. Whether it does is the model's own business. A push feed lets the listener decide, and on
  *       a consume-side broker bridge the choice is set with {@code DeliveryFailurePolicy}. The subscription is a
  *       single ordered channel shared by every instance this saga handles, so while one event keeps being redelivered
- *       and failing the events queued behind it wait. Four things have to hold for that wait to end at
- *       {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. The budget has to be set. The
- *       subscription model has to guarantee it holds every event it delivers. The event has to arrive with a stream id
- *       and version or a global position, since nothing tells one delivery of an event carrying neither from the next.
- *       And the model has to confirm, for that one event, that acknowledging it is not what would destroy the last
- *       copy of it, which catches a guarantee made wrongly before the event is acknowledged away. That is a question
- *       about what the acknowledgement costs rather than about what the source holds at this instant, so it answers yes
- *       for an event an operator has already erased, since saying no would strand an instance on an event nobody can
- *       supply. Where any of those is missing nothing bounds the wait, as in every version
- *       up to 0.33.0, so it runs for as long as the model offers the event again.
+ *       and failing the events queued behind it wait.
  *       <p>
- *       What is <em>not</em> among them is what failed or where it was thrown, once the saga has worked out which
- *       instance the event belongs to. Every failure from there counts, from the redelivery check, {@code evolve},
+ *       An instance that keeps failing can be quarantined instead, with a budget set by
+ *       {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. Whether a failing event is considered
+ *       for quarantine and whether a considered one is actually quarantined are separate conditions, and
+ *       {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} lists both. An instance can be past its budget and
+ *       still {@code ACTIVE}, so read the instance's status rather than inferring it from the budget.
+ *       <p>
+ *       What is <em>not</em> among the conditions is what failed or where it was thrown, once the saga has worked out
+ *       which instance the event belongs to. Every failure from there counts, from the redelivery check, {@code evolve},
  *       {@code react} and the dispatcher, to the store saving the result, and an {@code Error} counts the same as a
  *       {@code RuntimeException}. The one exclusion is a failure of the JVM rather than of the saga's work, which is
  *       {@link OutOfMemoryError} and nothing else. It says the process ran out of heap while this delivery held the
  *       thread, and any other delivery running then would have met the same thing.
  *       <p>
- *       Past the budget, what happens turns on whether the event reached an instance at all. An event the saga
- *       correlated is charged to that instance, which becomes
- *       {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} on whichever event it is failing on then. The executor
- *       stops rethrowing and the subscription moves past the event so the saga's other instances keep going. The budget
- *       is the instance's rather than one event's, so an instance where two events both fail keeps the instant it
- *       started failing and the record names whichever event it stopped on. The quarantined instance stops there, and
- *       0.34.0 has no operation that brings it back, so {@code SagaStateStore.delete(sagaId)} is how you abandon it.
+ *       An event the saga correlated is charged to that instance, and a quarantine records whichever event the
+ *       instance is failing on then. The budget is the instance's rather than one event's, so an instance where two
+ *       events both fail keeps the instant it started failing and the record names whichever event it stopped on.
+ *       The quarantined instance stops there, and 0.34.0 has no operation that brings it back, so {@code SagaStateStore.delete(sagaId)} is how you abandon it.
  *       <p>
  *       An event the saga could <em>not</em> correlate, because the converter or the id extractor threw, is never let
  *       past, whatever the budget. Not being able to say which instance it belongs to does not mean it belongs to none,

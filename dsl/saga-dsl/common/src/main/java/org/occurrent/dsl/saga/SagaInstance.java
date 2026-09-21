@@ -50,7 +50,8 @@ public interface SagaInstance {
      * The input this instance is failing on, or {@code null} when it is failing on nothing.
      * <p>
      * A non-null answer with a {@link SagaStatus#ACTIVE} status means an input has failed at least once and the
-     * quarantine budget is still running, so the instance is expected to recover on its own. A non-null answer with a
+     * instance has not been quarantined. The budget may still be running or may have run out, since reaching it is not
+     * enough on its own, and {@link SagaStatus#QUARANTINED} lists what else has to hold. A non-null answer with a
      * {@link SagaStatus#QUARANTINED} status means the budget elapsed and the instance stopped, and the record says
      * where and why. Those two read the same way here on purpose, because the operational question is the same one:
      * what is this instance stuck on.

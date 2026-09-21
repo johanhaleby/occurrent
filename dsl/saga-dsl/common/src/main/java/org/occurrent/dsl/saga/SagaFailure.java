@@ -37,9 +37,9 @@ import static java.util.Objects.requireNonNull;
  * instance's current run of failing, and not as the first time {@code input} failed.
  * <p>
  * The record outliving a single attempt is the point. An input that fails once and succeeds on redelivery clears it,
- * an input that keeps failing past the runner's quarantine budget turns the instance {@link SagaStatus#QUARANTINED},
- * and until that budget elapses the instance is still {@link SagaStatus#ACTIVE} with a record attached. So a present
- * record does not by itself mean a quarantined instance. Read {@link SagaInstance#status()} for that, and read this
+ * an input that keeps failing past the runner's quarantine budget can turn the instance {@link SagaStatus#QUARANTINED},
+ * and otherwise the instance is still {@link SagaStatus#ACTIVE} with a record attached. So a present record does not
+ * by itself mean a quarantined instance. Read {@link SagaInstance#status()} for that, and read this
  * for why.
  * <p>
  * What is here and what is not follows the same rule as the rest of {@link SagaInstance}. An operator asking why an
