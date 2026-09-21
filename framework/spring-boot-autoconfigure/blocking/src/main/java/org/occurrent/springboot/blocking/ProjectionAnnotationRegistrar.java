@@ -318,7 +318,10 @@ class ProjectionAnnotationRegistrar {
                     return null;
                 }
                 work.run();
-            } catch (RuntimeException | Error e) {
+            } catch (Throwable e) {
+                // Throwable rather than RuntimeException and Error, because a projection written in Kotlin can throw a
+                // checked exception from its fold without declaring it. Nobody joins this task except close(), so one
+                // that got past here was recorded nowhere: no log, and a status that still read as catching up.
                 log.error("The background catch-up of projection {} failed. It has folded no history and will receive "
                         + "no live events until the application is restarted.", id, e);
                 // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the

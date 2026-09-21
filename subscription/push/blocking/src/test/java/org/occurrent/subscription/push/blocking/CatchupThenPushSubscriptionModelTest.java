@@ -35,6 +35,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -1672,6 +1673,42 @@ class CatchupThenPushSubscriptionModelTest {
                 return false;
             }
         };
+    }
+
+    // A handler written in Kotlin can throw a checked exception without declaring it, and this model has to treat it
+    // as the failure it is: the replay entry goes, so isCatchingUp(id) stops answering true for a replay that ended,
+    // and the registration stays and refuses every later event rather than acknowledging it.
+    @Test
+    void a_catch_up_failing_on_a_checked_exception_from_the_handler_forgets_the_replay_and_keeps_the_registration_refusing() {
+        assertThatACatchUpFailingOnAHandlerFailureForgetsTheReplay(new IOException("the view this subscription writes to is down"));
+    }
+
+    @Test
+    void a_catch_up_failing_on_a_runtime_exception_from_the_handler_forgets_the_replay_and_keeps_the_registration_refusing() {
+        assertThatACatchUpFailingOnAHandlerFailureForgetsTheReplay(new IllegalStateException("the view this subscription writes to is down"));
+    }
+
+    private static void assertThatACatchUpFailingOnAHandlerFailureForgetsTheReplay(Exception handlerFailure) {
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
+        CloudEvent replayed = cloudEvent("1", "Created");
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(() -> Stream.of(replayed), 1), liveFeed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> sneakyThrow(handlerFailure));
+        Throwable thrownByWait = catchThrowable(subscription::waitUntilStarted);
+
+        assertThat(model.isCatchingUp("sub")).as("a replay that ended").isFalse();
+        Throwable thrownByAccept = catchThrowable(() -> liveFeed.accept(cloudEvent("2", "Created")));
+        assertThat(thrownByAccept).as("a live event after the failed catch-up")
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        // Rethrown as itself for a RuntimeException, wrapped for a checked one, since waitUntilStarted cannot throw
+        // a checked exception it does not declare.
+        assertThat(thrownByWait == handlerFailure ? thrownByWait : thrownByWait.getCause()).isSameAs(handlerFailure);
+        assertThat(model.isRunning("sub")).isTrue();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     private static PositionOrderedReader failingReader() {

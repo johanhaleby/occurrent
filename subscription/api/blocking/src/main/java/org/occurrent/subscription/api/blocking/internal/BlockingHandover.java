@@ -643,15 +643,16 @@ public final class BlockingHandover<T, K> {
             drainBufferAndGoLive(source);
             source.markCaughtUp();
             return true;
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
             // Record the failure so a live payload fed after a failed catch-up fails fast instead of buffering until
             // overflow and hiding the error.
             //
-            // Error is recorded alongside RuntimeException, not only rethrown. Its callers no longer release the
-            // registration when a catch-up fails (ADR 104), so a failure this engine does not record leaves a handover
-            // that keeps buffering live payloads and returning normally, which acknowledges them into a replay that is
-            // never coming back. That is the loss the refusal exists to prevent, and something like a
-            // NoClassDefFoundError out of the fold is exactly how it would arrive.
+            // Every Throwable is recorded, not only a RuntimeException. Its callers no longer release the registration
+            // when a catch-up fails (ADR 104), so a failure this engine does not record leaves a handover that keeps
+            // buffering live payloads and returning normally, which acknowledges them into a replay that is never
+            // coming back. That is the loss the refusal exists to prevent. A NoClassDefFoundError out of the fold is
+            // one way it arrives, and a checked exception from a fold written in Kotlin, which declares nothing, is
+            // another. An OutOfMemoryError is recorded too, since a replay it cut short is just as incomplete.
             if (replayOpen) {
                 abandonReplayWithoutMasking(source);
             }
@@ -672,7 +673,7 @@ public final class BlockingHandover<T, K> {
                 // delivered before the failure makes this handover refuse everything that comes after.
                 try {
                     deliverBufferAndGoLive();
-                } catch (RuntimeException | Error deliveryFailure) {
+                } catch (Throwable deliveryFailure) {
                     e.addSuppressed(deliveryFailure);
                 }
             }
@@ -711,7 +712,7 @@ public final class BlockingHandover<T, K> {
         }
         try {
             source.replayAbandoned();
-        } catch (RuntimeException | Error ignored) {
+        } catch (Throwable ignored) {
         }
     }
 
@@ -790,16 +791,19 @@ public final class BlockingHandover<T, K> {
         }
         // Ahead of the drained deliveries, so a payload the replay already applied is reported before any payload
         // that comes after it.
+        boolean reported = false;
         try {
             for (T replayedPayload : alreadyReplayed) {
                 replayedBy.alreadyDeliveredByReplay(replayedPayload);
             }
-        } catch (RuntimeException | Error e) {
-            // Nothing has been delivered yet, so every key reserved above is still reserved and would be skipped by a
-            // later redelivery. Released for the same reason the delivery loop below releases the rest of them.
-            releaseReservations(keysToDeliver);
-            throw e;
+            reported = true;
         } finally {
+            if (!reported) {
+                // Nothing has been delivered yet, so every key reserved above is still reserved and would be skipped
+                // by a later redelivery, and waited for by a later catch-up. Released for the same reason the
+                // delivery loop below releases the rest of them, whatever the source threw.
+                releaseReservations(keysToDeliver);
+            }
             // Counted from under the lock that made this handover live, so a catch-up starting right now waits for
             // these calls rather than replaying while the previous replay's source is still being told about them.
             synchronized (lock) {

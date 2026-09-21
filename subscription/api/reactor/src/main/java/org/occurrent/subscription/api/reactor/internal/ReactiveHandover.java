@@ -845,7 +845,11 @@ public final class ReactiveHandover<T, K> {
             replaySource.set(null);
             try {
                 source.replayAbandoned();
-            } catch (RuntimeException | Error ignored) {
+            } catch (Throwable ignored) {
+                // Throwable rather than RuntimeException and Error, because a view written in Kotlin can throw a
+                // checked exception without declaring it. One that got past here left the rest of the failure
+                // handling unrun, so nothing recorded the failure, the payloads waiting for an answer never got one,
+                // and the replay turn never went back.
             }
         }
     }
