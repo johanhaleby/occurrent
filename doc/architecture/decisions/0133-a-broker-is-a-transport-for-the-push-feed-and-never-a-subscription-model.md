@@ -1295,6 +1295,18 @@ the next tick with nothing left to release that delivery, and at the default `pr
 that consumer nothing further. The restore is for any `Throwable` now, so the tag goes back at the front and the next
 poll retries it, which is what the `RuntimeException` case already had.
 
+Stopping or closing a bridge has to end in a channel close whatever throws before it, since the close is what puts a
+held delivery back on the queue and the release in front of it only does that sooner. `stopPermanently()` and
+`close()` released each held delivery inside a catch for `RuntimeException`, with a comment saying the channel close
+that followed requeues whatever the release could not. An `Error` out of `basicNack` skipped that close, and so did an
+`Error` out of the consumer cancel before it, which `close()` caught only as an `IOException`. The held deliveries then
+stayed unacknowledged on a channel nobody closed, and RabbitMQ redelivers them only once that channel or its
+connection goes away. See [#1090](https://github.com/johanhaleby/occurrent/issues/1090). The channel close now runs in
+a `finally` in both methods of both bridges, and so does what follows it, the parking publisher's close in `close()`
+and the shutdown of the poll and the worker in `stopPermanently()`. The `Error` still propagates once that is done.
+Nothing is caught that was not caught before, so whether to exempt an `OutOfMemoryError`, which the poll and the saga
+timer poller each had to decide, does not come up.
+
 A failed acknowledgement is not always the bridge failing, though. A handler that finishes after the connection has
 dropped, and before its recovery has started, acknowledges on a closed channel, and `basicAck` throws
 `AlreadyClosedException`. Stopping for that closed the channel, and closing an `AutorecoveringChannel` takes it out
@@ -1391,3 +1403,8 @@ exception on its first tick and an `Error` on its second, then answers true, and
 `RabbitMqDomainEventBridgePollFailureTest` throws an `Error` from a mocked feed's `isReadyForLiveDelivery` on the
 first tick and asserts the consumer still starts. Both release-helper tests have a release that fails with an
 `Error` and assert the tag is back at the front of the deque. Each fails against the catch it was written for.
+`RabbitMqCloudEventBridgeTeardownTest` and `RabbitMqDomainEventBridgeTeardownTest` throw an `Error` against a mocked
+`Channel` from each step ahead of a close, both releases on a permanent stop and on `close()`, the consumer cancel on
+`close()`, and the consume channel's own close ahead of the parking publisher's, and assert that the close still
+happens. Each fails on that assertion without the `finally`. A `RuntimeException` from a release, which was always
+caught, passes with and without it.
