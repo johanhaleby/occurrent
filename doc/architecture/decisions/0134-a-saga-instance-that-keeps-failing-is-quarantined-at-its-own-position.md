@@ -176,8 +176,8 @@ quarantine. It must not hold one.
 
 The first failure of an input records when it started failing and rethrows, which is exactly today's behaviour.
 Every later failure of the same input compares the elapsed time against a configured budget and keeps rethrowing
-while it is under it. Only past the budget does the executor record the quarantine, stop rethrowing, and let the
-position advance.
+while it is under it. The executor records a quarantine, stops rethrowing and lets the position advance only past the
+budget, and `SagaStatus.QUARANTINED` lists what else has to hold first.
 
 The budget is a `Duration` rather than an attempt count, and the reason is stronger than the retry cadence being
 tunable. **The retry loop is not always Occurrent's at all.** On the MongoDB models it is a `RetryStrategy` the user
@@ -242,7 +242,7 @@ arriving 7, 8, 7, 8, then had every delivery reset `firstFailedAt` and never rea
 concurrency and a re-offered batch both produce that arrival order. So the elapsed time runs from when the instance
 started failing rather than from when the input now failing started. A different input failing rewrites which input the
 record names and keeps `firstFailedAt` where it was. The budget belongs to the instance, which is what quarantine
-suspends, and the record names whichever input the instance stopped on when the budget ran out.
+suspends, and the record names the input whose failure found the budget used up.
 
 **A lost compare-and-set on the first failure write can repeat indefinitely, and the narrowing two paragraphs above
 does not cover that.** It says only a first failure loses its budget that way, because a later one keeps the record the
@@ -633,8 +633,11 @@ replaced by the recorded position, which a release will later replay from. This 
 it should be read as such. What the instance gets in exchange is that the property becomes explicit, durable and visible in
 `findByStatus`, rather than implicit in a channel that is no longer moving.
 
-A long store outage quarantines instances. Past the budget the design cannot tell an outage from an input that will
-never succeed, so it treats it as the latter, and an outage longer than the budget quarantines a set of instances.
+A long outage of something the saga calls can quarantine instances. Past the budget the design cannot tell an outage
+from an input that will never succeed, so it treats it as the latter, and an instance still failing on the outage when
+a delivery finds its budget used up is quarantined wherever the other conditions on
+`SagaStatus.QUARANTINED` hold. An outage of the saga's own
+state store quarantines nothing while it lasts, because the quarantine is written to that store.
 Until release ships they cannot be brought back through the saga API, so the budget's default has to be chosen with
 that in mind.
 

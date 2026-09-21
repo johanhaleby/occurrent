@@ -77,16 +77,21 @@ So silence after that first line tells you nothing on its own. The instance may 
 a later delivery may have succeeded and cleared the record, which the runner does without logging anything. Read the
 instance's status with step 1 rather than reading the quiet either way.
 
-When the budget elapses, the same logger logs an `ERROR` saying the instance is now `QUARANTINED`. That line is the
-one to alert on. It names two durations, how long the instance had been failing and then the budget, in that order.
+When an instance is quarantined, the same logger logs an `ERROR` saying it is now `QUARANTINED`. That line is the one
+to alert on. It names two durations, how long the instance had been failing and then the budget, in that order.
 
-The third line is a `WARN` for the case where the budget elapsed and the instance was not quarantined, because the
-subscription could not confirm it still holds the failing event. That instance stays `ACTIVE`, and it blocks the
+The third line is a `WARN` for one of the ways an instance past its budget is not quarantined, where the subscription
+could not confirm it still holds the failing event. That instance stays `ACTIVE`, and it blocks the
 saga's other instances for as long as whatever feeds the subscription offers the event again. While that lasts it does
-not appear in step 1, so this line is the only thing that says so.
+not appear in step 1, so this line is the only log line that says so.
+
+The other ways log nothing about the quarantine. When the store read or write behind it throws, or the write loses a
+compare-and-set to another writer, no quarantine line appears. After a lost compare-and-set the runner cannot tell what
+the other writer did either. Read the instance's status with step 1 or step 2 rather than working it out from the time
+or from which lines you saw.
 
 That refusal is not final. The runner asks the subscription again on every redelivery, so a check that failed because
-a store was briefly unreachable can succeed later and quarantine the same instance then. That recovery needs a later
+a store was briefly unreachable can succeed later, and the same instance can be quarantined then. That recovery needs a later
 delivery to the instance, which for the event it stopped on means the subscription model offering that event again.
 Keep looking for it in step 1 rather than treating this warning as the end of the story.
 

@@ -63,8 +63,8 @@ public enum SagaStatus {
      * on its own.
      * <ul>
      *   <li>The subscription model confirms, for that event, that acknowledging it is not what would destroy the last
-     *       copy of it. A check that throws counts as a refusal. The runner logs a WARN for a refusal, though
-     *       not for every repeat of it.</li>
+     *       copy of it. A check that throws counts as a refusal, except for an {@link OutOfMemoryError}, which
+     *       propagates instead. The runner logs a WARN for a refusal, though not for every repeat of it.</li>
      *   <li>The store read the decision is made on and the write that records it both complete. When either throws, the
      *       runner logs nothing of its own about the quarantine.</li>
      *   <li>The compare-and-set write wins. When another writer changed the instance first, the write is discarded

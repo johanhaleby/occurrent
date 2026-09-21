@@ -248,7 +248,7 @@ public final class SagaExecutionSupport {
      * retry loop hammering one input costs one store write rather than one per attempt. A failure of a different input
      * does write, because the record has to name the input the instance is failing on now, so an instance where two
      * inputs fail in turn writes once per delivery. That is what it cost before this rule too. Past the budget the
-     * record quarantines the instance on the input that was failing when the budget ran out, if the executor writes it.
+     * record quarantines the instance on the input whose failure found the budget used up, if the executor writes it.
      * <p>
      * The elapsed time runs from when the instance started failing, not from when the input now failing started. A
      * different input failing rewrites the record to name that input and keeps {@code firstFailedAt} where it was, so
