@@ -47,9 +47,10 @@ import static java.util.Objects.requireNonNull;
  *                          {@code onStart} had run still saves {@code false}, because the transition it belonged to
  *                          was never saved, so the whole start is retried on a later redelivery. Start detection reads
  *                          this rather than whether a document exists
- * @param failure           the input this instance is failing on, or {@code null} when it is not failing on anything.
- *                          Present from the first failure onwards, so it outlives a single attempt; {@code status}
- *                          says whether the instance was quarantined for it
+ * @param failure           the input this instance is failing on, or {@code null} when no failure has been recorded
+ *                          for it, which does not mean it is not failing (see {@link SagaInstance#failure()}). Once
+ *                          written it outlives a single attempt, and {@code status} says whether the instance was
+ *                          quarantined for it
  * @param currentStep       the step a flow saga is waiting in, derived from {@code state} whenever it is present. A
  *                          store may pass this directly, but only when it passes a {@code null} state: that is how a
  *                          store answers {@link SagaInstance#currentStep()} from a projected read without loading the
@@ -85,7 +86,7 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     }
 
     /**
-     * An envelope for an instance that has started and is failing on nothing, which is every instance built before
+     * An envelope for an instance that has started and has no failure recorded, which is every instance built before
      * quarantine existed.
      *
      * @deprecated since 0.34.0. Use the canonical constructor and pass {@code started} and {@code failure} explicitly.
