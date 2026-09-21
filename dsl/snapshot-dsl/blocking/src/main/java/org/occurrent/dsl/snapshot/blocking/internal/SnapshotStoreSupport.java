@@ -89,8 +89,13 @@ public final class SnapshotStoreSupport {
         requireNonNull(decisionSupplier, "decisionSupplier cannot be null");
         try {
             return maybeSave(store, key, schemaVersion, policy, decisionSupplier.get());
-        } catch (RuntimeException e) {
-            log.warn("Best-effort snapshot save failed for key '{}'. The write is committed, the snapshot will be rebuilt from events on the next replay.", key, e);
+        } catch (Throwable t) {
+            // Throwable, since a store or policy written in Kotlin can throw a checked exception, and whatever escapes
+            // here reports a committed write as failed. A swallowed interrupt is set again for the caller.
+            if (t instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            log.warn("Best-effort snapshot save failed for key '{}'. The write is committed, the snapshot will be rebuilt from events on the next replay.", key, t);
             return false;
         }
     }

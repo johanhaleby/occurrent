@@ -34,6 +34,7 @@ import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
+import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -46,18 +47,24 @@ import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -72,6 +79,8 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
 
     @RegisterExtension
     OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
+
+    private static final Duration TIMEOUT = Duration.ofSeconds(10);
 
     private ApplicationService<DomainEvent> applicationService;
     private ReactiveSnapshotDeciderApplicationService<DomainEvent> service;
@@ -130,6 +139,29 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     }
 
     @Test
+    void a_snapshot_save_that_throws_a_checked_exception_before_returning_a_mono_does_not_error_and_the_write_is_committed() {
+        String streamId = UUID.randomUUID().toString();
+        ReactiveSnapshotStore<String> failingStore = new ReactiveSnapshotStore<>() {
+            @Override
+            public Mono<Snapshot<String>> findLatest(String key) {
+                return Mono.empty();
+            }
+
+            @Override
+            public Mono<Void> save(String key, Snapshot<String> snapshot) {
+                throw ReactiveSnapshotDeciderApplicationServiceTest.<RuntimeException>sneakyThrow(new IOException("snapshot store unreachable (test double)"));
+            }
+        };
+        AtomicReference<WriteResult> result = new AtomicReference<>();
+
+        Throwable thrown = catchThrowable(() -> result.set(service.execute(streamId, new Define("Jane"), ReactiveSnapshotDecider.from(decider, failingStore, SnapshotOptions.of(1, SnapshotPolicy.always()))).block(TIMEOUT)));
+
+        assertThat(requireNonNull(eventStore.read(streamId).block(TIMEOUT)).version()).as("the committed write").isEqualTo(1L);
+        assertThat(thrown).as("what escaped execute after the write committed").isNull();
+        assertThat(result.get().newStreamVersion()).isEqualTo(1L);
+    }
+
+    @Test
     void second_execute_resumes_from_the_snapshot_and_folds_only_the_tail() {
         String streamId = UUID.randomUUID().toString();
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
@@ -177,6 +209,56 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
                 () -> assertThat(state).isEqualTo("D"),
                 () -> assertThat(store.findLatest(streamId).blockOptional().orElseThrow().version()).isEqualTo(2L)
         );
+    }
+
+    @Test
+    void a_stale_snapshot_delete_that_errors_with_a_checked_exception_does_not_error_and_the_write_is_committed() {
+        assertStaleSnapshotDeleteFailureIsSwallowed(() -> Mono.error(new IOException("snapshot store unreachable (test double)")));
+    }
+
+    @Test
+    void a_stale_snapshot_delete_that_throws_a_runtime_exception_before_returning_a_mono_does_not_error_and_the_write_is_committed() {
+        assertStaleSnapshotDeleteFailureIsSwallowed(() -> {
+            throw new IllegalStateException("snapshot store delete failed (test double)");
+        });
+    }
+
+    @Test
+    void a_stale_snapshot_delete_that_throws_a_checked_exception_before_returning_a_mono_does_not_error_and_the_write_is_committed() {
+        assertStaleSnapshotDeleteFailureIsSwallowed(() -> {
+            throw ReactiveSnapshotDeciderApplicationServiceTest.<RuntimeException>sneakyThrow(new IOException("snapshot store unreachable (test double)"));
+        });
+    }
+
+    private void assertStaleSnapshotDeleteFailureIsSwallowed(Supplier<Mono<Void>> delete) {
+        String streamId = UUID.randomUUID().toString();
+        ReactiveSnapshotStore<String> deleteFailingStore = new ReactiveSnapshotStore<>() {
+            @Override
+            public Mono<Snapshot<String>> findLatest(String key) {
+                return store.findLatest(key);
+            }
+
+            @Override
+            public Mono<Void> save(String key, Snapshot<String> snapshot) {
+                return store.save(key, snapshot);
+            }
+
+            @Override
+            public Mono<Void> delete(String key) {
+                return delete.get();
+            }
+        };
+        var account = ReactiveSnapshotDecider.from(decider, deleteFailingStore, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        service.execute(streamId, new Define("A"), account).block(TIMEOUT);
+        service.execute(streamId, new Change("B"), account).block(TIMEOUT);
+        eventStore.deleteEventStream(streamId).block(TIMEOUT);
+        AtomicReference<WriteResult> result = new AtomicReference<>();
+
+        Throwable thrown = catchThrowable(() -> result.set(service.execute(streamId, new Define("C"), account).block(TIMEOUT)));
+
+        assertThat(requireNonNull(eventStore.read(streamId).block(TIMEOUT)).version()).as("the committed write against the reset stream").isEqualTo(1L);
+        assertThat(thrown).as("what escaped execute after the write committed").isNull();
+        assertThat(result.get().oldStreamVersion()).isEqualTo(0L);
     }
 
     @Test
@@ -295,5 +377,10 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
                 return "CLOSED".equals(state);
             }
         };
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> T sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 }

@@ -31,20 +31,25 @@ import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
+import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayName("SnapshotDcbDeciderApplicationService")
@@ -151,6 +156,30 @@ class SnapshotDcbDeciderApplicationServiceTest {
                 () -> assertThat(evolveCount.get()).isEqualTo(2),
                 () -> assertThat(store.findLatest(key).orElseThrow().state()).isEqualTo("B")
         );
+    }
+
+    @Test
+    void a_snapshot_save_that_throws_a_runtime_exception_does_not_fail_execute_and_the_append_is_committed() {
+        assertSnapshotSaveFailureIsSwallowed(new IllegalStateException("snapshot store save failed (test double)"));
+    }
+
+    @Test
+    void a_snapshot_save_that_throws_a_checked_exception_does_not_fail_execute_and_the_append_is_committed() {
+        assertSnapshotSaveFailureIsSwallowed(new IOException("snapshot store unreachable (test double)"));
+    }
+
+    private void assertSnapshotSaveFailureIsSwallowed(Throwable saveFailure) {
+        SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
+        AtomicReference<Optional<DcbAppendResult>> result = new AtomicReference<>();
+
+        Throwable thrown = catchThrowable(() -> result.set(service.execute(new Define("A"), SnapshotDcbDecider.from(dcbDecider, new ThrowingSnapshotStore<>(saveFailure), options))));
+
+        evolveCount.set(0);
+        service.execute(new Change("B"), SnapshotDcbDecider.from(dcbDecider, store, options));
+        // A (1) folded from the boundary plus the produced B (1) = 2, so A was appended before the save failed
+        assertThat(evolveCount.get()).as("events folded by the next command").isEqualTo(2);
+        assertThat(thrown).as("what escaped execute after the append committed").isNull();
+        assertThat(result.get()).isPresent();
     }
 
     @Test
