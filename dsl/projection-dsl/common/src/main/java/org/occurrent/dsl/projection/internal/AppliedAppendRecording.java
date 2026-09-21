@@ -479,7 +479,11 @@ public final class AppliedAppendRecording {
             pendingClear = false;
             lastRecorded = null;
             clearFailureLogged = false;
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // Exception rather than RuntimeException, because a store written in Kotlin can throw a checked exception
+            // from clear() without declaring it, and one that got past here failed the delivery or the replay that
+            // ran this instead of leaving recording off. An Error still propagates, rather than being logged once and
+            // then swallowed on every later delivery.
             if (clearFailureLogged) {
                 log.debug("Projection '{}' retried clearing its previously recorded appends and it is still failing. Recording stays off until a clear succeeds.", projectionId, e);
             } else {
