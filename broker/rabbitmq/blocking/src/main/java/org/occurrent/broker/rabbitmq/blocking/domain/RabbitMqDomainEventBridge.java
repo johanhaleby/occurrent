@@ -657,17 +657,17 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
      */
     @Override
     public void close() {
-        long deadline = System.nanoTime() + closeTimeout.toNanos();
-        bringCloseDeadlineForwardTo(deadline);
-        scheduler.shutdownNow();
-        // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
-        permanentlyStopped = true;
-        // Before the cancel, since a delivery the client has already dispatched could otherwise reach an idle worker
-        // and start a projection while this is closing.
-        worker.stopAcceptingWork();
-        // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that lock
-        // while a park waits for its confirm. Closing the channel below cancels the consumer and requeues the rest.
         try {
+            long deadline = System.nanoTime() + closeTimeout.toNanos();
+            bringCloseDeadlineForwardTo(deadline);
+            scheduler.shutdownNow();
+            // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
+            permanentlyStopped = true;
+            // Before the cancel, since a delivery the client has already dispatched could otherwise reach an idle worker
+            // and start a projection while this is closing.
+            worker.stopAcceptingWork();
+            // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that lock
+            // while a park waits for its confirm. Closing the channel below cancels the consumer and requeues the rest.
             if (lockBefore(deadline)) {
                 try {
                     if (consumerTag != null) {
@@ -709,8 +709,8 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                 }
             }
         } finally {
-            // A finally like stopPermanently()'s, so anything the cancel, the wait or a release throws still reaches
-            // the channel close, and the parking sink's close after it under PARK.
+            // A finally like stopPermanently()'s, so an exception from anything above, the deadline arithmetic included,
+            // still reaches the channel close, and the parking sink's close after it under PARK.
             try {
                 consumeChannel.close();
             } catch (IOException | ShutdownSignalException | TimeoutException ignored) {

@@ -124,6 +124,23 @@ class RabbitMqCloudEventBridgeTeardownTest {
     }
 
     /**
+     * A close timeout of 300 years passes the builder's check but overflows a {@code long} of nanoseconds, so
+     * computing the close deadline throws before anything else in {@code close()} has run.
+     */
+    @Test
+    void a_close_timeout_too_large_for_nanoseconds_still_closes_the_channel() throws Exception {
+        Channel channel = mock(Channel.class);
+        RabbitMqDeliveryFailureAction failureAction = new RabbitMqDeliveryFailureAction(channel, DeliveryFailurePolicy.REDELIVER, null, null,
+                LoggerFactory.getLogger(RabbitMqCloudEventBridgeTeardownTest.class));
+        RabbitMqCloudEventBridge bridge = new RabbitMqCloudEventBridge(null, null, channel, "queue", 1, Duration.ofSeconds(1), failureAction, null, Duration.ofDays(365L * 300));
+
+        Throwable thrown = catchThrowable(bridge::close);
+
+        verify(channel).close();
+        assertThat(thrown).isInstanceOf(ArithmeticException.class);
+    }
+
+    /**
      * Built through the builder rather than the constructor, since only the lifecycle poll registers a consumer and
      * there is nothing to cancel without one.
      */

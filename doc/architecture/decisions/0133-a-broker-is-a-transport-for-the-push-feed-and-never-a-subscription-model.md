@@ -1406,5 +1406,6 @@ first tick and asserts the consumer still starts. Both release-helper tests have
 `RabbitMqCloudEventBridgeTeardownTest` and `RabbitMqDomainEventBridgeTeardownTest` throw an `Error` against a mocked
 `Channel` from each step ahead of a close, both releases on a permanent stop and on `close()`, the consumer cancel on
 `close()`, and the consume channel's own close ahead of the parking publisher's, and assert that the close still
-happens. Each fails on that assertion without the `finally`. A `RuntimeException` from a release, which was always
+happens. One more gives `close()` a `closeTimeout` of 300 years, which the builder accepts and which overflows the
+nanosecond deadline `close()` computes first, so the `finally` has to start at the top of the method. Each fails on that assertion without the `finally`. A `RuntimeException` from a release, which was always
 caught, passes with and without it.
