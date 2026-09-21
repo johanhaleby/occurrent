@@ -386,7 +386,11 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             }
             try {
                 redeliver.accept(heldDeliveryTag);
-            } catch (RuntimeException e) {
+            } catch (Throwable e) {
+                // Throwable, so the tag goes back for anything at all that escapes the release. The poll this runs
+                // under catches an Error and comes back on the next tick, and a tag taken out of the deque by a
+                // release that failed has nothing left to nack it. At the default prefetchCount of one the broker
+                // then sends that consumer nothing further, on a bridge that is still consuming.
                 heldDeferredDeliveryTags.offerFirst(heldDeliveryTag);
                 throw e;
             }
