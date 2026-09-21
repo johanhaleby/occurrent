@@ -243,7 +243,7 @@ public final class SagaExecutionSupport {
      * Decide what a failed input costs the instance, or {@code null} when it costs it nothing and the exception should
      * simply propagate the way it always has.
      * <p>
-     * The first failure on an instance records when it started failing. A later failure of the input the record already
+     * The first failure on an instance produces a record of when it started failing. A later failure of the input the record already
      * names compares the elapsed time against {@code quarantineAfter} and writes nothing while it is under it, so a
      * retry loop hammering one input costs one store write rather than one per attempt. A failure of a different input
      * does write, because the record has to name the input the instance is failing on now, so an instance where two

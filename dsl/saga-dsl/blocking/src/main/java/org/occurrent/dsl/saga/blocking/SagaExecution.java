@@ -51,8 +51,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * save. Timeouts re-enter the same path, fenced so a timer no longer present on the (reloaded) envelope is skipped.
  * <p>
  * An instance that keeps failing can be quarantined rather than left to fail for as long as the subscription model
- * offers the event again. Its first failure records when the failing started and rethrows, which is what every
- * version up to 0.33.0 did. Whether a later failure is considered for quarantine, and whether a considered one is then
+ * offers the event again. Its first failure writes down when the failing started and rethrows, which is what every
+ * version up to 0.33.0 did. Where that write loses its compare-and-set nothing is recorded and the next failure is a
+ * first failure again. Whether a later failure is considered for quarantine, and whether a considered one is then
  * quarantined, are separate conditions, and {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} lists both. When
  * the instance is quarantined, this class returns normally instead of rethrowing.
  * <p>
