@@ -103,8 +103,10 @@ import static java.util.Objects.requireNonNull;
  * returns. A handler that blocks, waiting on a database that is down say, holds up only the bridge it belongs to,
  * never another bridge built on the same {@link Connection}. That one thread handles deliveries one at a time and in
  * the order the broker sent them, and about {@link Builder#prefetchCount(int)} of them wait for it. An {@code Error}
- * a handler throws, {@link AssertionError} aside, or an acknowledgement this bridge cannot issue for a reason other
- * than a connection recovery, stops this bridge and closes its channel, which puts the delivery back on the queue.
+ * a handler throws, {@link AssertionError} aside, a checked exception it throws, which a handler written in Kotlin
+ * has nothing to declare and nothing to stop it from doing, or an acknowledgement this bridge cannot issue for a
+ * reason other than a connection recovery, stops this bridge and closes its channel, which puts the delivery back on
+ * the queue.
  * <p>
  * <strong>Coarse lifecycle.</strong> A background poll, {@link Builder#pollInterval(Duration)} apart (one second by
  * default), reads {@link PushSubscriptionModel#subscriptionIds()} and {@link PushSubscriptionModel#isRunning(String)}
@@ -306,7 +308,15 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             } finally {
                 consumeLock.unlock();
             }
-        } catch (IOException | RuntimeException e) {
+        } catch (Throwable e) {
+            // Throwable rather than the IOException and RuntimeException this used to name, because anything escaping
+            // this method cancels the scheduled poll for good. The bridge would never start or cancel a consumer
+            // again, and a held delivery would sit unacknowledged with nothing left to release it, all without a word.
+            // Two things reach that. A readinessSource written in Kotlin throws a checked exception through the
+            // Predicate this bridge calls it behind, and an Error out of anything called here does the same. An
+            // OutOfMemoryError is swallowed along with the rest, the same as the saga timer poll's own wrapper, since
+            // keeping the poll alive is worth more than passing a failure on to a scheduled task that does nothing
+            // with it.
             log.warn("Failed to reconcile consumption for queue \"{}\" against the subscription model's running state. " +
                     "Retrying on the next poll.", queue, e);
         }
@@ -356,7 +366,11 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             }
             try {
                 redeliver.accept(heldDeliveryTag);
-            } catch (RuntimeException e) {
+            } catch (Throwable e) {
+                // Throwable, so the tag goes back for anything at all that escapes the release. The poll this runs
+                // under catches an Error and comes back on the next tick, and a tag taken out of the deque by a
+                // release that failed has nothing left to nack it. At the default prefetchCount of one the broker
+                // then sends that consumer nothing further, on a bridge that is still consuming.
                 heldDeferredDeliveryTags.offerFirst(heldDeliveryTag);
                 throw e;
             }
@@ -381,17 +395,19 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     }
 
     // handleDelivery routes a handler's own RuntimeException and AssertionError through the delivery failure policy, so
-    // anything escaping it is either an Error the handler threw or an acknowledgement this bridge could not issue. An
-    // acknowledgement that failed because the connection dropped and is being recovered does not stop this bridge,
-    // since RabbitMQ puts the delivery back on the queue when the connection drops, and closing this channel would take
-    // it out of the connection's recovery so the bridge never consumed again. Anything else stops this bridge and
-    // closes the channel, which is what puts the delivery back on the queue. Without that the delivery would sit
-    // unacknowledged on a consumer the broker sends nothing further to. Not rethrown, since the cause is logged here,
-    // and rethrowing would only end the worker thread.
+    // anything escaping it is an Error the handler threw, a checked exception it threw, or an acknowledgement this
+    // bridge could not issue. Throwable rather than the exception types javac allows here, because a handler written
+    // in Kotlin has no checked exception to declare and throws one straight through the Java interface this bridge
+    // calls it behind. An acknowledgement that failed because the connection dropped and is being recovered does not
+    // stop this bridge, since RabbitMQ puts the delivery back on the queue when the connection drops, and closing this
+    // channel would take it out of the connection's recovery so the bridge never consumed again. Anything else stops
+    // this bridge and closes the channel, which is what puts the delivery back on the queue. Without that the delivery
+    // would sit unacknowledged on a consumer the broker sends nothing further to. Not rethrown, since the cause is
+    // logged here, and rethrowing would only end the worker thread.
     private void handleDeliveryOrStop(Delivery delivery, long deliveryTag) {
         try {
             handleDelivery(delivery);
-        } catch (RuntimeException | Error e) {
+        } catch (Throwable e) {
             if (failureAction.isLostToConnectionRecovery(e)) {
                 log.warn("The connection under queue \"{}\" dropped before delivery tag {} could be acknowledged or "
                         + "rejected. RabbitMQ puts it back on the queue, and this bridge receives it again once the "

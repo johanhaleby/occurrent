@@ -60,6 +60,30 @@ class RabbitMqCloudEventBridgeReleaseHeldDeferredDeliveryTest {
         assertThat(held).containsExactly(1L, 2L);
     }
 
+    /**
+     * A Copilot review finding on the change that made the lifecycle poll catch {@code Throwable}. The poll now logs
+     * an {@code Error} from a release and comes back on the next tick, so a tag this method took out of the deque and
+     * did not put back has nothing left to nack it. At the default {@code prefetchCount} of one the broker then sends
+     * that consumer nothing further, on a bridge that is still consuming. Against a restore that names
+     * {@code RuntimeException} alone the tag is gone and only tag 2 is left.
+     */
+    @Test
+    void a_release_that_fails_with_an_error_puts_the_tag_back_too() {
+        Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
+        List<Long> released = new CopyOnWriteArrayList<>();
+
+        Throwable thrown = catchThrowable(() -> RabbitMqCloudEventBridge.releaseHeldDeferredDelivery(held, tag -> {
+            if (tag == 1L) {
+                throw new StackOverflowError("a nack that recursed");
+            }
+            released.add(tag);
+        }));
+
+        assertThat(thrown).isInstanceOf(StackOverflowError.class);
+        assertThat(released).isEmpty();
+        assertThat(held).containsExactly(1L, 2L);
+    }
+
     @Test
     void a_tag_that_failed_once_is_released_on_the_next_pass() {
         Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));

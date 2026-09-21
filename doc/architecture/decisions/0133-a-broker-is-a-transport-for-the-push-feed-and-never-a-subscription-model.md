@@ -1263,11 +1263,37 @@ acknowledgement from the worker takes `consumeLock` like every other call on the
 poll thread already took when it released a held tag.
 
 Anything escaping that call stops the bridge and closes its channel, which puts the delivery back on the queue. That
-is an `Error` a handler threw, or an acknowledgement the bridge could not issue, since a handler's own
-`RuntimeException` and `AssertionError` go through the delivery failure policy instead. The client used to do the
-same, because the delivery ran on its callback thread and its exception handler closes a channel for anything that
-escapes. Without it the delivery would sit unacknowledged on a consumer the broker sends nothing further to at the
-default `prefetchCount` of one, which is a bridge that has stopped without saying so.
+is an `Error` a handler threw, a checked exception it threw, or an acknowledgement the bridge could not issue, since
+a handler's own `RuntimeException` and `AssertionError` go through the delivery failure policy instead. The client
+used to do the same, because the delivery ran on its callback thread and its exception handler closes a channel for
+anything that escapes. Without it the delivery would sit unacknowledged on a consumer the broker sends nothing
+further to at the default `prefetchCount` of one, which is a bridge that has stopped without saying so.
+
+The checked exception is why the worker's own catch is `Throwable` rather than the types javac allows a `Runnable` to
+throw. Java will not throw one out of `handleDelivery`, and a handler written in Kotlin has no checked exception to
+declare, so it throws one straight through the Java interface the bridge calls it behind. `SagaExecution` catches
+`Throwable` and rethrows it unchanged, so a saga is one way it arrives. Caught, it stops the bridge like an `Error`.
+Uncaught, it ended the worker's task with the delivery unacknowledged on a bridge that still counted itself as
+running, which is the state this catch exists to prevent, reached without a log line. See
+[#1086](https://github.com/johanhaleby/occurrent/issues/1086). Routing it through the delivery failure policy was the
+other option and is not what happened, because both Kafka bridges catch `RuntimeException | AssertionError` around
+their own handler call too, and widening what the policy covers in one transport and not the other means the four
+bridges no longer agree about which failures a configured `REDELIVER` or `PARK` applies to.
+
+The lifecycle poll in both bridges catches `Throwable` for the same reason and a different consequence. It used to
+catch `IOException | RuntimeException`, and anything else cancelled the scheduled task for good, so the bridge never
+started or cancelled a consumer again and never released a held delivery. Two things reach that. A `readinessSource`
+written in Kotlin throws a checked exception through the `Predicate` the CloudEvent bridge calls it behind, and an
+`Error` out of anything either poll calls does the same. An `OutOfMemoryError` is caught with the rest, which is what
+`SagaExecution.pollTimers` already does around its own scheduled work, since a poll that keeps running and logs is
+worth more here than handing a failure to a scheduled task that does nothing with it.
+
+A poll that survives an `Error` needs the held-tag release to survive one as well, which a Copilot review of this
+change is what found. `releaseHeldDeferredDelivery` takes a tag out of the deque before the release and used to put
+it back only for a `RuntimeException`, so an `Error` out of `basicNack` dropped the tag. The poll then came back on
+the next tick with nothing left to release that delivery, and at the default `prefetchCount` of one the broker sends
+that consumer nothing further. The restore is for any `Throwable` now, so the tag goes back at the front and the next
+poll retries it, which is what the `RuntimeException` case already had.
 
 A failed acknowledgement is not always the bridge failing, though. A handler that finishes after the connection has
 dropped, and before its recovery has started, acknowledges on a closed channel, and `basicAck` throws
@@ -1353,3 +1379,15 @@ delivery whose handler `close()` interrupted is neither parked nor acknowledged.
 connection a recovery interval of five seconds, let a handler finish after the connection drops and before the
 recovery starts, and assert that a message published after the recovery is still handled. Both fail when a failed
 acknowledgement stops the bridge.
+
+Both worker-thread tests also throw a checked exception from a handler and assert that both published messages are
+back on the queue, which only a closed channel does, next to the `Error` test each already had. All four wait for the
+handler to fail before reading the queue, since both messages are ready on it until the bridge takes the first one,
+and a count of two read before that is the state before anything happened. Against a catch of
+`RuntimeException | Error` the checked-exception ones find one message rather than two, the first held unacknowledged
+by a worker whose task ended and the second never sent to that consumer.
+For the poll, `RabbitMqCloudEventBridgeReadinessTest` gives a bridge a `readinessSource` that throws a checked
+exception on its first tick and an `Error` on its second, then answers true, and asserts the message is handled, and
+`RabbitMqDomainEventBridgePollFailureTest` throws an `Error` from a mocked feed's `isReadyForLiveDelivery` on the
+first tick and asserts the consumer still starts. Both release-helper tests have a release that fails with an
+`Error` and assert the tag is back at the front of the deque. Each fails against the catch it was written for.
