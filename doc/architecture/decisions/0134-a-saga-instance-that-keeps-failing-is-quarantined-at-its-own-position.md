@@ -174,10 +174,12 @@ quarantine. It must not hold one.
 
 ### 3. Quarantine is the end of a time budget, not the answer to an exception
 
-The first failure of an input records when it started failing and rethrows, which is exactly today's behaviour.
-Every later failure of the same input compares the elapsed time against a configured budget and keeps rethrowing
-while it is under it. Only past the budget does the executor record the quarantine, stop rethrowing, and let the
-position advance.
+The first failure of an input tries to write down when it started failing, and rethrows whether or not that write
+succeeds, which is exactly today's behaviour. Where nothing was recorded, the next delivery decides on whatever
+the store holds then. Every
+later failure of the same input compares the elapsed time in the record against a configured budget and keeps
+rethrowing while it is under it. The executor records a quarantine, stops rethrowing and lets the position advance only past the
+budget, and `SagaStatus.QUARANTINED` lists what else has to hold first.
 
 The budget is a `Duration` rather than an attempt count, and the reason is stronger than the retry cadence being
 tunable. **The retry loop is not always Occurrent's at all.** On the MongoDB models it is a `RetryStrategy` the user
@@ -190,16 +192,16 @@ five minutes means five minutes on both.
 **The default budget is five minutes.** Once the MongoDB backoff saturates it retries every two seconds, so five
 minutes is on the order of a hundred and fifty attempts, which is ample evidence that an input is not going to
 succeed. It also spans the failures worth surviving without quarantining anything. A replica-set election takes
-seconds and a rolling restart takes a minute or two, and both finish well inside it. Against that, where the saga does
-quarantine, any block on the rest of its instances ends at the first delivery after the budget rather than running on.
+seconds and a rolling restart takes a minute or two, and both finish well inside it. Against that, it is also the
+earliest a failing instance can be quarantined.
 
 **A transport that never re-offers the input cannot be quarantined by this mechanism, and the design does not pretend
 otherwise.** `PushSubscriptionModel` has no retrying, no checkpoint and no position, and its javadoc says a handler
 exception propagates to the caller. Fed by a bare in-process `accept(...)` with nothing retrying behind it, the first
 failure is also the last, no second failure ever arrives, and a budget measured across repeated failures never
-elapses. Such a saga keeps today's behaviour. Quarantine is available on the transports that re-offer the input,
-which is the MongoDB models, the in-memory model, and a push feed behind a bridge that redelivers, and it is
-unavailable on the ones that do not.
+elapses. Such a saga keeps today's behaviour. Re-offering the input is necessary rather than enough, since `SagaRunner` also
+needs a model that says it holds every event it delivers, which is the MongoDB models. The in-memory model and a push
+feed behind a redelivering bridge say nothing of the kind, so they get no quarantine either.
 
 Two details keep the budget cheap. The elapsed time is measured from a value already read, because `process` loads
 the envelope on every attempt anyway, so no extra read is needed. And only the first failure of an input writes, so
@@ -242,7 +244,7 @@ arriving 7, 8, 7, 8, then had every delivery reset `firstFailedAt` and never rea
 concurrency and a re-offered batch both produce that arrival order. So the elapsed time runs from when the instance
 started failing rather than from when the input now failing started. A different input failing rewrites which input the
 record names and keeps `firstFailedAt` where it was. The budget belongs to the instance, which is what quarantine
-suspends, and the record names whichever input the instance stopped on when the budget ran out.
+suspends, and the record names the input whose failure found the budget used up.
 
 **A lost compare-and-set on the first failure write can repeat indefinitely, and the narrowing two paragraphs above
 does not cover that.** It says only a first failure loses its budget that way, because a later one keeps the record the
@@ -278,8 +280,8 @@ whose id extractor reads a correlation field that is null on one old event satis
 and was still never quarantined, because `sagaId` threw outside the `try`. Every other instance of that saga waited
 behind the redelivery forever, which is the outcome this decision exists to remove. The whole delivery now runs inside
 one `try` that catches `Throwable`, so once an event has reached an instance, where a failure was thrown decides
-nothing, what it was decides nothing beyond
-the single exclusion the next paragraph names, and the conditions are the four this decision states and no others. [#997](https://github.com/johanhaleby/occurrent/issues/997) is where that was
+nothing, and what it was decides nothing beyond
+the single exclusion the next paragraph names. The rest of the conditions are listed on `SagaStatus.QUARANTINED`. [#997](https://github.com/johanhaleby/occurrent/issues/997) is where that was
 found.
 
 **A failure is the instance's unless it is a condition of the process, and the test is on what was thrown rather than
@@ -633,8 +635,11 @@ replaced by the recorded position, which a release will later replay from. This 
 it should be read as such. What the instance gets in exchange is that the property becomes explicit, durable and visible in
 `findByStatus`, rather than implicit in a channel that is no longer moving.
 
-A long store outage quarantines instances. Past the budget the design cannot tell an outage from an input that will
-never succeed, so it treats it as the latter, and an outage longer than the budget quarantines a set of instances.
+A long outage of something the saga calls can quarantine instances. Past the budget the design cannot tell an outage
+from an input that will never succeed, so it treats it as the latter, and an instance still failing on the outage when
+a delivery finds its budget used up is quarantined wherever the other conditions on
+`SagaStatus.QUARANTINED` hold. An outage of the saga's own
+state store quarantines nothing while it lasts, because the quarantine is written to that store.
 Until release ships they cannot be brought back through the saga API, so the budget's default has to be chosen with
 that in mind.
 

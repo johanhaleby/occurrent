@@ -230,7 +230,8 @@ public final class SagaExecutionSupport {
     /**
      * What to write when an input has failed. {@link #envelope()} holds the failure record to save with
      * {@code compareAndSaveWithoutState(..., expectedVersion())}, and {@link #quarantined()} says whether the budget has
-     * now elapsed, meaning the executor stops rethrowing and lets the subscription move past the input.
+     * now elapsed, meaning the record quarantines the instance if the executor goes on to write it. What the executor
+     * checks before writing it is listed on {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED}.
      * <p>
      * Without the state, and not {@code compareAndSave}, because the envelope this carries came from a read that did not
      * decode the state, so saving it whole would erase the state of the instance this record is about.
@@ -242,12 +243,12 @@ public final class SagaExecutionSupport {
      * Decide what a failed input costs the instance, or {@code null} when it costs it nothing and the exception should
      * simply propagate the way it always has.
      * <p>
-     * The first failure on an instance records when it started failing. A later failure of the input the record already
+     * The first failure on an instance produces a record of when it started failing. A later failure of the input the record already
      * names compares the elapsed time against {@code quarantineAfter} and writes nothing while it is under it, so a
      * retry loop hammering one input costs one store write rather than one per attempt. A failure of a different input
      * does write, because the record has to name the input the instance is failing on now, so an instance where two
      * inputs fail in turn writes once per delivery. That is what it cost before this rule too. Past the budget the
-     * instance is quarantined on the input that was failing when the budget ran out.
+     * record quarantines the instance on the input whose failure found the budget used up, if the executor writes it.
      * <p>
      * The elapsed time runs from when the instance started failing, not from when the input now failing started. A
      * different input failing rewrites the record to name that input and keeps {@code firstFailedAt} where it was, so

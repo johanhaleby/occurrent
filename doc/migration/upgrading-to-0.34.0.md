@@ -642,10 +642,14 @@ A saga has one subscription, and every instance of that saga is fed by it. Up to
 that model offered the event again the saga tried again, without limit, and one correlation id that could never make
 progress therefore stopped every other correlation id behind it, for as long as nobody noticed.
 
-From 0.34.0 the executor times the failing rather than counting the attempts. The instance's first failure records the
-instant it started failing and rethrows, exactly as before. Once that instance has kept failing for at least
-`SagaRunnerConfig.quarantineAfter`, five minutes by default, it moves to the new `SagaStatus.QUARANTINED` and the
-executor stops rethrowing, so the subscription acknowledges the event and delivers the rest to everybody else.
+From 0.34.0 the executor times the failing rather than counting the attempts. The instance's first failure tries to write down
+the instant it started failing, and rethrows whether or not that write succeeds, exactly as before. Where nothing was
+recorded, the next delivery decides on whatever the store holds then. Once that instance has kept failing for at least
+`SagaRunnerConfig.quarantineAfter`, five minutes by default, it can move to the new `SagaStatus.QUARANTINED`, and when
+it does the executor stops rethrowing.
+
+Reaching the budget is not enough on its own. The javadoc on `SagaStatus.QUARANTINED` lists what else has to hold, so
+an instance past its budget can still be `ACTIVE`. Read its status rather than working it out from the time.
 
 The clock belongs to the instance rather than to one event. An instance where two events both fail keeps the earlier
 instant and renames the record to whichever event failed last, so `SagaFailure.firstFailedAt()` is the start of that
@@ -680,7 +684,7 @@ once you have decided not to recover it. [The quarantined saga runbook](../runbo
 the whole sequence, including the log lines that announce a quarantine and what deleting an instance costs against a
 redelivery.
 
-There are two limits to know before you rely on it.
+Two of the conditions on `SagaStatus.QUARANTINED` need explaining before you rely on quarantine.
 
 **Quarantine is available only where the subscription model can say that acknowledging the failing event is not what would destroy the last copy of it,**
 which it declares by implementing `HistoryRetainingSubscriptions`. `NativeMongoSubscriptionModel` and

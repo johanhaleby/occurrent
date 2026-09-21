@@ -19,8 +19,11 @@ which is how an instance whose state no longer decodes ends up here. Up to 0.33.
 other correlation id behind it.
 
 From 0.34.0 the executor times how long the instance has been failing. Once that reaches
-`SagaRunnerConfig.quarantineAfter`, five minutes by default, the instance moves to `SagaStatus.QUARANTINED` and the
-executor stops rethrowing, so the subscription acknowledges the event and goes on delivering to everybody else.
+`SagaRunnerConfig.quarantineAfter`, five minutes by default, the instance can move to `SagaStatus.QUARANTINED`, and
+when it does the executor stops rethrowing.
+
+Reaching the budget is not enough on its own. The javadoc on `SagaStatus.QUARANTINED` lists what else has to hold, so
+an instance past its budget can still be `ACTIVE`. Read its status rather than working it out from the time.
 
 A quarantined instance applies no further events and fires no timers, and its redelivery watermarks stop moving, so
 nothing it skipped is recorded as handled. The subscription still delivers those events, and the runner still reads
@@ -74,16 +77,21 @@ So silence after that first line tells you nothing on its own. The instance may 
 a later delivery may have succeeded and cleared the record, which the runner does without logging anything. Read the
 instance's status with step 1 rather than reading the quiet either way.
 
-When the budget elapses, the same logger logs an `ERROR` saying the instance is now `QUARANTINED`. That line is the
-one to alert on. It names two durations, how long the instance had been failing and then the budget, in that order.
+When an instance is quarantined, the same logger logs an `ERROR` saying it is now `QUARANTINED`. That line is the one
+to alert on. It names two durations, how long the instance had been failing and then the budget, in that order.
 
-The third line is a `WARN` for the case where the budget elapsed and the instance was not quarantined, because the
-subscription could not confirm it still holds the failing event. That instance stays `ACTIVE`, and it blocks the
+The third line is a `WARN` for one of the ways an instance past its budget is not quarantined, where the subscription
+could not confirm it still holds the failing event. That instance stays `ACTIVE`, and it blocks the
 saga's other instances for as long as whatever feeds the subscription offers the event again. While that lasts it does
-not appear in step 1, so this line is the only thing that says so.
+not appear in step 1, so this line is the only log line that says so.
+
+The other ways log nothing about the quarantine. When the store read or write behind it throws, or the write loses a
+compare-and-set to another writer, no quarantine line appears. After a lost compare-and-set the runner cannot tell what
+the other writer did either. Read the instance's status with step 1 or step 2 rather than working it out from the time
+or from which lines you saw.
 
 That refusal is not final. The runner asks the subscription again on every redelivery, so a check that failed because
-a store was briefly unreachable can succeed later and quarantine the same instance then. That recovery needs a later
+a store was briefly unreachable can succeed later, and the same instance can be quarantined then. That recovery needs a later
 delivery to the instance, which for the event it stopped on means the subscription model offering that event again.
 Keep looking for it in step 1 rather than treating this warning as the end of the story.
 
@@ -295,8 +303,8 @@ which is the race in step 5.
 
 ## Preventing the next one
 
-`SagaRunnerConfig.quarantineAfter` is how long an instance may keep failing before it is quarantined, five minutes by
-default. On the annotation path it is `occurrent.saga.quarantine-after` instead.
+`SagaRunnerConfig.quarantineAfter` is how long an instance has to keep failing before it can be quarantined, five
+minutes by default. On the annotation path it is `occurrent.saga.quarantine-after` instead.
 
 Lower it when you would rather find out sooner and are willing to quarantine an instance whose downstream service was
 only briefly unavailable. Raise it when your dispatcher talks to something that is routinely down for longer than five
