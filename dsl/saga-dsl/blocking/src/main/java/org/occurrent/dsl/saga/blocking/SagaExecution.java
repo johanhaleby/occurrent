@@ -51,11 +51,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * save. Timeouts re-enter the same path, fenced so a timer no longer present on the (reloaded) envelope is skipped.
  * <p>
  * An instance that keeps failing can be quarantined rather than left to fail for as long as the subscription model
- * offers the event again. Its first failure writes down when the failing started and rethrows, which is what every
- * version up to 0.33.0 did. Where that write loses its compare-and-set this delivery records nothing, and what the
- * next one finds is whatever the writer that won left. Whether a later failure is considered for quarantine, and whether a considered one is then
- * quarantined, are separate conditions, and {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} lists both. When
- * the instance is quarantined, this class returns normally instead of rethrowing.
+ * offers the event again. Its first failure tries to write down when the failing started and rethrows whether or not
+ * that write succeeds, which is what every version up to 0.33.0 did. Where nothing was recorded, the next delivery
+ * decides on whatever the store holds then. Whether a later failure is considered for quarantine, and whether a
+ * considered one is then quarantined, are separate conditions, and
+ * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} lists both. When the instance is quarantined, this class
+ * returns normally instead of rethrowing.
  * <p>
  * Every step from reading the CloudEvent to saving the result runs inside one {@code try} that catches
  * {@link Throwable}, so once an event has reached an instance, what failed and where it was thrown decide nothing

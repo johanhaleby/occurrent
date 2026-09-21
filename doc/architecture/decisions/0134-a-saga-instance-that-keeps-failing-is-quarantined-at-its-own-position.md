@@ -174,9 +174,9 @@ quarantine. It must not hold one.
 
 ### 3. Quarantine is the end of a time budget, not the answer to an exception
 
-The first failure of an input writes down when it started failing and rethrows, which is exactly today's behaviour.
-Where that write loses its compare-and-set that delivery records nothing, and what the next one finds is whatever the
-winning writer left. Every
+The first failure of an input tries to write down when it started failing, and rethrows whether or not that write
+succeeds, which is exactly today's behaviour. Where nothing was recorded, the next delivery decides on whatever
+the store holds then. Every
 later failure of the same input compares the elapsed time in the record against a configured budget and keeps
 rethrowing while it is under it. The executor records a quarantine, stops rethrowing and lets the position advance only past the
 budget, and `SagaStatus.QUARANTINED` lists what else has to hold first.
