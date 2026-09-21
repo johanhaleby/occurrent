@@ -108,7 +108,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
 
     /**
      * The default configuration: poll every 15 seconds, fire up to 100 due instances per poll, retry a lost save up to 50
-     * times, require redelivery detection, and quarantine an instance that has kept failing for five minutes. The poll interval only bounds how late a due timer fires, and saga
+     * times, require redelivery detection, and put the quarantine budget at five minutes. The poll interval only bounds how late a due timer fires, and saga
      * timeouts run at a minutes-to-days timescale, so 15 seconds (the same default as JobRunr) keeps the store query
      * load low while firing well within tolerance. Lower it only when you rely on short timeouts firing promptly.
      */

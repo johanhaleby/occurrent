@@ -197,9 +197,9 @@ earliest a failing instance can be quarantined.
 otherwise.** `PushSubscriptionModel` has no retrying, no checkpoint and no position, and its javadoc says a handler
 exception propagates to the caller. Fed by a bare in-process `accept(...)` with nothing retrying behind it, the first
 failure is also the last, no second failure ever arrives, and a budget measured across repeated failures never
-elapses. Such a saga keeps today's behaviour. Quarantine is available on the transports that re-offer the input,
-which is the MongoDB models, the in-memory model, and a push feed behind a bridge that redelivers, and it is
-unavailable on the ones that do not.
+elapses. Such a saga keeps today's behaviour. Re-offering the input is necessary rather than enough, since `SagaRunner` also
+needs a model that says it holds every event it delivers, which is the MongoDB models. The in-memory model and a push
+feed behind a redelivering bridge say nothing of the kind, so they get no quarantine either.
 
 Two details keep the budget cheap. The elapsed time is measured from a value already read, because `process` loads
 the envelope on every attempt anyway, so no extra read is needed. And only the first failure of an input writes, so
