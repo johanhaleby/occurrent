@@ -55,10 +55,10 @@ import java.lang.annotation.*;
  * {@code occurrent.saga.quarantine-after} on this path. Whether a failing event is considered for quarantine and
  * whether a considered one is actually quarantined are separate conditions, and the javadoc on
  * {@code SagaStatus.QUARANTINED} lists both. An instance can be past its budget and still {@code ACTIVE}, so read its
- * status rather than inferring it from the budget. Every failure after the saga has worked out which instance an event
- * belongs to spends the budget, {@code evolve}, {@code react}, the dispatcher and the store alike, with
- * {@code OutOfMemoryError} the one exclusion, since that says the JVM ran out of heap rather than anything about the
- * saga's work.
+ * status rather than inferring it from the budget. What failed and where decide nothing once the saga has worked out
+ * which instance an event belongs to, so {@code evolve}, {@code react}, the dispatcher and the store all count towards
+ * the budget, with {@code OutOfMemoryError} the one exclusion, since that says the JVM ran out of heap rather than
+ * anything about the saga's work.
  * <p>
  * Only an event the saga routed to an instance is charged to that instance, and a quarantine records whichever event
  * the instance stopped on. An event it could not route, because the converter or the id extractor threw, is refused
