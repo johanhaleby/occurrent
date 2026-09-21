@@ -1288,6 +1288,13 @@ written in Kotlin throws a checked exception through the `Predicate` the CloudEv
 `SagaExecution.pollTimers` already does around its own scheduled work, since a poll that keeps running and logs is
 worth more here than handing a failure to a scheduled task that does nothing with it.
 
+A poll that survives an `Error` needs the held-tag release to survive one as well, which a Copilot review of this
+change is what found. `releaseHeldDeferredDelivery` takes a tag out of the deque before the release and used to put
+it back only for a `RuntimeException`, so an `Error` out of `basicNack` dropped the tag. The poll then came back on
+the next tick with nothing left to release that delivery, and at the default `prefetchCount` of one the broker sends
+that consumer nothing further. The restore is for any `Throwable` now, so the tag goes back at the front and the next
+poll retries it, which is what the `RuntimeException` case already had.
+
 A failed acknowledgement is not always the bridge failing, though. A handler that finishes after the connection has
 dropped, and before its recovery has started, acknowledges on a closed channel, and `basicAck` throws
 `AlreadyClosedException`. Stopping for that closed the channel, and closing an `AutorecoveringChannel` takes it out
@@ -1373,10 +1380,14 @@ connection a recovery interval of five seconds, let a handler finish after the c
 recovery starts, and assert that a message published after the recovery is still handled. Both fail when a failed
 acknowledgement stops the bridge.
 
-Both worker-thread tests also throw a checked exception from a handler and assert that the delivery is back on the
-queue, which only a closed channel does, next to the `Error` test each already had. Against a catch of
-`RuntimeException | Error` the exception escapes the worker's task instead and the delivery stays with the bridge.
+Both worker-thread tests also throw a checked exception from a handler and assert that both published messages are
+back on the queue, which only a closed channel does, next to the `Error` test each already had. All four wait for the
+handler to fail before reading the queue, since both messages are ready on it until the bridge takes the first one,
+and a count of two read before that is the state before anything happened. Against a catch of
+`RuntimeException | Error` the checked-exception ones find one message rather than two, the first held unacknowledged
+by a worker whose task ended and the second never sent to that consumer.
 For the poll, `RabbitMqCloudEventBridgeReadinessTest` gives a bridge a `readinessSource` that throws a checked
 exception on its first tick and an `Error` on its second, then answers true, and asserts the message is handled, and
 `RabbitMqDomainEventBridgePollFailureTest` throws an `Error` from a mocked feed's `isReadyForLiveDelivery` on the
-first tick and asserts the consumer still starts. Each fails against the catch it was written for.
+first tick and asserts the consumer still starts. Both release-helper tests have a release that fails with an
+`Error` and assert the tag is back at the front of the deque. Each fails against the catch it was written for.
