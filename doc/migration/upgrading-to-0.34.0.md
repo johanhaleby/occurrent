@@ -643,8 +643,8 @@ that model offered the event again the saga tried again, without limit, and one 
 progress therefore stopped every other correlation id behind it, for as long as nobody noticed.
 
 From 0.34.0 the executor times the failing rather than counting the attempts. The instance's first failure writes down the
-instant it started failing and rethrows, exactly as before. Where that write loses a compare-and-set nothing is
-recorded, and the next failure is a first failure again. Once that instance has kept failing for at least
+instant it started failing and rethrows, exactly as before. Where that write loses a compare-and-set that delivery
+records nothing, and what the next one finds is whatever the writer that won left. Once that instance has kept failing for at least
 `SagaRunnerConfig.quarantineAfter`, five minutes by default, it can move to the new `SagaStatus.QUARANTINED`, and when
 it does the executor stops rethrowing.
 

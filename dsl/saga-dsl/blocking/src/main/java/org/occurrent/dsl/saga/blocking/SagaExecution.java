@@ -52,8 +52,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>
  * An instance that keeps failing can be quarantined rather than left to fail for as long as the subscription model
  * offers the event again. Its first failure writes down when the failing started and rethrows, which is what every
- * version up to 0.33.0 did. Where that write loses its compare-and-set nothing is recorded and the next failure is a
- * first failure again. Whether a later failure is considered for quarantine, and whether a considered one is then
+ * version up to 0.33.0 did. Where that write loses its compare-and-set this delivery records nothing, and what the
+ * next one finds is whatever the writer that won left. Whether a later failure is considered for quarantine, and whether a considered one is then
  * quarantined, are separate conditions, and {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} lists both. When
  * the instance is quarantined, this class returns normally instead of rethrowing.
  * <p>
