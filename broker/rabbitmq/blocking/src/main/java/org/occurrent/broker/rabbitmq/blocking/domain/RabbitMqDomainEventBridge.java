@@ -595,8 +595,8 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                     consumeChannel.basicCancel(consumerTag);
                 } catch (IOException | RuntimeException e) {
                     // RuntimeException too, not only IOException: an already-closed channel throws
-                    // com.rabbitmq.client.AlreadyClosedException, unchecked, and letting it escape here would skip
-                    // scheduler.shutdown() below, leaking the poll thread.
+                    // com.rabbitmq.client.AlreadyClosedException, unchecked, and a cancel that failed is no reason to
+                    // skip the releases below.
                     log.warn("Failed to cancel the consumer on queue \"{}\" while stopping permanently.", queue, e);
                 }
                 consumerTag = null;
@@ -604,24 +604,28 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             try {
                 releaseHeldDeferredDelivery();
             } catch (RuntimeException ignored) {
-                // Best effort: the channel closes right after regardless, which requeues whatever this could not.
+                // Best effort, the channel close in the finally below requeues whatever this could not.
             }
             try {
                 releaseHeldFailedDelivery();
             } catch (RuntimeException ignored) {
                 // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
             }
+        } finally {
+            // A finally, so an Error out of the cancel or a release still closes the channel and stops the poll and the
+            // worker. The close is what requeues a held delivery, the release only makes that happen sooner. The Error
+            // still propagates once the teardown is done.
             try {
                 consumeChannel.close();
             } catch (IOException | TimeoutException | RuntimeException ignored) {
                 // Best effort, mirroring close()'s own channel teardown: the channel is going away either way.
                 // RuntimeException also catches ShutdownSignalException, which extends it.
+            } finally {
+                consumeLock.unlock();
+                scheduler.shutdown();
+                worker.stopAcceptingWork();
             }
-        } finally {
-            consumeLock.unlock();
         }
-        scheduler.shutdown();
-        worker.stopAcceptingWork();
     }
 
     /**
@@ -653,63 +657,68 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
      */
     @Override
     public void close() {
-        long deadline = System.nanoTime() + closeTimeout.toNanos();
-        bringCloseDeadlineForwardTo(deadline);
-        scheduler.shutdownNow();
-        // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
-        permanentlyStopped = true;
-        // Before the cancel, since a delivery the client has already dispatched could otherwise reach an idle worker
-        // and start a projection while this is closing.
-        worker.stopAcceptingWork();
-        // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that lock
-        // while a park waits for its confirm. Closing the channel below cancels the consumer and requeues the rest.
-        if (lockBefore(deadline)) {
-            try {
-                if (consumerTag != null) {
-                    try {
-                        consumeChannel.basicCancel(consumerTag);
-                    } catch (IOException ignored) {
-                        // Best effort: the channel is about to be closed either way.
-                    }
-                    consumerTag = null;
-                }
-            } finally {
-                consumeLock.unlock();
-            }
-        }
-        boolean workerFinished = worker.stop(remainingUntil(deadline));
-        if (!workerFinished || worker.isWorkerThread()) {
-            // The teardown below goes ahead with a delivery still running, either because this thread was interrupted
-            // while waiting or because a projection is closing its own bridge, so fence the acknowledgement from here
-            // rather than at a deadline that may still be in the future.
-            bringCloseDeadlineForwardTo(System.nanoTime());
-        }
-        if (!workerFinished) {
-            worker.interruptRunningWork(closeTimeout);
-        }
-        if (lockBefore(deadline)) {
-            try {
-                try {
-                    releaseHeldDeferredDelivery();
-                } catch (RuntimeException ignored) {
-                    // Best effort, matching basicCancel above: the channel is about to be closed either way, and
-                    // closing it requeues whatever is left held regardless.
-                }
-                try {
-                    releaseHeldFailedDelivery();
-                } catch (RuntimeException ignored) {
-                    // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
-                }
-            } finally {
-                consumeLock.unlock();
-            }
-        }
         try {
-            consumeChannel.close();
-        } catch (IOException | ShutdownSignalException | TimeoutException ignored) {
-            // Best effort, mirroring RabbitMqCloudEventSink#close's own channel teardown.
+            long deadline = System.nanoTime() + closeTimeout.toNanos();
+            bringCloseDeadlineForwardTo(deadline);
+            scheduler.shutdownNow();
+            // Stops a poll that is already running from starting a new consumer while this waits for the worker below.
+            permanentlyStopped = true;
+            // Before the cancel, since a delivery the client has already dispatched could otherwise reach an idle worker
+            // and start a projection while this is closing.
+            worker.stopAcceptingWork();
+            // Each step under consumeLock is skipped once closeTimeout has run out, since the worker can hold that lock
+            // while a park waits for its confirm. Closing the channel below cancels the consumer and requeues the rest.
+            if (lockBefore(deadline)) {
+                try {
+                    if (consumerTag != null) {
+                        try {
+                            consumeChannel.basicCancel(consumerTag);
+                        } catch (IOException ignored) {
+                            // Best effort: the channel is about to be closed either way.
+                        }
+                        consumerTag = null;
+                    }
+                } finally {
+                    consumeLock.unlock();
+                }
+            }
+            boolean workerFinished = worker.stop(remainingUntil(deadline));
+            if (!workerFinished || worker.isWorkerThread()) {
+                // The teardown below goes ahead with a delivery still running, either because this thread was interrupted
+                // while waiting or because a projection is closing its own bridge, so fence the acknowledgement from here
+                // rather than at a deadline that may still be in the future.
+                bringCloseDeadlineForwardTo(System.nanoTime());
+            }
+            if (!workerFinished) {
+                worker.interruptRunningWork(closeTimeout);
+            }
+            if (lockBefore(deadline)) {
+                try {
+                    try {
+                        releaseHeldDeferredDelivery();
+                    } catch (RuntimeException ignored) {
+                        // Best effort, the channel close in the finally below requeues whatever is left held.
+                    }
+                    try {
+                        releaseHeldFailedDelivery();
+                    } catch (RuntimeException ignored) {
+                        // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
+                    }
+                } finally {
+                    consumeLock.unlock();
+                }
+            }
+        } finally {
+            // A finally like stopPermanently()'s, so an exception from anything above, the deadline arithmetic included,
+            // still reaches the channel close, and the parking sink's close after it under PARK.
+            try {
+                consumeChannel.close();
+            } catch (IOException | ShutdownSignalException | TimeoutException ignored) {
+                // Best effort, mirroring RabbitMqCloudEventSink#close's own channel teardown.
+            } finally {
+                failureAction.close();
+            }
         }
-        failureAction.close();
     }
 
     // Only ever moved earlier, so a second close() cannot push a deadline the first one has already passed back into
