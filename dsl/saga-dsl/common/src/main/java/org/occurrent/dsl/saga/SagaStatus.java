@@ -45,7 +45,8 @@ public enum SagaStatus {
      * listener. For a record the saga fails on with a {@link RuntimeException} or an {@link AssertionError}, the Kafka
      * bridge holds back at most that record's partition, and none once the record is parked. The RabbitMQ bridge holds
      * nothing back itself once it has requeued or parked the message, so what the broker sends it next is the broker's
-     * choice. Any other {@link Error} the saga rethrows stops either bridge.
+     * choice. Anything else the saga rethrows stops either bridge, which is any other {@link Error} and a checked
+     * exception, since a saga written in Kotlin can throw one.
      * <p>
      * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
      * which input the instance stopped on, when it started failing, and what the saga threw.
