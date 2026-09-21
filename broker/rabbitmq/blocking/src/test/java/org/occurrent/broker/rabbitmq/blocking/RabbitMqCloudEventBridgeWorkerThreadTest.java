@@ -31,6 +31,7 @@ import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
@@ -240,6 +241,36 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
     }
 
     /**
+     * A handler written in Kotlin has no checked exception to declare, so it throws one straight through the Java
+     * interface this bridge calls it behind, which is what {@link #sneakyThrow(Throwable)} below reproduces from Java.
+     * The delivery failure policy covers a handler's own {@code RuntimeException} and {@code AssertionError}, so a
+     * checked exception belongs on the stopping path with an {@code Error}. Against a catch of
+     * {@code RuntimeException | Error} it escapes the worker's task instead, the worker thread dies, and the delivery
+     * stays unacknowledged on a bridge that still says it is consuming.
+     */
+    @Test
+    void a_checked_exception_from_a_handler_stops_the_bridge_and_puts_its_delivery_back_on_the_queue() throws Exception {
+        String queue = declareAndBindQueue("checked");
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        model.subscribe("checked", cloudEvent -> {
+            if (firstCall.compareAndSet(true, false)) {
+                sneakyThrow(new IOException("the store this handler writes to is down"));
+            }
+        });
+
+        try (RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue).build()) {
+            publish("checked", "id-1");
+            publish("checked", "id-2");
+
+            // Both back on the queue, which only a closed channel does. The bridge acknowledged neither, and with
+            // prefetch one the second was never even sent to it.
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(2));
+        }
+    }
+
+    /**
      * RabbitMQ applies the prefetch count to each consumer separately, so a consumer started again while the handler
      * is still blocked would be sent a delivery of its own, which would wait behind the blocked one.
      */
@@ -405,6 +436,13 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    // Throws a checked exception the way a Kotlin handler does, without declaring it, since the interface the bridge
+    // calls the handler behind declares none.
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     private static void sleepQuietly(long millis) {

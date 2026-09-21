@@ -32,6 +32,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 
+import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -128,6 +129,34 @@ class RabbitMqDomainEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         }
     }
 
+    /**
+     * A projection written in Kotlin has no checked exception to declare, so it throws one straight through the Java
+     * interface this bridge calls it behind, which is what {@link #sneakyThrow(Throwable)} below reproduces from Java.
+     * The delivery failure policy covers a projection's own {@code RuntimeException} and {@code AssertionError}, so a
+     * checked exception belongs on the stopping path with an {@code Error}. Against a catch of
+     * {@code RuntimeException | Error} it escapes the worker's task instead, the worker thread dies, and the delivery
+     * stays unacknowledged on a bridge that still says it is consuming.
+     */
+    @Test
+    void a_checked_exception_from_a_projection_stops_the_bridge_and_puts_its_delivery_back_on_the_queue() throws Exception {
+        String queue = declareAndBindQueue("checked");
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        DomainEventFeed<TestOrderPlaced> feed = liveFeed(event -> {
+            if (firstCall.compareAndSet(true, false)) {
+                sneakyThrow(new IOException("the view this projection writes to is down"));
+            }
+        });
+
+        try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = bridge(feed, queue).build()) {
+            publish("checked", "order-1");
+            publish("checked", "order-2");
+
+            // Both back on the queue, which only a closed channel does. The bridge acknowledged neither, and with
+            // prefetch one the second was never even sent to it.
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(2));
+        }
+    }
+
     @Test
     void close_puts_every_unfinished_delivery_back_on_the_queue_once_the_close_timeout_runs_out() throws Exception {
         String queue = declareAndBindQueue("stuck");
@@ -194,6 +223,13 @@ class RabbitMqDomainEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
 
     private long queueMessageCount(String queue) throws Exception {
         return adminChannel.queueDeclarePassive(queue).getMessageCount();
+    }
+
+    // Throws a checked exception the way a Kotlin projection does, without declaring it, since the interface the
+    // bridge calls the projection behind declares none.
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     private static void awaitQuietly(CountDownLatch latch) {

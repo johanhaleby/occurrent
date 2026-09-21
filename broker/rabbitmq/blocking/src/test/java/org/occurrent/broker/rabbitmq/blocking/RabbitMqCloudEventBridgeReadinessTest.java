@@ -28,6 +28,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
@@ -103,6 +104,45 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
             ready.set(true);
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
+        }
+        assertAcknowledged(queue);
+    }
+
+    /**
+     * A {@code readinessSource} is user code, and one written in Kotlin can throw a checked exception through the
+     * {@code Predicate} this bridge calls it behind. Anything escaping the poll cancels the scheduled task for good,
+     * so the bridge never starts or cancels a consumer again, releases nothing it is holding, and says none of it.
+     * Throws a checked exception on the first poll and an {@code Error} on the second, so a catch of
+     * {@code IOException | RuntimeException} never gets past the first and a catch of {@code Exception} never gets
+     * past the second.
+     */
+    @Test
+    void a_readiness_source_that_throws_does_not_end_the_poll_that_starts_this_bridges_consumer() throws Exception {
+        String queue = declareAndBindQueue(OrderPlaced.class.getName());
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
+
+        AtomicInteger readinessCalls = new AtomicInteger();
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, outcomeChannel, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .readinessSource(subscriptionId -> {
+                    int call = readinessCalls.incrementAndGet();
+                    if (call == 1) {
+                        sneakyThrow(new IOException("the endpoint this readiness source reads is down"));
+                    }
+                    if (call == 2) {
+                        throw new StackOverflowError("a readiness source that recursed");
+                    }
+                    return true;
+                })
+                .build()) {
+            publish(OrderPlaced.class.getName(), "id-1");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(handled).extracting(CloudEvent::getId).containsExactly("id-1"));
         }
         assertAcknowledged(queue);
     }
@@ -333,6 +373,13 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
         }
 
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(1));
+    }
+
+    // Throws a checked exception the way a Kotlin readiness source does, without declaring it, since the Predicate
+    // the bridge calls it behind declares none.
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     private static void awaitLatch(CountDownLatch latch) {
