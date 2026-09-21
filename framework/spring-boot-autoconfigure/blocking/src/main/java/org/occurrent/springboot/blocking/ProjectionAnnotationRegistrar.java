@@ -504,11 +504,16 @@ class ProjectionAnnotationRegistrar {
             ExecutorService tickExecutor = recordingTickExecutor;
             recordingPollScheduler.schedule(() -> tickExecutor.execute(() -> {
                 try {
+                    // Throwable, and the next tick scheduled in a finally, because this tick is the only thing that
+                    // schedules the one after it. An AppliedAppendStore written in Kotlin can throw a checked
+                    // exception from clear() without declaring it, and anything this catch missed ended the poll for
+                    // this projection for good, with a clear still owed and nothing left to retry it.
                     registry.tick(id);
-                } catch (RuntimeException e) {
+                } catch (Throwable e) {
                     log.error("The applied-append recording poll for projection '{}' failed. It will be retried at the next tick.", id, e);
+                } finally {
+                    scheduleRecordingPoll(id);
                 }
-                scheduleRecordingPoll(id);
             }), registry.dueInNanos(id), TimeUnit.NANOSECONDS);
         }
     }
