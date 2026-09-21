@@ -42,7 +42,7 @@ public enum SagaStatus {
      * feeds the saga's subscription decides what else waits for that event, which can be every other instance of the
      * saga, some of them, or none. A push feed hands an event pushed to it live to the saga on the thread that pushed
      * it, so what waits for a live event that fails is up to the listener that pushed it, and a broker bridge is such a
-     * listener. For a record that fails, the Kafka bridge holds back no partition but that record's.
+     * listener. For a record the saga fails on, the Kafka bridge holds back no partition but that record's.
      * <p>
      * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
      * which input the instance stopped on, when it started failing, and what the saga threw.
