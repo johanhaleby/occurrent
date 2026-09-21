@@ -48,6 +48,11 @@ public enum SagaStatus {
      * choice. Anything else the saga rethrows stops either bridge, which is any other {@link Error} and a checked
      * exception, since a saga written in Kotlin can throw one.
      * <p>
+     * A failure during a catch-up can stop a bridge too. When the saga runs on a
+     * {@code CatchupThenPushSubscriptionModel} over either bridge and rethrows a {@link RuntimeException} or an
+     * {@link Error} during the replay, the model refuses the subscription's live events from then on, and either bridge
+     * stops for good on a record the model refuses.
+     * <p>
      * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
      * which input the instance stopped on, when it started failing, and what the saga threw.
      * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided not to recover it.
