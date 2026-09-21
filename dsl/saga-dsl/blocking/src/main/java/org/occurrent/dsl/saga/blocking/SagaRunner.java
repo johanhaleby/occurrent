@@ -81,9 +81,10 @@ import static java.util.Objects.requireNonNull;
  *   <li><strong>Event path.</strong> A failure (including a {@link SagaConcurrencyException} once the retries are
  *       exhausted) propagates to the subscription model, and the whole step is retried wherever that model offers
  *       the event again. Whether it does is the model's own business. A push feed lets the listener decide, and on
- *       a consume-side broker bridge the choice is set with {@code DeliveryFailurePolicy}. The subscription is a
- *       single ordered channel shared by every instance this saga handles, so while one event keeps being redelivered
- *       and failing the events queued behind it wait.
+ *       a consume-side broker bridge the choice is set with {@code DeliveryFailurePolicy}.
+ *       <p>
+ *       What a failing event holds up is decided by whatever feeds the subscription rather than by the runner, and
+ *       {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what that can be.
  *       <p>
  *       An instance that keeps failing can be quarantined instead, with a budget set by
  *       {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. Whether a failing event is considered
@@ -108,9 +109,9 @@ import static java.util.Objects.requireNonNull;
  *       and once the subscription moved past it the next event for that instance would move the instance's watermark
  *       beyond it, so feeding it to the saga again would be ignored as a redelivery and the event would be lost. It is
  *       refused on every redelivery instead, as every version up to 0.33.0 did. Where the subscription offers it
- *       again, every instance of this saga waits behind it while other sagas and subscriptions keep going, and once
- *       the converter or the id extractor is repaired the event is applied in the order it was written, with nothing
- *       to feed again. Whether it is offered again is the subscription model's to decide, and
+ *       again, once the converter or the id extractor is repaired the event is applied in the order it was written,
+ *       with nothing to feed again. What it holds up in the meantime is decided by whatever feeds the subscription, the
+ *       same as for an instance that keeps failing. Whether it is offered again is the subscription model's to decide, and
  *       {@code DeliveryFailurePolicy} is where a consume-side broker bridge's choice is configured. The first
  *       failure is logged at WARN and, after that, at ERROR once per {@code quarantineAfter} when it is set or a
  *       fixed five-minute default when it is not, naming the event and the exception that stopped it, so that ERROR
@@ -322,12 +323,12 @@ public final class SagaRunner<E, C> {
         }
         Optional<HistoryRetainingSubscriptions> retention = HistoryRetainingSubscriptions.findIn(subscriptionModel);
         if (retention.isEmpty()) {
-            log.warn("Saga subscription '{}' runs on a subscription model that cannot say whether it still holds an event it delivered ({}), so the event a quarantined instance stopped on has to be treated as one that could not be obtained again, and quarantine is switched off for this saga. An event that keeps failing for one instance therefore blocks every other instance of it for as long as whatever feeds this subscription offers the event again, which is the behaviour before 0.34.0. A model answers by implementing HistoryRetainingSubscriptions, which the MongoDB subscription models do, and so does a catch-up model over one of them. A push feed on its own does not, because it is handed its events without being told where they came from, so it cannot establish that anything here still has them, whether or not something does. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+            log.warn("Saga subscription '{}' runs on a subscription model that cannot say whether it still holds an event it delivered ({}), so the event a quarantined instance stopped on has to be treated as one that could not be obtained again, and quarantine is switched off for this saga. An instance that keeps failing is therefore never quarantined, which is the behaviour before 0.34.0. What its failing event holds up is decided by whatever feeds this subscription. A model answers by implementing HistoryRetainingSubscriptions, which the MongoDB subscription models do, and so does a catch-up model over one of them. A push feed on its own does not, because it is handed its events without being told where they came from, so it cannot establish that anything here still has them, whether or not something does. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                     subscriptionId, subscriptionModel.getClass().getName());
             return config.withQuarantineAfter(null);
         }
         if (!retention.get().retainsEveryEvent()) {
-            log.warn("Saga subscription '{}' runs on a subscription model that cannot guarantee it holds every event it delivers ({}), so quarantine is switched off for this saga, and an event that keeps failing for one instance blocks every other instance of it for as long as whatever feeds this subscription offers the event again, which is the behaviour before 0.34.0. Quarantining the event an instance stopped on would be safe whenever this model still holds that one, but a quarantined instance skips everything addressed to it afterwards, and skipping acknowledges. On a model that holds only some of what it delivers, one of those later events may be a copy nothing else has. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+            log.warn("Saga subscription '{}' runs on a subscription model that cannot guarantee it holds every event it delivers ({}), so quarantine is switched off for this saga, and an instance that keeps failing is never quarantined, which is the behaviour before 0.34.0. What its failing event holds up is decided by whatever feeds this subscription. Quarantining the event an instance stopped on would be safe whenever this model still holds that one, but a quarantined instance skips everything addressed to it afterwards, and skipping acknowledges. On a model that holds only some of what it delivers, one of those later events may be a copy nothing else has. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                     subscriptionId, subscriptionModel.getClass().getName());
             return config.withQuarantineAfter(null);
         }

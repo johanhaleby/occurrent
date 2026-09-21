@@ -62,7 +62,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link Throwable}, so once an event has reached an instance, what failed and where it was thrown decide nothing
  * about its budget. A delivery that fails before the saga can say which instance it
  * belongs to has no instance to charge and no instance to hold it, so it is never let past. It is refused on every
- * redelivery, and where the subscription offers it again the saga waits behind it. See
+ * redelivery. See
  * {@link #letTheSubscriptionPast} for the conditions and
  * {@link #refuseUnroutableDelivery} for why the unroutable delivery is the exception.
  * <p>
@@ -73,8 +73,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * The quarantine decision reads and writes the instance without its application state, through
  * {@link SagaStateStore#findWithoutState} and {@link SagaStateStore#compareAndSaveWithoutState}. An instance whose state
  * no longer decodes is one of the instances most in need of quarantining, so deciding on a read that throws on it would
- * leave it failing on every delivery, blocking the saga's other instances wherever the subscription model offers the
- * failing event again. A store that only reads an instance whole keeps that behaviour, because nothing
+ * leave it failing on every delivery without ever reaching its budget. A store that only reads an instance whole keeps that behaviour, because nothing
  * here can read an instance it can only hand over whole.
  * <p>
  * Dispatch amplification: commands are dispatched before the save, and a lost compare-and-set retries the whole step, so a
@@ -184,8 +183,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
 
     /**
      * Whether the subscription may move past this delivery rather than be made to offer it again. A true answer means
-     * {@link #onCloudEvent} returns normally, so the subscription acknowledges the event and every other instance on the
-     * shared channel keeps going. A false answer means the failure propagates exactly as it always has.
+     * {@link #onCloudEvent} returns normally. A false answer means the failure propagates exactly as it always has.
      * <p>
      * A delivery the saga could not route, because the converter or the id extractor threw, always gets a false answer,
      * and {@link #refuseUnroutableDelivery} says why. Only a delivery that reached an instance can be let past, and
@@ -222,9 +220,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * Acknowledging it is what would lose it. An event the saga cannot route may still belong to an instance, and the
      * next event for that instance moves the instance's watermark past it, so feeding the repaired event to the saga
      * again afterwards is taken for a redelivery and ignored. Nothing can be written for it either, since there is no
-     * instance to write on. Where the subscription offers it again, the saga waits behind it, which blocks this saga
-     * and no other, and once the converter or the id extractor can read it the event is applied in the order it was
-     * written, with nothing to feed again.
+     * instance to write on. Where the subscription offers it again, once the converter or the id extractor can read it
+     * the event is applied in the order it was written, with nothing to feed again. What it holds up in the meantime is
+     * decided by whatever feeds the subscription, and {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what
+     * that can be.
      * <p>
      * The first failure is a warning, and after that it is logged at ERROR once per {@link #unroutableErrorInterval()}
      * for as long as the event keeps being offered, rather than every time the source offers it. That interval is the
@@ -242,7 +241,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         Instant now = clock.get();
         UnroutableDelivery existing = unroutableDeliveries.putIfAbsent(redeliveryKey, new UnroutableDelivery(now, now));
         if (existing == null) {
-            log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, so it refused the event rather than acknowledging it, because an event the saga cannot route may still belong to an instance and acknowledging it would lose it. Where the subscription offers the event again, every instance of this saga waits behind it until the converter or the id extractor can read it, and the event is then applied in the order it was written. Whether it is offered again is up to the subscription model, and DeliveryFailurePolicy is where a broker bridge's choice is configured.",
+            log.warn("Saga '{}' could not work out which instance the event '{}' belongs to, so it refused the event rather than acknowledging it, because an event the saga cannot route may still belong to an instance and acknowledging it would lose it. Where the subscription offers the event again, it is applied in the order it was written once the converter or the id extractor can read it. What it holds up until then is decided by whatever feeds this subscription. Whether it is offered again is up to the subscription model, and DeliveryFailurePolicy is where a broker bridge's choice is configured.",
                     subscriptionId, redeliveryKey, failure);
             return;
         }
@@ -251,7 +250,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             || !unroutableDeliveries.replace(redeliveryKey, existing, new UnroutableDelivery(existing.firstFailedAt(), now))) {
             return;
         }
-        log.error("Saga '{}' has been unable to work out which instance the event '{}' belongs to for {}, and for as long as the subscription model offers it again every instance of this saga waits behind it. The event is refused rather than skipped, because acknowledging it would lose it, and no instance is quarantined, because the event reached none. Where the event is offered again, repair the converter or the id extractor and it is applied in the order it was written, with nothing to feed to the saga again.",
+        log.error("Saga '{}' has been unable to work out which instance the event '{}' belongs to for {}. What it holds up is decided by whatever feeds this subscription. The event is refused rather than skipped, because acknowledging it would lose it, and no instance is quarantined, because the event reached none. Where the event is offered again, repair the converter or the id extractor and it is applied in the order it was written, with nothing to feed to the saga again.",
                 subscriptionId, redeliveryKey, Duration.between(existing.firstFailedAt(), now), failure);
     }
 
@@ -274,8 +273,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
 
     /**
      * Record that this event failed for this instance, and answer whether that ended the instance's time budget. A true
-     * answer means the caller returns normally, so the subscription acknowledges the event and every other instance on
-     * the shared channel keeps going. A false answer means the exception propagates exactly as it always has.
+     * answer means the caller returns normally. A false answer means the exception propagates exactly as it always has.
      * <p>
      * The failure is a {@link Throwable} because the instance is stuck on it either way. An {@code Error} out of a
      * reaction stops the instance making progress exactly as a {@code RuntimeException} does, and it costs the saga's
@@ -319,7 +317,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 // redelivery ask again. Retention is rechecked every time so a store coming back is noticed, while
                 // the warning is said once per instance.
                 if (firstRefusalForThisInstance) {
-                    log.warn("Saga '{}' instance '{}' has been failing for {}, which is past its budget of {}, and is stopped on the event '{}', and it is not quarantined, because the subscription could not confirm that acknowledging the event is safe to do. Either acknowledging is what would drop the only copy of it, or the check could not be completed, and quarantining acknowledges the event. This delivery is rethrown instead, and the instance blocks the saga's other instances for as long as whatever feeds this subscription offers the event again. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+                    log.warn("Saga '{}' instance '{}' has been failing for {}, which is past its budget of {}, and is stopped on the event '{}', and it is not quarantined, because the subscription could not confirm that acknowledging the event is safe to do. Either acknowledging is what would drop the only copy of it, or the check could not be completed, and quarantining acknowledges the event. This delivery is rethrown instead. What the event holds up is decided by whatever feeds this subscription. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                             subscriptionId, sagaId, failingFor, quarantineAfter, meta.redeliveryKey(), failure);
                 }
                 return false;
@@ -341,7 +339,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                 return false;
             }
-            log.error("Saga '{}' instance '{}' has been failing for {}, past its budget of {}, and is now QUARANTINED, stopped on the event '{}'. The time is how long the instance has been failing, which can be longer than this one event has. It skips every further event and fires no timers, so the saga's other instances keep going. Find it with findByStatus(QUARANTINED, ..).",
+            log.error("Saga '{}' instance '{}' has been failing for {}, past its budget of {}, and is now QUARANTINED, stopped on the event '{}'. The time is how long the instance has been failing, which can be longer than this one event has. It skips every further event and fires no timers. Find it with findByStatus(QUARANTINED, ..).",
                     subscriptionId, sagaId, failingFor(record, now), quarantineAfter, meta.redeliveryKey(), failure);
             return true;
         } catch (Throwable storeFailure) {

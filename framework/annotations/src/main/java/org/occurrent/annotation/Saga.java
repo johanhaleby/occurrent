@@ -47,9 +47,9 @@ import java.lang.annotation.*;
  * wherever the subscription model offers the event again. Whether it does is that model's own business. A push feed
  * lets the listener decide, and on a consume-side broker bridge the choice is set with
  * {@code DeliveryFailurePolicy}.
- * That subscription is a single ordered
- * channel shared by every instance of this saga, so while one event keeps being redelivered and failing the events
- * behind it wait, which is head-of-line blocking.
+ * <p>
+ * What a failing event holds up is decided by whatever feeds the subscription, and the javadoc on
+ * {@code SagaStatus.QUARANTINED} says what that can be.
  * <p>
  * An instance that keeps failing can be quarantined instead, with a budget of five minutes by default, set by
  * {@code occurrent.saga.quarantine-after} on this path. Whether a failing event is considered for quarantine and
@@ -62,9 +62,8 @@ import java.lang.annotation.*;
  * <p>
  * Only an event the saga routed to an instance is charged to that instance, and a quarantine records whichever event
  * the instance stopped on. An event it could not route, because the converter or the id extractor threw, is refused
- * on every redelivery instead, because acknowledging it would lose it. Where the subscription offers it again, this saga waits behind it
- * until the converter or the id extractor is repaired, and the refusal is logged once per interval naming the event, the
- * budget when it is set and a fixed five minutes when it is not, so the refusal keeps getting louder even where the
+ * on every redelivery instead, because acknowledging it would lose it. Where the subscription offers it again, the
+ * refusal is logged once per interval naming the event, the budget when it is set and a fixed five minutes when it is not, so the refusal keeps getting louder even where the
  * budget is switched off. The javadoc on {@code SagaRunner}, the executor the framework builds for this saga, and
  * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0134-a-saga-instance-that-keeps-failing-is-quarantined-at-its-own-position.md">ADR 134</a>
  * have the rest, including what a quarantined instance does afterwards and how to find one.

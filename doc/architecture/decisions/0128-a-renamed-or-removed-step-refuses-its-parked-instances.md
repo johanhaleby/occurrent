@@ -44,12 +44,10 @@ Guard the lookup, and `reactToBranch`, `reactToJoin` and `armTimeoutIfAny` can n
 name or a branch index the current build does not have. There is nothing left for a second fix to do there.
 
 **The two guarded call sites do not carry the same cost when they refuse.** `SagaRunner`'s own javadoc documents
-that an exception on the event path propagates to the subscription model, that the whole step is retried wherever
-that model offers the event again, and that the
-subscription is a single ordered channel shared by every instance the saga handles, so while one event keeps being
-redelivered and failing the events behind it wait. One instance parked on a gone step is what holds that channel. A
-consume-side broker bridge need not hold it, since it need not offer the event again, and `DeliveryFailurePolicy` is
-where that choice is configured. That is not a new failure mode this decision introduces, it is the same accepted
+that an exception on the event path propagates to the subscription model, and that the whole step is retried
+wherever that model offers the event again. What one instance parked on a gone step holds up meanwhile is decided by
+whatever feeds the subscription, and `SagaStatus.QUARANTINED` says what that can be. A consume-side broker bridge need
+not offer the event again, and `DeliveryFailurePolicy` is where that choice is configured. That is not a new failure mode this decision introduces, it is the same accepted
 architecture ADR 123's own refusal already lives with. The timer path is different. `SagaExecution.pollTimers`
 catches a failing timeout per instance, logs it, and leaves it due for the next poll.
 

@@ -100,7 +100,7 @@ class SagaQuarantineWarningTest {
                 () -> assertThat(warnings()).hasSize(1),
                 () -> assertThat(warning()).contains("cannot say whether it still holds an event it delivered"),
                 () -> assertThat(warning()).contains(RetainsNothing.class.getName()),
-                () -> assertThat(warning()).contains("blocks every other instance")
+                () -> assertThat(warning()).contains("What its failing event holds up is decided by whatever feeds this subscription")
         );
     }
 

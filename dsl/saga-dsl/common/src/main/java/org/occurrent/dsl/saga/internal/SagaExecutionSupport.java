@@ -253,8 +253,8 @@ public final class SagaExecutionSupport {
      * The elapsed time runs from when the instance started failing, not from when the input now failing started. A
      * different input failing rewrites the record to name that input and keeps {@code firstFailedAt} where it was, so
      * an instance where two inputs fail in turn still reaches its budget. Letting each one write the current time into
-     * the record put the clock back to zero on every delivery, and such an instance never quarantined and never stopped
-     * blocking the saga's other instances. This is the mirror of the rule below, where a successful input
+     * the record put the clock back to zero on every delivery, and such an instance never reached its budget. This is
+     * the mirror of the rule below, where a successful input
      * clears the record only when it is the input the record names, and it is there for the same reason.
      * <p>
      * "The same input" is {@link EventMeta#redeliveryKey()}, not the global position, so an event from a store that
