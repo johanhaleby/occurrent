@@ -644,8 +644,8 @@ that model offered the event again the saga tried again, without limit.
 What the failing event holds up in the meantime is decided by whatever feeds the subscription, and the javadoc on
 `SagaStatus.QUARANTINED` says what that can be.
 
-From 0.34.0 the executor times the failing rather than counting the attempts. The instance's first failure tries to write down
-the instant it started failing, and rethrows whether or not that write succeeds, exactly as before. Where nothing was
+From 0.34.0 the executor times the failing rather than counting the attempts. Where a quarantine budget is in force, the
+instance's first failure tries to write down the instant it started failing, and rethrows whether or not that write succeeds, exactly as before. Where nothing was
 recorded, the next delivery decides on whatever the store holds then. Once that instance has kept failing for at least
 `SagaRunnerConfig.quarantineAfter`, five minutes by default, it can move to the new `SagaStatus.QUARANTINED`, and when
 it does the executor stops rethrowing.
@@ -741,7 +741,9 @@ stuck.addAll(instances.findByStatus(SagaStatus.QUARANTINED, Instant.now(), 100))
 **`SagaInstance` gains a `failure()` method,** which breaks anyone implementing that interface outside this
 repository. It tells you what a quarantined instance stopped on, which is the failing event's redelivery key with its
 position beside it when the store assigns one, the exception's class name and message, and when the instance started
-failing, and it answers `null` for an instance that is failing on nothing. `SagaEnvelope` implements it from its new `failure` component, so a store that carries that
+failing, and it answers `null` for an instance that has no failure recorded. That does not mean the instance is not
+failing, because the runner records a failure only while a quarantine budget is in force, and it switches the budget
+off at startup on a subscription model that cannot guarantee it holds every event it delivers. `SagaEnvelope` implements it from its new `failure` component, so a store that carries that
 component answers it for free.
 
 **`SagaEnvelope` gains two record components, `started` and `failure`,** which changes its canonical constructor and

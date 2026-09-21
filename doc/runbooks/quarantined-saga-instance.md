@@ -148,8 +148,12 @@ stored as epoch milliseconds rather than a date.
 
 ### 2. [you] Read what the instance stopped on
 
-`SagaInstance.failure()` answers a `SagaFailure` for a quarantined instance, and `null` for an instance that is failing
-on nothing.
+`SagaInstance.failure()` answers a `SagaFailure` for a quarantined instance, and `null` for an instance that has no
+failure recorded.
+
+A `null` does not mean the instance is not failing. The runner records a failure only while a quarantine budget is in
+force, and it switches the budget off at startup on a subscription model that cannot guarantee it holds every event it
+delivers. On such a model an instance can fail on every delivery and still answer `null` with an `ACTIVE` status.
 
 ```java
 SagaInstance instance = quarantined.getFirst();
