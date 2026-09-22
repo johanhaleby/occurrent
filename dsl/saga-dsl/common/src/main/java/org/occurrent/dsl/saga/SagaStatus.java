@@ -49,9 +49,9 @@ public enum SagaStatus {
      * exception, since a saga written in Kotlin can throw one.
      * <p>
      * A failure during a catch-up can stop a bridge too. When the saga runs on a
-     * {@code CatchupThenPushSubscriptionModel} over either bridge and rethrows a {@link RuntimeException} or an
-     * {@link Error} during the replay, the model refuses the subscription's live events from then on, and either bridge
-     * stops for good on a record the model refuses.
+     * {@code CatchupThenPushSubscriptionModel} over either bridge and the replay throws anything at all, whether the
+     * saga threw it or reading the history from the event store did, the model refuses the subscription's live events
+     * from then on, and either bridge stops for good on a record the model refuses.
      * <p>
      * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
      * which input the instance stopped on, when it started failing, and what the saga threw.
@@ -93,6 +93,13 @@ public enum SagaStatus {
      * So an instance that has been failing for longer than {@code quarantineAfter} can still be {@link #ACTIVE}, and the
      * logs alone do not tell you which status it has. Read its status with {@code SagaInstances.find} or
      * {@code findByStatus} instead.
+     * <p>
+     * {@link SagaInstance#failure()} answers {@code null} when no failure is on record, and several ways of failing
+     * record nothing, so a {@code null} does not mean the instance is not failing. A failing timeout records nothing.
+     * Neither does a failing event the first list above rules out, such as one on a saga whose budget is off, one
+     * carrying no redelivery key, or one that failed with an {@link OutOfMemoryError}. A failure also records nothing
+     * when the store read or the record write throws, which includes a store that reads an instance only whole failing
+     * to decode its state, or when that write loses its compare-and-set. A later failing event can try the write again.
      */
     QUARANTINED
 }

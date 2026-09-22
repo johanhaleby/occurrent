@@ -51,7 +51,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * save. Timeouts re-enter the same path, fenced so a timer no longer present on the (reloaded) envelope is skipped.
  * <p>
  * An instance that keeps failing can be quarantined rather than left to fail for as long as the subscription model
- * offers the event again. Where a quarantine budget is in force, its first failure tries to write down when the
+ * offers the event again. Where a quarantine budget is in force, its first failing event can write down when the
  * failing started, and it rethrows whether or not that write succeeds, which is what every version up to 0.33.0 did. Where nothing was recorded, the next delivery
  * decides on whatever the store holds then. Whether a later failure is considered for quarantine, and whether a
  * considered one is then quarantined, are separate conditions, and

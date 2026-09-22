@@ -1272,7 +1272,8 @@ further to at the default `prefetchCount` of one, which is a bridge that has sto
 The checked exception is why the worker's own catch is `Throwable` rather than the types javac allows a `Runnable` to
 throw. Java will not throw one out of `handleDelivery`, and a handler written in Kotlin has no checked exception to
 declare, so it throws one straight through the Java interface the bridge calls it behind. `SagaExecution` catches
-`Throwable` and rethrows it unchanged, so a saga is one way it arrives. Caught, it stops the bridge like an `Error`.
+`Throwable`, and when it does not quarantine the instance the checked exception can come back out of it, so a saga is
+one way it arrives. Caught, it stops the bridge like an `Error`.
 Uncaught, it ended the worker's task with the delivery unacknowledged on a bridge that still counted itself as
 running, which is the state this catch exists to prevent, reached without a log line. See
 [#1086](https://github.com/johanhaleby/occurrent/issues/1086). Routing it through the delivery failure policy was the
@@ -1303,7 +1304,9 @@ that followed requeues whatever the release could not. An `Error` out of `basicN
 stayed unacknowledged on a channel nobody closed, and RabbitMQ redelivers them only once that channel or its
 connection goes away. See [#1090](https://github.com/johanhaleby/occurrent/issues/1090). The channel close now runs in
 a `finally` in both methods of both bridges, and so does what follows it, the parking publisher's close in `close()`
-and the shutdown of the poll and the worker in `stopPermanently()`. The `Error` still propagates once that is done.
+and the shutdown of the poll and the worker in `stopPermanently()`. The `Error` still propagates once that is done,
+unless something in that teardown throws too, such as the channel close or the parking publisher's close, since what a
+`finally` throws replaces what was propagating.
 Nothing is caught that was not caught before, so whether to exempt an `OutOfMemoryError`, which the poll and the saga
 timer poller each had to decide, does not come up.
 
