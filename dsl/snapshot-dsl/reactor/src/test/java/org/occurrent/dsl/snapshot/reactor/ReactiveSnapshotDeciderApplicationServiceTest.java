@@ -21,6 +21,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -351,6 +352,79 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
         assertThatThrownBy(() -> ReactiveSnapshotDecider.from(decider, store, null))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("options");
+    }
+
+    @Test
+    void executeAndReturnState_with_a_single_command_refuses_a_null_state_before_anything_is_written() {
+        String streamId = UUID.randomUUID().toString();
+        var account = ReactiveSnapshotDecider.from(foldsToNullDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        assertThatThrownBy(() -> service.executeAndReturnState(streamId, new Delete(), account).block(TIMEOUT))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("Mono cannot carry null");
+
+        assertThat(requireNonNull(eventStore.read(streamId).block(TIMEOUT)).version()).as("nothing written for a refused null state").isZero();
+    }
+
+    @Test
+    void executeAndReturnState_with_a_UUID_stream_id_also_refuses_a_null_state_before_anything_is_written() {
+        UUID streamId = UUID.randomUUID();
+        var account = ReactiveSnapshotDecider.from(foldsToNullDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        assertThatThrownBy(() -> service.executeAndReturnState(streamId, new Delete(), account).block(TIMEOUT))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("Mono cannot carry null");
+
+        assertThat(requireNonNull(eventStore.read(streamId.toString()).block(TIMEOUT)).version()).as("nothing written for a refused null state").isZero();
+    }
+
+    @Test
+    void executeAndReturnState_with_a_command_list_also_refuses_a_null_state_before_anything_is_written() {
+        String streamId = UUID.randomUUID().toString();
+        var account = ReactiveSnapshotDecider.from(foldsToNullDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        assertThatThrownBy(() -> service.executeAndReturnState(streamId, List.of(new Delete()), account).block(TIMEOUT))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("Mono cannot carry null");
+
+        assertThat(requireNonNull(eventStore.read(streamId).block(TIMEOUT)).version()).as("nothing written for a refused null state").isZero();
+    }
+
+    @Test
+    void executeAndReturnDecision_still_allows_a_null_state_and_the_write_is_committed() {
+        String streamId = UUID.randomUUID().toString();
+        var account = ReactiveSnapshotDecider.from(foldsToNullDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        Decider.Decision<@Nullable String, DomainEvent> decision = service.executeAndReturnDecision(streamId, new Delete(), account).block(TIMEOUT);
+
+        assertAll(
+                () -> assertThat(decision).isNotNull(),
+                () -> assertThat(decision.state()).isNull(),
+                () -> assertThat(requireNonNull(eventStore.read(streamId).block(TIMEOUT)).version()).as("the committed write").isEqualTo(1L)
+        );
+    }
+
+    private static Decider<Delete, @Nullable String, DomainEvent> foldsToNullDecider(LocalDateTime time) {
+        return new Decider<>() {
+            @Override
+            public @Nullable String initialState() {
+                return "";
+            }
+
+            @NonNull
+            @Override
+            public List<DomainEvent> decide(@NonNull Delete command, @Nullable String state) {
+                return List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "DELETED"));
+            }
+
+            @Override
+            public @Nullable String evolve(@Nullable String state, @NonNull DomainEvent event) {
+                return null;
+            }
+        };
+    }
+
+    private record Delete() {
     }
 
     private sealed interface Cmd {

@@ -100,18 +100,23 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
 
     /**
      * Execute a single command and emit the folded state after the decision (even when nothing was appended). A {@link Mono}
-     * cannot carry a null value, so the snapshot state {@code S} must be non-null here, use
-     * {@link #executeAndReturnDecision} for a nullable state.
+     * cannot carry a null value, so the snapshot state {@code S} must be non-null here. A decider that folds to null is
+     * refused before anything is written. Use {@link #executeAndReturnDecision} for a nullable state.
      */
     public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(C command, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
-        return executeAndReturnDecision(command, snapshotDcbDecider).map(ReactiveSnapshotDcbDeciderApplicationService::requireNonNullState);
+        return doExecuteAndReturnState(List.of(command), snapshotDcbDecider);
     }
 
     /**
-     * Execute {@code commands} and emit the folded state after the decision (even when nothing was appended).
+     * Execute {@code commands} and emit the folded state after the decision (even when nothing was appended). Refused
+     * before anything is written if the decider folds to a null state. See {@link #executeAndReturnState(Object, ReactiveSnapshotDcbDecider)}.
      */
     public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
-        return executeAndReturnDecision(commands, snapshotDcbDecider).map(ReactiveSnapshotDcbDeciderApplicationService::requireNonNullState);
+        return doExecuteAndReturnState(commands, snapshotDcbDecider);
+    }
+
+    private <C, S extends @Nullable Object> Mono<S> doExecuteAndReturnState(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+        return doExecute(commands, snapshotDcbDecider, true).map(executed -> executed.decision().state());
     }
 
     // A Mono cannot carry null, so a null folded state fails fast with guidance instead of a bare NPE from Reactor.
@@ -134,6 +139,10 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
     }
 
     private <C, S extends @Nullable Object> Mono<Executed<S, E>> doExecute(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+        return doExecute(commands, snapshotDcbDecider, false);
+    }
+
+    private <C, S extends @Nullable Object> Mono<Executed<S, E>> doExecute(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider, boolean refuseNullState) {
         Objects.requireNonNull(commands, "commands cannot be null");
         Objects.requireNonNull(snapshotDcbDecider, "snapshotDcbDecider cannot be null");
 
@@ -156,6 +165,12 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
                                     tailSize.set(tail.size());
                                     S current = decider.evolve(base.state(), tail);
                                     Decider.Decision<S, E> decision = decider.decideOnState(current, commands);
+                                    // The decision is known before functionThatCallsDomainModel returns, which is before
+                                    // the application service appends anything, so refusing a null state here (rather
+                                    // than after the append) keeps a rejected command from ever being committed.
+                                    if (refuseNullState) {
+                                        requireNonNullState(decision);
+                                    }
                                     decisionRef.set(decision);
                                     return decision.events();
                                 })
