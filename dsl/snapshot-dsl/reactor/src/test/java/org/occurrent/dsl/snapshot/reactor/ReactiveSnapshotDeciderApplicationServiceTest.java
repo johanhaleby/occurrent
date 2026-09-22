@@ -140,6 +140,15 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
 
     @Test
     void a_snapshot_save_that_throws_a_checked_exception_before_returning_a_mono_does_not_error_and_the_write_is_committed() {
+        assertSnapshotSaveThrowingBeforeReturningAMonoIsSwallowed(new IOException("snapshot store unreachable (test double)"));
+    }
+
+    @Test
+    void a_snapshot_save_that_throws_a_StackOverflowError_before_returning_a_mono_does_not_error_and_the_write_is_committed() {
+        assertSnapshotSaveThrowingBeforeReturningAMonoIsSwallowed(new StackOverflowError("snapshot store save overflowed (test double)"));
+    }
+
+    private void assertSnapshotSaveThrowingBeforeReturningAMonoIsSwallowed(Throwable saveFailure) {
         String streamId = UUID.randomUUID().toString();
         ReactiveSnapshotStore<String> failingStore = new ReactiveSnapshotStore<>() {
             @Override
@@ -149,7 +158,7 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
 
             @Override
             public Mono<Void> save(String key, Snapshot<String> snapshot) {
-                throw ReactiveSnapshotDeciderApplicationServiceTest.<RuntimeException>sneakyThrow(new IOException("snapshot store unreachable (test double)"));
+                throw ReactiveSnapshotDeciderApplicationServiceTest.<RuntimeException>sneakyThrow(saveFailure);
             }
         };
         AtomicReference<WriteResult> result = new AtomicReference<>();
@@ -227,6 +236,13 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     void a_stale_snapshot_delete_that_throws_a_checked_exception_before_returning_a_mono_does_not_error_and_the_write_is_committed() {
         assertStaleSnapshotDeleteFailureIsSwallowed(() -> {
             throw ReactiveSnapshotDeciderApplicationServiceTest.<RuntimeException>sneakyThrow(new IOException("snapshot store unreachable (test double)"));
+        });
+    }
+
+    @Test
+    void a_stale_snapshot_delete_that_throws_a_StackOverflowError_before_returning_a_mono_does_not_error_and_the_write_is_committed() {
+        assertStaleSnapshotDeleteFailureIsSwallowed(() -> {
+            throw new StackOverflowError("snapshot store delete overflowed (test double)");
         });
     }
 

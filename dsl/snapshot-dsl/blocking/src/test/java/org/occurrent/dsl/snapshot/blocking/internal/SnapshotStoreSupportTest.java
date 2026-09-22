@@ -88,6 +88,11 @@ class SnapshotStoreSupportTest {
     }
 
     @Test
+    void best_effort_save_returns_false_when_the_store_throws_an_Error() {
+        assertBestEffortSaveReturnsFalse(storeWhoseSaveThrows(new StackOverflowError("snapshot store save overflowed (test double)")), SnapshotPolicy.always(), () -> DECISION);
+    }
+
+    @Test
     void best_effort_save_returns_false_when_the_policy_throws_a_checked_exception() {
         SnapshotPolicy<Integer, LedgerEvent> throwingPolicy = decision -> {
             throw SnapshotStoreSupportTest.<RuntimeException>sneakyThrow(new IOException("policy failed (test double)"));

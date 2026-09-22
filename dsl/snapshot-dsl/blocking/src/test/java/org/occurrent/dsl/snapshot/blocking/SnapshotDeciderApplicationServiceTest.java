@@ -114,6 +114,19 @@ class SnapshotDeciderApplicationServiceTest {
     }
 
     @Test
+    void a_snapshot_save_that_throws_an_Error_does_not_fail_execute_and_the_write_is_committed() {
+        String streamId = UUID.randomUUID().toString();
+        SnapshotStore<String> failingStore = new ThrowingSnapshotStore<>(new StackOverflowError("snapshot store save overflowed (test double)"));
+        AtomicReference<WriteResult> result = new AtomicReference<>();
+
+        Throwable thrown = catchThrowable(() -> result.set(service.execute(streamId, new Define("Jane"), SnapshotDecider.from(decider, failingStore, SnapshotOptions.of(1, SnapshotPolicy.always())))));
+
+        assertThat(eventStore.read(streamId).version()).as("the committed write").isEqualTo(1L);
+        assertThat(thrown).as("what escaped execute after the write committed").isNull();
+        assertThat(result.get().newStreamVersion()).isEqualTo(1L);
+    }
+
+    @Test
     void second_execute_resumes_from_the_snapshot_and_folds_only_the_tail() {
         String streamId = UUID.randomUUID().toString();
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
@@ -223,6 +236,11 @@ class SnapshotDeciderApplicationServiceTest {
     @Test
     void a_stale_snapshot_delete_that_throws_a_checked_exception_does_not_fail_execute_and_the_write_is_committed() {
         assertStaleSnapshotDeleteFailureIsSwallowed(new IOException("snapshot store unreachable (test double)"));
+    }
+
+    @Test
+    void a_stale_snapshot_delete_that_throws_an_Error_does_not_fail_execute_and_the_write_is_committed() {
+        assertStaleSnapshotDeleteFailureIsSwallowed(new StackOverflowError("snapshot store delete overflowed (test double)"));
     }
 
     @Test

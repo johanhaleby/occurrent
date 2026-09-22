@@ -63,8 +63,9 @@ public final class SnapshotStoreSupport {
      * Best-effort variant of {@link #maybeSave} for the DSL executors, which save the snapshot after the command's
      * events have already committed. A snapshot is a discardable optimization, so a save failure is logged and swallowed
      * rather than propagated: failing here would surface as a command failure even though the write succeeded, and a lost
-     * snapshot only means the next replay folds a longer tail. The maintained {@code @Snapshot} path keeps using the
-     * throwing {@link #maybeSave} so a durable subscription can retry.
+     * snapshot only means the next replay folds a longer tail. The {@code @Snapshot} handler in the Spring Boot starter
+     * calls {@link SnapshotStore#save} itself and lets a failure propagate to the subscription, so a durable subscription
+     * can retry.
      *
      * @return {@code true} if a snapshot was written, {@code false} if the policy declined it or the save failed
      */
