@@ -185,9 +185,9 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
 
     // Keeps a broken observer from masquerading as a handler failure. accept(...) throwing is what tells a broker
     // listener to redeliver (ADR 104), so an observer exception must never trigger that for an event that was, or
-    // would have been, delivered normally. RuntimeException and AssertionError are caught, the same as a handler
-    // failure elsewhere on this stack (routeIsolated) plus the assertion an observer used as a test spy is likely to
-    // throw. Another Error still propagates.
+    // would have been, delivered normally. RuntimeException and AssertionError are caught, the second because an
+    // observer used as a test spy is likely to throw one. Another Error still propagates, and so does a checked
+    // exception.
     private void notifyObserver(CloudEvent cloudEvent, RoutingOutcome outcome) {
         try {
             observer.observe(cloudEvent, outcome);

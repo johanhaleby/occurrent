@@ -516,8 +516,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * <p>
      * A handler that throws is skipped for the rest of this batch, so isolation is between handlers and never within
      * one handler's own event order. One failure is rethrown exactly as it was, several as the first with the rest in
-     * {@link Throwable#addSuppressed(Throwable)}. Only a {@link RuntimeException} is caught, which is all a
-     * {@link Consumer} can throw, so an {@link Error} still propagates immediately.
+     * {@link Throwable#addSuppressed(Throwable)}. Any {@link Exception} is caught, checked ones included, because a
+     * handler written in Kotlin, or one that rethrows without declaring it, can throw a checked exception through a
+     * {@link Consumer}. An {@link Error} still propagates immediately.
      * <p>
      * See the 2026-08-04 amendment to ADR 57 for why a dispatch without a transaction works this way.
      *
@@ -530,7 +531,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         // the one that released it. The failures themselves go in a list, so they are reported in the order they
         // happened.
         Set<Registration> failed = Collections.newSetFromMap(new IdentityHashMap<>());
-        List<RuntimeException> failures = new ArrayList<>();
+        List<Exception> failures = new ArrayList<>();
         for (CloudEvent cloudEvent : cloudEvents) {
             if (!running) {
                 break;
@@ -546,15 +547,19 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     if (registration.matcher().test(cloudEvent)) {
                         registration.action().route(cloudEvent, true);
                     }
-                } catch (RuntimeException e) {
+                } catch (Exception e) {
                     failed.add(registration);
                     failures.add(e);
                 }
             }
         }
-        HandlerFailures.combined(failures).ifPresent(failure -> {
-            throw failure;
-        });
+        HandlerFailures.combined(failures).ifPresent(RegisteringSubscribable::sneakyThrow);
+    }
+
+    // Rethrows a checked exception unchanged, without wrapping it, so the caller sees what the handler threw
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
+        throw (T) throwable;
     }
 
     /**

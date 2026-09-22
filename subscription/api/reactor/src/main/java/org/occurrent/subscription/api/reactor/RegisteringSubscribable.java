@@ -549,9 +549,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                                             ? registration.action().route(cloudEvent)
                                             : Mono.<Boolean>empty())
                                     .onErrorResume(error -> {
-                                        // An Error is not a recoverable situation, so it keeps going the way it does on
-                                        // the blocking stack. A checked exception is an ordinary handler failure and is
-                                        // collected, which only this stack can see, since a Consumer cannot throw one.
+                                        // An Error is not a recoverable situation, so it keeps going. A checked
+                                        // exception is an ordinary handler failure and is collected. Both match the
+                                        // blocking stack.
                                         if (error instanceof Error) {
                                             return Mono.error(error);
                                         }
