@@ -29,6 +29,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -81,6 +82,22 @@ class RegisteringSubscribableRouteReportingMatchTest {
         }));
 
         assertThat(thrown).isSameAs(matcherFailure);
+        assertThat(thrown.getSuppressed()).containsExactly(observerFailure);
+    }
+
+    @Test
+    void a_matchObserver_throwing_a_checked_exception_is_attached_to_the_matchers_exception() {
+        RuntimeException matcherFailure = new IllegalStateException("matcher failed");
+        Exception observerFailure = new IOException("matchObserver failed too");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw matcherFailure;
+        };
+        RawConsumersOneModel model = new RawConsumersOneModel(throwingReader);
+        model.subscribeRaw("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), (cloudEvent, bufferIfNotLive) -> true);
+
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), true, (cloudEvent, outcome) -> sneakyThrow(observerFailure)));
+
+        assertThat(thrown).as("the matcher failure is what the caller sees").isSameAs(matcherFailure);
         assertThat(thrown.getSuppressed()).containsExactly(observerFailure);
     }
 
@@ -172,6 +189,21 @@ class RegisteringSubscribableRouteReportingMatchTest {
         }));
 
         assertThat(thrown).isSameAs(actionFailure);
+        assertThat(thrown.getSuppressed()).containsExactly(observerFailure);
+    }
+
+    @Test
+    void a_matchObserver_throwing_a_checked_exception_is_attached_to_the_actions_exception() {
+        RuntimeException actionFailure = new IllegalStateException("action failed");
+        Exception observerFailure = new IOException("matchObserver failed too");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw actionFailure;
+        });
+
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> sneakyThrow(observerFailure)));
+
+        assertThat(thrown).as("the action failure is what the caller sees").isSameAs(actionFailure);
         assertThat(thrown.getSuppressed()).containsExactly(observerFailure);
     }
 
@@ -344,6 +376,11 @@ class RegisteringSubscribableRouteReportingMatchTest {
 
         assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
         assertThat(thrown).isSameAs(refusalCause);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
+        throw (T) throwable;
     }
 
     private static CloudEvent cloudEvent(String id) {

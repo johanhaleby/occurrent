@@ -31,6 +31,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -83,6 +84,23 @@ class RegisteringSubscribableRouteReportingMatchTest {
                 }))
                 .verifyErrorSatisfies(error -> {
                     assertThat(error).isSameAs(matcherFailure);
+                    assertThat(error.getSuppressed()).containsExactly(observerFailure);
+                });
+    }
+
+    @Test
+    void a_matchObserver_throwing_a_checked_exception_is_attached_to_the_matchers_exception() {
+        RuntimeException matcherFailure = new IllegalStateException("matcher failed");
+        Exception observerFailure = new IOException("matchObserver failed too");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw matcherFailure;
+        };
+        RawConsumersOneModel model = new RawConsumersOneModel(throwingReader);
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> Mono.empty());
+
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> sneakyThrow(observerFailure)))
+                .verifyErrorSatisfies(error -> {
+                    assertThat(error).as("the matcher failure is what the caller sees").isSameAs(matcherFailure);
                     assertThat(error.getSuppressed()).containsExactly(observerFailure);
                 });
     }
@@ -190,6 +208,20 @@ class RegisteringSubscribableRouteReportingMatchTest {
     }
 
     @Test
+    void a_matchObserver_throwing_a_checked_exception_is_attached_to_the_actions_exception() {
+        RuntimeException actionFailure = new IllegalStateException("action failed");
+        Exception observerFailure = new IOException("matchObserver failed too");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(actionFailure));
+
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> sneakyThrow(observerFailure)))
+                .verifyErrorSatisfies(error -> {
+                    assertThat(error).as("the action failure is what the caller sees").isSameAs(actionFailure);
+                    assertThat(error.getSuppressed()).containsExactly(observerFailure);
+                });
+    }
+
+    @Test
     void a_shared_exception_instance_thrown_by_the_action_and_the_matchObserver_is_not_self_suppressed() {
         RuntimeException shared = new IllegalStateException("shared failure");
         RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
@@ -271,6 +303,11 @@ class RegisteringSubscribableRouteReportingMatchTest {
 
         assertThat(received).extracting(CloudEvent::getId).containsExactly("1");
         assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
+        throw (T) throwable;
     }
 
     private static CloudEvent cloudEvent(String id) {

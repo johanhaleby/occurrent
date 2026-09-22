@@ -150,7 +150,8 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * Feed a batch of events to the model, routing each in iteration order.
      * <p>
      * Drops the batch when no subscription is registered, with the caveat {@link #accept(CloudEvent)} describes. An
-     * event whose predecessor's handler threw is neither observed nor routed, since the batch stops there.
+     * event whose predecessor's handler threw is neither observed nor routed, since the batch stops there. An
+     * observer throwing is different, and stops nothing, see {@link PushObserver}.
      *
      * @param cloudEvents The events received from the external source.
      */
@@ -185,13 +186,18 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
 
     // Keeps a broken observer from masquerading as a handler failure. accept(...) throwing is what tells a broker
     // listener to redeliver (ADR 104), so an observer exception must never trigger that for an event that was, or
-    // would have been, delivered normally. RuntimeException and AssertionError are caught, the second because an
-    // observer used as a test spy is likely to throw one. Another Error still propagates, and so does a checked
-    // exception.
+    // would have been, delivered normally. Any Exception is caught, checked ones included, since an observer
+    // written in Kotlin can throw one without declaring it, and so is an AssertionError, because an observer used
+    // as a test spy is likely to throw that. Another Error still propagates, since nothing here can keep running
+    // after one.
     private void notifyObserver(CloudEvent cloudEvent, RoutingOutcome outcome) {
         try {
             observer.observe(cloudEvent, outcome);
-        } catch (RuntimeException | AssertionError e) {
+        } catch (Exception | AssertionError e) {
+            // Catching an Exception means catching an InterruptedException, so the interrupt is set again
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             log.warn("A PushObserver threw while observing an event pushed to {}. The observer failure did not affect routing.",
                     getClass().getSimpleName(), e);
         }

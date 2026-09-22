@@ -27,6 +27,7 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -455,6 +456,61 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void an_observer_throwing_a_checked_exception_does_not_stop_the_rest_of_the_batch_from_being_routed() {
+        List<String> handled = new ArrayList<>();
+        Exception checked = new IOException("observer failed");
+        // An observer written in Kotlin throws a checked exception like this without declaring it
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> sneakyThrow(checked));
+        model.subscribe("sub", cloudEvent -> handled.add(cloudEvent.getId()));
+
+        Throwable thrown = catchThrowable(() -> model.accept(List.of(
+                cloudEvent("1", "NameDefined"), cloudEvent("2", "NameDefined"), cloudEvent("3", "NameDefined"))));
+
+        assertThat(handled).as("every event in the batch reaches the handler although the observer threw")
+                .containsExactly("1", "2", "3");
+        assertThat(thrown).as("the observer failure does not reach the caller, which would tell a broker to redeliver")
+                .isNull();
+    }
+
+    @Test
+    void an_observer_throwing_a_runtime_exception_does_not_stop_the_rest_of_the_batch_from_being_routed() {
+        List<String> handled = new ArrayList<>();
+        Exception unchecked = new IllegalStateException("observer failed");
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> sneakyThrow(unchecked));
+        model.subscribe("sub", cloudEvent -> handled.add(cloudEvent.getId()));
+
+        Throwable thrown = catchThrowable(() -> model.accept(List.of(
+                cloudEvent("1", "NameDefined"), cloudEvent("2", "NameDefined"), cloudEvent("3", "NameDefined"))));
+
+        assertThat(handled).as("every event in the batch reaches the handler although the observer threw")
+                .containsExactly("1", "2", "3");
+        assertThat(thrown).as("the observer failure does not reach the caller, which would tell a broker to redeliver")
+                .isNull();
+    }
+
+    @Test
+    void an_observer_throwing_a_checked_exception_while_reporting_a_filter_failure_does_not_replace_it() {
+        RuntimeException filterFailure = new IllegalStateException("reader failed");
+        Exception checked = new IOException("observer failed");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw filterFailure;
+        };
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader,
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> sneakyThrow(checked));
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
+        });
+
+        Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
+
+        assertThat(thrown).as("the filter failure is what the caller sees").isSameAs(filterFailure);
+        assertThat(thrown.getSuppressed())
+                .as("the model logs it and drops it before routeReportingMatch could suppress it onto the filter failure")
+                .isEmpty();
+    }
+
+    @Test
     void a_batch_stops_observing_once_a_handler_throws() {
         List<String> observed = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
@@ -612,6 +668,11 @@ class PushSubscriptionModelTest {
 
         assertThat(thrown).isNull();
         assertThat(received).containsExactly("1");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
+        throw (T) throwable;
     }
 
     private static CloudEvent cloudEvent(String id, String type) {

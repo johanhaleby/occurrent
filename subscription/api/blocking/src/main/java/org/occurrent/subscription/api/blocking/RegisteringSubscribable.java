@@ -378,10 +378,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * {@link RoutingOutcome#FILTERED}. The matcher itself throwing reports
      * {@link RoutingOutcome#NOT_DELIVERABLE}, never {@link RoutingOutcome#FILTERED}, since a filter that failed to
      * answer did not decline the event, and that throwing matcher's exception still propagates to the caller once
-     * {@code matchObserver} has been told. If {@code matchObserver} itself then
-     * throws a {@link RuntimeException} or an {@link Error} while being told, that failure is suppressed onto the
-     * matcher's original exception rather than replacing it, so a badly behaved {@code matchObserver} can never
-     * change which exception, or whose, a caller sees.
+     * {@code matchObserver} has been told. Whatever {@code matchObserver} itself then throws while being told,
+     * a checked exception included, is suppressed onto the matcher's original exception rather than replacing it,
+     * so a badly behaved {@code matchObserver} can never change which exception, or whose, a caller sees.
      * <p>
      * A matched registration's {@link RoutingAction} is always told this event was matched, even when it later
      * throws: {@code matchObserver} is told {@link RoutingOutcome#DELIVERED}, since the action was genuinely
@@ -429,7 +428,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                 } catch (RuntimeException | AssertionError e) {
                     try {
                         matchObserver.accept(cloudEvent, RoutingOutcome.NOT_DELIVERABLE);
-                    } catch (RuntimeException | Error observerFailure) {
+                    } catch (Throwable observerFailure) {
                         // Skip the instance itself. A shared exception object thrown by both the matcher and the
                         // observer would otherwise hit addSuppressed's self-suppression guard, an
                         // IllegalArgumentException that would replace the matcher failure this is here to protect.
@@ -454,7 +453,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     RuntimeException cause = refusal.unwrap();
                     try {
                         matchObserver.accept(cloudEvent, refusal.outcome());
-                    } catch (RuntimeException | Error observerFailure) {
+                    } catch (Throwable observerFailure) {
                         // Same self-suppression guard as the matcher-throw branch above: skip the instance itself.
                         if (observerFailure != cause) {
                             cause.addSuppressed(observerFailure);
@@ -468,7 +467,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     // handler is observed regardless of how it fails.
                     try {
                         matchObserver.accept(cloudEvent, RoutingOutcome.DELIVERED);
-                    } catch (RuntimeException | Error observerFailure) {
+                    } catch (Throwable observerFailure) {
                         if (observerFailure != e) {
                             e.addSuppressed(observerFailure);
                         }

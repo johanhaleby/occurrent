@@ -51,10 +51,13 @@ import org.occurrent.subscription.RoutingOutcome;
  * propagates after the observer has been told. Any other {@link Error} skips the observer entirely and propagates
  * straight out.
  * <p>
- * Whatever it is being told, the real outcome or a filter's own failure, a {@link RuntimeException} or
- * {@link AssertionError} the observer throws is caught and logged rather than propagated, so a broken observer
- * cannot turn an event that was actually delivered into a broker redelivery. That much is the same either way. Any
- * other {@link Error} the observer throws is not caught, and where it goes next depends on what it was being told.
+ * Whatever it is being told, the real outcome or a filter's own failure, any {@link Exception} the observer
+ * throws, a checked one included, is caught and logged rather than propagated, and so is an
+ * {@link AssertionError}, so a broken observer cannot turn an event that was actually delivered into a broker
+ * redelivery, and cannot stop the events after it in the same batch from being routed. That much is the same
+ * either way. An {@link InterruptedException} is caught like any other, and the calling thread is left
+ * interrupted so the caller can act on it. Any other {@link Error} the observer throws is not caught, and where it
+ * goes next depends on what it was being told.
  * Told the real outcome, that {@link Error} propagates on its own, once the observer has already run. Told about a
  * filter's own failure instead, it is attached to that filter's error through
  * {@link Throwable#addSuppressed(Throwable)} rather than propagating on its own, so a filter failure is never
