@@ -215,8 +215,12 @@ public final class SnapshotDeciderApplicationService<E> {
                     streamId, base.version(), writeResult.oldStreamVersion());
             try {
                 store.delete(streamId);
-            } catch (RuntimeException e) {
-                log.warn("Failed to delete the stale snapshot for stream '{}' after detecting a reset. It will be discarded again by the head guard on the next command.", streamId, e);
+            } catch (Throwable t) {
+                // Throwable, since the write has already committed and anything escaping here reports it as failed
+                if (t instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                log.warn("Failed to delete the stale snapshot for stream '{}' after detecting a reset. It will be discarded again by the head guard on the next command.", streamId, t);
             }
             return new Executed<>(writeResult, decision);
         }

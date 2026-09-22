@@ -63,8 +63,9 @@ public final class SnapshotStoreSupport {
      * Best-effort variant of {@link #maybeSave} for the DSL executors, which save the snapshot after the command's
      * events have already committed. A snapshot is a discardable optimization, so a save failure is logged and swallowed
      * rather than propagated: failing here would surface as a command failure even though the write succeeded, and a lost
-     * snapshot only means the next replay folds a longer tail. The maintained {@code @Snapshot} path keeps using the
-     * throwing {@link #maybeSave} so a durable subscription can retry.
+     * snapshot only means the next replay folds a longer tail. The {@code @Snapshot} handler in the Spring Boot starter
+     * calls {@link SnapshotStore#save} itself and lets a failure propagate to the subscription, so a durable subscription
+     * can retry.
      *
      * @return {@code true} if a snapshot was written, {@code false} if the policy declined it or the save failed
      */
@@ -89,8 +90,13 @@ public final class SnapshotStoreSupport {
         requireNonNull(decisionSupplier, "decisionSupplier cannot be null");
         try {
             return maybeSave(store, key, schemaVersion, policy, decisionSupplier.get());
-        } catch (RuntimeException e) {
-            log.warn("Best-effort snapshot save failed for key '{}'. The write is committed, the snapshot will be rebuilt from events on the next replay.", key, e);
+        } catch (Throwable t) {
+            // Throwable, since a store or policy written in Kotlin can throw a checked exception, and whatever escapes
+            // here reports a committed write as failed. A swallowed interrupt is set again for the caller.
+            if (t instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            log.warn("Best-effort snapshot save failed for key '{}'. The write is committed, the snapshot will be rebuilt from events on the next replay.", key, t);
             return false;
         }
     }

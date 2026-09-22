@@ -35,6 +35,8 @@ import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
+import org.occurrent.dsl.snapshot.Snapshot;
+import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
@@ -50,17 +52,22 @@ import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+import reactor.core.publisher.Mono;
 
+import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
@@ -88,6 +95,8 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     private DcbDecider<Cmd, String, DomainEvent> dcbDecider;
     private String key;
     private LocalDateTime time;
+
+    private static final Duration TIMEOUT = Duration.ofSeconds(10);
 
     @BeforeEach
     void create_instances() {
@@ -130,6 +139,41 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         service.execute(new Define("A"), account).block();
 
         assertThat(store.findLatest(DcbSnapshotKeys.canonicalKey(criteria())).blockOptional()).hasValueSatisfying(s -> assertThat(s.state()).isEqualTo("A"));
+    }
+
+    @Test
+    void a_snapshot_save_that_throws_a_checked_exception_before_returning_a_mono_does_not_error_and_the_append_is_committed() {
+        assertSnapshotSaveThrowingBeforeReturningAMonoIsSwallowed(new IOException("snapshot store unreachable (test double)"));
+    }
+
+    @Test
+    void a_snapshot_save_that_throws_a_StackOverflowError_before_returning_a_mono_does_not_error_and_the_append_is_committed() {
+        assertSnapshotSaveThrowingBeforeReturningAMonoIsSwallowed(new StackOverflowError("snapshot store save overflowed (test double)"));
+    }
+
+    private void assertSnapshotSaveThrowingBeforeReturningAMonoIsSwallowed(Throwable saveFailure) {
+        SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
+        ReactiveSnapshotStore<String> failingStore = new ReactiveSnapshotStore<>() {
+            @Override
+            public Mono<Snapshot<String>> findLatest(String key) {
+                return Mono.empty();
+            }
+
+            @Override
+            public Mono<Void> save(String key, Snapshot<String> snapshot) {
+                throw ReactiveSnapshotDcbDeciderApplicationServiceTest.<RuntimeException>sneakyThrow(saveFailure);
+            }
+        };
+        AtomicReference<DcbAppendResult> result = new AtomicReference<>();
+
+        Throwable thrown = catchThrowable(() -> result.set(service.execute(new Define("A"), ReactiveSnapshotDcbDecider.from(dcbDecider, failingStore, options)).block(TIMEOUT)));
+
+        evolveCount.set(0);
+        service.execute(new Change("B"), ReactiveSnapshotDcbDecider.from(dcbDecider, store, options)).block(TIMEOUT);
+        // A (1) folded from the boundary plus the produced B (1) = 2, so A was appended before the save failed
+        assertThat(evolveCount.get()).as("events folded by the next command").isEqualTo(2);
+        assertThat(thrown).as("what escaped execute after the append committed").isNull();
+        assertThat(result.get()).isNotNull();
     }
 
     @Test
@@ -257,5 +301,10 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
                 return event.name();
             }
         };
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> T sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 }

@@ -33,15 +33,18 @@ import org.occurrent.dsl.snapshot.SnapshotPolicy;
 import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayName("SnapshotDeciderApplicationService")
@@ -95,6 +98,32 @@ class SnapshotDeciderApplicationServiceTest {
                 () -> assertThat(result.newStreamVersion()).isEqualTo(1L),
                 () -> assertThat(eventStore.read(streamId).version()).isEqualTo(1L)
         );
+    }
+
+    @Test
+    void a_snapshot_save_that_throws_a_checked_exception_does_not_fail_execute_and_the_write_is_committed() {
+        String streamId = UUID.randomUUID().toString();
+        SnapshotStore<String> failingStore = new ThrowingSnapshotStore<>(new IOException("snapshot store unreachable (test double)"));
+        AtomicReference<WriteResult> result = new AtomicReference<>();
+
+        Throwable thrown = catchThrowable(() -> result.set(service.execute(streamId, new Define("Jane"), SnapshotDecider.from(decider, failingStore, SnapshotOptions.of(1, SnapshotPolicy.always())))));
+
+        assertThat(eventStore.read(streamId).version()).as("the committed write").isEqualTo(1L);
+        assertThat(thrown).as("what escaped execute after the write committed").isNull();
+        assertThat(result.get().newStreamVersion()).isEqualTo(1L);
+    }
+
+    @Test
+    void a_snapshot_save_that_throws_an_Error_does_not_fail_execute_and_the_write_is_committed() {
+        String streamId = UUID.randomUUID().toString();
+        SnapshotStore<String> failingStore = new ThrowingSnapshotStore<>(new StackOverflowError("snapshot store save overflowed (test double)"));
+        AtomicReference<WriteResult> result = new AtomicReference<>();
+
+        Throwable thrown = catchThrowable(() -> result.set(service.execute(streamId, new Define("Jane"), SnapshotDecider.from(decider, failingStore, SnapshotOptions.of(1, SnapshotPolicy.always())))));
+
+        assertThat(eventStore.read(streamId).version()).as("the committed write").isEqualTo(1L);
+        assertThat(thrown).as("what escaped execute after the write committed").isNull();
+        assertThat(result.get().newStreamVersion()).isEqualTo(1L);
     }
 
     @Test
@@ -197,6 +226,63 @@ class SnapshotDeciderApplicationServiceTest {
                 () -> assertThat(state).isEqualTo("D"),
                 () -> assertThat(store.findLatest(streamId).orElseThrow().version()).isEqualTo(2L)
         );
+    }
+
+    @Test
+    void a_stale_snapshot_delete_that_throws_a_runtime_exception_does_not_fail_execute_and_the_write_is_committed() {
+        assertStaleSnapshotDeleteFailureIsSwallowed(new IllegalStateException("snapshot store delete failed (test double)"));
+    }
+
+    @Test
+    void a_stale_snapshot_delete_that_throws_a_checked_exception_does_not_fail_execute_and_the_write_is_committed() {
+        assertStaleSnapshotDeleteFailureIsSwallowed(new IOException("snapshot store unreachable (test double)"));
+    }
+
+    @Test
+    void a_stale_snapshot_delete_that_throws_an_Error_does_not_fail_execute_and_the_write_is_committed() {
+        assertStaleSnapshotDeleteFailureIsSwallowed(new StackOverflowError("snapshot store delete overflowed (test double)"));
+    }
+
+    @Test
+    void a_stale_snapshot_delete_that_throws_an_InterruptedException_keeps_the_interrupt() {
+        try {
+            assertStaleSnapshotDeleteFailureIsSwallowed(new InterruptedException("interrupted while deleting (test double)"));
+
+            assertThat(Thread.currentThread().isInterrupted()).as("the caller's interrupt flag").isTrue();
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    private void assertStaleSnapshotDeleteFailureIsSwallowed(Throwable deleteFailure) {
+        String streamId = UUID.randomUUID().toString();
+        SnapshotStore<String> deleteFailingStore = new SnapshotStore<>() {
+            @Override
+            public Optional<Snapshot<String>> findLatest(String key) {
+                return store.findLatest(key);
+            }
+
+            @Override
+            public void save(String key, Snapshot<String> snapshot) {
+                store.save(key, snapshot);
+            }
+
+            @Override
+            public void delete(String key) {
+                throw ThrowingSnapshotStore.<RuntimeException>sneakyThrow(deleteFailure);
+            }
+        };
+        var account = SnapshotDecider.from(decider, deleteFailingStore, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        service.execute(streamId, new Define("A"), account);
+        service.execute(streamId, new Change("B"), account);
+        eventStore.deleteEventStream(streamId);
+        AtomicReference<WriteResult> result = new AtomicReference<>();
+
+        Throwable thrown = catchThrowable(() -> result.set(service.execute(streamId, new Define("C"), account)));
+
+        assertThat(eventStore.read(streamId).version()).as("the committed write against the reset stream").isEqualTo(1L);
+        assertThat(thrown).as("what escaped execute after the write committed").isNull();
+        assertThat(result.get().oldStreamVersion()).isEqualTo(0L);
     }
 
     @Test

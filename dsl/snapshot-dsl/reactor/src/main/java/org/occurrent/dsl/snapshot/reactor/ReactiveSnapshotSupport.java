@@ -71,7 +71,7 @@ final class ReactiveSnapshotSupport {
      */
     static <S extends @Nullable Object, E> Mono<Void> maybeSaveBestEffort(ReactiveSnapshotStore<S> store, String key, int schemaVersion,
                                                                           SnapshotPolicy<S, E> policy, Supplier<? extends SnapshotDecision<S, E>> decisionSupplier) {
-        return Mono.defer(() -> {
+        return deferCatchingEverything(() -> {
                     SnapshotDecision<S, E> decision = decisionSupplier.get();
                     if (!policy.shouldSnapshot(decision)) {
                         return Mono.<Void>empty();
@@ -82,5 +82,21 @@ final class ReactiveSnapshotSupport {
                     log.warn("Best-effort snapshot save failed for key '{}'. The write is committed, the snapshot will be rebuilt from events on the next replay.", key, e);
                     return Mono.empty();
                 });
+    }
+
+    /**
+     * {@link Mono#defer} that also turns an {@link Error} thrown by {@code supplier} into an error signal. Reactor's own
+     * {@code Mono.defer} rethrows a JVM-fatal {@link Error}, such as a {@link VirtualMachineError} or a
+     * {@link LinkageError}, instead, so a following {@code onErrorResume} never sees it and the command's {@code Mono}
+     * never completes.
+     */
+    static <T> Mono<T> deferCatchingEverything(Supplier<? extends Mono<T>> supplier) {
+        return Mono.defer(() -> {
+            try {
+                return supplier.get();
+            } catch (Throwable t) {
+                return Mono.error(t);
+            }
+        });
     }
 }

@@ -20,8 +20,21 @@ import org.occurrent.dsl.snapshot.Snapshot;
 
 import java.util.Optional;
 
-/** A test double whose {@code save} always throws, used to assert how the facades handle a store failure. */
+/**
+ * A test double whose {@code save} always throws, used to assert how the facades handle a store failure. The failure is
+ * thrown as it is, so a checked exception reaches the caller undeclared, the way a store written in Kotlin can throw it.
+ */
 final class ThrowingSnapshotStore<S> implements SnapshotStore<S> {
+    private final Throwable failure;
+
+    ThrowingSnapshotStore() {
+        this(new RuntimeException("snapshot store save failed (test double)"));
+    }
+
+    ThrowingSnapshotStore(Throwable failure) {
+        this.failure = failure;
+    }
+
     @Override
     public Optional<Snapshot<S>> findLatest(String key) {
         return Optional.empty();
@@ -29,6 +42,11 @@ final class ThrowingSnapshotStore<S> implements SnapshotStore<S> {
 
     @Override
     public void save(String key, Snapshot<S> snapshot) {
-        throw new RuntimeException("snapshot store save failed (test double)");
+        throw ThrowingSnapshotStore.<RuntimeException>sneakyThrow(failure);
+    }
+
+    @SuppressWarnings("unchecked")
+    static <T extends Throwable> T sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 }

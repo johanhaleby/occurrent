@@ -214,7 +214,8 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
                     // already committed.
                     log.warn("Snapshot for stream '{}' is at version {} but the stream's head was {} before this write, so the stream was reset below the snapshot. Deleting the stale snapshot; the next command folds fresh from the stream. Pair a stream reset with SnapshotStore.delete to avoid this.",
                             streamId, base.version(), writeResult.oldStreamVersion());
-                    return store.delete(streamId)
+                    // Deferred so a store that throws before returning its Mono reaches onErrorResume too
+                    return ReactiveSnapshotSupport.<Void>deferCatchingEverything(() -> store.delete(streamId))
                             .onErrorResume(e -> {
                                 log.warn("Failed to delete the stale snapshot for stream '{}' after detecting a reset. It will be discarded again by the head guard on the next command.", streamId, e);
                                 return Mono.empty();
