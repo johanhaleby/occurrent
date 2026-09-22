@@ -25,6 +25,7 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.eventstore.api.AppendId;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class AppliedAppendRecordingTest {
@@ -375,6 +377,31 @@ class AppliedAppendRecordingTest {
         assertThat(clears).hasSize(3);
     }
 
+    // A failing clear keeps recording off and is retried, and never fails the delivery or the poll that ran it. An
+    // AppliedAppendStore written in Kotlin can throw a checked exception from clear() without declaring it.
+    @Test
+    void a_clear_that_throws_a_checked_exception_fails_neither_the_delivery_nor_the_poll() {
+        assertThatAFailingClearFailsNeitherTheDeliveryNorThePoll(new IOException("the store is down"));
+    }
+
+    @Test
+    void a_clear_that_throws_a_runtime_exception_fails_neither_the_delivery_nor_the_poll() {
+        assertThatAFailingClearFailsNeitherTheDeliveryNorThePoll(new IllegalStateException("the store is down"));
+    }
+
+    private static void assertThatAFailingClearFailsNeitherTheDeliveryNorThePoll(Exception clearFailure) {
+        List<String> clears = new ArrayList<>();
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(true), clearFailure));
+        recording.catchupStarted(new Object());
+
+        Throwable thrownByDelivery = catchThrowable(() -> recording.recordIfReady(metadataWithAppendId(AppendId.mint())));
+        Throwable thrownByPoll = catchThrowable(recording::pollForClear);
+
+        assertThat(thrownByDelivery).as("a delivery while the owed clear fails").isNull();
+        assertThat(thrownByPoll).as("a poll while the owed clear fails").isNull();
+        assertThat(clears).hasSize(2);
+    }
+
     // The clear stays a precondition after the history has been read, so a projection whose history read handled
     // nothing (an empty store, or a filter that matched none of it) still clears before it records anything.
     @Test
@@ -569,6 +596,10 @@ class AppliedAppendRecordingTest {
 
     // Records every clear(..) call in order, failing them while shouldFail is true.
     private static AppliedAppendStore clearCountingStore(List<String> clears, AtomicBoolean shouldFail) {
+        return clearCountingStore(clears, shouldFail, new RuntimeException("clear failed"));
+    }
+
+    private static AppliedAppendStore clearCountingStore(List<String> clears, AtomicBoolean shouldFail, Exception failure) {
         AppliedAppendStore delegate = AppliedAppendStore.inMemory();
         return new AppliedAppendStore() {
             @Override
@@ -585,10 +616,15 @@ class AppliedAppendRecordingTest {
             public void clear(String projectionId) {
                 clears.add(projectionId);
                 if (shouldFail.get()) {
-                    throw new RuntimeException("clear failed");
+                    sneakyThrow(failure);
                 }
                 delegate.clear(projectionId);
             }
         };
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 }

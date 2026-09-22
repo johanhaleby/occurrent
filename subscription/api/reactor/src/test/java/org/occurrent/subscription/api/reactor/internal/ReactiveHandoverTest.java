@@ -27,6 +27,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -820,6 +821,78 @@ class ReactiveHandoverTest {
                         .isInstanceOf(IllegalStateException.class)
                         .hasMessageContaining("Catch-up failed")
                         .hasCauseReference(replayFailure));
+    }
+
+    // A fold written in Kotlin can throw a checked exception without declaring it. It errors the replay pipeline like
+    // any other failure, and the pipeline's error handler records it.
+    @Test
+    void a_checked_exception_from_a_replayed_fold_is_recorded_and_a_later_live_payload_is_refused() {
+        assertThatAFoldFailureIsRecordedAndALaterLivePayloadRefused(new IOException("the view is down"));
+    }
+
+    @Test
+    void a_runtime_exception_from_a_replayed_fold_is_recorded_and_a_later_live_payload_is_refused() {
+        assertThatAFoldFailureIsRecordedAndALaterLivePayloadRefused(new IllegalStateException("the view is down"));
+    }
+
+    // The source's own replayAbandoned() throwing must neither replace the failure that made the engine call it nor
+    // stop the rest of the failure handling, which is what tells the pending payloads and the caller about it.
+    @Test
+    void a_replay_abandoned_that_throws_a_checked_exception_does_not_keep_the_failure_from_reaching_the_caller() {
+        assertThatAThrowingReplayAbandonedStillFailsTheCatchUp(new IOException("replayAbandoned boom"));
+    }
+
+    @Test
+    void a_replay_abandoned_that_throws_a_runtime_exception_does_not_keep_the_failure_from_reaching_the_caller() {
+        assertThatAThrowingReplayAbandonedStillFailsTheCatchUp(new IllegalStateException("replayAbandoned boom"));
+    }
+
+    private static void assertThatAFoldFailureIsRecordedAndALaterLivePayloadRefused(Exception foldFailure) {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("R2")) {
+                sneakyThrow(foldFailure);
+            }
+            delivered.add(payload);
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+
+        StepVerifier.create(handover.catchUp(source(List.of("R1", "R2"), false)))
+                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(foldFailure));
+
+        StepVerifier.create(handover.accept("L1"))
+                .verifyErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("Catch-up failed")
+                        .hasCauseReference(foldFailure));
+        assertThat(handover.refusesPermanently()).isTrue();
+        assertThat(delivered).containsExactly("R1");
+    }
+
+    private static void assertThatAThrowingReplayAbandonedStillFailsTheCatchUp(Exception abandonFailure) {
+        ReactiveHandover<String, String> handover = handover(new ArrayList<>());
+        RuntimeException replayFailure = new RuntimeException("replay boom");
+        FakeSource source = source(List.of(), false);
+        source.replayFailure = replayFailure;
+        source.onReplayAbandoned = () -> sneakyThrow(abandonFailure);
+
+        // Bounded rather than left to the class timeout, so a failure handler that never finishes shows up as this
+        // expectation going unmet.
+        StepVerifier.create(handover.catchUp(source))
+                .expectErrorSatisfies(error -> assertThat(error).isSameAs(replayFailure))
+                .verify(Duration.ofSeconds(5));
+
+        StepVerifier.create(handover.accept("L1"))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("Catch-up failed")
+                        .hasCauseReference(replayFailure))
+                .verify(Duration.ofSeconds(5));
+        assertThat(handover.refusesPermanently()).isTrue();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     // --- helpers ---

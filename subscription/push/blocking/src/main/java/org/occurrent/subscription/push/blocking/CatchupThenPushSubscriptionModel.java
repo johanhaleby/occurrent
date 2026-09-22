@@ -419,7 +419,12 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             final boolean caughtUp;
             try {
                 caughtUp = handover.catchUp(source);
-            } catch (RuntimeException | Error e) {
+            } catch (Throwable e) {
+                // Throwable rather than RuntimeException and Error, because a handler written in Kotlin can throw a
+                // checked exception without declaring it, and a replay that ended on one ended just as surely. One
+                // that got past here left the replay entry behind, so isCatchingUp(id) answered true for a replay
+                // that was over, and said nothing about the failure anywhere.
+                //
                 // The registration stays. The handover was registered before the replay and recorded this failure, so
                 // every later live event is refused rather than acknowledged, and the broker keeps holding them
                 // (ADR 104). Releasing it here used to be the point, and it was the wrong trade: it freed the id at

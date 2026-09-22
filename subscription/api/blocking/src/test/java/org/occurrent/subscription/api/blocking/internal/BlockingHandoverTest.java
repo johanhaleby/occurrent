@@ -22,6 +22,8 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.HandoverMessages;
 
+import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -1408,6 +1410,147 @@ class BlockingHandoverTest {
 
         assertThat(log).as("the payload was buffered for the replay that was running")
                 .containsExactly("R1", "R3", "L1");
+    }
+
+    // A handler written in Kotlin can throw a checked exception without declaring it. The handover has to record it
+    // like any other replay failure, or it keeps buffering live payloads and returning normally, which acknowledges
+    // them into a replay that is never coming back.
+    @Test
+    void a_checked_exception_from_a_replayed_fold_is_recorded_and_a_later_live_payload_is_refused() {
+        assertThatAFoldFailureIsRecordedAndALaterLivePayloadRefused(new IOException("the view is down"));
+    }
+
+    @Test
+    void a_runtime_exception_from_a_replayed_fold_is_recorded_and_a_later_live_payload_is_refused() {
+        assertThatAFoldFailureIsRecordedAndALaterLivePayloadRefused(new IllegalStateException("the view is down"));
+    }
+
+    // The failure the drain hits after a failed replay on a live handover is attached to the replay failure rather
+    // than replacing it, and the replay failure is still recorded, whatever kind of exception the drain threw.
+    @Test
+    void a_checked_exception_draining_the_buffer_after_a_failed_replay_does_not_keep_the_failure_from_being_recorded() {
+        assertThatADrainFailureAfterAFailedReplayLeavesTheFailureRecorded(new IOException("the view is down"));
+    }
+
+    @Test
+    void a_runtime_exception_draining_the_buffer_after_a_failed_replay_does_not_keep_the_failure_from_being_recorded() {
+        assertThatADrainFailureAfterAFailedReplayLeavesTheFailureRecorded(new IllegalStateException("the view is down"));
+    }
+
+    @Test
+    void a_replay_abandoned_that_throws_a_checked_exception_does_not_mask_the_failure_that_triggered_it() {
+        assertThatAThrowingReplayAbandonedDoesNotMaskTheFailure(new IOException("replayAbandoned boom"));
+    }
+
+    @Test
+    void a_replay_abandoned_that_throws_a_runtime_exception_does_not_mask_the_failure_that_triggered_it_or_go_unrecorded() {
+        assertThatAThrowingReplayAbandonedDoesNotMaskTheFailure(new IllegalStateException("replayAbandoned boom"));
+    }
+
+    // A payload reserved for the drain stays reserved when alreadyDeliveredByReplay throws before it is delivered, and
+    // a later catch-up waits for every reserved payload before it replays, so it would wait for good.
+    @Test
+    void a_checked_exception_from_already_delivered_by_replay_does_not_leave_a_later_catch_up_waiting_for_good() throws Exception {
+        assertThatAThrowingAlreadyDeliveredByReplayReleasesTheDrain(new IOException("the listener is down"));
+    }
+
+    @Test
+    void a_runtime_exception_from_already_delivered_by_replay_does_not_leave_a_later_catch_up_waiting_for_good() throws Exception {
+        assertThatAThrowingAlreadyDeliveredByReplayReleasesTheDrain(new IllegalStateException("the listener is down"));
+    }
+
+    private static void assertThatAFoldFailureIsRecordedAndALaterLivePayloadRefused(Exception foldFailure) {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("R2")) {
+                sneakyThrow(foldFailure);
+            }
+            delivered.add(payload);
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+
+        Throwable thrownByCatchUp = catchThrowable(() -> handover.catchUp(source(List.of("R1", "R2"), false)));
+        Throwable thrownByAccept = catchThrowable(() -> handover.accept("L1"));
+
+        assertThat(thrownByCatchUp).isSameAs(foldFailure);
+        assertThat(thrownByAccept).as("a live payload after the failed catch-up")
+                .isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.catchUpFailed(NOUN))
+                .hasCauseReference(foldFailure);
+        assertThat(handover.refusesPermanently()).isTrue();
+        assertThat(delivered).containsExactly("R1");
+    }
+
+    private static void assertThatADrainFailureAfterAFailedReplayLeavesTheFailureRecorded(Exception drainFailure) {
+        List<String> log = new ArrayList<>();
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
+        AtomicBoolean offered = new AtomicBoolean();
+        RuntimeException replayFailure = new IllegalStateException("replay boom");
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("R2")) {
+                throw replayFailure;
+            }
+            if (payload.equals("L1")) {
+                sneakyThrow(drainFailure);
+            }
+            log.add(payload);
+            if (payload.equals("R1") && offered.compareAndSet(false, true)) {
+                assertThat(self.get().acceptReportingDelivery("L1")).isTrue();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        self.set(handover);
+        handover.catchUp(source(List.of(), true));
+
+        Throwable thrownByCatchUp = catchThrowable(() -> handover.catchUp(source(List.of("R1", "R2"), false)));
+        Throwable thrownByAccept = catchThrowable(() -> handover.accept("L2"));
+
+        assertThat(thrownByAccept).as("a live payload after the failed catch-up")
+                .isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
+                .hasCauseReference(replayFailure);
+        assertThat(thrownByCatchUp).isSameAs(replayFailure);
+        assertThat(replayFailure.getSuppressed()).containsExactly(drainFailure);
+        assertThat(log).containsExactly("R1");
+    }
+
+    private static void assertThatAThrowingReplayAbandonedDoesNotMaskTheFailure(Exception abandonFailure) {
+        BlockingHandover<String, String> handover = handover(new ArrayList<>());
+        RuntimeException replayFailure = new RuntimeException("replay boom");
+        FakeSource source = source(List.of(), false);
+        source.replayFailure = replayFailure;
+        source.onReplayAbandoned = () -> sneakyThrow(abandonFailure);
+
+        Throwable thrownByCatchUp = catchThrowable(() -> handover.catchUp(source));
+        Throwable thrownByAccept = catchThrowable(() -> handover.accept("L1"));
+
+        assertThat(thrownByAccept).as("a live payload after the failed catch-up")
+                .isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
+                .hasCauseReference(replayFailure);
+        assertThat(thrownByCatchUp).isSameAs(replayFailure);
+    }
+
+    private static void assertThatAThrowingAlreadyDeliveredByReplayReleasesTheDrain(Exception listenerFailure) throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.accept("1");
+        handover.accept("L2");
+        FakeSource failing = source(List.of("1"), false);
+        failing.onAlreadyDeliveredByReplay = () -> sneakyThrow(listenerFailure);
+        assertThat(catchThrowable(() -> handover.catchUp(failing))).isSameAs(listenerFailure);
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            // A caller asking for a catch-up on a handover that already failed still gets one.
+            Future<Boolean> later = executor.submit(() -> handover.catchUp(source(List.of(), false)));
+
+            assertThat(later).as("a later catch-up on the failed handover")
+                    .succeedsWithin(Duration.ofSeconds(5));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     private static BlockingHandover<String, String> handover(List<String> delivered) {
