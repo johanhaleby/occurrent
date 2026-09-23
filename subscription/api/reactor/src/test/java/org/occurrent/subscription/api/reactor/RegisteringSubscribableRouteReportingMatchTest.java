@@ -31,6 +31,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -42,7 +43,7 @@ import static org.occurrent.condition.Condition.eq;
 /**
  * Exercises {@link RegisteringSubscribable#routeReportingMatch(CloudEvent, BiConsumer)} directly, with a raw
  * {@code matchObserver} that has no swallowing of its own. {@code PushSubscriptionModel}'s own
- * {@code notifyObserver} already catches a {@code RuntimeException} or {@code AssertionError} from the configured
+ * {@code notifyObserver} already catches any {@code Exception} or an {@code AssertionError} from the configured
  * {@code PushObserver} before it could ever reach {@code routeReportingMatch}'s own guard against a shared
  * exception instance, so that guard is unreachable through {@code PushSubscriptionModel} and needs a caller here
  * that does not have PushSubscriptionModel's own protection layer in the way.
@@ -83,6 +84,23 @@ class RegisteringSubscribableRouteReportingMatchTest {
                 }))
                 .verifyErrorSatisfies(error -> {
                     assertThat(error).isSameAs(matcherFailure);
+                    assertThat(error.getSuppressed()).containsExactly(observerFailure);
+                });
+    }
+
+    @Test
+    void a_matchObserver_throwing_a_checked_exception_is_attached_to_the_matchers_exception() {
+        RuntimeException matcherFailure = new IllegalStateException("matcher failed");
+        Exception observerFailure = new IOException("matchObserver failed too");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw matcherFailure;
+        };
+        RawConsumersOneModel model = new RawConsumersOneModel(throwingReader);
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> Mono.empty());
+
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> sneakyThrow(observerFailure)))
+                .verifyErrorSatisfies(error -> {
+                    assertThat(error).as("the matcher failure is what the caller sees").isSameAs(matcherFailure);
                     assertThat(error.getSuppressed()).containsExactly(observerFailure);
                 });
     }
@@ -190,6 +208,20 @@ class RegisteringSubscribableRouteReportingMatchTest {
     }
 
     @Test
+    void a_matchObserver_throwing_a_checked_exception_is_attached_to_the_actions_exception() {
+        RuntimeException actionFailure = new IllegalStateException("action failed");
+        Exception observerFailure = new IOException("matchObserver failed too");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(actionFailure));
+
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> sneakyThrow(observerFailure)))
+                .verifyErrorSatisfies(error -> {
+                    assertThat(error).as("the action failure is what the caller sees").isSameAs(actionFailure);
+                    assertThat(error.getSuppressed()).containsExactly(observerFailure);
+                });
+    }
+
+    @Test
     void a_shared_exception_instance_thrown_by_the_action_and_the_matchObserver_is_not_self_suppressed() {
         RuntimeException shared = new IllegalStateException("shared failure");
         RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
@@ -271,6 +303,48 @@ class RegisteringSubscribableRouteReportingMatchTest {
 
         assertThat(received).extracting(CloudEvent::getId).containsExactly("1");
         assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    /**
+     * #1116. {@code onErrorResume} takes any {@link Throwable}, so before this it reported an action that ended in
+     * an {@link Error} as DELIVERED, while the blocking stack's {@code RuntimeException | AssertionError} catch
+     * reported nothing for the same failure. Blocking is the one to keep, because an action that ended in an
+     * {@link Error} delivered nothing.
+     */
+    @Test
+    void an_action_that_errors_with_an_error_reports_nothing_and_that_error_still_propagates() {
+        Error actionFailure = new NotAVirtualMachineError();
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(actionFailure));
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(actionFailure));
+
+        assertThat(observed).as("an action that ended in an Error delivered nothing, so DELIVERED would be a lie")
+                .isEmpty();
+    }
+
+    /**
+     * The control for the test above. An {@link AssertionError} is excluded from that skip for the same reason the
+     * blocking catch includes it, so a matched handler written as a test spy is still observed.
+     */
+    @Test
+    void an_action_that_errors_with_an_assertion_error_is_still_reported_delivered() {
+        AssertionError actionFailure = new AssertionError("the handler's own assertion failed");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(actionFailure));
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(actionFailure));
+
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
+        throw (T) throwable;
     }
 
     private static CloudEvent cloudEvent(String id) {
@@ -359,6 +433,15 @@ class RegisteringSubscribableRouteReportingMatchTest {
                 .verifyErrorSatisfies(error -> assertThat(error).isSameAs(refusalCause));
 
         assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+    }
+
+    // A plain Error, deliberately not a VirtualMachineError, ThreadDeath or LinkageError: Reactor's
+    // Exceptions.throwIfFatal rethrows those three rather than turning them into an error signal, which
+    // would prove nothing about what matchObserver is told.
+    private static final class NotAVirtualMachineError extends Error {
+        NotAVirtualMachineError() {
+            super("the action failed with an Error");
+        }
     }
 
     private static final class RawConsumersOneModel extends RegisteringSubscribable {

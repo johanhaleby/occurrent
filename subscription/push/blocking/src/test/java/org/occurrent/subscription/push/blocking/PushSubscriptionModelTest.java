@@ -27,10 +27,12 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -383,6 +385,30 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void the_observer_is_told_nothing_when_evaluating_the_filter_throws_a_checked_exception() {
+        // The two tests above cover what the RuntimeException | AssertionError catch around the filter reaches. A
+        // DataFieldReader written in Kotlin can throw a checked exception it never declared, which that catch
+        // misses, so the observer is not told at all. The PushObserver javadoc says so, and this is what holds it
+        // to that rather than a reading of the catch clause.
+        List<RoutingOutcome> outcomes = new ArrayList<>();
+        Exception checked = new IOException("payload unreadable");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            sneakyThrow(checked);
+            return Optional.empty();
+        };
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader,
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
+        });
+
+        Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
+
+        assertThat(thrown).as("the filter's own checked exception is what the caller sees").isSameAs(checked);
+        assertThat(outcomes).as("the catch around the filter misses a checked exception, so nothing is reported")
+                .isEmpty();
+    }
+
+    @Test
     void an_observer_error_while_reporting_a_filter_failure_is_suppressed_rather_than_replacing_it() {
         // A badly behaved observer must never be able to swap out the filter's own exception for its own. That
         // exception is the caller's redelivery signal, and reporting it to the observer must not risk losing it.
@@ -452,6 +478,109 @@ class PushSubscriptionModelTest {
 
         assertThat(thrown).isNull();
         assertThat(handled).containsExactly("1");
+    }
+
+    @Test
+    void an_observer_throwing_a_checked_exception_does_not_stop_the_rest_of_the_batch_from_being_routed() {
+        List<String> handled = new ArrayList<>();
+        Exception checked = new IOException("observer failed");
+        // An observer written in Kotlin throws a checked exception like this without declaring it
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> sneakyThrow(checked));
+        model.subscribe("sub", cloudEvent -> handled.add(cloudEvent.getId()));
+
+        Throwable thrown = catchThrowable(() -> model.accept(List.of(
+                cloudEvent("1", "NameDefined"), cloudEvent("2", "NameDefined"), cloudEvent("3", "NameDefined"))));
+
+        assertThat(handled).as("every event in the batch reaches the handler although the observer threw")
+                .containsExactly("1", "2", "3");
+        assertThat(thrown).as("the observer failure does not reach the caller, which would tell a broker to redeliver")
+                .isNull();
+    }
+
+    @Test
+    void an_observer_throwing_a_runtime_exception_does_not_stop_the_rest_of_the_batch_from_being_routed() {
+        List<String> handled = new ArrayList<>();
+        Exception unchecked = new IllegalStateException("observer failed");
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> sneakyThrow(unchecked));
+        model.subscribe("sub", cloudEvent -> handled.add(cloudEvent.getId()));
+
+        Throwable thrown = catchThrowable(() -> model.accept(List.of(
+                cloudEvent("1", "NameDefined"), cloudEvent("2", "NameDefined"), cloudEvent("3", "NameDefined"))));
+
+        assertThat(handled).as("every event in the batch reaches the handler although the observer threw")
+                .containsExactly("1", "2", "3");
+        assertThat(thrown).as("the observer failure does not reach the caller, which would tell a broker to redeliver")
+                .isNull();
+    }
+
+    @Test
+    void an_observer_throwing_a_checked_exception_while_reporting_a_filter_failure_does_not_replace_it() {
+        RuntimeException filterFailure = new IllegalStateException("reader failed");
+        Exception checked = new IOException("observer failed");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw filterFailure;
+        };
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader,
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> sneakyThrow(checked));
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
+        });
+
+        Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
+
+        assertThat(thrown).as("the filter failure is what the caller sees").isSameAs(filterFailure);
+        assertThat(thrown.getSuppressed())
+                .as("the model logs it and drops it before routeReportingMatch could suppress it onto the filter failure")
+                .isEmpty();
+    }
+
+    @Test
+    void an_observer_throwing_a_checked_exception_while_being_told_filtered_does_not_stop_the_batch() {
+        // The FILTERED report goes through the same notifyObserver as the delivered one, but from a call site
+        // that does not suppress what the observer throws onto another failure, and nothing covered a
+        // throwing observer there.
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Exception checked = new IOException("observer failed");
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> {
+                    observed.add(outcome);
+                    sneakyThrow(checked);
+                });
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.type("SomethingElseHappened")), cloudEvent -> {
+        });
+
+        Throwable thrown = catchThrowable(() -> model.accept(List.of(
+                cloudEvent("1", "NameDefined"), cloudEvent("2", "NameDefined"), cloudEvent("3", "NameDefined"))));
+
+        assertThat(observed).as("every event in the batch is still evaluated although the observer threw")
+                .containsExactly(FILTERED, FILTERED, FILTERED);
+        assertThat(thrown).as("the observer failure does not reach the caller, which would tell a broker to redeliver")
+                .isNull();
+    }
+
+    @Test
+    void an_observer_throwing_a_checked_exception_while_being_told_unavailable_does_not_stop_the_batch() {
+        // The paused call site, which reports UNAVAILABLE before the matcher runs at all, is a third unguarded
+        // notifyObserver call and was uncovered for a throwing observer too.
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Exception checked = new IOException("observer failed");
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> {
+                    observed.add(outcome);
+                    sneakyThrow(checked);
+                });
+        model.subscribe("sub", cloudEvent -> {
+        });
+        model.pauseSubscription("sub");
+
+        Throwable thrown = catchThrowable(() -> model.accept(List.of(
+                cloudEvent("1", "NameDefined"), cloudEvent("2", "NameDefined"), cloudEvent("3", "NameDefined"))));
+
+        assertThat(observed).as("every event in the batch is still evaluated although the observer threw")
+                .containsExactly(UNAVAILABLE, UNAVAILABLE, UNAVAILABLE);
+        assertThat(thrown).as("the observer failure does not reach the caller, which would tell a broker to redeliver")
+                .isNull();
     }
 
     @Test
@@ -612,6 +741,11 @@ class PushSubscriptionModelTest {
 
         assertThat(thrown).isNull();
         assertThat(received).containsExactly("1");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
+        throw (T) throwable;
     }
 
     private static CloudEvent cloudEvent(String id, String type) {

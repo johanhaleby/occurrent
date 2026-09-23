@@ -292,7 +292,7 @@ class SynchronousSubscriptionModelTest {
         StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), false))
                 .verifyErrorSatisfies(error -> assertThat(error).isInstanceOf(AssertionError.class).hasMessage("not recoverable"));
 
-        // Matches the blocking stack, where only a RuntimeException is collected and an Error keeps propagating.
+        // Matches the blocking stack, where any Exception is collected and an Error keeps propagating.
         assertThat(handled).isEmpty();
     }
 

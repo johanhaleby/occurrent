@@ -375,19 +375,23 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * decision and the report. Nothing registered, the model not running and the sole subscription being paused all
      * report {@link RoutingOutcome#UNAVAILABLE} and throw nothing, the same three states
      * {@link #route(CloudEvent)} already skips for dispatch. A filter that declines the event reports
-     * {@link RoutingOutcome#FILTERED}. The matcher itself throwing reports
-     * {@link RoutingOutcome#NOT_DELIVERABLE}, never {@link RoutingOutcome#FILTERED}, since a filter that failed to
-     * answer did not decline the event, and that throwing matcher's exception still propagates to the caller once
-     * {@code matchObserver} has been told. If {@code matchObserver} itself then
-     * throws a {@link RuntimeException} or an {@link Error} while being told, that failure is suppressed onto the
-     * matcher's original exception rather than replacing it, so a badly behaved {@code matchObserver} can never
-     * change which exception, or whose, a caller sees.
+     * {@link RoutingOutcome#FILTERED}. The matcher itself throwing a {@link RuntimeException} or an
+     * {@link AssertionError} reports {@link RoutingOutcome#NOT_DELIVERABLE}, never
+     * {@link RoutingOutcome#FILTERED}, since a filter that failed to answer did not decline the event, and that
+     * throwing matcher's exception still propagates to the caller once {@code matchObserver} has been told. A
+     * matcher that fails any other way, an undeclared checked exception or an {@link Error} other than an
+     * {@link AssertionError}, propagates without {@code matchObserver} being told at all, exactly as an action
+     * failing those two ways does. Whatever {@code matchObserver} itself then throws while being told,
+     * a checked exception included, is suppressed onto the matcher's original exception rather than replacing it,
+     * so a badly behaved {@code matchObserver} can never change which exception, or whose, a caller sees.
      * <p>
-     * A matched registration's {@link RoutingAction} is always told this event was matched, even when it later
-     * throws: {@code matchObserver} is told {@link RoutingOutcome#DELIVERED}, since the action was genuinely
+     * A matched registration's {@link RoutingAction} throwing a {@link RuntimeException} or an
+     * {@link AssertionError} is still reported {@link RoutingOutcome#DELIVERED}, since the action was genuinely
      * invoked, which is what {@link RoutingOutcome#DELIVERED} has always meant regardless of what the action does
-     * with the event afterward, and the original {@link RuntimeException} then still propagates to the caller once
-     * {@code matchObserver} has been told. An engine-level refusal a {@link RoutingAction} makes deliberately, by
+     * with the event afterward, and that exception then still propagates to the caller once {@code matchObserver}
+     * has been told. An action that fails any other way, an undeclared checked exception or an {@link Error} other
+     * than an {@link AssertionError}, propagates without {@code matchObserver} being told at all. An engine-level
+     * refusal a {@link RoutingAction} makes deliberately, by
      * returning {@code false} rather than throwing, is a different thing entirely and is what decides
      * {@link RoutingOutcome#DEFERRED} instead.
      * <p>
@@ -404,9 +408,11 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      *
      * @param cloudEvent      The event to route.
      * @param bufferIfNotLive Passed through to the matched registration's {@link RoutingAction#route(CloudEvent, boolean)}
-     *                        unchanged; this method itself has no opinion on what it means.
-     * @param matchObserver   Told, once, this event's {@link RoutingOutcome}, after its registration's action (if
-     *                        any) has run, whether that action returned or threw.
+     *                        unchanged, and this method itself has no opinion on what it means.
+     * @param matchObserver   Told this event's {@link RoutingOutcome} at most once, after its registration's
+     *                        action (if any) has run, whether that action returned or threw. The paragraphs above
+     *                        name the four failures it is not told about at all, two from the matcher and the same
+     *                        two from the action.
      */
     protected final void routeReportingMatch(CloudEvent cloudEvent, boolean bufferIfNotLive, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
@@ -429,7 +435,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                 } catch (RuntimeException | AssertionError e) {
                     try {
                         matchObserver.accept(cloudEvent, RoutingOutcome.NOT_DELIVERABLE);
-                    } catch (RuntimeException | Error observerFailure) {
+                    } catch (Throwable observerFailure) {
                         // Skip the instance itself. A shared exception object thrown by both the matcher and the
                         // observer would otherwise hit addSuppressed's self-suppression guard, an
                         // IllegalArgumentException that would replace the matcher failure this is here to protect.
@@ -454,7 +460,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     RuntimeException cause = refusal.unwrap();
                     try {
                         matchObserver.accept(cloudEvent, refusal.outcome());
-                    } catch (RuntimeException | Error observerFailure) {
+                    } catch (Throwable observerFailure) {
                         // Same self-suppression guard as the matcher-throw branch above: skip the instance itself.
                         if (observerFailure != cause) {
                             cause.addSuppressed(observerFailure);
@@ -468,7 +474,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     // handler is observed regardless of how it fails.
                     try {
                         matchObserver.accept(cloudEvent, RoutingOutcome.DELIVERED);
-                    } catch (RuntimeException | Error observerFailure) {
+                    } catch (Throwable observerFailure) {
                         if (observerFailure != e) {
                             e.addSuppressed(observerFailure);
                         }
@@ -516,8 +522,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * <p>
      * A handler that throws is skipped for the rest of this batch, so isolation is between handlers and never within
      * one handler's own event order. One failure is rethrown exactly as it was, several as the first with the rest in
-     * {@link Throwable#addSuppressed(Throwable)}. Only a {@link RuntimeException} is caught, which is all a
-     * {@link Consumer} can throw, so an {@link Error} still propagates immediately.
+     * {@link Throwable#addSuppressed(Throwable)}. Any {@link Exception} is caught, checked ones included, because a
+     * handler written in Kotlin, or one that rethrows without declaring it, can throw a checked exception through a
+     * {@link Consumer}. An {@link Error} still propagates immediately.
      * <p>
      * See the 2026-08-04 amendment to ADR 57 for why a dispatch without a transaction works this way.
      *
@@ -530,7 +537,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         // the one that released it. The failures themselves go in a list, so they are reported in the order they
         // happened.
         Set<Registration> failed = Collections.newSetFromMap(new IdentityHashMap<>());
-        List<RuntimeException> failures = new ArrayList<>();
+        List<Exception> failures = new ArrayList<>();
         for (CloudEvent cloudEvent : cloudEvents) {
             if (!running) {
                 break;
@@ -546,15 +553,19 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     if (registration.matcher().test(cloudEvent)) {
                         registration.action().route(cloudEvent, true);
                     }
-                } catch (RuntimeException e) {
+                } catch (Exception e) {
                     failed.add(registration);
                     failures.add(e);
                 }
             }
         }
-        HandlerFailures.combined(failures).ifPresent(failure -> {
-            throw failure;
-        });
+        HandlerFailures.combined(failures).ifPresent(RegisteringSubscribable::sneakyThrow);
+    }
+
+    // Rethrows a checked exception unchanged, without wrapping it, so the caller sees what the handler threw
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
+        throw (T) throwable;
     }
 
     /**

@@ -28,6 +28,7 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -240,6 +241,37 @@ class SynchronousSubscriptionModelTest {
     }
 
     @Test
+    void without_a_transaction_a_checked_exception_from_a_handler_does_not_stop_the_handlers_behind_it() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> handled = new ArrayList<>();
+        Exception checked = new IOException("handler failed");
+        // A Kotlin handler throws a checked exception like this without declaring it
+        model.subscribe("first", cloudEvent -> sneakyThrow(checked));
+        model.subscribe("second", cloudEvent -> handled.add("second:" + cloudEvent.getId()));
+
+        Throwable thrown = catchThrowable(() -> model.dispatch(List.of(cloudEvent("1", "NameDefined"), cloudEvent("2", "NameWasChanged")), false));
+
+        assertThat(handled).as("the handler behind the failing one receives every written event")
+                .containsExactly("second:1", "second:2");
+        assertThat(thrown).as("the checked exception is rethrown after the batch").isSameAs(checked);
+    }
+
+    @Test
+    void without_a_transaction_a_runtime_exception_from_a_handler_does_not_stop_the_handlers_behind_it() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> handled = new ArrayList<>();
+        Exception unchecked = new IllegalStateException("handler failed");
+        model.subscribe("first", cloudEvent -> sneakyThrow(unchecked));
+        model.subscribe("second", cloudEvent -> handled.add("second:" + cloudEvent.getId()));
+
+        Throwable thrown = catchThrowable(() -> model.dispatch(List.of(cloudEvent("1", "NameDefined"), cloudEvent("2", "NameWasChanged")), false));
+
+        assertThat(handled).as("the handler behind the failing one receives every written event")
+                .containsExactly("second:1", "second:2");
+        assertThat(thrown).as("the runtime exception is rethrown after the batch").isSameAs(unchecked);
+    }
+
+    @Test
     void without_a_transaction_a_handler_error_that_is_not_an_exception_stops_the_batch() {
         SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
         List<String> handled = new ArrayList<>();
@@ -313,6 +345,11 @@ class SynchronousSubscriptionModelTest {
 
         // The single-argument overload is unchanged, so anything driving the model directly behaves as it always did.
         assertThat(handled).isEmpty();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
+        throw (T) throwable;
     }
 
     private static CloudEvent cloudEvent(String id, String type) {

@@ -91,9 +91,9 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
 
     /**
      * Creates a model that both answers a subscription filter on a {@code data} payload field through
-     * {@code dataFieldReader} and tells {@code observer} about every event {@link #accept(CloudEvent)} is asked to
-     * deliver, see {@link PushObserver}. Pass {@link DataFieldReader#refusing()} to get the observer without also
-     * answering a payload filter.
+     * {@code dataFieldReader} and reports to {@code observer} what {@link #accept(CloudEvent)} decided for an
+     * event it was asked to deliver, see {@link PushObserver} for the failures that skip that report altogether.
+     * Pass {@link DataFieldReader#refusing()} to get the observer without also answering a payload filter.
      */
     public PushSubscriptionModel(DataFieldReader dataFieldReader, PushObserver observer) {
         super(Consumers.ONE, dataFieldReader);
@@ -112,12 +112,13 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * write path (an {@code InMemoryEventStore} listener, say), where the event is already durably stored and
      * refusing would fail the write instead of protecting anything. A caller that can redeliver instead of a write
      * path that cannot should call {@link #acceptRedeliverable(CloudEvent)} instead, which never buffers. See ADR
-     * 104. A configured {@link PushObserver} is told the event's {@link RoutingOutcome} once delivery has been
-     * attempted, and that is where to get visibility into it instead. Told about the event even when a
+     * 104. A configured {@link PushObserver} is told the event's {@link RoutingOutcome}, and that is where to get
+     * visibility into it instead. It is not told at all when the filter or the matched action fails in a way this
+     * model does not catch, which {@link PushObserver} names. Told about the event even when a
      * subscription's filter itself throws a {@link RuntimeException} or {@link AssertionError} while being evaluated
      * (a supplied {@link DataFieldReader} can), reported as {@link RoutingOutcome#NOT_DELIVERABLE}, before that
-     * exception propagates as it always has. Another {@link Error} bypasses the observer and propagates directly,
-     * see {@link PushObserver}.
+     * exception propagates as it always has. An undeclared checked exception or another {@link Error} from that
+     * filter bypasses the observer and propagates directly, see {@link PushObserver}.
      *
      * @param cloudEvent The event received from the external source.
      */
@@ -134,10 +135,10 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * can redeliver the same event later, never from a write path that cannot, since a write-path event this call
      * refuses is lost rather than protected, the same reason {@link #accept(CloudEvent)} itself never refuses.
      * <p>
-     * Always evaluates the full routing decision and tells the configured {@link PushObserver}, even when this
-     * model was built with none, unlike {@link #accept(CloudEvent)}'s fast path for that case: a caller of this
-     * method needs the genuine {@link RoutingOutcome} to decide whether to acknowledge or redeliver, which the fast
-     * path has nothing to report.
+     * Always evaluates the full routing decision, even when this model was built with no {@link PushObserver},
+     * rather than taking {@link #accept(CloudEvent)}'s fast path for that case, and reports the outcome on the same
+     * terms {@link #accept(CloudEvent)} does. A caller of this method needs the genuine {@link RoutingOutcome} to
+     * decide whether to acknowledge or redeliver, which the fast path has nothing to report.
      *
      * @param cloudEvent The event received from the external source, which the caller can redeliver if this refuses it.
      */
@@ -150,7 +151,9 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * Feed a batch of events to the model, routing each in iteration order.
      * <p>
      * Drops the batch when no subscription is registered, with the caveat {@link #accept(CloudEvent)} describes. An
-     * event whose predecessor's handler threw is neither observed nor routed, since the batch stops there.
+     * event whose predecessor's handler threw is neither observed nor routed, since the batch stops there. An
+     * observer throwing stops nothing, apart from an {@link Error} other than an {@link AssertionError}, which
+     * stops the batch the way a handler's would, see {@link PushObserver}.
      *
      * @param cloudEvents The events received from the external source.
      */
@@ -185,13 +188,18 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
 
     // Keeps a broken observer from masquerading as a handler failure. accept(...) throwing is what tells a broker
     // listener to redeliver (ADR 104), so an observer exception must never trigger that for an event that was, or
-    // would have been, delivered normally. RuntimeException and AssertionError are caught, the same as a handler
-    // failure elsewhere on this stack (routeIsolated) plus the assertion an observer used as a test spy is likely to
-    // throw. Another Error still propagates.
+    // would have been, delivered normally. Any Exception is caught, checked ones included, since an observer
+    // written in Kotlin can throw one without declaring it, and so is an AssertionError, because an observer used
+    // as a test spy is likely to throw that. Another Error still propagates, since nothing here can keep running
+    // after one.
     private void notifyObserver(CloudEvent cloudEvent, RoutingOutcome outcome) {
         try {
             observer.observe(cloudEvent, outcome);
-        } catch (RuntimeException | AssertionError e) {
+        } catch (Exception | AssertionError e) {
+            // Catching an Exception means catching an InterruptedException, so the interrupt is set again
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             log.warn("A PushObserver threw while observing an event pushed to {}. The observer failure did not affect routing.",
                     getClass().getSimpleName(), e);
         }

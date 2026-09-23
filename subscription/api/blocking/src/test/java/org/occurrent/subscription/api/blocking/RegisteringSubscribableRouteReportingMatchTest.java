@@ -29,6 +29,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,7 +42,7 @@ import static org.occurrent.condition.Condition.eq;
 /**
  * Exercises {@link RegisteringSubscribable#routeReportingMatch(CloudEvent, boolean, BiConsumer)} directly, with a
  * raw {@code matchObserver} that has no swallowing of its own. {@code PushSubscriptionModel}'s own
- * {@code notifyObserver} already catches a {@code RuntimeException} or {@code AssertionError} from the configured
+ * {@code notifyObserver} already catches any {@code Exception} or an {@code AssertionError} from the configured
  * {@code PushObserver} before it could ever reach {@code routeReportingMatch}'s own guard against a shared
  * exception instance, so that guard is unreachable through {@code PushSubscriptionModel} and needs a caller here
  * that does not have PushSubscriptionModel's own protection layer in the way.
@@ -81,6 +82,22 @@ class RegisteringSubscribableRouteReportingMatchTest {
         }));
 
         assertThat(thrown).isSameAs(matcherFailure);
+        assertThat(thrown.getSuppressed()).containsExactly(observerFailure);
+    }
+
+    @Test
+    void a_matchObserver_throwing_a_checked_exception_is_attached_to_the_matchers_exception() {
+        RuntimeException matcherFailure = new IllegalStateException("matcher failed");
+        Exception observerFailure = new IOException("matchObserver failed too");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw matcherFailure;
+        };
+        RawConsumersOneModel model = new RawConsumersOneModel(throwingReader);
+        model.subscribeRaw("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), (cloudEvent, bufferIfNotLive) -> true);
+
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), true, (cloudEvent, outcome) -> sneakyThrow(observerFailure)));
+
+        assertThat(thrown).as("the matcher failure is what the caller sees").isSameAs(matcherFailure);
         assertThat(thrown.getSuppressed()).containsExactly(observerFailure);
     }
 
@@ -172,6 +189,21 @@ class RegisteringSubscribableRouteReportingMatchTest {
         }));
 
         assertThat(thrown).isSameAs(actionFailure);
+        assertThat(thrown.getSuppressed()).containsExactly(observerFailure);
+    }
+
+    @Test
+    void a_matchObserver_throwing_a_checked_exception_is_attached_to_the_actions_exception() {
+        RuntimeException actionFailure = new IllegalStateException("action failed");
+        Exception observerFailure = new IOException("matchObserver failed too");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw actionFailure;
+        });
+
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> sneakyThrow(observerFailure)));
+
+        assertThat(thrown).as("the action failure is what the caller sees").isSameAs(actionFailure);
         assertThat(thrown.getSuppressed()).containsExactly(observerFailure);
     }
 
@@ -346,12 +378,64 @@ class RegisteringSubscribableRouteReportingMatchTest {
         assertThat(thrown).isSameAs(refusalCause);
     }
 
+    /**
+     * #1116's other half. This is the behaviour the reactor stack was changed to match. The
+     * {@code RuntimeException | AssertionError} catch misses an {@link Error}, so {@code matchObserver} is told
+     * nothing about an action that ended in one.
+     */
+    @Test
+    void an_action_that_throws_an_error_reports_nothing_and_that_error_still_propagates() {
+        Error actionFailure = new NotAnAssertionError();
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw actionFailure;
+        });
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> observed.add(outcome)));
+
+        assertThat(thrown).isSameAs(actionFailure);
+        assertThat(observed).as("an action that ended in an Error delivered nothing, so DELIVERED would be a lie")
+                .isEmpty();
+    }
+
+    /**
+     * The control for the test above, and the reason the reactor skip excludes {@link AssertionError} too.
+     */
+    @Test
+    void an_action_that_throws_an_assertion_error_is_still_reported_delivered() {
+        AssertionError actionFailure = new AssertionError("the handler's own assertion failed");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw actionFailure;
+        });
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> observed.add(outcome)));
+
+        assertThat(thrown).isSameAs(actionFailure);
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
+        throw (T) throwable;
+    }
+
     private static CloudEvent cloudEvent(String id) {
         return CloudEventBuilder.v1()
                 .withId(id)
                 .withSource(URI.create("urn:occurrent:test"))
                 .withType("NameDefined")
                 .build();
+    }
+
+    // An Error the RuntimeException | AssertionError catch misses, and deliberately not a real
+    // VirtualMachineError or ThreadDeath, which are no better to throw from a test than from anywhere else.
+    private static final class NotAnAssertionError extends Error {
+        NotAnAssertionError() {
+            super("the action failed with an Error");
+        }
     }
 
     private static final class RawConsumersOneModel extends RegisteringSubscribable {

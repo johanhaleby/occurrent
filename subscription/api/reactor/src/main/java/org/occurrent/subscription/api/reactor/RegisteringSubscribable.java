@@ -369,19 +369,22 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * decision and the report. Nothing registered, the model not running and the sole subscription being paused all
      * report {@link RoutingOutcome#UNAVAILABLE} and throw nothing, the same three states
      * {@link #route(CloudEvent)} already skips for dispatch. A filter that declines the event reports
-     * {@link RoutingOutcome#FILTERED}. The matcher itself
-     * throwing reports {@link RoutingOutcome#NOT_DELIVERABLE}, never {@link RoutingOutcome#FILTERED}, since a
-     * filter that failed to answer did not decline the event, and that throwing matcher's exception still
-     * propagates once {@code matchObserver} has been told. If {@code matchObserver} itself then throws a
-     * {@link RuntimeException} or an {@link Error} while being told, that failure is suppressed onto the matcher's
-     * original exception rather than replacing it, so a badly behaved {@code matchObserver} can never change which
-     * exception, or whose, a caller sees.
+     * {@link RoutingOutcome#FILTERED}. The matcher itself throwing a {@link RuntimeException} or an
+     * {@link AssertionError} reports {@link RoutingOutcome#NOT_DELIVERABLE}, never
+     * {@link RoutingOutcome#FILTERED}, since a filter that failed to answer did not decline the event, and that
+     * throwing matcher's exception still propagates once {@code matchObserver} has been told. A matcher that fails
+     * any other way, an undeclared checked exception or an {@link Error} other than an {@link AssertionError},
+     * propagates without {@code matchObserver} being told at all. Whatever {@code matchObserver} itself then throws while
+     * being told, a checked exception included, is suppressed onto the matcher's original exception rather than
+     * replacing it, so a badly behaved {@code matchObserver} can never change which exception, or whose, a caller
+     * sees.
      * <p>
-     * A matched registration's {@link RoutingAction} is always told this event was matched, even when it later
-     * errors: {@code matchObserver} is told {@link RoutingOutcome#DELIVERED}, since the action was genuinely
-     * invoked, which is what {@link RoutingOutcome#DELIVERED} has always meant regardless of what the action does
-     * with the event afterward, and the original error then still propagates once {@code matchObserver} has been
-     * told.
+     * A matched registration's {@link RoutingAction} erroring is still reported {@link RoutingOutcome#DELIVERED},
+     * since the action was genuinely invoked, which is what {@link RoutingOutcome#DELIVERED} has always meant
+     * regardless of what the action does with the event afterward, and the original error then still propagates
+     * once {@code matchObserver} has been told. An {@link Error} other than an {@link AssertionError} is the one
+     * exception. It propagates without {@code matchObserver} being told at all, because an action that ended in an
+     * {@link Error} delivered nothing, and the blocking stack reports nothing for it either.
      * <p>
      * A {@link RoutingAction.Refusal} is a different thing again. The action was reached but refused before
      * attempting any dispatch, so it is never {@link RoutingOutcome#DELIVERED}, and the wrapped cause propagates
@@ -396,8 +399,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * deferred, since it is a caller error rather than model state.
      *
      * @param cloudEvent    The event to route.
-     * @param matchObserver Told, once, this event's {@link RoutingOutcome}, after its registration's action (if
-     *                      any) has run, whether that action completed, declined, or errored.
+     * @param matchObserver Told this event's {@link RoutingOutcome} at most once, after its registration's action
+     *                      (if any) has run, whether that action completed, declined, or errored. The paragraphs
+     *                      above name the three failures it is not told about at all, two from the matcher and one
+     *                      from the action.
      * @return A {@link Mono} that completes when the action, if any ran, has completed.
      */
     protected final Mono<Void> routeReportingMatch(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
@@ -422,7 +427,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     } catch (RuntimeException | AssertionError e) {
                         try {
                             matchObserver.accept(cloudEvent, RoutingOutcome.NOT_DELIVERABLE);
-                        } catch (RuntimeException | Error observerFailure) {
+                        } catch (Throwable observerFailure) {
                             // Skip the instance itself. A shared exception object thrown by both the matcher and the
                             // observer would otherwise hit addSuppressed's self-suppression guard, an
                             // IllegalArgumentException that would replace the matcher failure this is here to
@@ -444,6 +449,16 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     // misclassified as an action failure.
                     return Mono.defer(() -> registration.action().route(cloudEvent))
                             .onErrorResume(error -> {
+                                // An action that ended in an Error delivered nothing, so matchObserver is told
+                                // nothing rather than DELIVERED, and the Error propagates on its own. The blocking
+                                // stack arrives at the same place by catching RuntimeException | AssertionError,
+                                // which an Error misses. onErrorResume takes any Throwable, so it is skipped here
+                                // explicitly instead. AssertionError is excluded for the same reason the blocking
+                                // catch includes it, so a matched handler written as a test spy is observed
+                                // whatever it throws.
+                                if (error instanceof Error && !(error instanceof AssertionError)) {
+                                    return Mono.<Boolean>error(error);
+                                }
                                 // A RoutingAction.Refusal is decided before any dispatch was attempted
                                 // (ReactiveHandover's catch-up failure, say), never a delivery, so this reports
                                 // whichever of NOT_DELIVERABLE or REFUSED refusal.outcome() decided, never
@@ -462,7 +477,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                                 }
                                 try {
                                     matchObserver.accept(cloudEvent, outcome);
-                                } catch (RuntimeException | Error observerFailure) {
+                                } catch (Throwable observerFailure) {
                                     // Same self-suppression guard as the matcher-throw branch above. Skip the
                                     // instance itself.
                                     if (observerFailure != propagate) {
@@ -549,9 +564,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                                             ? registration.action().route(cloudEvent)
                                             : Mono.<Boolean>empty())
                                     .onErrorResume(error -> {
-                                        // An Error is not a recoverable situation, so it keeps going the way it does on
-                                        // the blocking stack. A checked exception is an ordinary handler failure and is
-                                        // collected, which only this stack can see, since a Consumer cannot throw one.
+                                        // An Error is not a recoverable situation, so it keeps going. A checked
+                                        // exception is an ordinary handler failure and is collected. Both match the
+                                        // blocking stack.
                                         if (error instanceof Error) {
                                             return Mono.error(error);
                                         }
