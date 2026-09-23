@@ -856,13 +856,16 @@ public class OccurrentProperties {
 
             /**
              * How the {@code @Projection(recordAppliedAppends = true)} registrars pace the scheduled poll that
-             * notices a replay whose deliveries are all filtered out server-side, where no delivery ever reaches the
-             * recording wrapper to notice the replay itself
+             * retries a clear an earlier catch-up start left owed, which can fail against a store that is
+             * momentarily unavailable
              * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>
-             * decision 7). A replay entirely between two ticks, delivering nothing this projection handles, is
-             * missed by this poll too, an accepted residual decision 7 documents rather than closes. {@code max} is
-             * how sparse this poll's own sampling ever becomes. Unrelated to {@link #waitBackoff}, which paces a
-             * caller's wait for an append to show up, not this poll.
+             * decision 7). A subscription model that can tell the projection about a catch-up does so directly, and
+             * that is all this poll then does. A model that cannot send that signal has the same poll watch for the
+             * catch-up itself by asking whether the subscription is still catching up, where a catch-up that starts
+             * and ends between two ticks is missed the way any such polling misses it, an accepted residual
+             * decision 6 documents rather than closes. {@code max} is how sparse this poll's own sampling ever
+             * becomes. Unrelated to {@link #waitBackoff}, which paces a caller's wait for an append to show up, not
+             * this poll.
              */
             private ReplayPollProperties replayPoll = new ReplayPollProperties();
 

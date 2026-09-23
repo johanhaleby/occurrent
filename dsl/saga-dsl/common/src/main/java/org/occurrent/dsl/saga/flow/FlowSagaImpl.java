@@ -310,8 +310,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // promised.
     //
     // A correlated event of a type no step in the flow declares and that is not a repeat of startType (reachable
-    // only through a narrowingFilter or replacementFilter wider than the flow's own types, or a CloudEventTypeMapper
-    // that collapses several domain types onto one CloudEvent type string, see Saga#replacementFilter()) is still
+    // only through a replacementFilter wider than the flow's own types, or a CloudEventTypeMapper that collapses
+    // several domain types onto one CloudEvent type string, see Saga#replacementFilter()) is still
     // counted in appended above it, but it does not count here: only a declared event, isDeclared, both fills the
     // budget and gets evicted to make room. Such a foreign event is retained for as long as the window does not
     // have to advance past it to evict enough declared events, and is swept up for free when it does, never

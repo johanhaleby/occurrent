@@ -122,12 +122,12 @@ public final class FlowSaga {
          * {@link ReceivedEvents#initiating()} reaches the start event as always.
          * <p>
          * The cap counts only events of a type this flow declares (a step's {@code on(...)} and its window-condition
-         * leaves). A correlated event of any other type, reachable through a {@link #narrowingFilter} or
-         * {@link #replacementFilter} wider than the flow's own types, or a {@code CloudEventTypeMapper} that collapses
-         * several domain types onto one CloudEvent type string, is still retained, exactly as {@link Saga#replacementFilter()}
-         * says, but it neither counts against {@code events} nor evicts one of the step's own events to make room for
-         * itself. So this cap does not bound a step fed only such events, and the store-boundary warning is what
-         * surfaces that growth instead. A repeat of the start type after an instance has already started counts
+         * leaves). A correlated event of any other type, reachable through a {@link #replacementFilter} wider than
+         * the flow's own types, or a {@code CloudEventTypeMapper} that collapses several domain types onto one
+         * CloudEvent type string, is still retained, exactly as {@link Saga#replacementFilter()} says, but it neither
+         * counts against {@code events} nor evicts one of the step's own events to make room for itself. So this cap
+         * does not bound a step fed only such events, and the store-boundary warning is what surfaces that growth
+         * instead. A repeat of the start type after an instance has already started counts
          * against this cap like any of the step's own events, even though the start type itself is declared only
          * for the subscription, not for any step's {@code on(...)} or window-condition leaf.
          * <p>

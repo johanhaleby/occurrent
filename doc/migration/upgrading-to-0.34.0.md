@@ -112,8 +112,8 @@ the Kotlin equivalent reads the same way.
 ## 2. A flow saga's `stepWindow` now caps its declared events and the start type
 
 No recipe, and most callers need to do nothing. This only matters if your flow sets a
-`narrowingFilter`, a `replacementFilter` wider than the flow's own declared types, or uses a
-`CloudEventTypeMapper` that collapses several domain types onto one CloudEvent type string.
+`replacementFilter` wider than the flow's own declared types, or uses a `CloudEventTypeMapper` that
+collapses several domain types onto one CloudEvent type string.
 
 The 0.33.0 upgrade guide's [section 9](upgrading-to-0.33.0.md#9-a-flow-saga-can-cap-the-events-of-the-step-it-is-parked-in)
 and [section 10's replacement-filter caveat](upgrading-to-0.33.0.md#10-a-saga-or-subscription-declaring-a-supertype-event-is-refused)
@@ -124,8 +124,9 @@ types evict one of the step's own events, and the absolute bound section 9 state
 
 `stepWindow` now counts and evicts only events of a type some step's `on(...)` branch or
 window-condition leaf actually names, plus an event of the type that starts the flow. An
-event of any other type is still retained, never discarded, but it no longer takes one of the
-cap's slots or evicts a declared event to make room for itself. The bound in section 9 still holds
+event of any other type no longer takes one of the cap's slots or evicts a declared event to
+make room for itself, but it is not retained forever. Once the window advances past it to evict
+enough declared events, it is swept out together with them. The bound in section 9 still holds
 for a flow's own declared-type events, the start type included. It no longer bounds a step fed only
 events of a type no step declares and that is not the start type, which is not a new gap. It was
 always the kind of growth `stepWindow` and `historyWindow` alone did not close, only masked. Watch
@@ -923,10 +924,11 @@ checkpoint if it is killed part way.
 ### What it will not fix, and you should know before you run it
 
 The repair rebuilds an event from what its document still holds. Where the old write-back destroyed the only copy
-of a value, the tool reports the event by `_id` rather than inventing one. Five cases end up there: a position that
+of a value, the tool reports the event by `_id` rather than inventing one. Six cases end up there: a position that
 was never stored, a position another event already holds, a `position` string that is not a number, one holding zero
-or a negative number, and one above the store's position counter. The last two are values no store ever assigns. The
-runbook says what to do about each.
+or a negative number, one above the store's position counter, and a document whose `dcbtags` cannot be read back into
+a tag set. The zero-or-negative and above-the-counter cases are values no store ever assigns. The runbook says what
+to do about each.
 
 A position the tool does restore is the value the document holds, not one it can check. The old write-back kept
 whatever position the update function returned, so a function that set `position` itself left that number behind as a
