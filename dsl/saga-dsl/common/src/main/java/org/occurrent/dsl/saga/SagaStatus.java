@@ -100,7 +100,7 @@ public enum SagaStatus {
      * carrying no redelivery key, one that failed with an {@link OutOfMemoryError}, or one on an instance that already
      * counts the event as handled. A failure also records nothing when the store read the decision is made on or the
      * record write throws, which includes a store that can only read an instance whole failing to decode its state, or
-     * when that write loses its compare-and-set. A later failing event tries that write again.
+     * when that write loses its compare-and-set. A later failing event can try that write again.
      */
     QUARANTINED
 }
