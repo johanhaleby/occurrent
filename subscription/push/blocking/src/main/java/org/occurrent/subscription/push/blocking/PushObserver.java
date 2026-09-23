@@ -68,17 +68,19 @@ import org.occurrent.subscription.RoutingOutcome;
  * still propagates after the observer has been told. Any other failure, an undeclared checked exception or an
  * {@link Error} other than an {@link AssertionError}, skips the observer entirely and propagates straight out.
  * <p>
- * Whatever it is being told, the real outcome or a filter's own failure, any {@link Exception} the observer
- * throws, a checked one included, is caught and logged rather than propagated, and so is an
- * {@link AssertionError}, so a broken observer cannot turn an event that was actually delivered into a broker
- * redelivery, and cannot stop the events after it in the same batch from being routed. That much is the same
- * either way. An {@link InterruptedException} is caught like any other, and the calling thread is left
- * interrupted so the caller can act on it. Any other {@link Error} the observer throws is not caught, and where it
- * goes next depends on what it was being told.
- * Told the real outcome, that {@link Error} propagates on its own, once the observer has already run. Told about a
- * filter's own failure instead, it is attached to that filter's exception through
- * {@link Throwable#addSuppressed(Throwable)} rather than propagating on its own, so a filter failure is never
- * replaced by a failure in reporting it.
+ * Whatever it is being told, any {@link Exception} the observer throws, a checked one included, is caught and
+ * logged rather than propagated, and so is an {@link AssertionError}, so a broken observer cannot turn an event
+ * that was actually delivered into a broker redelivery, and cannot stop the events after it in the same batch
+ * from being routed. An {@link InterruptedException} is caught like any other, and the calling thread is left
+ * interrupted so the caller can act on it.
+ * <p>
+ * Any other {@link Error} the observer throws is not caught. Where it goes next depends on whether the model
+ * already had a failure of its own to propagate, not on which outcome the observer was told. Reported alongside
+ * such a failure, a filter that threw, an action that threw, or an action that refused the event, the observer's
+ * {@link Error} is attached to it through {@link Throwable#addSuppressed(Throwable)} and that failure is what
+ * propagates, so a failure is never replaced by a failure in reporting it. Reported with nothing else in flight,
+ * it propagates on its own. {@link RoutingOutcome#DELIVERED} reaches the observer both ways, since an action that
+ * threw is reported delivered too.
  * <p>
  * The default, {@link #noop()}, changes nothing for existing code, and {@link PushSubscriptionModel} skips both this
  * call and the match check entirely when no other observer is configured.

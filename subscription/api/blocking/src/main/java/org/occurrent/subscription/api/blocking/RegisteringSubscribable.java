@@ -383,10 +383,12 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * {@link AssertionError}, propagates without {@code matchObserver} being told at all, exactly as an action
      * failing those two ways does. Whatever {@code matchObserver} itself then throws while being told,
      * a checked exception included, is suppressed onto the matcher's original exception rather than replacing it,
-     * so a badly behaved {@code matchObserver} can never change which exception, or whose, a caller sees.
+     * so a badly behaved {@code matchObserver} can never change which exception, or whose, a caller sees for a
+     * matcher that threw.
      * <p>
-     * A matched registration's {@link RoutingAction} throwing a {@link RuntimeException} or an
-     * {@link AssertionError} is still reported {@link RoutingOutcome#DELIVERED}, since the action was genuinely
+     * A matched registration's {@link RoutingAction} throwing a {@link RuntimeException} other than a
+     * {@link RoutingAction.Refusal}, or an {@link AssertionError}, is still reported
+     * {@link RoutingOutcome#DELIVERED}, since the action was genuinely
      * invoked, which is what {@link RoutingOutcome#DELIVERED} has always meant regardless of what the action does
      * with the event afterward, and that exception then still propagates to the caller once {@code matchObserver}
      * has been told. An action that fails any other way, an undeclared checked exception or an {@link Error} other
@@ -412,7 +414,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * @param matchObserver   Told this event's {@link RoutingOutcome} at most once, after its registration's
      *                        action (if any) has run, whether that action returned or threw. The paragraphs above
      *                        name the four failures it is not told about at all, two from the matcher and the same
-     *                        two from the action.
+     *                        two from the action. Whatever it throws is suppressed onto the exception this method
+     *                        is already propagating, a matcher that threw, an action that threw or a refusal, and
+     *                        propagates on its own when there is no such exception.
+     *                        {@link RoutingOutcome#DELIVERED} arrives both ways.
      */
     protected final void routeReportingMatch(CloudEvent cloudEvent, boolean bufferIfNotLive, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");

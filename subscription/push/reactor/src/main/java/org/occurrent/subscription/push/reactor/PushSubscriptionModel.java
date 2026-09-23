@@ -169,13 +169,12 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
             observer.observe(cloudEvent, outcome);
         } catch (Exception | AssertionError e) {
             // Catching an Exception means catching an InterruptedException, so the interrupt is set again. Unlike
-            // the blocking stack, this is not always the thread that called accept(..), since it runs inside
-            // the pipeline routeReportingMatch assembles, so a registered handler whose Mono publishes on another
-            // scheduler puts it on that scheduler's worker. Setting it anyway beats swallowing it. The flag is the
-            // only remaining record that the observer was interrupted, the UNAVAILABLE, FILTERED and
-            // NOT_DELIVERABLE reports do run on the calling thread, and Schedulers.boundedElastic() and
-            // Schedulers.parallel() are both backed by a ScheduledThreadPoolExecutor, whose runWorker clears a
-            // stray interrupt flag before each task, so it cannot reach the unrelated work that worker runs next.
+            // the blocking stack, this is not always the thread that called accept(..). routeReportingMatch
+            // returns a Mono.defer(..), so every report runs on whichever thread subscribes, and in a batch that
+            // is the thread the previous event's handler completed on. Setting the flag there beats swallowing it,
+            // but the caller may never see it. Schedulers.boundedElastic() and Schedulers.parallel() are both
+            // backed by a ScheduledThreadPoolExecutor, whose runWorker clears a stray interrupt flag before each
+            // task, so at least it cannot reach the unrelated work that worker runs next.
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
