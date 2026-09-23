@@ -855,17 +855,14 @@ public class OccurrentProperties {
             private WaitBackoffProperties waitBackoff = new WaitBackoffProperties();
 
             /**
-             * How the {@code @Projection(recordAppliedAppends = true)} registrars pace the scheduled poll that
-             * retries a clear an earlier catch-up start left owed, which can fail against a store that is
-             * momentarily unavailable
+             * How the {@code @Projection(recordAppliedAppends = true)} registrars pace their scheduled poll. When a
+             * catch-up starts, the projection's recorded appends are deleted, and the poll retries that delete when it
+             * failed because the store was unavailable
              * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>
-             * decision 7). A subscription model that can tell the projection about a catch-up does so directly, and
-             * that is all this poll then does. A model that cannot send that signal has the same poll watch for the
-             * catch-up itself by asking whether the subscription is still catching up, where a catch-up that starts
-             * and ends between two ticks is missed the way any such polling misses it, an accepted residual
-             * decision 6 documents rather than closes. {@code max} is how sparse this poll's own sampling ever
-             * becomes. Unrelated to {@link #waitBackoff}, which paces a caller's wait for an append to show up, not
-             * this poll.
+             * decision 7). For a subscription model that cannot tell the projection when a catch-up starts and ends,
+             * the poll also asks the model whether it is catching up, so a catch-up that starts and ends between two
+             * ticks goes unnoticed, a limit decision 7 accepts. {@code max} is the longest interval between two
+             * ticks. Unrelated to {@link #waitBackoff}, which paces a caller's wait for an append to show up.
              */
             private ReplayPollProperties replayPoll = new ReplayPollProperties();
 
