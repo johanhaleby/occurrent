@@ -151,9 +151,9 @@ stored as epoch milliseconds rather than a date.
 `SagaInstance.failure()` answers a `SagaFailure` for a quarantined instance, and `null` for an instance that has no
 failure recorded.
 
-A `null` does not mean the instance is not failing. The runner records a failure only while a quarantine budget is in
-force, and it switches the budget off at startup on a subscription model that cannot guarantee it holds every event it
-delivers. On such a model an instance can fail on every delivery and still answer `null` with an `ACTIVE` status.
+A `null` does not mean the instance is not failing. Several ways of failing record nothing, a failing timeout among
+them, so an instance can fail on every delivery and every timer poll and still answer `null` with an `ACTIVE` status.
+The javadoc on `SagaStatus.QUARANTINED` lists which ways those are.
 
 ```java
 SagaInstance instance = quarantined.getFirst();
@@ -162,8 +162,8 @@ SagaFailure failure = instance.failure();
 //                          or the global position when the event has no stream metadata
 // failure.position()       that global position beside it when the store assigns one, otherwise null
 // failure.firstFailedAt()  when this instance started failing, strictly when its first failure record
-//                          was written, which is later than the first failure itself if that write
-//                          lost a compare-and-set
+//                          was written, which is later than the first failure itself if an earlier
+//                          failure recorded nothing
 // failure.failureType()    the class name of the exception that stopped the processing. Usually one the
 //                          saga or its command dispatcher threw, and it can also be a store or
 //                          converter failure, since the runner catches the whole path including the
@@ -176,8 +176,9 @@ SagaFailure failure = instance.failure();
 Read `firstFailedAt()` as the start of the instance's current run of failing, and not as the first time
 `failure.input()` itself failed. Reading it the other way under-reports how long the instance has been stuck.
 
-It is a floor rather than an exact incident start. The value is when the first failure record was written, which is
-the same moment unless that write lost its compare-and-set, so the instance may have been failing for longer than the
+It is a floor rather than an exact incident start. The value is when the first failure record was written, and an
+earlier failure that recorded nothing, a failing timeout or a write that lost its compare-and-set for instance, makes
+that later than when the instance started failing. So the instance may have been failing for longer than the
 difference between `firstFailedAt()` and now.
 
 The record holds the exception's class name and message, and not its stack trace. Take the stack trace from the log

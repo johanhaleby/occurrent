@@ -597,7 +597,8 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         } finally {
             // A finally, so an Error out of the cancel or a release still closes the channel and stops the poll and the
             // worker. The close is what requeues a held delivery, the release only makes that happen sooner. The Error
-            // still propagates once the teardown is done.
+            // still propagates once the teardown is done, unless the teardown throws something of its own, which then
+            // replaces it.
             try {
                 consumeChannel.close();
             } catch (IOException | TimeoutException | RuntimeException ignored) {
