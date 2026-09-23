@@ -50,8 +50,8 @@ import java.util.function.Function;
  * snapshot only lengthens the tail. It loads one snapshot per execute, and costs nothing when no snapshot is used.
  * <p>
  * An empty result Mono from {@link #execute} means the domain function produced no new events, so nothing is appended and
- * no snapshot is written. {@link #executeAndReturnDecision}/{@link #executeAndReturnState} still emit the decided state
- * even for a no-op.
+ * no snapshot is written. {@link #executeAndReturnDecision} still emits the decided state for a no-op, nullable or not.
+ * {@link #executeAndReturnState} emits it too, subject to the same non-null refusal as any other execute.
  * <p>
  * Deliberate asymmetry with the stream executor: this executor only advances the base when the decision actually
  * appended events, since a no-op decision has no {@link DcbAppendResult} to key the save on.
@@ -108,8 +108,10 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
     }
 
     /**
-     * Execute {@code commands} and emit the folded state after the decision (even when nothing was appended). Refused
-     * before anything is written if the decider folds to a null state. See {@link #executeAndReturnState(Object, ReactiveSnapshotDcbDecider)}.
+     * Execute {@code commands} and emit the folded state after the decision (even when nothing was appended). The
+     * commands are decided as one unit and appended once, so only the state after the last command is checked. If that
+     * state is null, nothing is written, not even the events the earlier commands decided. See
+     * {@link #executeAndReturnState(Object, ReactiveSnapshotDcbDecider)}.
      */
     public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
         return doExecuteAndReturnState(commands, snapshotDcbDecider);

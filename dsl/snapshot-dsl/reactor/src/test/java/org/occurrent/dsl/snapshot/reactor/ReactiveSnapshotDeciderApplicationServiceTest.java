@@ -332,6 +332,19 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     }
 
     @Test
+    void executeAndReturnState_with_a_UUID_stream_id_and_a_command_list_folds_all_commands_and_returns_the_final_state() {
+        UUID streamId = UUID.randomUUID();
+        var account = ReactiveSnapshotDecider.from(decider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        String state = service.executeAndReturnState(streamId, List.of(new Define("A"), new Change("B")), account).block(TIMEOUT);
+
+        assertAll(
+                () -> assertThat(state).isEqualTo("B"),
+                () -> assertThat(requireNonNull(eventStore.read(streamId.toString()).block(TIMEOUT)).version()).isEqualTo(2L)
+        );
+    }
+
+    @Test
     void from_throws_NullPointerException_when_the_decider_is_null() {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
         assertThatThrownBy(() -> ReactiveSnapshotDecider.from(null, store, options))
@@ -391,6 +404,21 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     }
 
     @Test
+    void executeAndReturnState_with_several_commands_refuses_a_null_state_even_though_an_earlier_command_in_the_list_folded_non_null() {
+        String streamId = UUID.randomUUID().toString();
+        var account = ReactiveSnapshotDecider.from(foldsToNullOnTheLastOfSeveralCommandsDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        assertThatThrownBy(() -> service.executeAndReturnState(streamId, List.of(new Keep("A"), new FoldToNull()), account).block(TIMEOUT))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("Mono cannot carry null");
+
+        assertAll(
+                () -> assertThat(requireNonNull(eventStore.read(streamId).block(TIMEOUT)).version()).as("nothing written, including the events the first command decided").isZero(),
+                () -> assertThat(store.findLatest(streamId).blockOptional()).as("no snapshot for a refused write").isEmpty()
+        );
+    }
+
+    @Test
     void executeAndReturnDecision_still_allows_a_null_state_and_the_write_is_committed() {
         String streamId = UUID.randomUUID().toString();
         var account = ReactiveSnapshotDecider.from(foldsToNullDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
@@ -425,6 +453,38 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     }
 
     private record Delete() {
+    }
+
+    private static Decider<MultiFoldCmd, @Nullable String, DomainEvent> foldsToNullOnTheLastOfSeveralCommandsDecider(LocalDateTime time) {
+        return new Decider<>() {
+            @Override
+            public @Nullable String initialState() {
+                return "";
+            }
+
+            @NonNull
+            @Override
+            public List<DomainEvent> decide(@NonNull MultiFoldCmd command, @Nullable String state) {
+                return switch (command) {
+                    case Keep k -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", k.name()));
+                    case FoldToNull ignored -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "DELETED"));
+                };
+            }
+
+            @Override
+            public @Nullable String evolve(@Nullable String state, @NonNull DomainEvent event) {
+                return event instanceof NameWasChanged ? null : event.name();
+            }
+        };
+    }
+
+    private sealed interface MultiFoldCmd {
+    }
+
+    private record Keep(String name) implements MultiFoldCmd {
+    }
+
+    private record FoldToNull() implements MultiFoldCmd {
     }
 
     private sealed interface Cmd {
