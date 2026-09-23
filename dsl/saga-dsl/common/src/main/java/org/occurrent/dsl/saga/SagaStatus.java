@@ -96,10 +96,11 @@ public enum SagaStatus {
      * <p>
      * {@link SagaInstance#failure()} answers {@code null} when no failure is on record, and several ways of failing
      * record nothing, so a {@code null} does not mean the instance is not failing. A failing timeout records nothing.
-     * Neither does a failing event the first list above rules out, such as one on a saga whose budget is off, one
-     * carrying no redelivery key, or one that failed with an {@link OutOfMemoryError}. A failure also records nothing
-     * when the store read or the record write throws, which includes a store that reads an instance only whole failing
-     * to decode its state, or when that write loses its compare-and-set. A later failing event can try the write again.
+     * Neither does a failing event the saga could not route to an instance, one on a saga whose budget is off, one
+     * carrying no redelivery key, one that failed with an {@link OutOfMemoryError}, or one on an instance that already
+     * counts the event as handled. A failure also records nothing when the store read the decision is made on or the
+     * record write throws, which includes a store that can only read an instance whole failing to decode its state, or
+     * when that write loses its compare-and-set. A later failing event tries that write again.
      */
     QUARANTINED
 }

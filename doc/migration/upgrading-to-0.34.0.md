@@ -644,12 +644,12 @@ that model offered the event again the saga tried again, without limit.
 What the failing event holds up in the meantime is decided by whatever feeds the subscription, and the javadoc on
 `SagaStatus.QUARANTINED` says what that can be.
 
-From 0.34.0 the executor times the failing rather than counting the attempts. Where a quarantine budget is in force, a
-failing event can write down the instant its instance started failing, and it rethrows whether or not that write succeeds, exactly as before. Some ways of
-failing write nothing, a failing timeout among them, and the javadoc on `SagaStatus.QUARANTINED` lists them. Where nothing was
-recorded, the next delivery decides on whatever the store holds then. Once that instance has kept failing for at least
-`SagaRunnerConfig.quarantineAfter`, five minutes by default, it can move to the new `SagaStatus.QUARANTINED`, and when
-it does the executor stops rethrowing.
+From 0.34.0 the executor times the failing rather than counting the attempts. Where a quarantine budget is in force, an
+instance's first failing event can write down the instant it started failing, and it rethrows whether or not that write
+succeeds, exactly as before. Some ways of failing write nothing, a failing timeout among them, and the javadoc on
+`SagaStatus.QUARANTINED` lists them. Where nothing was recorded, the next delivery decides on whatever the store holds
+then. Once that instance has kept failing for at least `SagaRunnerConfig.quarantineAfter`, five minutes by default, it
+can move to the new `SagaStatus.QUARANTINED`, and when it does the executor stops rethrowing.
 
 Reaching the budget is not enough on its own. The javadoc on `SagaStatus.QUARANTINED` lists what else has to hold, so
 an instance past its budget can still be `ACTIVE`. Read its status rather than working it out from the time.
