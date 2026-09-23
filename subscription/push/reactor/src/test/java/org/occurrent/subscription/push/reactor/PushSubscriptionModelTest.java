@@ -418,6 +418,73 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void an_observer_error_while_reporting_delivered_for_a_handler_that_errored_is_suppressed_rather_than_replacing_it() {
+        // DELIVERED reaches the observer both from the plain success path and from a handler that errored, and only
+        // the second one already has a failure to propagate. The outcome alone does not say which, so what the observer is
+        // told cannot decide where its own Error goes.
+        RuntimeException handlerFailure = new IllegalStateException("handler failed");
+        Error observerFailure = new Error("observer blew up too");
+        List<RoutingOutcome> outcomes = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> {
+                    outcomes.add(outcome);
+                    throw observerFailure;
+                });
+        model.subscribe("sub", cloudEvent -> Mono.error(handlerFailure));
+
+        StepVerifier.create(model.accept(cloudEvent("1", "NameDefined")))
+                .verifyErrorSatisfies(error -> {
+                    assertThat(error).as("the handler failure is what the caller sees").isSameAs(handlerFailure);
+                    assertThat(error.getSuppressed()).containsExactly(observerFailure);
+                });
+
+        assertThat(outcomes).containsExactly(DELIVERED);
+    }
+
+    @Test
+    void an_observer_error_while_reporting_delivered_for_a_handler_that_completed_propagates_on_its_own() {
+        // The other half of the same property. Nothing else is in flight, so the observer's Error is what the
+        // caller sees, told the same DELIVERED as the test above.
+        Error observerFailure = new Error("observer blew up");
+        List<RoutingOutcome> outcomes = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> {
+                    outcomes.add(outcome);
+                    throw observerFailure;
+                });
+        model.subscribe("sub", cloudEvent -> Mono.empty());
+
+        StepVerifier.create(model.accept(cloudEvent("1", "NameDefined")))
+                .verifyErrorSatisfies(error -> {
+                    assertThat(error).isSameAs(observerFailure);
+                    assertThat(error.getSuppressed()).isEmpty();
+                });
+
+        assertThat(outcomes).containsExactly(DELIVERED);
+    }
+
+    @Test
+    void a_report_in_a_batch_does_not_run_on_the_calling_thread() {
+        // Event 1's DELIVERED is decided in the flatMap, on the thread the handler's Mono signalled. Event 2's
+        // FILTERED is decided in the defer body, subscribed by concatMap on the thread event 1 finished on. Both
+        // mechanisms run off the caller, which is why an interrupt flag a report sets cannot be promised to it.
+        // The delay keeps this off a race with the calling thread's own drain loop, since the caller is parked in
+        // block() once the handler ends.
+        String callingThread = Thread.currentThread().getName();
+        List<String> reportThreads = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> reportThreads.add(Thread.currentThread().getName()));
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.type("NameDefined")),
+                cloudEvent -> Mono.delay(Duration.ofMillis(50)).then());
+
+        model.accept(List.of(cloudEvent("1", "NameDefined"), cloudEvent("2", "SomethingElseHappened"))).block();
+
+        assertThat(reportThreads).as("both the DELIVERED report and the FILTERED report after it")
+                .hasSize(2)
+                .allSatisfy(reportThread -> assertThat(reportThread).isNotEqualTo(callingThread));
+    }
+
+    @Test
     void a_throwing_observer_is_swallowed_and_the_matching_handler_still_runs() {
         List<String> handled = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (CloudEvent cloudEvent, RoutingOutcome outcome) -> {

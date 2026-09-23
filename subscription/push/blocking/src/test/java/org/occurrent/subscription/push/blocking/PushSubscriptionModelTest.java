@@ -450,6 +450,51 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void an_observer_error_while_reporting_delivered_for_a_handler_that_threw_is_suppressed_rather_than_replacing_it() {
+        // DELIVERED reaches the observer both from the plain success path and from a handler that threw, and only
+        // the second one already has an exception to propagate. The outcome alone does not say which, so what the observer
+        // is told cannot decide where its own Error goes.
+        RuntimeException handlerFailure = new IllegalStateException("handler failed");
+        Error observerFailure = new Error("observer blew up too");
+        List<RoutingOutcome> outcomes = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> {
+                    outcomes.add(outcome);
+                    throw observerFailure;
+                });
+        model.subscribe("sub", cloudEvent -> {
+            throw handlerFailure;
+        });
+
+        Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
+
+        assertThat(outcomes).containsExactly(DELIVERED);
+        assertThat(thrown).as("the handler failure is what the caller sees").isSameAs(handlerFailure);
+        assertThat(thrown.getSuppressed()).containsExactly(observerFailure);
+    }
+
+    @Test
+    void an_observer_error_while_reporting_delivered_for_a_handler_that_returned_propagates_on_its_own() {
+        // The other half of the same property. Nothing else is in flight, so the observer's Error is what the
+        // caller sees, told the same DELIVERED as the test above.
+        Error observerFailure = new Error("observer blew up");
+        List<RoutingOutcome> outcomes = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> {
+                    outcomes.add(outcome);
+                    throw observerFailure;
+                });
+        model.subscribe("sub", cloudEvent -> {
+        });
+
+        Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
+
+        assertThat(outcomes).containsExactly(DELIVERED);
+        assertThat(thrown).isSameAs(observerFailure);
+        assertThat(thrown.getSuppressed()).isEmpty();
+    }
+
+    @Test
     void a_throwing_observer_is_swallowed_and_the_matching_handler_still_runs() {
         List<String> handled = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (CloudEvent cloudEvent, RoutingOutcome outcome) -> {

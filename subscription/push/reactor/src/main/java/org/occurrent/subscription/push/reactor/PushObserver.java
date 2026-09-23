@@ -58,19 +58,29 @@ import org.occurrent.subscription.RoutingOutcome;
  * propagates after the observer has been told. Any other failure, an undeclared checked exception or an
  * {@link Error} other than an {@link AssertionError}, skips the observer entirely and propagates straight out.
  * <p>
- * Whatever it is being told, the real outcome or a filter's own failure, any {@link Exception} the observer
- * throws, a checked one included, is caught and logged rather than propagated, and so is an
- * {@link AssertionError}, so a broken observer cannot turn an event that was actually delivered into a broker
- * redelivery, and cannot stop the events after it in the same batch from being routed. That much is the same
- * either way. An {@link InterruptedException} is caught like any other, and the interrupt flag is set again on
- * whichever thread ran the observer, so the interrupt is not lost. That is the thread that called
- * {@code accept(..)} only when nothing upstream moved the work off it. A registered handler whose
- * {@link reactor.core.publisher.Mono} publishes on a scheduler of its own has the flag set on that scheduler's
- * worker instead, for the rest of the task that worker is running. Any other {@link Error} the observer throws is
- * not caught, and where it goes next depends on what it was being told. Told the real outcome, that
- * {@link Error} propagates on its own, once the observer has already run. Told about a filter's own failure
- * instead, it is attached to that filter's error through {@link Throwable#addSuppressed(Throwable)} rather than
- * propagating on its own, so a filter failure is never replaced by a failure in reporting it.
+ * Whatever it is being told, any {@link Exception} the observer throws, a checked one included, is caught and
+ * logged rather than propagated, and so is an {@link AssertionError}, so a broken observer cannot turn an event
+ * that was actually delivered into a broker redelivery, and cannot stop the events after it in the same batch
+ * from being routed.
+ * <p>
+ * An {@link InterruptedException} is caught like any other, and the interrupt flag is set again on whichever
+ * thread ran the observer. Which thread that is depends on the report. The ones decided before the registered
+ * handler is dispatched, {@link RoutingOutcome#UNAVAILABLE}, {@link RoutingOutcome#FILTERED} and a filter
+ * failure's {@link RoutingOutcome#NOT_DELIVERABLE}, run on the thread that subscribed. The ones decided after it,
+ * {@link RoutingOutcome#DELIVERED}, {@link RoutingOutcome#DEFERRED} and a refusal's own outcome, run on whichever
+ * thread that handler's {@link reactor.core.publisher.Mono} signalled on. In a batch, the subscription for one
+ * event happens on the thread the event before it finished on.
+ * <p>
+ * A pooled worker clears a stray flag before its next task, so the caller may never see an interrupt the observer
+ * raised. An observer that needs one to reach the caller has to record it itself.
+ * <p>
+ * Any other {@link Error} the observer throws is not caught. Where it goes next depends on whether the model
+ * already had a failure of its own to propagate, not on which outcome the observer was told. Reported alongside
+ * such a failure, whether it came from the filter, the action or a refusal, the observer's
+ * {@link Error} is attached to it through {@link Throwable#addSuppressed(Throwable)} and that failure is what
+ * propagates, so a failure is never replaced by a failure in reporting it. Reported with nothing else in flight,
+ * it propagates on its own. {@link RoutingOutcome#DELIVERED} reaches the observer both ways, since an action that
+ * errored is reported delivered too.
  * <p>
  * The returned {@link reactor.core.publisher.Mono} from {@link PushSubscriptionModel#accept(CloudEvent)} is cold, so
  * "once per event" means once per subscription to it, not once per event handed to {@code accept(..)}. Subscribing
