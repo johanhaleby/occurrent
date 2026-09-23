@@ -533,7 +533,8 @@ class FlowSagaTest {
          * A type no step below ever declares, in any branch or window-condition leaf, so {@code eventTypes()} never
          * names it. Simulates what a caller reaches through a {@code replacementFilter} wider than the flow's own
          * types, or a collapsing {@code CloudEventTypeMapper}. Correlated and appended, never counted by
-         * {@code stepWindow}, and dropped only when a declared event that arrived after it is evicted.
+         * {@code stepWindow}, and {@code stepWindow} drops it only together with a declared event that arrived after
+         * it. {@code historyWindow} can also drop it on a later transition, once its step has been left.
          */
         record Untracked(String id) implements CapEvent {
         }

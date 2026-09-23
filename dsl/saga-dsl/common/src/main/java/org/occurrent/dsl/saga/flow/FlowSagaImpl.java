@@ -313,11 +313,11 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // only through a replacementFilter wider than the flow's own types, or a CloudEventTypeMapper that collapses
     // several domain types onto one CloudEvent type string, see Saga#replacementFilter()) is still
     // counted in appended above it, but it does not count here: only a declared event, isDeclared, both fills the
-    // budget and gets evicted to make room. Such a foreign event is retained for as long as the window does not
-    // have to advance past it to evict enough declared events, and is swept up for free when it does, never
-    // targeted on its own. This is what keeps the isolation rule intact (a genuinely correlated event is never
-    // discarded on arrival), at the cost of no longer bounding a step fed only foreign-typed events; see the ADR
-    // for that trade-off.
+    // budget and gets evicted to make room. This cap keeps such a foreign event until the window has to advance past
+    // it to evict enough declared events, and then drops it together with them, never by itself. That keeps the
+    // isolation rule intact (a genuinely correlated event is never discarded on arrival), at the cost of no
+    // longer bounding a step fed only foreign-typed events, the trade-off ADR 129 records. The historyWindow drop in
+    // applyTransition can still remove such an event once its step has been left.
     private int boundedWindowStart(int stepEntryIndex, int windowStart, List<E> appended) {
         if (stepWindow == UNBOUNDED_STEP_WINDOW) {
             return windowStart;

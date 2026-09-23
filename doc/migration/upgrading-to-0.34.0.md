@@ -125,8 +125,9 @@ types evict one of the step's own events, and the absolute bound section 9 state
 `stepWindow` now counts and evicts only events of a type some step's `on(...)` branch or
 window-condition leaf actually names, plus an event of the type that starts the flow. An
 event of any other type no longer takes one of the cap's slots or evicts a declared event to
-make room for itself, but it is not retained forever. Once the window advances past it to evict
-enough declared events, it is swept out together with them. The bound in section 9 still holds
+make room for itself, but it can still be dropped. When the window advances past it to evict
+enough declared events, it is swept out together with them, and `historyWindow` can drop it on a
+later transition, once the step it arrived in has been left. The bound in section 9 still holds
 for a flow's own declared-type events, the start type included. It no longer bounds a step fed only
 events of a type no step declares and that is not the start type, which is not a new gap. It was
 always the kind of growth `stepWindow` and `historyWindow` alone did not close, only masked. Watch

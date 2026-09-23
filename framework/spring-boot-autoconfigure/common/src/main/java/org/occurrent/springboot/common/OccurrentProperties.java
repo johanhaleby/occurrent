@@ -915,8 +915,8 @@ public class OccurrentProperties {
             public static class WaitBackoffProperties {
 
                 /**
-                 * The interval before the first re-check of whether the append has been applied. Kept short so a
-                 * projection that has already applied it answers immediately.
+                 * The interval before the first re-check of whether the append has been applied. Kept short so an
+                 * append the projection applies just after the first check is seen soon after.
                  */
                 private Duration initial = Duration.ofMillis(25);
 
@@ -960,18 +960,22 @@ public class OccurrentProperties {
             public static class ReplayPollProperties {
 
                 /**
-                 * The poll interval for a projection that has just registered, or was just seen replaying. Kept
-                 * short so a replay whose deliveries are all filtered out is still noticed quickly.
+                 * The poll interval for a projection that has just registered, and the one a tick goes back to
+                 * whenever it finds a clear still owed or, for a model that has to be polled, a catch-up still
+                 * running. Kept short so a failed clear is retried soon and a polled catch-up's end is seen soon after
+                 * it happens. A model that sends catch-up signals does not rely on the poll to notice a replay. For
+                 * a model that has to be polled, a catch-up that starts and ends between two ticks is missed.
                  */
                 private Duration initial = Duration.ofMillis(200);
 
                 /**
-                 * The longest the interval grows to, for a projection that has been live for a while.
+                 * The longest the interval grows to, for a projection whose ticks have found nothing to react to
+                 * for a while.
                  */
                 private Duration max = Duration.ofSeconds(5);
 
                 /**
-                 * What the interval is multiplied by after each poll that found the projection live.
+                 * What the interval is multiplied by after each tick that found nothing to react to.
                  */
                 private double multiplier = 2.0;
 

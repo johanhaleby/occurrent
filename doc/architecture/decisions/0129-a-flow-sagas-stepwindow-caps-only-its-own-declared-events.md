@@ -49,10 +49,11 @@ per-step set unless some step also declares it in its own right, the same way a 
 has started, a retained repeat of the start type counts as declared for the cap and the eviction
 walk, the same way one of a step's own declared-type events does, because a repeat of the event that
 created the instance is not the kind of foreign traffic this decision means to leave uncapped. A
-correlated event of any other type is still appended to `received()`, never silently dropped, but it
-neither counts toward the N-event budget nor evicts one of the step's own events by itself. It is
-swept up only as a byproduct of the window advancing past it while dropping enough declared events
-ahead of it to satisfy the cap.
+correlated event of any other type is still appended to `received()` rather than dropped on arrival,
+but it neither counts toward the N-event budget nor evicts one of the step's own events by itself.
+`stepWindow` drops it only when the window advances past it to evict a declared event that arrived
+after it. `historyWindow` can also drop it on a later transition, once the step it arrived in has
+been left, because that drop does not look at an event's type.
 
 The alternative the issue also named, discarding the foreign event before it is ever appended, was
 rejected. Nothing else in the codebase silently drops an event that genuinely arrived and correlated
@@ -71,8 +72,10 @@ uncommon caller customization already covered by the store's warning.
 ### The consequence this has for #764
 
 Once a foreign-typed event no longer counts toward `stepWindow`, a step fed only foreign-typed
-events is not bounded by `stepWindow` at all. A foreign-typed event is dropped only when a declared
-event that arrived after it is evicted, and such a step receives no declared event.
+events is not bounded by `stepWindow` at all. `stepWindow` drops a foreign-typed event only when it
+evicts a declared event that arrived after it, and such a step receives no declared event.
+`historyWindow` drops events only on a transition, once the step they arrived in has been left, so it
+does not limit what an instance retains while it stays in that step either.
 This is the cost the issue itself named for this fix ("a retention rule with two kinds of entry in
 it"), not a new problem this ADR introduces.
 
@@ -110,9 +113,10 @@ Three places described the old behavior, or did not say enough to rule it out, a
 correction in the same change:
 
 - `Saga.replacementFilter()` stated the bug as the shipped cost of a wide selector. It now says a
-  foreign event is retained but neither counts against `stepWindow` nor evicts a declared event, and
-  that nothing evicts it as long as the step's own declared-type events stay within their cap, so it
-  can grow what a parked step stores without limit.
+  foreign event is retained but neither counts against `stepWindow` nor evicts a declared event, that
+  `stepWindow` does not evict it as long as the step's own declared-type events stay within their cap,
+  and that `historyWindow` drops it only once the flow has left the step it arrived in, so it can grow
+  what a parked step stores without limit.
 - `FlowSaga.Builder.stepWindow(int)` did not previously say what "the current step's own received
   events" meant for a type the flow does not declare. It now states the scope directly and points at
   the store's warning as the residual signal.
