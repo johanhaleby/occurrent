@@ -62,7 +62,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -274,23 +274,23 @@ class DcbDeciderApplicationServiceTest {
 
         @Test
         void with_a_single_command_refuses_a_null_state_before_anything_is_appended() {
-            // When / Then
-            assertThatThrownBy(() -> deciderApplicationService.executeAndReturnState(new Vanish(), nullFoldDcbDecider()).block())
-                    .isInstanceOf(NullPointerException.class)
-                    .hasMessageContaining("Mono cannot carry null");
+            // When
+            Throwable thrown = catchThrowable(() -> deciderApplicationService.executeAndReturnState(new Vanish(), nullFoldDcbDecider()).block());
 
+            // Then
             assertThat(readNullFoldEvents()).as("nothing appended for a refused null state").isEmpty();
+            assertThat(thrown).isInstanceOf(NullPointerException.class).hasMessageContaining("Mono cannot carry null");
         }
 
         @Test
         void with_a_command_list_refuses_a_null_state_before_anything_is_appended_even_when_an_earlier_command_folds_non_null() {
-            // When / Then: Materialize folds to a non-null state, Vanish (the last command) folds to null. Both are
-            // decided as one unit and appended once, so the whole append is refused, not just Vanish's event.
-            assertThatThrownBy(() -> deciderApplicationService.executeAndReturnState(List.of(new Materialize(), new Vanish()), nullFoldDcbDecider()).block())
-                    .isInstanceOf(NullPointerException.class)
-                    .hasMessageContaining("Mono cannot carry null");
+            // When: Materialize folds to a non-null state, Vanish (the last command) folds to null. Both are decided
+            // as one unit and appended once, so the whole append is refused, not just Vanish's event.
+            Throwable thrown = catchThrowable(() -> deciderApplicationService.executeAndReturnState(List.of(new Materialize(), new Vanish()), nullFoldDcbDecider()).block());
 
+            // Then
             assertThat(readNullFoldEvents()).as("nothing appended, not even Materialize's event").isEmpty();
+            assertThat(thrown).isInstanceOf(NullPointerException.class).hasMessageContaining("Mono cannot carry null");
         }
     }
 
