@@ -857,8 +857,9 @@ public class OccurrentProperties {
             /**
              * How the {@code @Projection(recordAppliedAppends = true)} registrars pace their scheduled poll. When a
              * catch-up starts, the projection's recorded appends are marked for deletion, and the next delivery or poll
-             * tick deletes them. For a projection that gets no delivery, the poll makes the first attempt at deleting
-             * them (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>
+             * tick tries to delete them. If the store fails, each later delivery or tick tries again, and recording
+             * stays off until one succeeds. For a projection that gets no delivery, the poll makes the first attempt
+             * at deleting them (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>
              * decision 7). For a subscription model that cannot tell the projection when a catch-up starts and ends,
              * the poll also asks the model whether it is catching up, so a catch-up that starts and ends between two
              * ticks goes unnoticed, a limit decision 7 accepts. {@code max} is the longest interval between two
