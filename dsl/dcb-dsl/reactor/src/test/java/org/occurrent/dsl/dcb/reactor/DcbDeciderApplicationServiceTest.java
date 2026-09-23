@@ -20,6 +20,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -55,10 +57,12 @@ import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -240,6 +244,16 @@ class DcbDeciderApplicationServiceTest {
             // Then
             StepVerifier.create(result).expectError(IllegalArgumentException.class).verify();
         }
+
+        @Test
+        void still_allows_a_null_state_and_the_append_is_committed() {
+            // When
+            Decider.Decision<@Nullable String, DomainEvent> decision = deciderApplicationService.executeAndReturnDecision(new Vanish(), nullFoldDcbDecider()).block();
+
+            // Then
+            assertThat(requireNonNull(decision).state()).isNull();
+            assertThat(readNullFoldEvents()).hasSize(1);
+        }
     }
 
     @Nested
@@ -256,6 +270,27 @@ class DcbDeciderApplicationServiceTest {
 
             // Then
             assertThat(state).isEqualTo("John Doe");
+        }
+
+        @Test
+        void with_a_single_command_refuses_a_null_state_before_anything_is_appended() {
+            // When
+            Throwable thrown = catchThrowable(() -> deciderApplicationService.executeAndReturnState(new Vanish(), nullFoldDcbDecider()).block());
+
+            // Then
+            assertThat(readNullFoldEvents()).as("nothing appended for a refused null state").isEmpty();
+            assertThat(thrown).isInstanceOf(NullPointerException.class).hasMessageContaining("Mono cannot carry null");
+        }
+
+        @Test
+        void with_a_command_list_refuses_a_null_state_before_anything_is_appended_even_when_an_earlier_command_folds_non_null() {
+            // When: Materialize folds to a non-null state, Vanish (the last command) folds to null. Both are decided
+            // as one unit and appended once, so the whole append is refused, not just Vanish's event.
+            Throwable thrown = catchThrowable(() -> deciderApplicationService.executeAndReturnState(List.of(new Materialize(), new Vanish()), nullFoldDcbDecider()).block());
+
+            // Then
+            assertThat(readNullFoldEvents()).as("nothing appended, not even Materialize's event").isEmpty();
+            assertThat(thrown).isInstanceOf(NullPointerException.class).hasMessageContaining("Mono cannot carry null");
         }
     }
 
@@ -293,6 +328,47 @@ class DcbDeciderApplicationServiceTest {
 
     private DcbDecider<NameCommand, String, DomainEvent> nameDcbDecider() {
         return DcbDecider.from(nameDecider(), command -> nameQuery("name"), event -> Set.of(tagFor(event)));
+    }
+
+    // Materialize folds to a non-null state, Vanish folds back to null, dedicated to the null-state refusal tests
+    // above and kept separate from the sealed NameCommand hierarchy above it.
+    private DcbDecider<NullFoldCommand, @Nullable String, DomainEvent> nullFoldDcbDecider() {
+        Decider<NullFoldCommand, @Nullable String, DomainEvent> decider = new Decider<>() {
+            @Override
+            public @Nullable String initialState() {
+                return null;
+            }
+
+            @NonNull
+            @Override
+            public List<DomainEvent> decide(@NonNull NullFoldCommand command, @Nullable String state) {
+                String marker = command instanceof Materialize ? "materialized" : "vanished";
+                return List.of(new NameWasChanged("event-" + UUID.randomUUID(), time, "nullfold", marker));
+            }
+
+            @Override
+            public @Nullable String evolve(@Nullable String state, @NonNull DomainEvent event) {
+                return event instanceof NameWasChanged nameWasChanged && "materialized".equals(nameWasChanged.name()) ? "materialized" : null;
+            }
+        };
+        return DcbDecider.from(decider, command -> nullFoldQuery(), event -> Set.of(Tag.of("nullfold", "nullfold")));
+    }
+
+    private List<DomainEvent> readNullFoldEvents() {
+        return converter.toDomainEvents(requireNonNull(eventStore.read(nullFoldQuery()).block()).events().stream()).toList();
+    }
+
+    private static DcbCriteria nullFoldQuery() {
+        return DcbCriteria.tags(Tag.of("nullfold", "nullfold"));
+    }
+
+    private sealed interface NullFoldCommand {
+    }
+
+    private record Materialize() implements NullFoldCommand {
+    }
+
+    private record Vanish() implements NullFoldCommand {
     }
 
     private void append(DomainEvent... events) {
