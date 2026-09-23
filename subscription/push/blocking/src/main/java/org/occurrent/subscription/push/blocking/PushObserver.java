@@ -51,7 +51,7 @@ import org.occurrent.subscription.RoutingOutcome;
  * <strong>A broker bridge feeding this model from outside the process, rather than the in-process write path
  * {@link PushSubscriptionModel#accept(CloudEvent)} serves, should call
  * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} instead.</strong> When this model is wrapped in a
- * {@link CatchupThenPushSubscriptionModel} still replaying or draining,
+ * {@link CatchupThenPushSubscriptionModel} that has not reached live yet,
  * {@code acceptRedeliverable(...)} refuses such an event outright rather than buffering it, reported
  * {@link RoutingOutcome#DEFERRED}, safe to redeliver and never a reason to acknowledge. {@code RabbitMqCloudEventBridge}
  * and {@code KafkaCloudEventBridge} do exactly this, and are correct with no further configuration:

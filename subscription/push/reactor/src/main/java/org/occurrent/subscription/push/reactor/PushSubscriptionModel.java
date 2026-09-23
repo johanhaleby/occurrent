@@ -84,9 +84,9 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
 
     /**
      * Creates a model that both answers a subscription filter on a {@code data} payload field through
-     * {@code dataFieldReader} and tells {@code observer} about every event {@link #accept(CloudEvent)} is asked to
-     * deliver, see {@link PushObserver}. Pass {@link DataFieldReader#refusing()} to get the observer without also
-     * answering a payload filter.
+     * {@code dataFieldReader} and reports to {@code observer} what {@link #accept(CloudEvent)} decided for an
+     * event it was asked to deliver, see {@link PushObserver} for the failures that skip that report altogether.
+     * Pass {@link DataFieldReader#refusing()} to get the observer without also answering a payload filter.
      */
     public PushSubscriptionModel(DataFieldReader dataFieldReader, PushObserver observer) {
         super(Consumers.ONE, dataFieldReader);
@@ -103,11 +103,13 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * the listener starts consuming. This model cannot refuse the event on your behalf, because it is also fed from
      * the write path, where the event is already durably stored and refusing would fail the write instead of
      * protecting anything. The domain-event feed, which is broker-only, does refuse. See ADR 104. A configured
-     * {@link PushObserver} is told the event's {@link RoutingOutcome} once delivery has been attempted, and that is
-     * where to get visibility into it instead. Told about the event even when a subscription's filter itself throws
+     * {@link PushObserver} is told the event's {@link RoutingOutcome}, and that is where to get visibility into it
+     * instead. It is not told at all when the filter or the matched action fails in a way this model does not
+     * catch, which {@link PushObserver} names. Told about the event even when a subscription's filter itself throws
      * a {@link RuntimeException} or {@link AssertionError} while being evaluated (a supplied {@link DataFieldReader}
      * can), reported as {@link RoutingOutcome#NOT_DELIVERABLE}, before that exception propagates as it always has.
-     * Another {@link Error} bypasses the observer and propagates directly, see {@link PushObserver}.
+     * An undeclared checked exception or another {@link Error} from that filter bypasses the observer and
+     * propagates directly, see {@link PushObserver}.
      *
      * @param cloudEvent The event received from the external source.
      * @return A {@link Mono} that completes when the handler has completed.

@@ -375,10 +375,13 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * decision and the report. Nothing registered, the model not running and the sole subscription being paused all
      * report {@link RoutingOutcome#UNAVAILABLE} and throw nothing, the same three states
      * {@link #route(CloudEvent)} already skips for dispatch. A filter that declines the event reports
-     * {@link RoutingOutcome#FILTERED}. The matcher itself throwing reports
-     * {@link RoutingOutcome#NOT_DELIVERABLE}, never {@link RoutingOutcome#FILTERED}, since a filter that failed to
-     * answer did not decline the event, and that throwing matcher's exception still propagates to the caller once
-     * {@code matchObserver} has been told. Whatever {@code matchObserver} itself then throws while being told,
+     * {@link RoutingOutcome#FILTERED}. The matcher itself throwing a {@link RuntimeException} or an
+     * {@link AssertionError} reports {@link RoutingOutcome#NOT_DELIVERABLE}, never
+     * {@link RoutingOutcome#FILTERED}, since a filter that failed to answer did not decline the event, and that
+     * throwing matcher's exception still propagates to the caller once {@code matchObserver} has been told. A
+     * matcher that fails any other way, an undeclared checked exception or an {@link Error} other than an
+     * {@link AssertionError}, propagates without {@code matchObserver} being told at all, exactly as an action
+     * failing those two ways does. Whatever {@code matchObserver} itself then throws while being told,
      * a checked exception included, is suppressed onto the matcher's original exception rather than replacing it,
      * so a badly behaved {@code matchObserver} can never change which exception, or whose, a caller sees.
      * <p>
@@ -405,10 +408,11 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      *
      * @param cloudEvent      The event to route.
      * @param bufferIfNotLive Passed through to the matched registration's {@link RoutingAction#route(CloudEvent, boolean)}
-     *                        unchanged; this method itself has no opinion on what it means.
+     *                        unchanged, and this method itself has no opinion on what it means.
      * @param matchObserver   Told this event's {@link RoutingOutcome} at most once, after its registration's
      *                        action (if any) has run, whether that action returned or threw. The paragraphs above
-     *                        name the two failures it is not told about at all.
+     *                        name the four failures it is not told about at all, two from the matcher and the same
+     *                        two from the action.
      */
     protected final void routeReportingMatch(CloudEvent cloudEvent, boolean bufferIfNotLive, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");

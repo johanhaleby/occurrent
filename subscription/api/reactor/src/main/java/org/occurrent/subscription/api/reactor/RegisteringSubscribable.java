@@ -369,10 +369,12 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * decision and the report. Nothing registered, the model not running and the sole subscription being paused all
      * report {@link RoutingOutcome#UNAVAILABLE} and throw nothing, the same three states
      * {@link #route(CloudEvent)} already skips for dispatch. A filter that declines the event reports
-     * {@link RoutingOutcome#FILTERED}. The matcher itself
-     * throwing reports {@link RoutingOutcome#NOT_DELIVERABLE}, never {@link RoutingOutcome#FILTERED}, since a
-     * filter that failed to answer did not decline the event, and that throwing matcher's exception still
-     * propagates once {@code matchObserver} has been told. Whatever {@code matchObserver} itself then throws while
+     * {@link RoutingOutcome#FILTERED}. The matcher itself throwing a {@link RuntimeException} or an
+     * {@link AssertionError} reports {@link RoutingOutcome#NOT_DELIVERABLE}, never
+     * {@link RoutingOutcome#FILTERED}, since a filter that failed to answer did not decline the event, and that
+     * throwing matcher's exception still propagates once {@code matchObserver} has been told. A matcher that fails
+     * any other way, an undeclared checked exception or an {@link Error} other than an {@link AssertionError},
+     * propagates without {@code matchObserver} being told at all. Whatever {@code matchObserver} itself then throws while
      * being told, a checked exception included, is suppressed onto the matcher's original exception rather than
      * replacing it, so a badly behaved {@code matchObserver} can never change which exception, or whose, a caller
      * sees.
@@ -399,7 +401,8 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * @param cloudEvent    The event to route.
      * @param matchObserver Told this event's {@link RoutingOutcome} at most once, after its registration's action
      *                      (if any) has run, whether that action completed, declined, or errored. The paragraphs
-     *                      above name the one failure it is not told about at all.
+     *                      above name the three failures it is not told about at all, two from the matcher and one
+     *                      from the action.
      * @return A {@link Mono} that completes when the action, if any ran, has completed.
      */
     protected final Mono<Void> routeReportingMatch(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
