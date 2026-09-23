@@ -18,8 +18,9 @@ a type no step in the flow declares still takes one of the step's N slots, and c
 step's own events to make room for itself. Two ways reach this in production. A `CloudEventTypeMapper`
 that collapses a whole domain hierarchy onto one CloudEvent type string does it without any filter
 override. A flow declaring only `PaymentReserved` derives the filter `eq("order-event")`, which
-matches every event in the hierarchy. An explicit `replacementFilter()` or `narrowingFilter()` wider
-than the flow's declared types does it deliberately.
+matches every event in the hierarchy. An explicit `replacementFilter()` wider than the flow's
+declared types does it deliberately. A `narrowingFilter()` cannot, because `SagaFilters` ANDs it with
+the filter derived from the flow's types, and those always include the start type.
 
 `stepWindow`'s own javadoc says it caps "the current step's own received events." The implementation
 did not agree with that claim for an event outside the flow's declared types, which is #773.
@@ -70,14 +71,15 @@ uncommon caller customization already covered by the store's warning.
 ### The consequence this has for #764
 
 Once a foreign-typed event no longer counts toward `stepWindow`, a step fed only foreign-typed
-events is not bounded by `stepWindow` at all, because nothing evicts an event that never counts.
+events is not bounded by `stepWindow` at all. A foreign-typed event is dropped only when a declared
+event that arrived after it is evicted, and such a step receives no declared event.
 This is the cost the issue itself named for this fix ("a retention rule with two kinds of entry in
 it"), not a new problem this ADR introduces.
 
-It reaches only flows that already opted into a wider surface than their own declared types. The
-default path, no `replacementFilter`, no `narrowingFilter`, no collapsing type mapper, can never
-deliver a foreign-typed event to `evolve` in the first place, because the subscription filter itself
-is derived from `eventTypes()`. And the 0.33.0 warning is untyped. It already counts every retained
+It reaches only flows that already opted into a wider surface than their own declared types. A
+flow with no `replacementFilter` and no collapsing type mapper can never deliver a foreign-typed
+event to `evolve` in the first place, because the subscription filter itself is derived from
+`eventTypes()`, and a `narrowingFilter` only adds a condition to that filter. And the 0.33.0 warning is untyped. It already counts every retained
 event, declared or foreign, so this exact growth is visible in production today regardless of what
 `stepWindow` bounds.
 
@@ -109,7 +111,8 @@ correction in the same change:
 
 - `Saga.replacementFilter()` stated the bug as the shipped cost of a wide selector. It now says a
   foreign event is retained but neither counts against `stepWindow` nor evicts a declared event, and
-  that nothing evicts it either, so it can grow what a step stores without limit.
+  that nothing evicts it as long as the step's own declared-type events stay within their cap, so it
+  can grow what a parked step stores without limit.
 - `FlowSaga.Builder.stepWindow(int)` did not previously say what "the current step's own received
   events" meant for a type the flow does not declare. It now states the scope directly and points at
   the store's warning as the residual signal.
@@ -125,8 +128,8 @@ flow that keeps receiving repeats of its own start type. 0.33.0 counted every re
 own fix keeps it bounded the same way. The gap the paragraph below describes existed only in the
 still-unreleased implementation this ADR's earlier decision produced, never in anything a 0.33.0
 caller observed, and closing it in the same unreleased change is what keeps that promise true. A flow
-without a `replacementFilter`, a `narrowingFilter`, or a collapsing type mapper sees no change from the
-widened-selector defect #773 targets either, since its subscription can never deliver a foreign-typed
+without a `replacementFilter` or a collapsing type mapper sees no change from the widened-selector
+defect #773 targets either, since its subscription can never deliver a foreign-typed
 event, so `isDeclared` was already true for everything else it receives.
 
 A flow that already widened its selector gets a genuine bug fix. `stepWindow` now keeps exactly N of
