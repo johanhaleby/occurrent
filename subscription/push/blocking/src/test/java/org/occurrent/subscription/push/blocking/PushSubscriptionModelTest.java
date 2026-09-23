@@ -512,7 +512,7 @@ class PushSubscriptionModelTest {
 
     @Test
     void an_observer_throwing_a_checked_exception_while_being_told_filtered_does_not_stop_the_batch() {
-        // The FILTERED report goes through the same notifyObserver as the delivered one, but from a call site with
+        // The FILTERED report goes through the same notifyObserver as the delivered one, but from a call site
         // that does not suppress what the observer throws onto another failure, and nothing covered a
         // throwing observer there.
         List<RoutingOutcome> observed = new ArrayList<>();

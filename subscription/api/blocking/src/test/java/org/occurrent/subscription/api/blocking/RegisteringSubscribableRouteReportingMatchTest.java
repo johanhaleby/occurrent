@@ -385,7 +385,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
      */
     @Test
     void an_action_that_throws_an_error_reports_nothing_and_that_error_still_propagates() {
-        Error actionFailure = new NotAVirtualMachineError();
+        Error actionFailure = new NotAnAssertionError();
         RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
         model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
             throw actionFailure;
@@ -430,11 +430,10 @@ class RegisteringSubscribableRouteReportingMatchTest {
                 .build();
     }
 
-    // A plain Error, deliberately not a VirtualMachineError, ThreadDeath or LinkageError: Reactor's
-    // Exceptions.throwIfFatal rethrows those three rather than turning them into an error signal, which
-    // would prove nothing about what matchObserver is told.
-    private static final class NotAVirtualMachineError extends Error {
-        NotAVirtualMachineError() {
+    // An Error the RuntimeException | AssertionError catch misses, and deliberately not a real
+    // VirtualMachineError or ThreadDeath, which are no better to throw from a test than from anywhere else.
+    private static final class NotAnAssertionError extends Error {
+        NotAnAssertionError() {
             super("the action failed with an Error");
         }
     }

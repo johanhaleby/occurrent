@@ -21,15 +21,20 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.RoutingOutcome;
 
 /**
- * Told about every event {@link PushSubscriptionModel#accept(CloudEvent)} is asked to deliver, once the matched
+ * Told about each event {@link PushSubscriptionModel#accept(CloudEvent)} is asked to deliver, once the matched
  * registration's action has run (or the model found no running, unpaused registration for it at all), so a
  * misconfigured queue binding, a missing declared event type or a type-mapping typo can be told apart from a saga
  * or projection that received an event and chose not to act on it. {@code accept(...)} itself stays silent about
- * all of these by design, see ADR 104.
+ * all of these by design, see ADR 104. A filter or an action that fails in a way this model does not catch skips
+ * this call entirely, and the paragraph below names those failures.
  * <p>
- * Called once per event, whether or not a handler ends up running. {@code outcome} is {@link RoutingOutcome#DELIVERED}
+ * The filter and the action are each run inside a catch of {@link RuntimeException} and {@link AssertionError}, so
+ * an undeclared checked exception or an {@link Error} other than an {@link AssertionError} from either one
+ * propagates with the observer never told. Every other event reaches this call once, whether or not a handler ends
+ * up running. {@code outcome} is {@link RoutingOutcome#DELIVERED}
  * only when the model is running, a currently registered, unpaused subscription's filter accepted the event, and
- * the registration's action genuinely ran, independent of whether that action goes on to succeed or throw. It is
+ * the registration's action genuinely ran rather than refusing the event before attempting it, independent of
+ * whether that action then succeeds or throws a {@link RuntimeException} or an {@link AssertionError}. It is
  * {@link RoutingOutcome#FILTERED} when that same subscription evaluated the event and declined it, and
  * {@link RoutingOutcome#UNAVAILABLE} when there was no running, unpaused subscription for the event to reach at
  * all, whether because nothing is registered, the model is stopped, or the subscription is paused. A caller
@@ -60,8 +65,8 @@ import org.occurrent.subscription.RoutingOutcome;
  * it matched. A {@link RuntimeException} or {@link AssertionError} is reported to the observer as
  * {@link RoutingOutcome#NOT_DELIVERABLE} instead, standing in for the answer that never came, never as
  * {@link RoutingOutcome#FILTERED}, since a filter that failed to answer did not decline the event. That exception
- * still propagates after the observer has been told. Any other {@link Error} skips the observer entirely and
- * propagates straight out.
+ * still propagates after the observer has been told. Any other failure, an undeclared checked exception or an
+ * {@link Error} other than an {@link AssertionError}, skips the observer entirely and propagates straight out.
  * <p>
  * Whatever it is being told, the real outcome or a filter's own failure, any {@link Exception} the observer
  * throws, a checked one included, is caught and logged rather than propagated, and so is an
