@@ -465,9 +465,11 @@ class PushSubscriptionModelTest {
 
     @Test
     void a_report_in_a_batch_does_not_run_on_the_calling_thread() {
-        // routeReportingMatch returns a Mono.defer(..), so a report runs on whichever thread subscribes, which is
-        // why an interrupt flag a report sets cannot be promised to the caller. The delay keeps this off a race
-        // with the calling thread's own drain loop, since the caller is parked in block() once the handler ends.
+        // Event 1's DELIVERED is decided in the flatMap, on the thread the handler's Mono signalled. Event 2's
+        // FILTERED is decided in the defer body, subscribed by concatMap on the thread event 1 finished on. Both
+        // mechanisms run off the caller, which is why an interrupt flag a report sets cannot be promised to it.
+        // The delay keeps this off a race with the calling thread's own drain loop, since the caller is parked in
+        // block() once the handler ends.
         String callingThread = Thread.currentThread().getName();
         List<String> reportThreads = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),

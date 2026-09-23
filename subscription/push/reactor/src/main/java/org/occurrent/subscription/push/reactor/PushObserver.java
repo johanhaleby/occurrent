@@ -64,16 +64,19 @@ import org.occurrent.subscription.RoutingOutcome;
  * from being routed.
  * <p>
  * An {@link InterruptedException} is caught like any other, and the interrupt flag is set again on whichever
- * thread ran the observer. Every report runs on whichever thread subscribed to the {@link PushSubscriptionModel}'s
- * {@link reactor.core.publisher.Mono}, which is the thread that called {@code accept(..)} only when nothing
- * upstream moved the work off it. A registered handler whose own {@link reactor.core.publisher.Mono} publishes on
- * a scheduler of its own has the flag set on that scheduler's worker, and in a batch so do the reports for every
- * event after it. A pooled worker clears a stray flag before its next task, so the caller may never see an
- * interrupt the observer raised. An observer that needs one to reach the caller has to record it itself.
+ * thread ran the observer. Which thread that is depends on the report. The ones decided before the registered
+ * handler is dispatched, {@link RoutingOutcome#UNAVAILABLE}, {@link RoutingOutcome#FILTERED} and a filter
+ * failure's {@link RoutingOutcome#NOT_DELIVERABLE}, run on the thread that subscribed. The ones decided after it,
+ * {@link RoutingOutcome#DELIVERED}, {@link RoutingOutcome#DEFERRED} and a refusal's own outcome, run on whichever
+ * thread that handler's {@link reactor.core.publisher.Mono} signalled on. In a batch, the subscription for one
+ * event happens on the thread the event before it finished on.
+ * <p>
+ * A pooled worker clears a stray flag before its next task, so the caller may never see an interrupt the observer
+ * raised. An observer that needs one to reach the caller has to record it itself.
  * <p>
  * Any other {@link Error} the observer throws is not caught. Where it goes next depends on whether the model
  * already had a failure of its own to propagate, not on which outcome the observer was told. Reported alongside
- * such a failure, a filter that threw, an action that errored, or an action that refused the event, the observer's
+ * such a failure, whether it came from the filter, the handler or a refusal, the observer's
  * {@link Error} is attached to it through {@link Throwable#addSuppressed(Throwable)} and that failure is what
  * propagates, so a failure is never replaced by a failure in reporting it. Reported with nothing else in flight,
  * it propagates on its own. {@link RoutingOutcome#DELIVERED} reaches the observer both ways, since an action that
