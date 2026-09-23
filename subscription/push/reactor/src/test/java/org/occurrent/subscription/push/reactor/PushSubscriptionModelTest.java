@@ -34,6 +34,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -350,6 +351,29 @@ class PushSubscriptionModelTest {
                         .hasMessage("payload assertion failed"));
 
         assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
+    }
+
+    @Test
+    void the_observer_is_told_nothing_when_evaluating_the_filter_throws_a_checked_exception() {
+        // The two tests above cover what the RuntimeException | AssertionError catch around the filter reaches. A
+        // DataFieldReader written in Kotlin can throw a checked exception it never declared, which that catch
+        // misses, so the observer is not told at all. The PushObserver javadoc says so, and this is what holds it
+        // to that rather than a reading of the catch clause.
+        List<RoutingOutcome> outcomes = new ArrayList<>();
+        Exception checked = new IOException("payload unreadable");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            sneakyThrow(checked);
+            return Optional.empty();
+        };
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader,
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> Mono.empty());
+
+        StepVerifier.create(model.accept(cloudEvent("1", "NameDefined")))
+                .verifyErrorMatches(error -> error == checked);
+
+        assertThat(outcomes).as("the catch around the filter misses a checked exception, so nothing is reported")
+                .isEmpty();
     }
 
     @Test
