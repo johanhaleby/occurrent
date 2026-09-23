@@ -511,6 +511,54 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void an_observer_throwing_a_checked_exception_while_being_told_filtered_does_not_stop_the_batch() {
+        // The FILTERED report goes through the same notifyObserver as the delivered one, but from a call site with
+        // that does not suppress what the observer throws onto another failure, and nothing covered a
+        // throwing observer there.
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Exception checked = new IOException("observer failed");
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> {
+                    observed.add(outcome);
+                    sneakyThrow(checked);
+                });
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.type("SomethingElseHappened")), cloudEvent -> {
+        });
+
+        Throwable thrown = catchThrowable(() -> model.accept(List.of(
+                cloudEvent("1", "NameDefined"), cloudEvent("2", "NameDefined"), cloudEvent("3", "NameDefined"))));
+
+        assertThat(observed).as("every event in the batch is still evaluated although the observer threw")
+                .containsExactly(FILTERED, FILTERED, FILTERED);
+        assertThat(thrown).as("the observer failure does not reach the caller, which would tell a broker to redeliver")
+                .isNull();
+    }
+
+    @Test
+    void an_observer_throwing_a_checked_exception_while_being_told_unavailable_does_not_stop_the_batch() {
+        // The paused call site, which reports UNAVAILABLE before the matcher runs at all, is a third unguarded
+        // notifyObserver call and was uncovered for a throwing observer too.
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Exception checked = new IOException("observer failed");
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> {
+                    observed.add(outcome);
+                    sneakyThrow(checked);
+                });
+        model.subscribe("sub", cloudEvent -> {
+        });
+        model.pauseSubscription("sub");
+
+        Throwable thrown = catchThrowable(() -> model.accept(List.of(
+                cloudEvent("1", "NameDefined"), cloudEvent("2", "NameDefined"), cloudEvent("3", "NameDefined"))));
+
+        assertThat(observed).as("every event in the batch is still evaluated although the observer threw")
+                .containsExactly(UNAVAILABLE, UNAVAILABLE, UNAVAILABLE);
+        assertThat(thrown).as("the observer failure does not reach the caller, which would tell a broker to redeliver")
+                .isNull();
+    }
+
+    @Test
     void a_batch_stops_observing_once_a_handler_throws() {
         List<String> observed = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),

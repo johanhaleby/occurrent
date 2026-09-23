@@ -55,8 +55,11 @@ import org.occurrent.subscription.RoutingOutcome;
  * throws, a checked one included, is caught and logged rather than propagated, and so is an
  * {@link AssertionError}, so a broken observer cannot turn an event that was actually delivered into a broker
  * redelivery, and cannot stop the events after it in the same batch from being routed. That much is the same
- * either way. An {@link InterruptedException} is caught like any other, and the calling thread is left
- * interrupted so the caller can act on it. Any other {@link Error} the observer throws is not caught, and where it
+ * either way. An {@link InterruptedException} is caught like any other, and the interrupt flag is set again on
+ * whichever thread ran the observer, so the interrupt is not lost. That is the thread that called
+ * {@code accept(..)} only when nothing upstream moved the work off it. A registered handler whose
+ * {@link reactor.core.publisher.Mono} publishes on a scheduler of its own has the flag set on that scheduler's
+ * worker instead, for the rest of the task that worker is running. Any other {@link Error} the observer throws is not caught, and where it
  * goes next depends on what it was being told.
  * Told the real outcome, that {@link Error} propagates on its own, once the observer has already run. Told about a
  * filter's own failure instead, it is attached to that filter's error through

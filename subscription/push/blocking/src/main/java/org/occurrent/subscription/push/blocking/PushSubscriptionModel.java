@@ -151,7 +151,8 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * <p>
      * Drops the batch when no subscription is registered, with the caveat {@link #accept(CloudEvent)} describes. An
      * event whose predecessor's handler threw is neither observed nor routed, since the batch stops there. An
-     * observer throwing is different, and stops nothing, see {@link PushObserver}.
+     * observer throwing stops nothing, apart from an {@link Error} other than an {@link AssertionError}, which
+     * stops the batch the way a handler's would, see {@link PushObserver}.
      *
      * @param cloudEvents The events received from the external source.
      */

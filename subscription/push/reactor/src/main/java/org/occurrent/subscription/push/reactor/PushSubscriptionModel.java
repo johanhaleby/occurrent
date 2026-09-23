@@ -122,7 +122,8 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * <p>
      * Drops the batch when no subscription is registered, with the caveat {@link #accept(CloudEvent)} describes. An
      * event whose predecessor's handler errored is neither observed nor routed, since the batch stops there. An
-     * observer throwing is different, and stops nothing, see {@link PushObserver}.
+     * observer throwing stops nothing, apart from an {@link Error} other than an {@link AssertionError}, which
+     * stops the batch the way a handler's would, see {@link PushObserver}.
      *
      * @param cloudEvents The events received from the external source.
      * @return A {@link Mono} that completes when every event has been dispatched.
@@ -165,7 +166,14 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
         try {
             observer.observe(cloudEvent, outcome);
         } catch (Exception | AssertionError e) {
-            // Catching an Exception means catching an InterruptedException, so the interrupt is set again
+            // Catching an Exception means catching an InterruptedException, so the interrupt is set again. Unlike
+            // the blocking stack, this is not always the thread that called accept(..), since it runs inside
+            // the pipeline routeReportingMatch assembles, so a registered handler whose Mono publishes on another
+            // scheduler puts it on that scheduler's worker. Setting it anyway beats swallowing it. The flag is the
+            // only remaining record that the observer was interrupted, the UNAVAILABLE, FILTERED and
+            // NOT_DELIVERABLE reports do run on the calling thread, and Schedulers.boundedElastic() and
+            // Schedulers.parallel() are both backed by a ScheduledThreadPoolExecutor, whose runWorker clears a
+            // stray interrupt flag before each task, so it cannot reach the unrelated work that worker runs next.
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }

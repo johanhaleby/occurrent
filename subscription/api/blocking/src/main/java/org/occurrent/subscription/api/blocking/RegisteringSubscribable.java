@@ -382,11 +382,13 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * a checked exception included, is suppressed onto the matcher's original exception rather than replacing it,
      * so a badly behaved {@code matchObserver} can never change which exception, or whose, a caller sees.
      * <p>
-     * A matched registration's {@link RoutingAction} is always told this event was matched, even when it later
-     * throws: {@code matchObserver} is told {@link RoutingOutcome#DELIVERED}, since the action was genuinely
+     * A matched registration's {@link RoutingAction} throwing a {@link RuntimeException} or an
+     * {@link AssertionError} is still reported {@link RoutingOutcome#DELIVERED}, since the action was genuinely
      * invoked, which is what {@link RoutingOutcome#DELIVERED} has always meant regardless of what the action does
-     * with the event afterward, and the original {@link RuntimeException} then still propagates to the caller once
-     * {@code matchObserver} has been told. An engine-level refusal a {@link RoutingAction} makes deliberately, by
+     * with the event afterward, and that exception then still propagates to the caller once {@code matchObserver}
+     * has been told. An action that fails any other way, an undeclared checked exception or an {@link Error} other
+     * than an {@link AssertionError}, propagates without {@code matchObserver} being told at all. An engine-level
+     * refusal a {@link RoutingAction} makes deliberately, by
      * returning {@code false} rather than throwing, is a different thing entirely and is what decides
      * {@link RoutingOutcome#DEFERRED} instead.
      * <p>
@@ -404,8 +406,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * @param cloudEvent      The event to route.
      * @param bufferIfNotLive Passed through to the matched registration's {@link RoutingAction#route(CloudEvent, boolean)}
      *                        unchanged; this method itself has no opinion on what it means.
-     * @param matchObserver   Told, once, this event's {@link RoutingOutcome}, after its registration's action (if
-     *                        any) has run, whether that action returned or threw.
+     * @param matchObserver   Told this event's {@link RoutingOutcome} at most once, after its registration's
+     *                        action (if any) has run, whether that action returned or threw. The paragraphs above
+     *                        name the two failures it is not told about at all.
      */
     protected final void routeReportingMatch(CloudEvent cloudEvent, boolean bufferIfNotLive, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
