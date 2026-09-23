@@ -24,10 +24,10 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * One saga instance's record of the input it is failing on. Which input, where in the subscription it sits, when the
- * instance started failing, and what came out of the saga. Where a quarantine budget is in force, the runner tries to
- * write it on the instance's first failure, and it survives every later failure, which is what lets the executor
- * measure how long the failing has lasted rather than count attempts. Where no budget is in force the runner does not
- * write it, so an instance can be failing without one, see {@link SagaInstance#failure()}.
+ * instance started failing, and what came out of the saga. The runner can write it when an event fails for the
+ * instance, and it survives every later failure, which is what lets the executor measure how long the failing has
+ * lasted rather than count attempts. Several ways of failing write nothing, a failing timeout among them, so an
+ * instance can be failing without one. {@link SagaStatus#QUARANTINED} lists which ways those are.
  * <p>
  * {@code input} names the input the instance is failing on <em>now</em>, while {@code firstFailedAt} is when the
  * instance started failing, which is not always the same moment. An instance where two inputs fail in turn has the
@@ -58,7 +58,8 @@ import static java.util.Objects.requireNonNull;
  *                       none, in which case {@code input} holds its stream id and version instead
  * @param firstFailedAt  when this instance started failing, which is when the quarantine budget started running. Not
  *                       necessarily when {@code input} first failed, see above. Strictly it is when the first failure
- *                       was recorded, which is the same moment unless that write lost its compare-and-set, and
+ *                       was recorded, and the instance may have been failing for longer, because several ways of
+ *                       failing record nothing, a lost compare-and-set on that write among them.
  *                       <a href="https://github.com/johanhaleby/occurrent/issues/977">#977</a> covers the case where
  *                       those writes keep losing
  * @param failureType    the class name of the exception the saga or its dispatcher threw

@@ -1429,12 +1429,33 @@ class BlockingHandoverTest {
     // than replacing it, and the replay failure is still recorded, whatever kind of exception the drain threw.
     @Test
     void a_checked_exception_draining_the_buffer_after_a_failed_replay_does_not_keep_the_failure_from_being_recorded() {
-        assertThatADrainFailureAfterAFailedReplayLeavesTheFailureRecorded(new IOException("the view is down"));
+        RuntimeException replayFailure = new IllegalStateException("replay boom");
+        Exception drainFailure = new IOException("the view is down");
+
+        assertThatADrainFailureAfterAFailedReplayLeavesTheFailureRecorded(replayFailure, drainFailure);
+
+        assertThat(replayFailure.getSuppressed()).containsExactly(drainFailure);
     }
 
     @Test
     void a_runtime_exception_draining_the_buffer_after_a_failed_replay_does_not_keep_the_failure_from_being_recorded() {
-        assertThatADrainFailureAfterAFailedReplayLeavesTheFailureRecorded(new IllegalStateException("the view is down"));
+        RuntimeException replayFailure = new IllegalStateException("replay boom");
+        Exception drainFailure = new IllegalStateException("the view is down");
+
+        assertThatADrainFailureAfterAFailedReplayLeavesTheFailureRecorded(replayFailure, drainFailure);
+
+        assertThat(replayFailure.getSuppressed()).containsExactly(drainFailure);
+    }
+
+    // A view that throws one shared exception object, a Kotlin object declaration or a cached instance, throws the
+    // same instance from the replay and from the drain. Java refuses to suppress an exception under itself.
+    @Test
+    void the_same_exception_instance_from_the_replay_and_the_drain_does_not_keep_the_failure_from_being_recorded() {
+        RuntimeException sharedFailure = new IllegalStateException("the view is down");
+
+        assertThatADrainFailureAfterAFailedReplayLeavesTheFailureRecorded(sharedFailure, sharedFailure);
+
+        assertThat(sharedFailure.getSuppressed()).isEmpty();
     }
 
     @Test
@@ -1480,11 +1501,10 @@ class BlockingHandoverTest {
         assertThat(delivered).containsExactly("R1");
     }
 
-    private static void assertThatADrainFailureAfterAFailedReplayLeavesTheFailureRecorded(Exception drainFailure) {
+    private static void assertThatADrainFailureAfterAFailedReplayLeavesTheFailureRecorded(RuntimeException replayFailure, Exception drainFailure) {
         List<String> log = new ArrayList<>();
         AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
         AtomicBoolean offered = new AtomicBoolean();
-        RuntimeException replayFailure = new IllegalStateException("replay boom");
         BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
             if (payload.equals("R2")) {
                 throw replayFailure;
@@ -1507,7 +1527,7 @@ class BlockingHandoverTest {
                 .isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
                 .hasCauseReference(replayFailure);
         assertThat(thrownByCatchUp).isSameAs(replayFailure);
-        assertThat(replayFailure.getSuppressed()).containsExactly(drainFailure);
+        assertThat(handover.refusesPermanently()).isTrue();
         assertThat(log).containsExactly("R1");
     }
 

@@ -674,7 +674,13 @@ public final class BlockingHandover<T, K> {
                 try {
                     deliverBufferAndGoLive();
                 } catch (Throwable deliveryFailure) {
-                    e.addSuppressed(deliveryFailure);
+                    // Skip the instance itself. A view can throw one shared exception object from both the replay and
+                    // the drain, and addSuppressed refuses to suppress an exception under itself. The
+                    // IllegalArgumentException it throws would escape before the failure below is recorded, and the
+                    // drain has already gone live, so later live events would be applied and acknowledged.
+                    if (deliveryFailure != e) {
+                        e.addSuppressed(deliveryFailure);
+                    }
                 }
             }
             synchronized (lock) {

@@ -21,6 +21,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -255,6 +256,65 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         assertThatThrownBy(() -> ReactiveSnapshotDcbDecider.from(dcbDecider, store, options, null))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("keyFunction");
+    }
+
+    @Test
+    void executeAndReturnState_with_a_single_command_refuses_a_null_state_before_anything_is_written() {
+        var account = ReactiveSnapshotDcbDecider.from(foldsToNullDcbDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        assertThatThrownBy(() -> service.executeAndReturnState(new Delete(), account).block(TIMEOUT))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("Mono cannot carry null");
+
+        assertThat(eventStore.count(criteria()).block(TIMEOUT)).as("nothing appended for a refused null state").isZero();
+    }
+
+    @Test
+    void executeAndReturnState_with_a_command_list_also_refuses_a_null_state_before_anything_is_written() {
+        var account = ReactiveSnapshotDcbDecider.from(foldsToNullDcbDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        assertThatThrownBy(() -> service.executeAndReturnState(List.of(new Delete()), account).block(TIMEOUT))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("Mono cannot carry null");
+
+        assertThat(eventStore.count(criteria()).block(TIMEOUT)).as("nothing appended for a refused null state").isZero();
+    }
+
+    @Test
+    void executeAndReturnDecision_still_allows_a_null_state_and_the_append_is_committed() {
+        var account = ReactiveSnapshotDcbDecider.from(foldsToNullDcbDecider(time), store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        Decider.Decision<@Nullable String, DomainEvent> decision = service.executeAndReturnDecision(new Delete(), account).block(TIMEOUT);
+
+        assertAll(
+                () -> assertThat(decision).isNotNull(),
+                () -> assertThat(decision.state()).isNull(),
+                () -> assertThat(eventStore.count(criteria()).block(TIMEOUT)).as("the committed append").isEqualTo(1L)
+        );
+    }
+
+    private static DcbDecider<Delete, @Nullable String, DomainEvent> foldsToNullDcbDecider(LocalDateTime time) {
+        Decider<Delete, @Nullable String, DomainEvent> decider = new Decider<>() {
+            @Override
+            public @Nullable String initialState() {
+                return "";
+            }
+
+            @NonNull
+            @Override
+            public List<DomainEvent> decide(@NonNull Delete command, @Nullable String state) {
+                return List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "DELETED"));
+            }
+
+            @Override
+            public @Nullable String evolve(@Nullable String state, @NonNull DomainEvent event) {
+                return null;
+            }
+        };
+        return DcbDecider.from(decider, command -> criteria(), event -> Set.of(tag()));
+    }
+
+    private record Delete() {
     }
 
     private void appendOutOfBand(DomainEvent event) {

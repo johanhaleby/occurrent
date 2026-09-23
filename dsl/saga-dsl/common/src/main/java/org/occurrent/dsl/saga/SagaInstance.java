@@ -49,10 +49,10 @@ public interface SagaInstance {
     /**
      * The input this instance is failing on, or {@code null} when no failure has been recorded for it.
      * <p>
-     * A {@code null} answer does not mean the instance is not failing. The runner records a failure only while a
-     * quarantine budget is in force, and it switches the budget off at startup on a subscription model that cannot
-     * guarantee it holds every event it delivers, as {@link SagaStatus#QUARANTINED} lists. On such a model an instance
-     * can fail on every delivery and still answer {@code null} here with an {@link SagaStatus#ACTIVE} status.
+     * A {@code null} answer does not mean the instance is not failing. Several ways of failing record nothing, a
+     * failing timeout among them, so an instance can fail on every delivery and every timer poll and still answer
+     * {@code null} here with an {@link SagaStatus#ACTIVE} status. {@link SagaStatus#QUARANTINED} lists which ways
+     * those are.
      * <p>
      * A non-null answer with a {@link SagaStatus#ACTIVE} status means an input has failed at least once and the
      * instance has not been quarantined. The budget may still be running or may have run out, since reaching it is not
