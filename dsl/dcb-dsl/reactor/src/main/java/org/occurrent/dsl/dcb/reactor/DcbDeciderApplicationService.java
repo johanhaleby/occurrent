@@ -107,6 +107,37 @@ public final class DcbDeciderApplicationService<E> {
      * Execute {@code commands} and emit the folded state plus the new events decided by {@code dcbDecider}.
      */
     public <C, S extends @Nullable Object> Mono<Decider.Decision<S, E>> executeAndReturnDecision(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
+        return doExecuteAndReturnDecision(commands, dcbDecider, false);
+    }
+
+    /**
+     * Execute a single command and emit the folded state after the decision. The state is bound to a non-null type
+     * because a {@link Mono} cannot carry a null value. A decider that folds to null is refused before anything is
+     * appended. Use {@link #executeAndReturnDecision} for a nullable state.
+     */
+    public <C, S> Mono<S> executeAndReturnState(C command, DcbDecider<C, S, E> dcbDecider) {
+        return doExecuteAndReturnState(List.of(command), dcbDecider);
+    }
+
+    /**
+     * Execute {@code commands} and emit the folded state after the decision. The commands are decided as one unit
+     * and appended once, so only the state after the last command is checked. If that state is null, nothing is
+     * appended, not even the events the earlier commands decided. See {@link #executeAndReturnState(Object, DcbDecider)}.
+     */
+    public <C, S> Mono<S> executeAndReturnState(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
+        return doExecuteAndReturnState(commands, dcbDecider);
+    }
+
+    private <C, S> Mono<S> doExecuteAndReturnState(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
+        return doExecuteAndReturnDecision(commands, dcbDecider, true).map(Decider.Decision::state);
+    }
+
+    // A Mono cannot carry null, so a null folded state fails fast with guidance instead of a bare NPE from Reactor.
+    private static <S, E> S requireNonNullState(Decider.Decision<S, E> decision) {
+        return Objects.requireNonNull(decision.state(), "The decider produced a null state, but a Mono cannot carry null. Use executeAndReturnDecision for a nullable state.");
+    }
+
+    private <C, S extends @Nullable Object> Mono<Decider.Decision<S, E>> doExecuteAndReturnDecision(List<C> commands, DcbDecider<C, S, E> dcbDecider, boolean refuseNullState) {
         // Deferred so the AtomicReference is created per subscription. A shared reference would let concurrent or
         // repeat subscribers see each other's decision.
         return Mono.defer(() -> {
@@ -115,25 +146,16 @@ public final class DcbDeciderApplicationService<E> {
             AtomicReference<Decider.Decision<S, E>> decision = new AtomicReference<>();
             return applicationService.execute(criteria, options, events -> {
                 Decider.Decision<S, E> result = dcbDecider.decider().decideOnEvents(events, commands);
+                // The decision is known before this function returns, which is before the application service
+                // appends anything, so refusing a null state here (rather than after the append) keeps a rejected
+                // command from ever being committed.
+                if (refuseNullState) {
+                    requireNonNullState(result);
+                }
                 decision.set(result);
                 return result.events();
             }).then(Mono.fromCallable(() -> Objects.requireNonNull(decision.get(), "The decider produced no decision")));
         });
-    }
-
-    /**
-     * Execute a single command and emit the folded state after the decision. The state is bound to a non-null type
-     * because a {@link Mono} cannot carry a null value, use {@link #executeAndReturnDecision} for a nullable state.
-     */
-    public <C, S> Mono<S> executeAndReturnState(C command, DcbDecider<C, S, E> dcbDecider) {
-        return executeAndReturnDecision(command, dcbDecider).map(Decider.Decision::state);
-    }
-
-    /**
-     * Execute {@code commands} and emit the folded state after the decision.
-     */
-    public <C, S> Mono<S> executeAndReturnState(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
-        return executeAndReturnDecision(commands, dcbDecider).map(Decider.Decision::state);
     }
 
     /**
