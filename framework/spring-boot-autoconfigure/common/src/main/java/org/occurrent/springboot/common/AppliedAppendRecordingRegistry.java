@@ -54,9 +54,11 @@ public final class AppliedAppendRecordingRegistry {
     }
 
     /**
-     * @param initial    the interval a newly registered projection, or one just seen replaying, is next due at.
-     * @param max        the interval growth is capped at once a projection has stayed live for a while.
-     * @param multiplier what the interval is multiplied by after each tick that found the projection live.
+     * @param initial    the interval a newly registered projection, or one whose last tick had something to react
+     *                   to, is next due at.
+     * @param max        the interval growth is capped at once a projection's ticks have found nothing to react to
+     *                   for a while.
+     * @param multiplier what the interval is multiplied by after each tick that found nothing to react to.
      * @throws IllegalArgumentException if {@code initial} or {@code max} is zero or negative, if {@code initial}
      *                                   exceeds {@code max}, or if {@code multiplier} is below 1.0 (this also
      *                                   catches {@code NaN}, since every comparison against it except {@code !=}

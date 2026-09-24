@@ -531,9 +531,10 @@ class FlowSagaTest {
 
         /**
          * A type no step below ever declares, in any branch or window-condition leaf, so {@code eventTypes()} never
-         * names it. Simulates what a caller reaches through a {@code narrowingFilter}/{@code replacementFilter} wider
-         * than the flow's own types, or a collapsing {@code CloudEventTypeMapper}: correlated and appended, but never
-         * counted or evicted by {@code stepWindow}.
+         * names it. Simulates what a caller reaches through a {@code replacementFilter} wider than the flow's own
+         * types, or a collapsing {@code CloudEventTypeMapper}. Correlated and appended, never counted by
+         * {@code stepWindow}, and {@code stepWindow} drops it only together with a declared event that arrived after
+         * it. {@code historyWindow} can also drop it on a later transition, once its step has been left.
          */
         record Untracked(String id) implements CapEvent {
         }
@@ -716,9 +717,9 @@ class FlowSagaTest {
         }
 
         @Test
-        void an_event_of_a_type_no_step_declares_is_retained_but_never_counted_or_evicted() {
-            // Untracked stands in for whatever reaches evolve through a narrowingFilter/replacementFilter wider than
-            // this flow's own types, or a collapsing CloudEventTypeMapper: no branch anywhere names it.
+        void an_event_of_a_type_no_step_declares_is_retained_and_does_not_count_against_the_cap() {
+            // Untracked stands in for whatever reaches evolve through a replacementFilter wider than this flow's own
+            // types, or a collapsing CloudEventTypeMapper. No branch anywhere names it.
             Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(2, new ArrayList<>());
             FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
 

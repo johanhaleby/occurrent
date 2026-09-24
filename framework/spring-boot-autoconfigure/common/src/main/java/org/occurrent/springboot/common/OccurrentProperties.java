@@ -855,14 +855,15 @@ public class OccurrentProperties {
             private WaitBackoffProperties waitBackoff = new WaitBackoffProperties();
 
             /**
-             * How the {@code @Projection(recordAppliedAppends = true)} registrars pace the scheduled poll that
-             * notices a replay whose deliveries are all filtered out server-side, where no delivery ever reaches the
-             * recording wrapper to notice the replay itself
-             * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>
-             * decision 7). A replay entirely between two ticks, delivering nothing this projection handles, is
-             * missed by this poll too, an accepted residual decision 7 documents rather than closes. {@code max} is
-             * how sparse this poll's own sampling ever becomes. Unrelated to {@link #waitBackoff}, which paces a
-             * caller's wait for an append to show up, not this poll.
+             * How the {@code @Projection(recordAppliedAppends = true)} registrars pace their scheduled poll. When a
+             * catch-up starts, the projection's recorded appends are marked for deletion, and the next delivery or poll
+             * tick tries to delete them. If the store fails, each later delivery or tick tries again, and recording
+             * stays off until one succeeds. For a projection that gets no delivery, the poll makes the first attempt
+             * at deleting them (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>
+             * decision 7). For a subscription model that cannot tell the projection when a catch-up starts and ends,
+             * the poll also asks the model whether it is catching up, so a catch-up that starts and ends between two
+             * ticks goes unnoticed, a limit decision 7 accepts. {@code max} is the longest interval between two
+             * ticks. Unrelated to {@link #waitBackoff}, which paces a caller's wait for an append to show up.
              */
             private ReplayPollProperties replayPoll = new ReplayPollProperties();
 
@@ -915,8 +916,8 @@ public class OccurrentProperties {
             public static class WaitBackoffProperties {
 
                 /**
-                 * The interval before the first re-check of whether the append has been applied. Kept short so a
-                 * projection that has already applied it answers immediately.
+                 * The interval before the first re-check of whether the append has been applied. Kept short so an
+                 * append the projection applies just after the first check is seen soon after.
                  */
                 private Duration initial = Duration.ofMillis(25);
 
@@ -960,18 +961,22 @@ public class OccurrentProperties {
             public static class ReplayPollProperties {
 
                 /**
-                 * The poll interval for a projection that has just registered, or was just seen replaying. Kept
-                 * short so a replay whose deliveries are all filtered out is still noticed quickly.
+                 * The poll interval for a projection that has just registered, and the one a tick goes back to
+                 * whenever it finds a clear still owed or, for a model that has to be polled, a catch-up still
+                 * running. Kept short so a failed clear is retried soon and a polled catch-up's end is seen soon after
+                 * it happens. A model that sends catch-up signals does not rely on the poll to notice a replay. For
+                 * a model that has to be polled, a catch-up that starts and ends between two ticks is missed.
                  */
                 private Duration initial = Duration.ofMillis(200);
 
                 /**
-                 * The longest the interval grows to, for a projection that has been live for a while.
+                 * The longest the interval grows to, for a projection whose ticks have found nothing to react to
+                 * for a while.
                  */
                 private Duration max = Duration.ofSeconds(5);
 
                 /**
-                 * What the interval is multiplied by after each poll that found the projection live.
+                 * What the interval is multiplied by after each tick that found nothing to react to.
                  */
                 private double multiplier = 2.0;
 

@@ -18,8 +18,9 @@ a type no step in the flow declares still takes one of the step's N slots, and c
 step's own events to make room for itself. Two ways reach this in production. A `CloudEventTypeMapper`
 that collapses a whole domain hierarchy onto one CloudEvent type string does it without any filter
 override. A flow declaring only `PaymentReserved` derives the filter `eq("order-event")`, which
-matches every event in the hierarchy. An explicit `replacementFilter()` or `narrowingFilter()` wider
-than the flow's declared types does it deliberately.
+matches every event in the hierarchy. An explicit `replacementFilter()` wider than the flow's
+declared types does it deliberately. A `narrowingFilter()` cannot, because `SagaFilters` ANDs it with
+the filter derived from the flow's types, and those always include the start type.
 
 `stepWindow`'s own javadoc says it caps "the current step's own received events." The implementation
 did not agree with that claim for an event outside the flow's declared types, which is #773.
@@ -48,10 +49,11 @@ per-step set unless some step also declares it in its own right, the same way a 
 has started, a retained repeat of the start type counts as declared for the cap and the eviction
 walk, the same way one of a step's own declared-type events does, because a repeat of the event that
 created the instance is not the kind of foreign traffic this decision means to leave uncapped. A
-correlated event of any other type is still appended to `received()`, never silently dropped, but it
-neither counts toward the N-event budget nor evicts one of the step's own events by itself. It is
-swept up only as a byproduct of the window advancing past it while dropping enough declared events
-ahead of it to satisfy the cap.
+correlated event of any other type is still appended to `received()` rather than dropped on arrival,
+but it neither counts toward the N-event budget nor evicts one of the step's own events by itself.
+`stepWindow` drops it only when the window advances past it to evict a declared event that arrived
+after it. `historyWindow` can also drop it on a later transition, once the step it arrived in has
+been left, because that drop does not look at an event's type.
 
 The alternative the issue also named, discarding the foreign event before it is ever appended, was
 rejected. Nothing else in the codebase silently drops an event that genuinely arrived and correlated
@@ -70,14 +72,17 @@ uncommon caller customization already covered by the store's warning.
 ### The consequence this has for #764
 
 Once a foreign-typed event no longer counts toward `stepWindow`, a step fed only foreign-typed
-events is not bounded by `stepWindow` at all, because nothing evicts an event that never counts.
+events is not bounded by `stepWindow` at all. `stepWindow` drops a foreign-typed event only when it
+evicts a declared event that arrived after it, and such a step receives no declared event.
+`historyWindow` drops events only on a transition, once the step they arrived in has been left, so it
+does not limit what an instance retains while it stays in that step either.
 This is the cost the issue itself named for this fix ("a retention rule with two kinds of entry in
 it"), not a new problem this ADR introduces.
 
-It reaches only flows that already opted into a wider surface than their own declared types. The
-default path, no `replacementFilter`, no `narrowingFilter`, no collapsing type mapper, can never
-deliver a foreign-typed event to `evolve` in the first place, because the subscription filter itself
-is derived from `eventTypes()`. And the 0.33.0 warning is untyped. It already counts every retained
+It reaches only flows that already opted into a wider surface than their own declared types. A
+flow with no `replacementFilter` and no collapsing type mapper can never deliver a foreign-typed
+event to `evolve` in the first place, because the subscription filter itself is derived from
+`eventTypes()`, and a `narrowingFilter` only adds a condition to that filter. And the 0.33.0 warning is untyped. It already counts every retained
 event, declared or foreign, so this exact growth is visible in production today regardless of what
 `stepWindow` bounds.
 
@@ -108,8 +113,10 @@ Three places described the old behavior, or did not say enough to rule it out, a
 correction in the same change:
 
 - `Saga.replacementFilter()` stated the bug as the shipped cost of a wide selector. It now says a
-  foreign event is retained but neither counts against `stepWindow` nor evicts a declared event, and
-  that nothing evicts it either, so it can grow what a step stores without limit.
+  foreign event is retained but neither counts against `stepWindow` nor evicts a declared event, that
+  `stepWindow` does not evict it as long as the step's own declared-type events stay within their cap,
+  and that `historyWindow` drops it only once the flow has left the step it arrived in, so it can grow
+  what a parked step stores without limit.
 - `FlowSaga.Builder.stepWindow(int)` did not previously say what "the current step's own received
   events" meant for a type the flow does not declare. It now states the scope directly and points at
   the store's warning as the residual signal.
@@ -125,8 +132,8 @@ flow that keeps receiving repeats of its own start type. 0.33.0 counted every re
 own fix keeps it bounded the same way. The gap the paragraph below describes existed only in the
 still-unreleased implementation this ADR's earlier decision produced, never in anything a 0.33.0
 caller observed, and closing it in the same unreleased change is what keeps that promise true. A flow
-without a `replacementFilter`, a `narrowingFilter`, or a collapsing type mapper sees no change from the
-widened-selector defect #773 targets either, since its subscription can never deliver a foreign-typed
+without a `replacementFilter` or a collapsing type mapper sees no change from the widened-selector
+defect #773 targets either, since its subscription can never deliver a foreign-typed
 event, so `isDeclared` was already true for everything else it receives.
 
 A flow that already widened its selector gets a genuine bug fix. `stepWindow` now keeps exactly N of
