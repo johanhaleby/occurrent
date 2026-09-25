@@ -42,6 +42,7 @@ import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.UnreadableLiveFilterException;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
+import org.occurrent.subscription.internal.HandoverMessages;
 
 import java.net.URI;
 import java.time.Duration;
@@ -50,6 +51,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -57,6 +59,7 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.Assertions.fail;
 import static org.occurrent.condition.Condition.eq;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -565,7 +568,13 @@ class DomainEventFeedTest {
         FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed5.accept(new Counted("buffered")));
         assertThat(catchThrowable(feed5::catchUpAll)).isNotNull();
         assertThat(feed5.isReadyForLiveDelivery()).as("the buffered live event's own fold threw during the drain").isFalse();
-        assertThat(fed).failsWithin(Duration.ofSeconds(5));
+        assertThat(fed).failsWithin(Duration.ofSeconds(5))
+                .withThrowableOfType(ExecutionException.class)
+                .havingCause()
+                .isInstanceOf(IllegalStateException.class)
+                .withMessage(HandoverMessages.catchUpFailed("projection feed"))
+                .havingRootCause()
+                .withMessage("drain boom");
     }
 
     private static CheckpointStorage throwingOnExistsCheckpointStorage() {
@@ -1000,12 +1009,19 @@ class DomainEventFeedTest {
 
     // accept(..) returns only once the catch-up has folded the event, so an event fed ahead of the catch-up comes from
     // its own thread, already waiting in the buffer when this returns
+    // A waiting accept(..) parks in Object.wait()
     private static FutureTask<Void> feedWaitingForTheCatchUp(Runnable accept) {
         FutureTask<Void> feeding = new FutureTask<>(accept, null);
         Thread thread = new Thread(feeding, "live-delivery");
         thread.start();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (thread.isAlive() && thread.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+        while (thread.getState() != Thread.State.WAITING) {
+            if (!thread.isAlive()) {
+                fail("accept(..) ended without waiting for the catch-up");
+            }
+            if (System.nanoTime() > deadline) {
+                fail("accept(..) did not start waiting within 5 seconds, it is " + thread.getState());
+            }
             Thread.onSpinWait();
         }
         return feeding;

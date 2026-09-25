@@ -69,10 +69,10 @@ import java.util.function.Supplier;
  * than at the end of the live stream. It does <em>not</em> complete before the replayed payloads are folded: the marker
  * phase starts only after the replay phase has finished folding. The blocking engine's
  * {@code BlockingHandover.catchUp} returns only <em>after</em> the buffered live
- * payloads are drained. Both are internally consistent: a blocking {@code accept} call returns before its payload is
- * folded during the catch-up window, whereas here a live payload's {@code accept} {@link Mono} completes only once
- * its fold has actually run (including payloads buffered during the replay), even though the catch-up-done signal
- * itself already fired. Neither ordering is "fixed" by this extraction. Both are preserved as-is.
+ * payloads are drained. Both are internally consistent. On either engine a live payload's {@code accept} returns, or
+ * its {@link Mono} completes, only once its fold has actually run, including a payload buffered during the replay,
+ * and here that can be after the catch-up-done signal has already fired. Neither ordering is "fixed" by this
+ * extraction. Both are preserved as-is.
  * <p>
  * <strong>The replay runs on {@code boundedElastic}, not on the thread that called {@link #catchUp(Source)}.</strong>
  * This engine subscribes its own pipeline, so a caller that never touches the returned {@link Mono} still gets a
@@ -362,9 +362,13 @@ public final class ReactiveHandover<T, K> {
      * (ADR 104), and for a broker listener it means not acknowledging, so the broker delivers the payload again.
      */
     public Mono<Void> accept(T payload) {
-        return acceptReportingDelivery(payload).flatMap(applied -> applied
-                ? Mono.<Void>empty()
-                : Mono.error(new PreDispatchRefusalException(this, HandoverMessages.notApplied(noun))));
+        Objects.requireNonNull(payload, "payload cannot be null");
+        return offer(payload).flatMap(outcome -> switch (outcome) {
+            case APPLIED -> Mono.<Void>empty();
+            case STOPPED -> Mono.error(new PreDispatchRefusalException(this, HandoverMessages.stoppedBeforeApplied(noun)));
+            case ENDED -> Mono.error(new PreDispatchRefusalException(this, HandoverMessages.liveDeliveryEnded(noun)));
+            case NOT_LIVE -> Mono.error(new AssertionError("Only acceptIfLive(..) answers a payload as not live."));
+        });
     }
 
     /**
@@ -379,6 +383,10 @@ public final class ReactiveHandover<T, K> {
      */
     public Mono<Boolean> acceptReportingDelivery(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
+        return offer(payload).map(outcome -> outcome == Outcome.APPLIED);
+    }
+
+    private Mono<Outcome> offer(T payload) {
         return Mono.create(ackSink -> bufferOrDeliverLive(payload, ackSink));
     }
 
@@ -409,7 +417,7 @@ public final class ReactiveHandover<T, K> {
      */
     public Mono<Boolean> acceptIfLive(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
-        return Mono.create(ackSink -> {
+        return Mono.<Outcome>create(ackSink -> {
             Throwable failure = terminalError.get();
             if (failure != null) {
                 ackSink.error(catchUpFailed(failure));
@@ -421,17 +429,17 @@ public final class ReactiveHandover<T, K> {
                 // already promised it can redeliver, so there is nothing to gain by holding the payload instead of
                 // asking again later. A replay on a handover that is already live pauses live delivery, and counts
                 // as still replaying here, the same as on the blocking engine.
-                ackSink.success(false);
+                ackSink.success(Outcome.NOT_LIVE);
                 return;
             }
             bufferOrDeliverLive(payload, ackSink);
-        });
+        }).map(outcome -> outcome == Outcome.APPLIED);
     }
 
     // Shared by acceptReportingDelivery(..) and, once live, by acceptIfLive(..): registers the pending ack, re-checks
     // the terminal failure and stopped flag under the same race window acceptReportingDelivery has always had to
     // guard, then reserves the dedup key and hands the item to liveSink for the concatMap pipeline to drain.
-    private void bufferOrDeliverLive(T payload, MonoSink<Boolean> ackSink) {
+    private void bufferOrDeliverLive(T payload, MonoSink<Outcome> ackSink) {
         LiveAck ack = new LiveAck(ackSink);
         ackSink.onDispose(() -> pendingLiveAcks.remove(ack));
         Throwable failure = terminalError.get();
@@ -440,11 +448,10 @@ public final class ReactiveHandover<T, K> {
             return;
         }
         if (stopped && !live) {
-            // Answered false rather than buffered. The replay that would have drained this buffer was stopped, so
-            // nothing is coming to fold it, and accept(..) errors on the false so its caller offers the payload
-            // again. A handover that has gone live delivers instead, whatever a stop left behind, since its live
+            // Answered as stopped rather than buffered. The replay that would have drained this buffer was stopped,
+            // so nothing is coming to fold it, and accept(..) errors so its caller offers the payload again. A handover that has gone live delivers instead, whatever a stop left behind, since its live
             // pipeline runs.
-            ackSink.success(false);
+            ackSink.success(Outcome.STOPPED);
             return;
         }
         pendingLiveAcks.add(ack);
@@ -457,7 +464,7 @@ public final class ReactiveHandover<T, K> {
             return;
         }
         if (stopped && !live) {
-            ackSink.success(false);
+            ackSink.success(Outcome.STOPPED);
             return;
         }
         K key;
@@ -570,12 +577,12 @@ public final class ReactiveHandover<T, K> {
                     return true;
                 }
                 // The pipeline is gone, so nothing is coming to deliver this payload. Dropped rather than
-                // refused, the same answer the stopped check above gives. Also defence rather than a reachable
+                // refused, like the stopped check above, but answered with its own reason. Also defence rather than a reachable
                 // path, since that check runs first and catches every way the pipeline ends today.
                 case FAIL_TERMINATED, FAIL_CANCELLED -> {
                     pendingOffers.poll();
                     dropFromBacklogAndDrains(pending.item());
-                    pending.ack().success(false);
+                    pending.ack().success(Outcome.ENDED);
                 }
                 default -> {
                     pendingOffers.poll();
@@ -621,7 +628,7 @@ public final class ReactiveHandover<T, K> {
 
     // An offer waiting its turn at the sink, with the point in time after which this engine stops offering it and
     // reports contention instead.
-    private record PendingOffer<K>(Item<K> item, MonoSink<Boolean> ack, long deadline) {
+    private record PendingOffer<K>(Item<K> item, MonoSink<Outcome> ack, long deadline) {
     }
 
     /**
@@ -798,7 +805,7 @@ public final class ReactiveHandover<T, K> {
                         // caller offering a payload again cannot have it delivered while the copy it is replacing is
                         // still waiting for an answer.
                         if (!wasLive) {
-                            dropPendingLiveAcks().forEach(dropped -> dropped.sink().success(false));
+                            dropPendingLiveAcks().forEach(dropped -> dropped.sink().success(Outcome.STOPPED));
                         }
                         resumeLiveDelivery(pause);
                         releaseReplayTurn(holdsReplayTurn);
@@ -1081,19 +1088,19 @@ public final class ReactiveHandover<T, K> {
         LiveAck liveAck = item.ack();
         if (liveAck != null) {
             if (!liveAck.settle()) {
-                // Answered false by a stop, and its caller offers it again.
+                // A stop already answered it, and its caller offers it again.
                 return Mono.empty();
             }
-            MonoSink<Boolean> ack = liveAck.sink();
+            MonoSink<Outcome> ack = liveAck.sink();
             if (deliveredIds.contains(item.dedupKey())) {
-                ack.success(true);
+                ack.success(Outcome.APPLIED);
                 return Mono.empty();
             }
             if (replayedIds.contains(item.dedupKey())) {
                 // Applied by the replay already, so delivering it again would apply it twice. The source is told
                 // instead, and the acknowledgement waits for that call rather than running ahead of it (ADR 137).
                 return Mono.defer(item.alreadyDeliveredByReplay())
-                        .doOnSuccess(v -> ack.success(true))
+                        .doOnSuccess(v -> ack.success(Outcome.APPLIED))
                         .onErrorResume(error -> {
                             ack.error(error);
                             return Mono.empty();
@@ -1104,7 +1111,7 @@ public final class ReactiveHandover<T, K> {
             return Mono.defer(item.deliver())
                     .doOnSuccess(v -> {
                         deliveredIds.add(item.dedupKey());
-                        ack.success(true);
+                        ack.success(Outcome.APPLIED);
                     })
                     .onErrorResume(error -> {
                         ack.error(error);
@@ -1143,6 +1150,12 @@ public final class ReactiveHandover<T, K> {
         return key;
     }
 
+    // How a live payload's offer ended. acceptReportingDelivery(..) and acceptIfLive(..) report APPLIED as true and
+    // everything else as false, and accept(..) errors with the reason.
+    private enum Outcome {
+        APPLIED, NOT_LIVE, STOPPED, ENDED
+    }
+
     // A live payload's acknowledgement. A stop and the path that delivers or refuses the payload both claim it, and
     // the first to claim it answers it and gives back the payload's place in the backlog and in the drains.
     private static final class LiveAck {
@@ -1151,16 +1164,16 @@ public final class ReactiveHandover<T, K> {
         private static final int SETTLED = 1;
         private static final int DROPPED_BY_STOP = 2;
 
-        private final MonoSink<Boolean> sink;
+        private final MonoSink<Outcome> sink;
         private final java.util.concurrent.atomic.AtomicInteger state = new java.util.concurrent.atomic.AtomicInteger(OPEN);
         // Written and read under the admission guard only.
         private long turn = NOT_ADMITTED;
 
-        private LiveAck(MonoSink<Boolean> sink) {
+        private LiveAck(MonoSink<Outcome> sink) {
             this.sink = sink;
         }
 
-        private MonoSink<Boolean> sink() {
+        private MonoSink<Outcome> sink() {
             return sink;
         }
 

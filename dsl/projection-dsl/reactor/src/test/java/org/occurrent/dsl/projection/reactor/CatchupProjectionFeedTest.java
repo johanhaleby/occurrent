@@ -229,7 +229,7 @@ class CatchupProjectionFeedTest {
             assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what accept(..) errored with once the catch-up stopped")
                     .cause()
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessage(HandoverMessages.notApplied("projection feed"));
+                    .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
             assertThat(folded).containsExactly("1");
         } finally {
             releaseReplay.countDown();

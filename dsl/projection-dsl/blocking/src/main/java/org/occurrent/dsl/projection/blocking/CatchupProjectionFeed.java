@@ -60,8 +60,9 @@ import java.util.stream.Stream;
  * returns). No live position watermark is kept, so delivery is at-least-once and the fold must be idempotent. The
  * de-dup cache and the live buffer are bounded. The buffer fails loud on overflow. {@link #accept(Object)} returns only
  * once the event has been folded, during the catch-up as well as after it. An event fed before the feed goes live waits
- * in the buffer, and the call waits with it until the drain folds it. A stop or a failed catch-up throws instead, so
- * the listener never acknowledges an event that is only held in memory.
+ * in the buffer, and the call waits with it until the drain folds it. A catch-up stopped before the feed went live, a
+ * failed catch-up or an interrupt throws instead, so the listener never acknowledges an event that is only held in
+ * memory. A replay stopped after a {@link #goLive()} drains the buffer instead, and the call returns normally.
  * <p>
  * The catch-up-then-live coordination itself (the buffer, the de-dup cache, and the drain-then-mark ordering) is
  * delegated to {@link BlockingHandover}, shared with {@code CatchupThenPushSubscriptionModel}.
@@ -179,7 +180,9 @@ public final class CatchupProjectionFeed<E> {
      * @throws IllegalStateException if the event was not folded, because the catch-up was stopped before the feed
      *                               went live, the catch-up failed, the waiting thread was interrupted, the live
      *                               buffer is full, or another delivery of the same event was still running. The
-     *                               listener must not acknowledge it, and the broker delivers it again.
+     *                               listener must not acknowledge it, and the broker delivers it again. Also thrown
+     *                               when this is called before the feed is live on the thread running the replay,
+     *                               from the projection or a view, since that thread would wait for itself.
      */
     public void accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
