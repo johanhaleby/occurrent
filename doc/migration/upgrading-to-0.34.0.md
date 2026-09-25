@@ -1036,7 +1036,7 @@ and the broker delivers it again. A listener that acknowledges only after `accep
 exception reach the broker client, needs no change.
 
 In 0.33.0 an event fed while the feed was not live from inside the projection, a view or another callback of the
-same feed was applied. Now it is refused. Thrown while the catch-up replays history into the projection or a view,
+same feed was buffered and applied once a catch-up took the feed live. Now it is refused. Thrown while the catch-up replays history into the projection or a view,
 that refusal fails the catch-up, and the feed refuses every event until you build a new one. A caller that catches
 the refusal and continues drops the nested event.
 
