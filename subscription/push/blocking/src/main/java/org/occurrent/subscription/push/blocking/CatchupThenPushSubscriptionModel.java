@@ -288,9 +288,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         BlockingHandover<CloudEvent, CloudEventKey> handover = BlockingHandover.create(action, CloudEventKey::of, options, "subscription");
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
         // lost in the gap between the replay head and going live. Registers a delivery-reporting action rather than
-        // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) buffers without
-        // waiting for the drain, since the store already has the event and a fold writing to that store would wait
-        // for its own replay, while PushSubscriptionModel.acceptRedeliverable(..) (a broker path that can redeliver,
+        // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) still buffers
+        // exactly as before, while PushSubscriptionModel.acceptRedeliverable(..) (a broker path that can redeliver,
         // bufferIfNotLive false) refuses instead of buffering, reported as RoutingOutcome.DEFERRED. Both branches
         // wrap only a BlockingHandover.PreDispatchRefusalException as RoutingAction.Refusal, never every
         // IllegalStateException the call could throw, since the handler itself can throw one too (deliverOutsideLock
@@ -301,7 +300,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // whether or not a PushObserver is configured.
         RoutingSubscribeAction routingAction = (cloudEvent, bufferIfNotLive) -> {
                     try {
-                        return bufferIfNotLive ? handover.acceptStored(cloudEvent) : handover.acceptIfLive(cloudEvent);
+                        return bufferIfNotLive ? handover.acceptReportingDelivery(cloudEvent) : handover.acceptIfLive(cloudEvent);
                     } catch (BlockingHandover.PreDispatchRefusalException e) {
                         if (!e.thrownBy(handover)) {
                             // A different handover refused, which this handler reached by calling into it. This

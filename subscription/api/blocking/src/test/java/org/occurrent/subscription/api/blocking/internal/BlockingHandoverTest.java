@@ -50,8 +50,8 @@ class BlockingHandoverTest {
         List<String> delivered = new ArrayList<>();
         BlockingHandover<String, String> handover = handover(delivered);
 
-        handover.acceptStored("L1");
-        handover.acceptStored("L2");
+        handover.acceptReportingDelivery("L1");
+        handover.acceptReportingDelivery("L2");
 
         handover.catchUp(source(List.of("R1", "R2"), false));
 
@@ -66,7 +66,7 @@ class BlockingHandoverTest {
         List<String> log = Collections.synchronizedList(new ArrayList<>());
         BlockingHandover<String, String> handover = BlockingHandover.create(log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
 
-        handover.acceptStored("L1");
+        handover.acceptReportingDelivery("L1");
         FakeSource source = source(List.of("R1"), false);
         source.onMarkCaughtUp = () -> log.add("marker");
 
@@ -81,7 +81,7 @@ class BlockingHandoverTest {
         List<String> delivered = new ArrayList<>();
         BlockingHandover<String, String> handover = handover(delivered);
 
-        handover.acceptStored("L1");
+        handover.acceptReportingDelivery("L1");
         FakeSource source = source(List.of("R1"), true);
 
         handover.catchUp(source);
@@ -97,7 +97,7 @@ class BlockingHandoverTest {
         BlockingHandover<String, String> handover = handover(delivered);
 
         // Buffered before the replay runs, but shares the replay's dedup id.
-        handover.acceptStored("1");
+        handover.acceptReportingDelivery("1");
         handover.catchUp(source(List.of("1"), false));
 
         assertThat(delivered).containsExactly("1");
@@ -116,7 +116,7 @@ class BlockingHandoverTest {
         BlockingHandover<String, String> handover = handover(delivered);
         FakeSource source = source(List.of("1"), false);
 
-        handover.acceptStored("1");
+        handover.acceptReportingDelivery("1");
         handover.catchUp(source);
 
         assertThat(delivered).containsExactly("1");
@@ -195,10 +195,10 @@ class BlockingHandoverTest {
         BlockingHandover<String, String> handover = BlockingHandover.create(
                 delivered::add, payload -> payload, new CatchupThenLiveOptions(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE, 2), NOUN);
 
-        handover.acceptStored("L1");
-        handover.acceptStored("L2");
+        handover.acceptReportingDelivery("L1");
+        handover.acceptReportingDelivery("L2");
 
-        Throwable thrown = catchThrowable(() -> handover.acceptStored("L3"));
+        Throwable thrown = catchThrowable(() -> handover.acceptReportingDelivery("L3"));
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class)
                 .hasMessage(HandoverMessages.bufferOverflow(2))
@@ -346,9 +346,9 @@ class BlockingHandoverTest {
         }
     }
 
-    // acceptIfLive(..): a caller that can redeliver, unlike accept(..)/acceptReportingDelivery(..), which keep
-    // buffering when not live (proved unchanged by live_payloads_accepted_before_catch_up_are_buffered_and_delivered_after_the_replay_in_order
-    // above, still exercised through accept(..) itself, the write path's only entry point).
+    // acceptIfLive(..): a caller that can redeliver, unlike accept(..) and acceptReportingDelivery(..), which buffer
+    // when not live. live_payloads_accepted_before_catch_up_are_buffered_and_delivered_after_the_replay_in_order above
+    // covers that through acceptReportingDelivery(..), the write path's entry point.
 
     @Test
     void acceptIfLive_refuses_without_buffering_when_not_live() {
@@ -775,8 +775,8 @@ class BlockingHandoverTest {
         BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
             log.add(payload);
             if (payload.equals("R1") && offered.compareAndSet(false, true)) {
-                self.get().acceptStored("R1");
-                self.get().acceptStored("L1");
+                self.get().acceptReportingDelivery("R1");
+                self.get().acceptReportingDelivery("L1");
             }
         }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
         self.set(handover);
@@ -838,7 +838,7 @@ class BlockingHandoverTest {
             }
             log.add(payload);
             if (payload.equals("R1") && offered.compareAndSet(false, true)) {
-                assertThat(self.get().acceptStored("L1")).isTrue();
+                assertThat(self.get().acceptReportingDelivery("L1")).isTrue();
             }
         }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
         self.set(handover);
@@ -885,7 +885,7 @@ class BlockingHandoverTest {
         BlockingHandover<String, String> handover = BlockingHandover.create(
                 delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
         // Buffered before the replay runs and sharing its key, so the drain suppresses it and reports it to the source.
-        handover.acceptStored("1");
+        handover.acceptReportingDelivery("1");
         FakeSource first = source(List.of("1"), false);
         first.onAlreadyDeliveredByReplay = () -> {
             callbackRunning.countDown();
@@ -922,7 +922,7 @@ class BlockingHandoverTest {
         AtomicBoolean replayStartedDuringTheTransition = new AtomicBoolean();
         BlockingHandover<String, String> handover = BlockingHandover.create(
                 log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
-        handover.acceptStored("L1");
+        handover.acceptReportingDelivery("L1");
         CountDownLatch replayCompleted = new CountDownLatch(1);
         FakeSource replaying = source(List.of("R1"), false);
         replaying.onReplayStarted = replayStarted::countDown;
@@ -961,7 +961,7 @@ class BlockingHandoverTest {
     void replay_lifecycle_is_started_then_completed_before_the_buffer_drain_and_the_marker() {
         List<String> log = Collections.synchronizedList(new ArrayList<>());
         BlockingHandover<String, String> handover = BlockingHandover.create(log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
-        handover.acceptStored("L1");
+        handover.acceptReportingDelivery("L1");
         FakeSource source = source(List.of("R1"), false);
         source.onReplayStarted = () -> log.add("started");
         source.onReplayCompleted = () -> log.add("completed");
@@ -1043,7 +1043,7 @@ class BlockingHandoverTest {
                     }
                 },
                 payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
-        handover.acceptStored("L1");
+        handover.acceptReportingDelivery("L1");
         FakeSource source = source(List.of("R1"), false);
         source.onReplayCompleted = () -> replayFinished.set(true);
 
@@ -1075,9 +1075,9 @@ class BlockingHandoverTest {
             delivered.add(payload);
         }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
 
-        handover.acceptStored("L1");
-        handover.acceptStored("L2");
-        handover.acceptStored("L3");
+        handover.acceptReportingDelivery("L1");
+        handover.acceptReportingDelivery("L2");
+        handover.acceptReportingDelivery("L3");
 
         FakeSource source = source(List.of(), false);
         Throwable thrown = catchThrowable(() -> handover.catchUp(source));
@@ -1104,8 +1104,8 @@ class BlockingHandoverTest {
         List<String> delivered = new ArrayList<>();
         BlockingHandover<String, String> handover = handover(delivered);
 
-        handover.acceptStored("L1");
-        handover.acceptStored("L2");
+        handover.acceptReportingDelivery("L1");
+        handover.acceptReportingDelivery("L2");
         handover.catchUp(source(List.of(), false));
 
         handover.accept("L1");
@@ -1136,7 +1136,7 @@ class BlockingHandoverTest {
             log.add(payload);
             if (payload.equals("R1")) {
                 // A live payload arriving mid-replay, which is the copy the abandoned replay would take with it.
-                handoverRef.get().acceptStored("L1");
+                handoverRef.get().acceptReportingDelivery("L1");
             }
         }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
         handoverRef.set(handover);
@@ -1246,7 +1246,7 @@ class BlockingHandoverTest {
                 awaitLatch(releaseBufferDelivery);
             }
         }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
-        handover.acceptStored("L1");
+        handover.acceptReportingDelivery("L1");
         FakeSource goingLive = source(List.of(), true);
         goingLive.onHistoryDone = () -> {
             historyDoneReached.countDown();
@@ -1308,7 +1308,7 @@ class BlockingHandoverTest {
         replay.start();
         // Waiting for the live delivery above, which is the window a payload lands in the buffer in.
         assertThat(reachedWithin(replayStarted, 300)).isFalse();
-        handover.acceptStored("L2");
+        handover.acceptReportingDelivery("L2");
         replay.interrupt();
         replay.join(5_000);
         releaseL1.countDown();
@@ -1429,7 +1429,7 @@ class BlockingHandoverTest {
 
         replay.start();
         awaitLatch(foldingR1);
-        handover.acceptStored("L1");
+        handover.acceptReportingDelivery("L1");
         assertThatThrownBy(() -> handover.catchUp(failingLookup)).isInstanceOf(IllegalStateException.class);
         handover.catchUp(source(List.of(), true));
         releaseR1.countDown();
@@ -1467,7 +1467,7 @@ class BlockingHandoverTest {
         assertThat(reachedWithin(secondReplayStarted, 300)).isFalse();
         waiting.interrupt();
         waiting.join(5_000);
-        handover.acceptStored("L1");
+        handover.acceptReportingDelivery("L1");
         releaseR1.countDown();
         replay.join(5_000);
 
@@ -1503,7 +1503,7 @@ class BlockingHandoverTest {
         assertThat(reachedWithin(replayStarted, 300)).isFalse();
         waiting.interrupt();
         waiting.join(5_000);
-        handover.acceptStored("L1");
+        handover.acceptReportingDelivery("L1");
         releaseTransition.countDown();
         goLive.join(5_000);
 
@@ -1585,7 +1585,7 @@ class BlockingHandoverTest {
         releaseR1.countDown();
         first.join(5_000);
         awaitLatch(foldingR3);
-        handover.acceptStored("L1");
+        handover.acceptReportingDelivery("L1");
         releaseR3.countDown();
         second.join(5_000);
 
@@ -1695,7 +1695,7 @@ class BlockingHandoverTest {
             }
             log.add(payload);
             if (payload.equals("R1") && offered.compareAndSet(false, true)) {
-                assertThat(self.get().acceptStored("L1")).isTrue();
+                assertThat(self.get().acceptReportingDelivery("L1")).isTrue();
             }
         }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
         self.set(handover);
@@ -1731,8 +1731,8 @@ class BlockingHandoverTest {
     private static void assertThatAThrowingAlreadyDeliveredByReplayReleasesTheDrain(Exception listenerFailure) throws Exception {
         List<String> delivered = new CopyOnWriteArrayList<>();
         BlockingHandover<String, String> handover = BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
-        handover.acceptStored("1");
-        handover.acceptStored("L2");
+        handover.acceptReportingDelivery("1");
+        handover.acceptReportingDelivery("L2");
         FakeSource failing = source(List.of("1"), false);
         failing.onAlreadyDeliveredByReplay = () -> sneakyThrow(listenerFailure);
         assertThat(catchThrowable(() -> handover.catchUp(failing))).isSameAs(listenerFailure);
