@@ -576,9 +576,10 @@ public final class ReactiveHandover<T, K> {
                     // Left at the head, so whatever runs next starts with it and the order holds.
                     return true;
                 }
-                // The pipeline is gone, so nothing is coming to deliver this payload. Only a failure ends it, so the
-                // payload is refused the way every payload after that failure is. Also defence rather than a
-                // reachable path, since the check above runs first and catches every way the pipeline ends today.
+                // The live pipeline has ended, so nothing is coming to deliver this payload. No path reaches this, since
+                // only the live phase takes from the sink and deliverItem(..) recovers from every live delivery error.
+                // An error outside a delivery would end it, and the pipeline's error handler records and logs that
+                // error. A null failure means the handler has not run yet, and the refusal still points to that log.
                 case FAIL_TERMINATED, FAIL_CANCELLED -> {
                     pendingOffers.poll();
                     dropFromBacklogAndDrains(pending.item());
