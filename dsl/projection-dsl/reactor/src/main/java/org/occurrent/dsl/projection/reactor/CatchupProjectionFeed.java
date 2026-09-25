@@ -189,8 +189,9 @@ public final class CatchupProjectionFeed<E> {
      * catch-up are buffered and delivered after the replay, and their {@link Mono} completes only then.
      * <p>
      * It errors with an {@link IllegalStateException} instead when the event was not folded, because the catch-up was
-     * stopped before the feed went live, the feed is stopped, the catch-up failed, or the live buffer is full. The
-     * listener must not acknowledge it, and the broker delivers it again.
+     * stopped before the feed went live, the feed is stopped, the catch-up failed, the live buffer is full, or another
+     * thread held the live sink's serialization claim for longer than the feed retries. The listener must not
+     * acknowledge it, and the broker delivers it again.
      *
      * @param event The domain event received from the external source.
      * @return A {@link Mono} that completes when the event has been folded.
