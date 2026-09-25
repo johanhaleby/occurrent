@@ -59,6 +59,7 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.Assertions.fail;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupProjectionFeedTest {
@@ -487,7 +488,7 @@ class CatchupProjectionFeedTest {
                     .isInstanceOf(ExecutionException.class)
                     .cause()
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessage(HandoverMessages.notApplied("projection feed"));
+                    .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
             assertThat(folded).containsExactly("1");
         } finally {
             releaseReplay.countDown();
@@ -543,7 +544,7 @@ class CatchupProjectionFeedTest {
                 .isInstanceOf(ExecutionException.class)
                 .cause()
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage(HandoverMessages.notApplied("projection feed"));
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
         assertThat(repo).isEmpty();
     }
 
@@ -797,12 +798,19 @@ class CatchupProjectionFeedTest {
 
     // accept(..) returns only once the catch-up has folded the event, so an event fed ahead of the catch-up comes from
     // its own thread, already waiting in the buffer when this returns
+    // A waiting accept(..) parks in Object.wait()
     private static FutureTask<Void> feedWaitingForTheCatchUp(Runnable accept) {
         FutureTask<Void> feeding = new FutureTask<>(accept, null);
         Thread thread = new Thread(feeding, "live-delivery");
         thread.start();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (thread.isAlive() && thread.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+        while (thread.getState() != Thread.State.WAITING) {
+            if (!thread.isAlive()) {
+                fail("accept(..) ended without waiting for the catch-up");
+            }
+            if (System.nanoTime() > deadline) {
+                fail("accept(..) did not start waiting within 5 seconds, it is " + thread.getState());
+            }
             Thread.onSpinWait();
         }
         return feeding;

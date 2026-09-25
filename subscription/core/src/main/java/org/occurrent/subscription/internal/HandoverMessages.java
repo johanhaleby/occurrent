@@ -84,16 +84,37 @@ public final class HandoverMessages {
     }
 
     /**
-     * Refuses a live event this handover did not apply, because its catch-up was stopped before going live or a
-     * delivery of the same event was still running on another thread. Neither is a failure, so it says to offer the event again
-     * rather than to rebuild anything.
+     * Refuses a live event this handover did not apply because it was stopped before it went live, whether its replay
+     * was stopped or no catch-up was left to run. Not a failure, so it says to offer the event again rather than to
+     * rebuild anything.
      *
      * @param noun The noun describing what did not apply the event, e.g. {@code "projection feed"}.
      */
-    public static String notApplied(String noun) {
-        return "This " + noun + " did not apply the event, because its catch-up was stopped before it went live or "
-                + "another delivery of the same event was still running. Do not acknowledge it. Offer it again and a "
-                + "later delivery applies it.";
+    public static String stoppedBeforeApplied(String noun) {
+        return "This " + noun + " was stopped before it went live, so it did not apply the event. Do not acknowledge "
+                + "it. Offer it again and a later delivery applies it.";
+    }
+
+    /**
+     * Refuses a live event because another delivery of the same event was still running, so this call cannot tell
+     * whether it will be applied. Only the blocking engine delivers two copies of one event at once.
+     *
+     * @param noun The noun describing what the event was fed to, e.g. {@code "projection feed"}.
+     */
+    public static String sameEventStillDelivering(String noun) {
+        return "Another delivery of the same event was still running on this " + noun + ", so this call did not apply "
+                + "it. Do not acknowledge it. Offer it again and a later delivery applies it or finds it already applied.";
+    }
+
+    /**
+     * Refuses a live event the reactor engine could not hand to its live delivery because that delivery had ended.
+     * Defence rather than a message anything produces today, since a stopped handover refuses first.
+     *
+     * @param noun The noun describing what the event was fed to, e.g. {@code "projection feed"}.
+     */
+    public static String liveDeliveryEnded(String noun) {
+        return "The live delivery of this " + noun + " had ended, so nothing applied the event. Do not acknowledge it. "
+                + "Offer it again and a later delivery applies it.";
     }
 
     /**

@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Eleven things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
+Twelve things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -35,10 +35,13 @@ replay was read by a history window, which needs a handler that is safe to run t
 Then, if your application ever called `updateEvent` while running 0.33.0 or earlier, some of your stored
 events are damaged and a one-off repair puts them back. Read
 [section 10](#10-events-updateevent-damaged-before-0340-need-a-one-off-repair).
-Finally, a subscription handler Spring's proxy cannot invoke now fails startup instead of silently losing its advice,
+Then a subscription handler Spring's proxy cannot invoke now fails startup instead of silently losing its advice,
 and every annotation-based handler registers later, once singleton construction has finished, so a live-only
 subscription no longer sees an event a bean wrote from its own startup. Read
 [section 11](#11-a-subscription-handler-spring-cannot-invoke-now-fails-startup-and-a-live-subscription-can-miss-a-startup-write).
+Finally, a blocking projection feed's `accept(..)` now waits during a catch-up until the event is applied, and
+throws when it was not, so a call on the same thread that later starts the catch-up never returns. Read
+[section 12](#12-a-blocking-projection-feeds-accept-waits-until-the-event-is-applied-and-throws-when-it-is-not).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -988,3 +991,48 @@ depends on.
 
 There is no recipe for either change. A proxy-invocability failure and a startup ordering dependency are both
 runtime behavior, not a call site a rewrite could search for.
+
+## 12. A blocking projection feed's `accept(..)` waits until the event is applied, and throws when it is not
+
+This covers `CatchupProjectionFeed.accept(..)` and `DomainEventFeed.accept(..)` on the blocking stack, fixed for
+[#1135](https://github.com/johanhaleby/occurrent/issues/1135). In 0.33.0 an event fed before the feed went live was
+put in a buffer and `accept(..)` returned straight away. A listener acknowledges the message once `accept(..)`
+returns, so the broker discarded an event that was only held in memory, and a stop or a crash before the catch-up
+finished lost it.
+
+Before the feed goes live, `accept(..)` now waits until the catch-up has applied the event. Once the feed is live
+the event is applied on the calling thread, the same as in 0.33.0.
+
+It's important to keep in mind that you must never call `accept(..)` on the thread that later calls `catchUp()`,
+`catchUpAll()` or `goLive()`. That thread waits for a catch-up it never gets to start, and only `stopCatchUp()`
+called from another thread releases it. A test or a startup routine that does this on one thread now hangs:
+
+```java
+feed.accept(event);
+feed.catchUp();
+```
+
+Run the catch-up on a thread of its own, or feed the event once the catch-up has returned.
+
+`accept(..)` now throws an `IllegalStateException` whenever the event was not applied. It throws in these cases:
+
+- the catch-up was stopped before the feed went live, or the feed was stopped before any catch-up started
+- the catch-up failed
+- the waiting thread was interrupted
+- it was called on the catch-up's own thread, from inside the projection or a view the replay is updating
+- the feed is live and another delivery of the same event is still running on another thread
+
+In 0.33.0 a stopped feed and a second delivery of an event still being applied both returned normally, so the
+listener acknowledged an event that nothing had applied. Do not acknowledge the message when `accept(..)` throws,
+and the broker delivers it again. A listener that acknowledges only after `accept(..)` returns, and lets an
+exception reach the broker client, needs no change.
+
+A long replay keeps the listener thread waiting. A Kafka consumer that waits past its `max.poll.interval.ms`, five
+minutes by default, is taken out of its consumer group, and the record is delivered again once the partition is
+reassigned. RabbitMQ closes the channel of a consumer that holds on to a message without acknowledging it for longer
+than `consumer_timeout`, 30 minutes by default, and delivers the message again. Both cost a redelivery, not the event.
+
+`DomainEventFeed.acceptCloudEvent(..)`, which the Kafka and RabbitMQ bridges call, is unchanged.
+
+There is no recipe for this change. Which thread calls `accept(..)` and what a listener does when it throws are
+runtime behavior that a rewrite of the source cannot see.

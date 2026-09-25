@@ -1213,7 +1213,7 @@ class ReactiveHandoverTest {
         StepVerifier.create(handover.accept("L1"))
                 .expectErrorSatisfies(error -> assertThat(error)
                         .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
-                        .hasMessage(HandoverMessages.notApplied("test payload")))
+                        .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload")))
                 .verify();
         assertThat(handover.refusesPermanently()).isFalse();
         assertThat(delivered).containsExactly("R1");
@@ -1261,7 +1261,7 @@ class ReactiveHandoverTest {
             assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what accept(..) errored with once the replay stopped")
                     .cause()
                     .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
-                    .hasMessage(HandoverMessages.notApplied("test payload"));
+                    .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
             assertThat(delivered).containsExactly("R1");
             assertThat(handover.refusesPermanently()).isFalse();
         } finally {
