@@ -545,6 +545,8 @@ public final class ReactiveHandover<T, K> {
             if (!result.isFailure()) {
                 pendingOffers.poll();
                 // A stop between the check above and the emit found it in neither queue, so it is taken out here.
+                // Until then deliverItem(..) skips it, since the stop claimed its acknowledgement, and no other offer
+                // reaches the sink while this drain holds the flag.
                 if (droppedByStop(pending.item())) {
                     liveBuffer.removeIf(queued -> queued == pending.item());
                 }
