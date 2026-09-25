@@ -186,10 +186,14 @@ public final class CatchupProjectionFeed<E> {
     /**
      * Feed a live domain event. The returned {@link Mono} completes once the event has been folded (or immediately if it
      * is a de-duplicated overlap), so the listener can acknowledge after processing. Events fed before or during the
-     * catch-up are buffered and delivered after the replay.
+     * catch-up are buffered and delivered after the replay, and their {@link Mono} completes only then.
+     * <p>
+     * It errors with an {@link IllegalStateException} instead when the event was not folded, because the catch-up was
+     * stopped before the feed went live, the feed is stopped, the catch-up failed, or the live buffer is full. The
+     * listener must not acknowledge it, and the broker delivers it again.
      *
      * @param event The domain event received from the external source.
-     * @return A {@link Mono} that completes when the event has been handled.
+     * @return A {@link Mono} that completes when the event has been folded.
      */
     public Mono<Void> accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
@@ -202,23 +206,17 @@ public final class CatchupProjectionFeed<E> {
      * broker message carries those values (as headers, say) and your listener can read them. Otherwise call
      * {@link #accept(Object)}, which folds with {@link EventMetadata#empty()}.
      *
+     * <p>
+     * Completes and errors for the same reasons {@link #accept(Object)} does.
+     *
      * @param metadata The metadata the source has for this event.
      * @param event    The domain event received from the external source.
-     * @return A {@link Mono} that completes when the event has been handled.
+     * @return A {@link Mono} that completes when the event has been folded.
      */
     public Mono<Void> accept(EventMetadata metadata, E event) {
         Objects.requireNonNull(metadata, "metadata cannot be null");
         Objects.requireNonNull(event, "event cannot be null");
         return handover.accept(new DeliveredEvent<>(metadata, event));
-    }
-
-    // Package-private. Lets DomainEventFeed.acceptCloudEvent(CloudEvent) tell a genuinely dropped live event (this
-    // feed's replay was stopped) apart from one that was actually buffered or delivered, which
-    // ReactiveHandover.accept(..) alone cannot report through its Mono<Void> contract.
-    Mono<Boolean> acceptReportingDelivery(EventMetadata metadata, E event) {
-        Objects.requireNonNull(metadata, "metadata cannot be null");
-        Objects.requireNonNull(event, "event cannot be null");
-        return handover.acceptReportingDelivery(new DeliveredEvent<>(metadata, event));
     }
 
     // Package-private. Lets DomainEventFeed.acceptCloudEvent(CloudEvent) refuse rather than buffer an event it can
@@ -339,9 +337,11 @@ public final class CatchupProjectionFeed<E> {
      * history again. A stop is not a failure: the feed stays usable rather than failing every later event.
      * <p>
      * What the stop does with the live events depends on where the feed stood when the replay started. One that had
-     * not gone live drains nothing and does not go live, and the acknowledgements of the events it held complete
-     * rather than fail. One replaying after a {@link #goLive()} delivers what it held while the replay ran and goes on
-     * delivering, since those events were accepted by a feed that was already live.
+     * not gone live drains nothing and does not go live, and the {@link Mono} {@link #accept(Object)} returned for
+     * each event it held errors rather than completing, the same as for an event fed after the stop, so the listener
+     * does not acknowledge it and the broker delivers it again. One replaying after a {@link #goLive()} delivers what
+     * it held while the replay ran and goes on delivering, since those events were accepted by a feed that was
+     * already live.
      * <p>
      * A view that buffers during a replay discards that buffer on a stop, so after a {@link #goLive()} the live copy
      * of an event the stopped replay delivered is delivered again rather than skipped as a duplicate. A view that

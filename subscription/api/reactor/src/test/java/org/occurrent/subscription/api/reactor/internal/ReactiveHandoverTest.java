@@ -1198,7 +1198,7 @@ class ReactiveHandoverTest {
     }
 
     @Test
-    void a_stopped_replay_leaves_the_handover_usable_and_completes_live_acks_rather_than_failing_them() {
+    void a_stopped_replay_leaves_the_handover_usable_and_errors_live_acks_as_not_applied() {
         List<String> delivered = Collections.synchronizedList(new ArrayList<>());
         ReactiveHandover<String, String> handover = handover(delivered);
         FakeSource stopped = source(List.of("R1", "R2"), false);
@@ -1206,10 +1206,107 @@ class ReactiveHandoverTest {
 
         StepVerifier.create(handover.catchUp(stopped)).expectNext(false).verifyComplete();
 
-        // A failed catch-up errors this ack. A stopped one completes it: the payload was dropped, not rejected, which
-        // is what lets a shared feed keep serving its other projections.
-        StepVerifier.create(handover.accept("L1")).verifyComplete();
+        // Not folded, so the ack must not complete as if it were. Errored as not applied rather than as a failed
+        // catch-up, and the handover does not refuse for good, which is what lets a shared feed keep serving its
+        // other projections.
+        StepVerifier.create(handover.acceptReportingDelivery("L1")).expectNext(false).verifyComplete();
+        StepVerifier.create(handover.accept("L1"))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload")))
+                .verify();
+        assertThat(handover.refusesPermanently()).isFalse();
         assertThat(delivered).containsExactly("R1");
+    }
+
+    @Test
+    void accept_during_a_replay_completes_only_once_the_drain_has_folded_the_payload() throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = handoverHoldingItsReplayAt("R1", delivered, replaying, releaseReplay, null);
+        try {
+            CompletableFuture<Boolean> catchUp = handover.catchUp(source(List.of("R1"), false)).subscribeOn(Schedulers.boundedElastic()).toFuture();
+            awaitLatchQuietly(replaying);
+
+            CompletableFuture<List<String>> foldedWhenAcceptCompleted = handover.accept("L1")
+                    .then(Mono.fromCallable(() -> List.copyOf(delivered)))
+                    .toFuture();
+            releaseReplay.countDown();
+
+            assertThat(catchUp.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(foldedWhenAcceptCompleted.get(5, TimeUnit.SECONDS)).as("what was folded when accept(..) completed")
+                    .containsExactly("R1", "L1");
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    @Test
+    void a_replay_stopped_while_accept_waits_errors_accept_and_folds_nothing() throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = handoverHoldingItsReplayAt("R1", delivered, replaying, releaseReplay, null);
+        FakeSource stopping = source(List.of("R1", "R2"), false);
+        stopping.stopAfter(1);
+        try {
+            CompletableFuture<Boolean> catchUp = handover.catchUp(stopping).subscribeOn(Schedulers.boundedElastic()).toFuture();
+            awaitLatchQuietly(replaying);
+
+            CompletableFuture<Void> accepted = handover.accept("L1").toFuture();
+            releaseReplay.countDown();
+
+            assertThat(catchUp.get(5, TimeUnit.SECONDS)).isFalse();
+            assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what accept(..) errored with once the replay stopped")
+                    .cause()
+                    .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                    .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
+            assertThat(delivered).containsExactly("R1");
+            assertThat(handover.refusesPermanently()).isFalse();
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    @Test
+    void a_catch_up_failing_while_accept_waits_errors_accept_with_the_failure() throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        IllegalStateException foldFailure = new IllegalStateException("fold failed");
+        ReactiveHandover<String, String> handover = handoverHoldingItsReplayAt("R1", delivered, replaying, releaseReplay, foldFailure);
+        try {
+            CompletableFuture<Boolean> catchUp = handover.catchUp(source(List.of("R1"), false)).subscribeOn(Schedulers.boundedElastic()).toFuture();
+            awaitLatchQuietly(replaying);
+
+            CompletableFuture<Void> accepted = handover.accept("L1").toFuture();
+            releaseReplay.countDown();
+
+            assertThatThrownBy(() -> catchUp.get(5, TimeUnit.SECONDS)).hasCause(foldFailure);
+            assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what accept(..) errored with once the catch-up failed")
+                    .cause()
+                    .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                    .hasMessage(HandoverMessages.catchUpFailed("test payload"))
+                    .hasCauseReference(foldFailure);
+            assertThat(delivered).isEmpty();
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    private static ReactiveHandover<String, String> handoverHoldingItsReplayAt(String held, List<String> delivered, CountDownLatch reached,
+                                                                               CountDownLatch release, RuntimeException failure) {
+        return ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals(held)) {
+                reached.countDown();
+                awaitLatchQuietly(release);
+                if (failure != null) {
+                    throw failure;
+                }
+            }
+            delivered.add(payload);
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
     }
 
     @Test

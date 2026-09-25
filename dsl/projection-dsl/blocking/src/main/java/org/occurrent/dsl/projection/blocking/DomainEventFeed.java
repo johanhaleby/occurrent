@@ -214,10 +214,18 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Feed a live domain event to the registered projection, on the calling thread. Call this from the broker
-     * listener, acknowledging the message only once it returns. An exception from the projection propagates.
+     * Feed a live domain event to the registered projection. Call this from the broker listener, acknowledging the
+     * message only once it returns.
+     * <p>
+     * Once the projection is live the event is folded on the calling thread, and an exception from the projection
+     * propagates. Before the projection goes live, and while a catch-up runs on a projection that already went live,
+     * this waits until the drain after the replay has folded the event, and throws when it does not fold it, a
+     * catch-up stopped or failed before the projection went live, say. {@link CatchupProjectionFeed#accept(Object)}
+     * has the details, including what a long wait does to a Kafka consumer.
      *
-     * @throws IllegalStateException if no projection is registered on this feed. Refused rather than accepted,
+     * @throws IllegalStateException if the event was not folded, for the reasons
+     *                               {@link CatchupProjectionFeed#accept(Object)} lists, or if no projection is
+     *                               registered on this feed. The latter is refused rather than accepted,
      *                               because the listener acknowledges once this returns and the broker discards what
      *                               it acknowledges, so returning normally would lose the event. See ADR 104.
      */
@@ -231,9 +239,11 @@ public final class DomainEventFeed<E> {
      * about it, so a projection keyed on the stream id, version or position works on the live path and not only during
      * the catch-up replay. Use this when the broker message carries those values and your listener can read them.
      * Otherwise call {@link #accept(Object)}, which folds with no metadata.
+     * <p>
+     * Waits for the catch-up and throws when the event was not folded, for the reasons {@link #accept(Object)} gives.
      *
-     * @throws IllegalStateException if no projection is registered on this feed, for the reason
-     *                               {@link #accept(Object)} gives.
+     * @throws IllegalStateException if the event was not folded, or if no projection is registered on this feed, for
+     *                               the reasons {@link #accept(Object)} gives.
      */
     public void accept(EventMetadata metadata, E event) {
         Objects.requireNonNull(metadata, "metadata cannot be null");
@@ -457,7 +467,11 @@ public final class DomainEventFeed<E> {
     /**
      * Stop a catch-up replay that is still in flight, so a shutting-down application does not leave one folding into
      * a store that is closing with it. The replay notices at its next event and unwinds without writing the
-     * completion marker, so the next start replays the whole history again.
+     * completion marker, so the next start replays the whole history again. An {@link #accept(Object)} waiting on a
+     * replay that started before the feed went live throws rather than returning, so its listener does not
+     * acknowledge the event, and so does one waiting on a catch-up that has not started yet. One waiting on a replay
+     * started after {@link #goLive(String)} returns normally, since the feed still applies the events that arrived
+     * while that replay ran.
      * <p>
      * Stopping is what a caller cannot do for itself. Backgrounding is not, since a caller that wants the replay off
      * its own thread can run {@link #catchUpAll()} on a thread it owns, which is what the Spring starter does for

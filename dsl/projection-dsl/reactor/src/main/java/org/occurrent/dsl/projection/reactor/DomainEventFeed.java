@@ -184,7 +184,9 @@ public final class DomainEventFeed<E> {
 
     /**
      * Feed a live domain event to the registered projection. The returned {@link Mono} completes once the projection
-     * has handled it, so the listener can acknowledge after processing.
+     * has handled it, so the listener can acknowledge after processing. Before the projection goes live it completes
+     * only once the catch-up has folded the event, and errors when it does not fold it, a stopped or failed catch-up
+     * say, see {@link CatchupProjectionFeed#accept(Object)}.
      * <p>
      * The returned {@link Mono} fails with an {@link IllegalStateException} when no projection is registered. Refused
      * rather than completed empty, because the listener acknowledges on completion and the broker discards what it
@@ -395,7 +397,11 @@ public final class DomainEventFeed<E> {
     /**
      * Stop a catch-up replay that is still in flight, so a shutting-down application does not leave one folding into
      * a store that is closing with it. The replay notices at its next event and unwinds without recording the
-     * completion marker, so the next start replays the whole history again.
+     * completion marker, so the next start replays the whole history again. The {@link Mono} {@link #accept(Object)}
+     * returned for an event waiting on a replay that started before the feed went live errors rather than completing,
+     * so its listener does not acknowledge the event. One waiting on a replay started after {@link #goLive(String)}
+     * completes once the event is folded, since the feed still applies the events that arrived while that replay
+     * ran.
      * <p>
      * Stopping is what a caller cannot do for itself. Backgrounding is not, since the returned {@link Mono} from
      * {@link #catchUpAll()} is the caller's to compose or not.

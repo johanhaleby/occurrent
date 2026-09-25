@@ -69,10 +69,10 @@ import java.util.function.Supplier;
  * than at the end of the live stream. It does <em>not</em> complete before the replayed payloads are folded: the marker
  * phase starts only after the replay phase has finished folding. The blocking engine's
  * {@code BlockingHandover.catchUp} returns only <em>after</em> the buffered live
- * payloads are drained. Both are internally consistent: a blocking {@code accept} call returns before its payload is
- * folded during the catch-up window, whereas here a live payload's {@code accept} {@link Mono} completes only once
- * its fold has actually run (including payloads buffered during the replay), even though the catch-up-done signal
- * itself already fired. Neither ordering is "fixed" by this extraction. Both are preserved as-is.
+ * payloads are drained. Both are internally consistent. On either engine a live payload's {@code accept} returns, or
+ * its {@link Mono} completes, only once its fold has actually run, including a payload buffered during the replay,
+ * and here that can be after the catch-up-done signal has already fired. Neither ordering is "fixed" by this
+ * extraction. Both are preserved as-is.
  * <p>
  * <strong>The replay runs on {@code boundedElastic}, not on the thread that called {@link #catchUp(Source)}.</strong>
  * This engine subscribes its own pipeline, so a caller that never touches the returned {@link Mono} still gets a
@@ -104,10 +104,11 @@ public final class ReactiveHandover<T, K> {
          * next catch-up replays the whole history and the handover stays usable.
          * <p>
          * What the stop does with the live payloads depends on where the handover stood when the replay started. One
-         * that had not gone live drains nothing and does not go live, and live payloads arriving after the stop are
-         * dropped and their acks complete rather than hang, the same dropped-not-deferred contract a stopped
-         * subscription model has (ADR 85). One that was already live delivers what it held back and goes on
-         * delivering, see {@link ReactiveHandover#catchUp}.
+         * that had not gone live drains nothing and does not go live. The payloads it held and those arriving after
+         * the stop are answered as not applied rather than left hanging, so {@link ReactiveHandover#accept(Object)}
+         * errors for them and {@link ReactiveHandover#acceptReportingDelivery(Object)} completes {@code false}. One
+         * that was already live delivers what it held back and goes on delivering, see
+         * {@link ReactiveHandover#catchUp}.
          */
         default boolean keepReplaying() {
             return true;
@@ -149,9 +150,8 @@ public final class ReactiveHandover<T, K> {
          * about to be delivered. Called immediately before every drain, including the one for a source that was
          * already caught up and replayed nothing, which is what makes it different from {@link #replayCompleted()}.
          * <p>
-         * A buffered payload is delivered exactly once and never again, since whoever fed it here has already been
-         * told it was handled, so a source that reports its own catch-up phase has to stop calling this part of the
-         * work a replay before the drain rather than after it
+         * A buffered payload is delivered exactly once and never again, so a source that reports its own catch-up
+         * phase has to stop calling this part of the work a replay before the drain rather than after it
          * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
          * decision 6). The default does nothing.
          */
@@ -201,7 +201,9 @@ public final class ReactiveHandover<T, K> {
     /**
      * Thrown by {@link #acceptReportingDelivery(Object)} and {@link #acceptIfLive(Object)} for a refusal decided
      * before any dispatch was attempted, a permanently failed catch-up, a full live buffer with nothing draining
-     * it, or a {@code dedupId} function that returned {@code null} for the payload, none of them a delivery.
+     * it, or a {@code dedupId} function that returned {@code null} for the payload, none of them a delivery. Also
+     * what {@link #accept(Object)} errors with for every payload {@link #acceptReportingDelivery(Object)} would
+     * complete {@code false} for, so the caller offers it again.
      * Distinct from any other {@link IllegalStateException} either method can error with, in particular one a
      * delivered payload's own handler errors with, so a caller that needs to tell those apart can catch this type
      * specifically instead of classifying every {@link IllegalStateException} alike. Mirrors
@@ -351,29 +353,39 @@ public final class ReactiveHandover<T, K> {
     /**
      * Feed a live payload. The returned {@link Mono} completes once the payload has been folded (or immediately if it
      * is a de-duplicated overlap). Payloads fed before or during the catch-up are buffered and delivered after the
-     * replay.
+     * replay, and the {@link Mono} completes only then.
      * <p>
-     * A payload fed after a failed catch-up is refused rather than completed, and stays refused: the caller
-     * acknowledges on completion, so completing would acknowledge a payload nothing handled. Recovery is the caller's
-     * to choose, not this engine's (ADR 104).
+     * Errors rather than completing whenever the payload was not folded, since the caller acknowledges on completion
+     * and completing would acknowledge a payload nothing handled. That covers a replay stopped before the handover
+     * went live, which errors every payload it held, a payload fed while this handover is stopped, and a failed
+     * catch-up, which refuses every payload from then on. Recovery is the caller's to choose, not this engine's
+     * (ADR 104), and for a broker listener it means not acknowledging, so the broker delivers the payload again.
      */
     public Mono<Void> accept(T payload) {
-        return acceptReportingDelivery(payload).then();
+        Objects.requireNonNull(payload, "payload cannot be null");
+        return offer(payload).flatMap(outcome -> switch (outcome) {
+            case APPLIED -> Mono.<Void>empty();
+            case STOPPED -> Mono.error(new PreDispatchRefusalException(this, HandoverMessages.stoppedBeforeApplied(noun)));
+            case NOT_LIVE -> Mono.error(new AssertionError("Only acceptIfLive(..) answers a payload as not live."));
+        });
     }
 
     /**
-     * As {@link #accept(Object)}, additionally emitting whether the payload was genuinely handled (buffered for the
-     * replay to drain, delivered live, or already delivered by an earlier attempt) rather than silently dropped
-     * because a replay that would have drained it was stopped. A caller that acknowledges an externally sourced
-     * payload (a broker message, say) needs this to tell the two apart, since {@link #accept(Object)} completes
-     * normally either way.
+     * As {@link #accept(Object)}, except a payload that was not folded because this handover is stopped, or because
+     * a replay that would have drained it was stopped, completes {@code false} rather than erroring. Waits for the
+     * drain the same way {@link #accept(Object)} does.
      *
-     * @return A {@link Mono} that completes with {@code false} only when this handover is stopped and the payload
-     *         was dropped rather than buffered or delivered, and {@code true} otherwise, including a de-duplicated
-     *         repeat of an already-delivered payload. Errors for the same reasons {@link #accept(Object)} does.
+     * @return A {@link Mono} that completes with {@code true} once the payload has been folded, live or by the drain,
+     *         including a de-duplicated repeat of an already-delivered payload, and with {@code false} when this
+     *         handover is stopped or the replay was stopped before going live, so the payload was never folded.
+     *         Every {@code false} is safe to offer again. Errors for the other reasons {@link #accept(Object)} does.
      */
     public Mono<Boolean> acceptReportingDelivery(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
+        return offer(payload).map(outcome -> outcome == Outcome.APPLIED);
+    }
+
+    private Mono<Outcome> offer(T payload) {
         return Mono.create(ackSink -> bufferOrDeliverLive(payload, ackSink));
     }
 
@@ -404,7 +416,7 @@ public final class ReactiveHandover<T, K> {
      */
     public Mono<Boolean> acceptIfLive(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
-        return Mono.create(ackSink -> {
+        return Mono.<Outcome>create(ackSink -> {
             Throwable failure = terminalError.get();
             if (failure != null) {
                 ackSink.error(catchUpFailed(failure));
@@ -416,17 +428,17 @@ public final class ReactiveHandover<T, K> {
                 // already promised it can redeliver, so there is nothing to gain by holding the payload instead of
                 // asking again later. A replay on a handover that is already live pauses live delivery, and counts
                 // as still replaying here, the same as on the blocking engine.
-                ackSink.success(false);
+                ackSink.success(Outcome.NOT_LIVE);
                 return;
             }
             bufferOrDeliverLive(payload, ackSink);
-        });
+        }).map(outcome -> outcome == Outcome.APPLIED);
     }
 
     // Shared by acceptReportingDelivery(..) and, once live, by acceptIfLive(..): registers the pending ack, re-checks
     // the terminal failure and stopped flag under the same race window acceptReportingDelivery has always had to
     // guard, then reserves the dedup key and hands the item to liveSink for the concatMap pipeline to drain.
-    private void bufferOrDeliverLive(T payload, MonoSink<Boolean> ackSink) {
+    private void bufferOrDeliverLive(T payload, MonoSink<Outcome> ackSink) {
         LiveAck ack = new LiveAck(ackSink);
         ackSink.onDispose(() -> pendingLiveAcks.remove(ack));
         Throwable failure = terminalError.get();
@@ -435,10 +447,11 @@ public final class ReactiveHandover<T, K> {
             return;
         }
         if (stopped && !live) {
-            // Dropped rather than buffered, and the ack completes rather than failing. The replay that would have
-            // drained this buffer was stopped, so nothing is coming to fold it. Dropped, not deferred (ADR 85). A
-            // handover that has gone live delivers instead, whatever a stop left behind, since its live pipeline runs.
-            ackSink.success(false);
+            // Answered as stopped rather than buffered. The replay that would have drained this buffer was stopped,
+            // so nothing is coming to fold it, and accept(..) errors so its caller offers the payload again. A
+            // handover that has gone live delivers instead, whatever a stop left behind, since its live pipeline
+            // runs.
+            ackSink.success(Outcome.STOPPED);
             return;
         }
         pendingLiveAcks.add(ack);
@@ -451,7 +464,7 @@ public final class ReactiveHandover<T, K> {
             return;
         }
         if (stopped && !live) {
-            ackSink.success(false);
+            ackSink.success(Outcome.STOPPED);
             return;
         }
         K key;
@@ -563,13 +576,18 @@ public final class ReactiveHandover<T, K> {
                     // Left at the head, so whatever runs next starts with it and the order holds.
                     return true;
                 }
-                // The pipeline is gone, so nothing is coming to deliver this payload. Dropped rather than
-                // refused, the same answer the stopped check above gives. Also defence rather than a reachable
-                // path, since that check runs first and catches every way the pipeline ends today.
+                // The live pipeline has ended, so nothing is coming to deliver this payload. No path reaches this, since
+                // only the live phase takes from the sink and deliverItem(..) recovers from every live delivery error.
+                // An error outside a delivery would end it, and the pipeline's error handler records and logs that
+                // error. A null failure means the handler has not run yet, so the refusal has no cause attached, and
+                // the handler's log line is where the cause shows up.
                 case FAIL_TERMINATED, FAIL_CANCELLED -> {
                     pendingOffers.poll();
                     dropFromBacklogAndDrains(pending.item());
-                    pending.ack().success(false);
+                    Throwable failure = terminalError.get();
+                    pending.ack().error(failure == null
+                            ? new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun))
+                            : catchUpFailed(failure));
                 }
                 default -> {
                     pendingOffers.poll();
@@ -615,7 +633,7 @@ public final class ReactiveHandover<T, K> {
 
     // An offer waiting its turn at the sink, with the point in time after which this engine stops offering it and
     // reports contention instead.
-    private record PendingOffer<K>(Item<K> item, MonoSink<Boolean> ack, long deadline) {
+    private record PendingOffer<K>(Item<K> item, MonoSink<Outcome> ack, long deadline) {
     }
 
     /**
@@ -780,9 +798,9 @@ public final class ReactiveHandover<T, K> {
                 }, error -> {
                     if (error == CatchupStopped.INSTANCE) {
                         // Stopped, not failed. No marker, no drain, and no terminal error, so the handover stays
-                        // usable. A handover that never went live drops what it buffered, and the acks of those
-                        // payloads complete rather than fail, because each was dropped rather than rejected. One that
-                        // was already live goes on delivering them, the same as the blocking engine.
+                        // usable. A handover that never went live drops what it buffered and answers each of those
+                        // payloads STOPPED, so accept(..) errors and its caller offers it again. One that was already
+                        // live goes on delivering them, the same as the blocking engine.
                         boolean wasLive = live;
                         if (!wasLive) {
                             stopped = true;
@@ -792,7 +810,7 @@ public final class ReactiveHandover<T, K> {
                         // caller offering a payload again cannot have it delivered while the copy it is replacing is
                         // still waiting for an answer.
                         if (!wasLive) {
-                            dropPendingLiveAcks().forEach(dropped -> dropped.sink().success(false));
+                            dropPendingLiveAcks().forEach(dropped -> dropped.sink().success(Outcome.STOPPED));
                         }
                         resumeLiveDelivery(pause);
                         releaseReplayTurn(holdsReplayTurn);
@@ -1075,19 +1093,19 @@ public final class ReactiveHandover<T, K> {
         LiveAck liveAck = item.ack();
         if (liveAck != null) {
             if (!liveAck.settle()) {
-                // Answered false by a stop, and its caller offers it again.
+                // A stop already answered it, and its caller offers it again.
                 return Mono.empty();
             }
-            MonoSink<Boolean> ack = liveAck.sink();
+            MonoSink<Outcome> ack = liveAck.sink();
             if (deliveredIds.contains(item.dedupKey())) {
-                ack.success(true);
+                ack.success(Outcome.APPLIED);
                 return Mono.empty();
             }
             if (replayedIds.contains(item.dedupKey())) {
                 // Applied by the replay already, so delivering it again would apply it twice. The source is told
                 // instead, and the acknowledgement waits for that call rather than running ahead of it (ADR 137).
                 return Mono.defer(item.alreadyDeliveredByReplay())
-                        .doOnSuccess(v -> ack.success(true))
+                        .doOnSuccess(v -> ack.success(Outcome.APPLIED))
                         .onErrorResume(error -> {
                             ack.error(error);
                             return Mono.empty();
@@ -1098,7 +1116,7 @@ public final class ReactiveHandover<T, K> {
             return Mono.defer(item.deliver())
                     .doOnSuccess(v -> {
                         deliveredIds.add(item.dedupKey());
-                        ack.success(true);
+                        ack.success(Outcome.APPLIED);
                     })
                     .onErrorResume(error -> {
                         ack.error(error);
@@ -1137,6 +1155,12 @@ public final class ReactiveHandover<T, K> {
         return key;
     }
 
+    // How a live payload's offer ended. acceptReportingDelivery(..) and acceptIfLive(..) report APPLIED as true and
+    // everything else as false, and accept(..) errors with the reason.
+    private enum Outcome {
+        APPLIED, NOT_LIVE, STOPPED
+    }
+
     // A live payload's acknowledgement. A stop and the path that delivers or refuses the payload both claim it, and
     // the first to claim it answers it and gives back the payload's place in the backlog and in the drains.
     private static final class LiveAck {
@@ -1145,16 +1169,16 @@ public final class ReactiveHandover<T, K> {
         private static final int SETTLED = 1;
         private static final int DROPPED_BY_STOP = 2;
 
-        private final MonoSink<Boolean> sink;
+        private final MonoSink<Outcome> sink;
         private final java.util.concurrent.atomic.AtomicInteger state = new java.util.concurrent.atomic.AtomicInteger(OPEN);
         // Written and read under the admission guard only.
         private long turn = NOT_ADMITTED;
 
-        private LiveAck(MonoSink<Boolean> sink) {
+        private LiveAck(MonoSink<Outcome> sink) {
             this.sink = sink;
         }
 
-        private MonoSink<Boolean> sink() {
+        private MonoSink<Outcome> sink() {
             return sink;
         }
 
