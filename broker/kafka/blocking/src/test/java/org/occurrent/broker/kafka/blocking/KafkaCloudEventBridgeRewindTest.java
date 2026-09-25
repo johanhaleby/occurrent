@@ -231,9 +231,13 @@ class KafkaCloudEventBridgeRewindTest {
         doAnswer(invocation -> {
             CloudEvent cloudEvent = invocation.getArgument(0);
             offered.add(cloudEvent.getId());
-            RoutingOutcome outcome = "id-1".equals(cloudEvent.getId()) ? RoutingOutcome.REFUSED : RoutingOutcome.DELIVERED;
-            outcomeChannel.observe(cloudEvent, outcome);
-            return null;
+            if ("id-1".equals(cloudEvent.getId())) {
+                // The real model reports REFUSED and throws rather than returning it
+                outcomeChannel.observe(cloudEvent, RoutingOutcome.REFUSED);
+                throw new IllegalStateException("catch-up failed");
+            }
+            outcomeChannel.observe(cloudEvent, RoutingOutcome.DELIVERED);
+            return RoutingOutcome.DELIVERED;
         }).when(model).acceptRedeliverable(any(CloudEvent.class));
         KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model, outcomeChannel);
 
