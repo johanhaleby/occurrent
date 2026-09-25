@@ -339,7 +339,7 @@ public final class BlockingHandover<T, K> {
      * is stopped. Unlike {@link #accept(Object)}, a buffered payload is reported {@code true} before {@code deliver}
      * has applied it. That is only for the write path of the store the replay reads, where the payload is already
      * stored. {@link Source#markCaughtUp()} runs only after the drain, so a crash during this handover's replay leaves
-     * its own marker unwritten and the next start replays the payload from the store. That holds only while no other
+     * its own marker unwritten and the next start replays the payload from the store. That is true only while no other
      * instance sharing the same marker storage writes the marker first, since the next start then skips the replay
      * and nothing applies the payload. A payload from anywhere else goes through {@link #accept(Object)}, which waits
      * until it is applied.
