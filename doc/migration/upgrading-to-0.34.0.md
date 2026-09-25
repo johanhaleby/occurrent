@@ -39,9 +39,12 @@ Then a subscription handler Spring's proxy cannot invoke now fails startup inste
 and every annotation-based handler registers later, once singleton construction has finished, so a live-only
 subscription no longer sees an event a bean wrote from its own startup. Read
 [section 11](#11-a-subscription-handler-spring-cannot-invoke-now-fails-startup-and-a-live-subscription-can-miss-a-startup-write).
-Finally, a blocking projection feed's `accept(..)` now waits during a catch-up until the event is applied, and
-throws when it was not, so a call on the same thread that later starts the catch-up never returns. Read
-[section 12](#12-a-blocking-projection-feeds-accept-waits-until-the-event-is-applied-and-throws-when-it-is-not).
+Finally, a projection feed's `accept(..)` no longer reports an event it did not apply as handled. On the blocking
+stack it now waits during a catch-up until the event is applied and throws when it was not, so a call on the same
+thread that later starts the catch-up waits until another thread runs the catch-up, takes the feed live, calls
+`stopCatchUp()` or interrupts it. On the reactor stack its `Mono` now errors for an event fed while the feed is
+stopped. Read
+[section 12](#12-a-projection-feeds-accept-waits-until-the-event-is-applied-and-fails-when-it-is-not).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -992,10 +995,11 @@ depends on.
 There is no recipe for either change. A proxy-invocability failure and a startup ordering dependency are both
 runtime behavior, not a call site a rewrite could search for.
 
-## 12. A blocking projection feed's `accept(..)` waits until the event is applied, and throws when it is not
+## 12. A projection feed's `accept(..)` waits until the event is applied, and fails when it is not
 
-This covers `CatchupProjectionFeed.accept(..)` and `DomainEventFeed.accept(..)` on the blocking stack, fixed for
-[#1135](https://github.com/johanhaleby/occurrent/issues/1135). In 0.33.0 an event fed before the feed went live was
+This covers `CatchupProjectionFeed.accept(..)` and `DomainEventFeed.accept(..)` on both stacks, fixed for
+[#1135](https://github.com/johanhaleby/occurrent/issues/1135). The reactor stack changes in one case only, covered
+after the blocking cases. In 0.33.0 an event fed before the blocking feed went live was
 put in a buffer and `accept(..)` returned straight away. A listener acknowledges the message once `accept(..)`
 returns, so the broker discarded an event that was only held in memory, and a stop or a crash before the catch-up
 finished lost it.
@@ -1030,6 +1034,11 @@ In 0.33.0 a stopped feed and a second delivery of an event still being applied b
 listener acknowledged an event that nothing had applied. Do not acknowledge the message when `accept(..)` throws,
 and the broker delivers it again. A listener that acknowledges only after `accept(..)` returns, and lets an
 exception reach the broker client, needs no change.
+
+In 0.33.0 an event fed while the feed was not live from inside the projection, a view or another callback of the
+same feed was applied. Now it is refused. Thrown while the catch-up replays history into the projection or a view,
+that refusal fails the catch-up, and the feed refuses every event until you build a new one. A caller that catches
+the refusal and continues drops the nested event.
 
 A long replay keeps the listener thread waiting. A Kafka consumer that waits past its `max.poll.interval.ms`, five
 minutes by default, is taken out of its consumer group, and the record is delivered again once the partition is

@@ -174,7 +174,8 @@ public final class CatchupProjectionFeed<E> {
      * A long replay can keep this call waiting for minutes. A Kafka consumer waiting past its
      * {@code max.poll.interval.ms}, five minutes by default, is taken out of its group and the record is delivered
      * again, which costs a redelivery rather than the event. Never call this on the thread that is about to call
-     * {@link #catchUp()} or {@link #goLive()}, since nothing else would drain the buffer.
+     * {@link #catchUp()} or {@link #goLive()}. It waits until another thread runs the catch-up, takes the feed live,
+     * calls {@link #stopCatchUp()} or interrupts it.
      *
      * @param event The domain event received from the external source.
      * @throws IllegalStateException if the event was not folded, because the catch-up was stopped before the feed

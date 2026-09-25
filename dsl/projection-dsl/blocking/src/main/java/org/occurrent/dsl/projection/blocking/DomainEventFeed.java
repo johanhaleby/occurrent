@@ -220,7 +220,7 @@ public final class DomainEventFeed<E> {
      * Once the projection is live the event is folded on the calling thread, and an exception from the projection
      * propagates. Before the projection goes live, and while a catch-up runs on a projection that already went live,
      * this waits until the drain after the replay has folded the event, and throws when it does not fold it, a
-     * stopped or failed catch-up say. {@link CatchupProjectionFeed#accept(Object)}
+     * catch-up stopped or failed before the projection went live, say. {@link CatchupProjectionFeed#accept(Object)}
      * has the details, including what a long wait does to a Kafka consumer.
      *
      * @throws IllegalStateException if the event was not folded, for the reasons
