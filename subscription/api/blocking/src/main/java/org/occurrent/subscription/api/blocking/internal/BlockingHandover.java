@@ -316,7 +316,8 @@ public final class BlockingHandover<T, K> {
      * A long replay can keep this call waiting for minutes. A Kafka consumer waiting past its
      * {@code max.poll.interval.ms}, five minutes by default, is taken out of its group and the record is delivered
      * again, which costs a redelivery rather than the event. Never call this from the thread that runs
-     * {@link #catchUp(Source)} before that call, since nothing else would drain the buffer.
+     * {@link #catchUp(Source)} before that call. It waits until another thread calls {@link #catchUp(Source)} or
+     * {@link #stopIfNotCatchingUp()}, or interrupts it.
      * <p>
      * Once live, {@code deliver} runs outside this engine's monitor (see the class javadoc), so a concurrent caller
      * gets a concurrent {@code deliver} call, not one queued behind another payload's fold.
@@ -590,8 +591,11 @@ public final class BlockingHandover<T, K> {
         boolean replayOpen = false;
         // Whether this call took the replay turn, so only the call that took it gives it back.
         boolean holdsReplayTurn = false;
-        enterOwnCall();
+        // Set once enterOwnCall() returns, so the finally below takes back only a depth this call added.
+        boolean enteredOwnCall = false;
         try {
+            enterOwnCall();
+            enteredOwnCall = true;
             if (source.isAlreadyCaughtUp()) {
                 synchronized (lock) {
                     if (replayRunning) {
@@ -792,18 +796,23 @@ public final class BlockingHandover<T, K> {
             }
             throw e;
         } finally {
-            exitOwnCall();
-            synchronized (lock) {
-                if (holdsReplayTurn) {
-                    replayTurnHeld = false;
+            try {
+                if (enteredOwnCall) {
+                    exitOwnCall();
                 }
-                catchUpsInProgress--;
-                // The last catch-up to return stops a handover that is neither live nor failed, so no waiting payload
-                // goes unanswered. An interrupted catch-up that is not the last to return does not stop it.
-                if (catchUpsInProgress == 0 && !live && catchUpFailure == null) {
-                    stopUnderLock();
+            } finally {
+                synchronized (lock) {
+                    if (holdsReplayTurn) {
+                        replayTurnHeld = false;
+                    }
+                    catchUpsInProgress--;
+                    // The last catch-up to return stops a handover that is neither live nor failed, so no waiting
+                    // payload goes unanswered. An interrupted catch-up that is not the last to return does not stop it.
+                    if (catchUpsInProgress == 0 && !live && catchUpFailure == null) {
+                        stopUnderLock();
+                    }
+                    lock.notifyAll();
                 }
-                lock.notifyAll();
             }
         }
     }
@@ -845,11 +854,14 @@ public final class BlockingHandover<T, K> {
     }
 
     private void reportAlreadyDeliveredByReplay(Source<T> replayedBy, T payload) {
-        enterOwnCall();
         try {
-            replayedBy.alreadyDeliveredByReplay(payload);
+            enterOwnCall();
+            try {
+                replayedBy.alreadyDeliveredByReplay(payload);
+            } finally {
+                exitOwnCall();
+            }
         } finally {
-            exitOwnCall();
             synchronized (lock) {
                 replayCallbacksRunning--;
                 lock.notifyAll();
@@ -1040,12 +1052,15 @@ public final class BlockingHandover<T, K> {
     // replay writes replayedIds instead.
     private void deliverOutsideLock(T payload, K key) {
         boolean succeeded = false;
-        enterOwnCall();
         try {
-            deliver.accept(payload);
-            succeeded = true;
+            enterOwnCall();
+            try {
+                deliver.accept(payload);
+                succeeded = true;
+            } finally {
+                exitOwnCall();
+            }
         } finally {
-            exitOwnCall();
             synchronized (lock) {
                 inFlight.remove(key);
                 if (succeeded) {

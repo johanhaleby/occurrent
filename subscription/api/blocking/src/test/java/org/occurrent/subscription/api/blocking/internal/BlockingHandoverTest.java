@@ -875,6 +875,82 @@ class BlockingHandoverTest {
         }
     }
 
+    // The refusal covers only an accept(..) that would wait. On a live handover the nested payload is delivered on the
+    // same thread and nothing waits.
+    @Test
+    void accept_from_inside_a_live_delivery_with_no_catch_up_running_delivers_the_nested_payload() {
+        List<String> delivered = new ArrayList<>();
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
+        AtomicReference<Throwable> thrownByNestedAccept = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("L1")) {
+                thrownByNestedAccept.set(catchThrowable(() -> self.get().accept("L2")));
+            }
+            delivered.add(payload);
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        self.set(handover);
+        handover.catchUp(source(List.of(), true));
+
+        handover.accept("L1");
+
+        assertThat(thrownByNestedAccept.get()).as("what the nested accept(..) threw").isNull();
+        assertThat(delivered).containsExactly("L2", "L1");
+    }
+
+    // A thread whose live delivery threw is no longer inside the handover's own work, so a later accept(..) from it
+    // during a catch-up waits for the drain rather than being refused.
+    @Test
+    void a_live_delivery_that_throws_does_not_leave_its_thread_refused_by_a_later_waiting_accept() throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("BOOM")) {
+                throw new IllegalStateException("BOOM");
+            }
+            if (payload.equals("R1")) {
+                replaying.countDown();
+                awaitLatch(releaseReplay);
+            }
+            delivered.add(payload);
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.catchUp(source(List.of(), true));
+        CountDownLatch boomThrown = new CountDownLatch(1);
+        CountDownLatch acceptAgain = new CountDownLatch(1);
+        AtomicReference<Throwable> thrownByBoom = new AtomicReference<>();
+        AtomicReference<Throwable> thrownByLaterAccept = new AtomicReference<>();
+        Thread listener = new Thread(() -> {
+            thrownByBoom.set(catchThrowable(() -> handover.accept("BOOM")));
+            boomThrown.countDown();
+            awaitLatch(acceptAgain);
+            thrownByLaterAccept.set(catchThrowable(() -> handover.accept("L1")));
+        }, "listener");
+        Thread replay = new Thread(() -> handover.catchUp(source(List.of("R1"), false)), "replay");
+        try {
+            listener.start();
+            awaitLatch(boomThrown);
+            replay.start();
+            awaitLatch(replaying);
+            acceptAgain.countDown();
+            awaitWaiting(listener);
+
+            releaseReplay.countDown();
+            listener.join(5_000);
+            replay.join(5_000);
+
+            assertThat(listener.isAlive()).as("the listener ended").isFalse();
+            assertThat(replay.isAlive()).as("the catch-up ended").isFalse();
+            assertThat(thrownByBoom.get()).as("what the throwing live delivery threw").hasMessage("BOOM");
+            assertThat(thrownByLaterAccept.get()).as("what the later accept(..) threw").isNull();
+            assertThat(delivered).containsExactly("R1", "L1");
+        } finally {
+            releaseReplay.countDown();
+            acceptAgain.countDown();
+            listener.interrupt();
+            replay.interrupt();
+        }
+    }
+
     @Test
     void two_waiting_accepts_of_the_same_payload_both_return_once_the_drain_has_applied_it_once() throws Exception {
         List<String> delivered = new CopyOnWriteArrayList<>();
