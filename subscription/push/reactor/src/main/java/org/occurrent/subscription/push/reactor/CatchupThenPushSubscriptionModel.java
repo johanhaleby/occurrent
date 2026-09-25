@@ -76,7 +76,8 @@ import java.util.function.Supplier;
  * restart skips the replay once the marker exists. Use a durable subscription if that is not acceptable.
  * <p>
  * Fed from a broker, call {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} and acknowledge the message
- * only when the {@link Mono} it returns completes normally. It refuses an event arriving during the replay instead of
+ * only when its {@link Mono} completes with {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or
+ * {@link org.occurrent.subscription.RoutingOutcome#FILTERED}. It refuses an event arriving during the replay instead of
  * buffering it, so the broker delivers that event again, and a delivery after this model has gone live applies it.
  * Delivery is at-least-once, so
  * a handler that sees the same event twice has to leave the same state as seeing it once. Do not acknowledge on {@code accept(..)} completing, since it also completes for

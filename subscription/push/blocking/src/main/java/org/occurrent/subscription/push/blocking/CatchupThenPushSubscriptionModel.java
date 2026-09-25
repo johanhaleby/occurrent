@@ -72,9 +72,9 @@ import java.util.stream.Stream;
  *       an event nothing handled depends on what feeds the {@link PushSubscriptionModel}.
  *       <ul>
  *         <li>Fed from a broker, the listener calls {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} and
- *             acknowledges the message only when it returns normally and the {@link PushObserver} was told an outcome
- *             for which {@link org.occurrent.subscription.RoutingOutcome#mayAcknowledge()} is true. During the
- *             replay it refuses the event instead of buffering it, so the broker delivers it again, and a delivery
+ *             acknowledges the message only when the outcome it returns is
+ *             {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or
+ *             {@link org.occurrent.subscription.RoutingOutcome#FILTERED}. During the replay it refuses the event instead of buffering it, so the broker delivers it again, and a delivery
  *             after this model has gone live applies it. Delivery is at-least-once, so applying the same event twice
  *             must leave the projection as applying it once would, the same contract as the change-stream path.</li>
  *         <li>Fed from the event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)}, nothing

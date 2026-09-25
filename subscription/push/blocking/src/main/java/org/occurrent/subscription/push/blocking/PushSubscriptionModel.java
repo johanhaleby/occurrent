@@ -31,6 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
@@ -47,9 +48,8 @@ import java.util.function.Consumer;
  * Fed from the event store's write path, this model keeps no record of which events the subscription has handled. When
  * the application crashes after a write has committed but before the handler has run, this subscription never sees
  * that event. Use a durable subscription if that is not acceptable. Fed from a broker, call
- * {@link #acceptRedeliverable(CloudEvent)} and acknowledge the message only when it returns normally and a configured
- * {@link PushObserver} was told an outcome for which {@link RoutingOutcome#mayAcknowledge()} is true. Returning
- * normally is not enough on its own, see that method.
+ * {@link #acceptRedeliverable(CloudEvent)} and acknowledge the message only when the {@link RoutingOutcome} it
+ * returns is {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}.
  * <p>
  * <strong>One model feeds one subscription</strong>, and a second {@code subscribe} is refused. The acknowledgement is
  * what forces it: this model has exactly one per received event, so several handlers on it would share the decision to
@@ -64,8 +64,7 @@ import java.util.function.Consumer;
  * Like {@code SynchronousSubscriptionModel}, it has no start position, checkpoint, catch-up, or replay. It only
  * ever reacts to events fed to it here and now. It is a full {@link org.occurrent.subscription.api.blocking.SubscriptionModel}, so stopping it, or pausing
  * a subscription, drops rather than defers events that arrive in the meantime (ADR 85). {@link #accept(CloudEvent)}
- * and {@link #acceptRedeliverable(CloudEvent)} return normally either way, so a listener that acknowledges on return
- * alone acknowledges those events too, and
+ * returns normally either way, so a listener that acknowledges on its return acknowledges those events too, and
  * stopping this model while the push feed keeps running loses them for good. For catch-up from the event store
  * before attaching the push feed, wrap it in the replay-then-push catch-up model. The shared register-and-route
  * machinery lives in {@link RegisteringSubscribable}.
@@ -116,8 +115,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * <p>
      * <strong>An event fed before any subscription is registered is dropped, and this returns normally.</strong> A
      * listener that acknowledges once this returns therefore acknowledges an event nothing consumed. A broker
-     * listener calls {@link #acceptRedeliverable(CloudEvent)} instead and acknowledges on the outcome its
-     * {@link PushObserver} is told, see that method. This method cannot refuse the event on your behalf, because it
+     * listener calls {@link #acceptRedeliverable(CloudEvent)} instead and acknowledges on the outcome it returns. This method cannot refuse the event on your behalf, because it
      * is also fed from the write path (an {@code InMemoryEventStore} listener, say), where the event is already
      * durably stored and refusing would fail the write instead of protecting anything. See ADR 104. A configured {@link PushObserver} is told the event's {@link RoutingOutcome}, and that is where to get
      * visibility into it instead. It is not told at all when the filter or the matched action fails in a way this
@@ -142,24 +140,37 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * can redeliver the same event later, never from a write path that cannot, since a write-path event this call
      * refuses is lost rather than protected, the same reason {@link #accept(CloudEvent)} itself never refuses.
      * <p>
-     * Returning normally does not mean the event was applied. This also returns normally for
-     * {@link RoutingOutcome#UNAVAILABLE}, when no subscription is registered, this model is stopped or the
-     * subscription is paused, and for {@link RoutingOutcome#DEFERRED}, which also covers an event whose earlier
-     * delivery is still running on another thread. Acknowledge the message only when this returns normally and the
-     * {@link PushObserver} was told {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}, the two
-     * outcomes for which {@link RoutingOutcome#mayAcknowledge()} is true. A handler failure and a failed catch-up
-     * throw instead.
+     * Acknowledge the message when this returns {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED},
+     * the two outcomes for which {@link RoutingOutcome#mayAcknowledge()} is true, and have the broker redeliver it
+     * otherwise. It returns {@link RoutingOutcome#DELIVERED} once the handler has run, {@link RoutingOutcome#FILTERED}
+     * when the subscription's filter declines the event, {@link RoutingOutcome#UNAVAILABLE} when no subscription is
+     * registered, this model is stopped or the subscription is paused, and {@link RoutingOutcome#DEFERRED} for an
+     * event refused during the replay or whose earlier delivery is still running on another thread.
+     * <p>
+     * It throws instead of returning when the handler throws, when the subscription's filter throws, and when the
+     * catch-up has failed, in each case with that failure, so a listener that redelivers on an exception redelivers
+     * those events too.
      * <p>
      * Always evaluates the full routing decision, even when this model was built with no {@link PushObserver},
-     * rather than taking {@link #accept(CloudEvent)}'s fast path for that case, and reports the outcome on the same
-     * terms {@link #accept(CloudEvent)} does. A caller of this method needs the genuine {@link RoutingOutcome} to
-     * decide whether to acknowledge or redeliver, which the fast path has nothing to report.
+     * rather than taking {@link #accept(CloudEvent)}'s fast path for that case. A configured {@link PushObserver} is
+     * told the outcome on the same terms {@link #accept(CloudEvent)} tells it.
      *
      * @param cloudEvent The event received from the external source, which the caller can redeliver if this refuses it.
+     * @return The event's {@link RoutingOutcome}, which decides whether to acknowledge the message.
      */
-    public void acceptRedeliverable(CloudEvent cloudEvent) {
+    public RoutingOutcome acceptRedeliverable(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
-        routeReportingMatch(cloudEvent, false, this::notifyObserver);
+        AtomicReference<@Nullable RoutingOutcome> reported = new AtomicReference<>();
+        routeReportingMatch(cloudEvent, false, (event, outcome) -> {
+            reported.set(outcome);
+            notifyObserver(event, outcome);
+        });
+        RoutingOutcome outcome = reported.get();
+        if (outcome == null) {
+            // routeReportingMatch reports an outcome on every path that returns, so this is reached only if that changes
+            throw new IllegalStateException("No routing outcome was reported for event with id '" + cloudEvent.getId() + "'.");
+        }
+        return outcome;
     }
 
     /**
