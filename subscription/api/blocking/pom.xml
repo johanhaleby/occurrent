@@ -50,6 +50,11 @@
             <artifactId>jspecify</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- Logs why acceptRedeliverable refused an event, since the returned outcome does not say -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
 
         <!-- Test -->
         <dependency>

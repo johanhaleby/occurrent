@@ -95,8 +95,8 @@ class KafkaCloudEventBridgeRewindTest {
         doThrow(new RuntimeException("simulated rebalance")).when(consumer).seek(eq(PARTITION_0), eq(5L));
 
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
-        // No subscription is registered on model, so both records report NOT_DELIVERABLE and neither ever commits.
-        // Only partition 0 throws on its own seek; partition 1 must still be safely rewound.
+        // No subscription is registered on model, so both records report UNAVAILABLE and neither ever commits.
+        // Only partition 0 throws on its own seek, and partition 1 must still be safely rewound.
         KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model);
 
         Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();

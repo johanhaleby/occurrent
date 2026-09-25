@@ -30,6 +30,8 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.internal.HandlerFailures;
 import org.occurrent.subscription.internal.SingleConsumerMessages;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -157,6 +159,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         }
     }
 
+    private final Logger log = LoggerFactory.getLogger(getClass());
     private final Set<String> subscriptionIds = ConcurrentHashMap.newKeySet();
     private final Set<String> pausedSubscriptions = ConcurrentHashMap.newKeySet();
     private final CopyOnWriteArrayList<Registration> registrations = new CopyOnWriteArrayList<>();
@@ -503,7 +506,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                                 Throwable propagate;
                                 if (error instanceof RoutingAction.Refusal refusal) {
                                     if (!throwRefusal) {
-                                        // The caller takes the outcome instead of the cause
+                                        // The caller takes the outcome instead of the cause, so the cause is logged here
+                                        log.debug("Subscription \"{}\" refused event {} before dispatch, reported as {}.",
+                                                registration.id(), cloudEvent.getId(), refusal.outcome(), refusal.unwrap());
                                         matchObserver.accept(cloudEvent, refusal.outcome());
                                         return Mono.<Boolean>empty();
                                     }

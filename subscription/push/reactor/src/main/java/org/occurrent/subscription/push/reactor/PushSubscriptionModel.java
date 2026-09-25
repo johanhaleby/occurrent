@@ -161,9 +161,10 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * handler failed, with that failure. {@link #accept(CloudEvent)} still errors for a failed catch-up or a full
      * live buffer.
      * <p>
-     * Never call this from a write path. An event it refuses there is lost, since nothing delivers it again. A
-     * configured {@link PushObserver} is told the event's {@link RoutingOutcome} on the same terms as for
-     * {@link #accept(CloudEvent)}.
+     * Never call this from a write path. An event it refuses there is lost, since nothing delivers it again. The same
+     * holds for a call from inside another subscription's handler. Use {@link #accept(CloudEvent)} there, or act on
+     * the outcome the returned {@link Mono} completes with. A configured {@link PushObserver} is told the event's
+     * {@link RoutingOutcome} on the same terms as for {@link #accept(CloudEvent)}.
      *
      * @param cloudEvent The event received from the broker, which the broker delivers again if this refuses it.
      * @return A {@link Mono} that completes with the event's {@link RoutingOutcome}, which decides whether to

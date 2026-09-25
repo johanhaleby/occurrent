@@ -63,10 +63,11 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * same reason {@code RabbitMqCloudEventBridge} does. ADR 133 decision 1 is explicit that a bridge feeds the live
  * model, not the catch-up wrapper in front of it.
  * <p>
- * <strong>Acknowledgement.</strong> {@code acceptRedeliverable(...)} throwing (a handler exception, or a
- * subscription filter that failed to evaluate) never commits, and goes through the failure policy below. A normal
- * return is decided by {@link RoutingOutcome#disposition()} alone, so this bridge stages a record's offset for the
- * next commit exactly when {@link RoutingOutcome#mayAcknowledge()} answers true for the outcome.
+ * <strong>Acknowledgement.</strong> A record for which {@code acceptRedeliverable(...)} throws (a handler
+ * exception, or a subscription filter that failed to evaluate) goes through the failure policy below, and its offset
+ * is committed only once a {@link DeliveryFailurePolicy#PARK} of it is confirmed. A normal return is decided by
+ * {@link RoutingOutcome#disposition()} alone, so this bridge stages a record's offset for the next commit exactly
+ * when {@link RoutingOutcome#mayAcknowledge()} answers true for the outcome.
  * {@link RoutingOutcome.Disposition#HOLD} seeks back and paces the record rather than sending it through a failure
  * policy, see below, and {@link RoutingOutcome.Disposition#STOP} stops this bridge for good, also below.
  * {@link RoutingOutcome#NOT_DELIVERABLE}, a refusal the model decided before dispatch without promising it is

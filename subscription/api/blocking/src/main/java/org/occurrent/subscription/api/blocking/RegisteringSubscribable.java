@@ -30,6 +30,8 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.internal.HandlerFailures;
 import org.occurrent.subscription.internal.SingleConsumerMessages;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.*;
@@ -159,6 +161,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         }
     }
 
+    private final Logger log = LoggerFactory.getLogger(getClass());
     private final Set<String> subscriptionIds = ConcurrentHashMap.newKeySet();
     private final Set<String> pausedSubscriptions = ConcurrentHashMap.newKeySet();
     private final CopyOnWriteArrayList<Registration> registrations = new CopyOnWriteArrayList<>();
@@ -485,6 +488,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     // action's own promise about whether refusing is permanent picks REFUSED or NOT_DELIVERABLE.
                     // The wrapped cause is what the caller sees, unchanged, unless the caller takes the outcome instead.
                     if (!throwRefusal) {
+                        // The outcome does not say why, so the cause is logged here instead
+                        log.debug("Subscription \"{}\" refused event {} before dispatch, reported as {}.",
+                                registration.id(), cloudEvent.getId(), refusal.outcome(), refusal.unwrap());
                         matchObserver.accept(cloudEvent, refusal.outcome());
                         return;
                     }

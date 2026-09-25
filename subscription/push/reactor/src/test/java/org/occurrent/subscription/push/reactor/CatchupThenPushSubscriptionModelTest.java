@@ -492,10 +492,10 @@ class CatchupThenPushSubscriptionModelTest {
 
     /**
      * The reactor mirror of the blocking
-     * {@code a_catch_up_failure_reports_not_deliverable_rather_than_delivered_on_the_broker_path} test. A refusal
-     * decided before any dispatch was attempted (ReactiveHandover's catchUpFailure) must report
-     * {@link RoutingOutcome#NOT_DELIVERABLE}, never {@link RoutingOutcome#DELIVERED}, so a caller applies its own
-     * failure policy instead of acknowledging a message nothing consumed.
+     * {@code a_catch_up_failure_reports_refused_rather_than_delivered_on_the_write_path_with_an_observer} test. A
+     * refusal decided before any dispatch was attempted (ReactiveHandover's catchUpFailure) must report
+     * {@link RoutingOutcome#REFUSED} to the observer, never {@link RoutingOutcome#DELIVERED}, while
+     * {@code accept(..)} still errors with the catch-up failure.
      */
     @Test
     void a_catch_up_failure_reports_refused_rather_than_delivered() {

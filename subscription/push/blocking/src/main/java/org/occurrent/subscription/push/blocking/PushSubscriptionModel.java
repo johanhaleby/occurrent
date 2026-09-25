@@ -138,11 +138,15 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * still replaying, say, is refused instead: reported {@link RoutingOutcome#DEFERRED} rather than buffered, and
      * never delivered by this call. Call this instead of {@link #accept(CloudEvent)} from a broker listener that
      * can redeliver the same event later, never from a write path that cannot, since a write-path event this call
-     * refuses is lost rather than protected, the same reason {@link #accept(CloudEvent)} itself never refuses.
+     * refuses is lost rather than protected, the same reason {@link #accept(CloudEvent)} itself never refuses. The
+     * same holds for a call from inside another subscription's handler. Use {@link #accept(CloudEvent)} there, or act
+     * on the returned outcome, because nothing delivers an event this call refuses again.
      * <p>
      * Act on the {@link RoutingOutcome#disposition()} of what this returns. It returns {@link RoutingOutcome#DELIVERED}
-     * once the handler has run and {@link RoutingOutcome#FILTERED} when the subscription's filter declines the event,
-     * the two outcomes for which {@link RoutingOutcome#mayAcknowledge()} is true. It returns
+     * once the handler has run, or once a {@code CatchupThenPushSubscriptionModel} in front finds it had already
+     * applied the event, from its replay or from an earlier delivery. It returns {@link RoutingOutcome#FILTERED} when
+     * the subscription's filter declines the event. Those two are the outcomes for which
+     * {@link RoutingOutcome#mayAcknowledge()} is true. It returns
      * {@link RoutingOutcome#UNAVAILABLE} when no subscription is registered, this model is stopped or the subscription
      * is paused, and {@link RoutingOutcome#DEFERRED} for an event refused during the replay or, with a
      * {@code CatchupThenPushSubscriptionModel} in front, whose earlier delivery is still running on another thread.

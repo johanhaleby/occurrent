@@ -64,10 +64,11 @@ import static java.util.Objects.requireNonNull;
  * as a constructor argument and replays history through it before handing over. An application that wants catch-up
  * builds one from the same {@link PushSubscriptionModel} this bridge is given, in front of it, not instead of it.
  * <p>
- * <strong>Acknowledgement.</strong> {@code acceptRedeliverable(...)} throwing (a handler exception, or a
- * subscription filter that failed to evaluate) never acknowledges, and goes through the failure policy below. A
- * normal return is decided by {@link RoutingOutcome#disposition()} alone, so this bridge acknowledges an outcome
- * exactly when {@link RoutingOutcome#mayAcknowledge()} answers true for it.
+ * <strong>Acknowledgement.</strong> A message for which {@code acceptRedeliverable(...)} throws (a handler
+ * exception, or a subscription filter that failed to evaluate) goes through the failure policy below, and is
+ * acknowledged only once a {@link DeliveryFailurePolicy#PARK} of it is confirmed. A normal return is decided by
+ * {@link RoutingOutcome#disposition()} alone, so this bridge acknowledges an outcome exactly when
+ * {@link RoutingOutcome#mayAcknowledge()} answers true for it.
  * {@link RoutingOutcome.Disposition#HOLD} holds the delivery unacknowledged and paces it rather than sending it
  * through a failure policy, see below, and {@link RoutingOutcome.Disposition#STOP} stops this bridge for good, also
  * below. {@link RoutingOutcome#NOT_DELIVERABLE}, a refusal the model decided before dispatch without promising it is
