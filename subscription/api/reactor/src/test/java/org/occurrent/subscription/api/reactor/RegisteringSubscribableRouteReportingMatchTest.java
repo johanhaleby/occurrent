@@ -36,12 +36,13 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.condition.Condition.eq;
 
 /**
- * Exercises {@link RegisteringSubscribable#routeReportingMatch(CloudEvent, BiConsumer)} directly, with a raw
+ * Exercises {@link RegisteringSubscribable#routeReportingMatch(CloudEvent, boolean, BiConsumer)} directly, with a raw
  * {@code matchObserver} that has no swallowing of its own. {@code PushSubscriptionModel}'s own
  * {@code notifyObserver} already catches any {@code Exception} or an {@code AssertionError} from the configured
  * {@code PushObserver} before it could ever reach {@code routeReportingMatch}'s own guard against a shared
@@ -115,6 +116,23 @@ class RegisteringSubscribableRouteReportingMatchTest {
                 .verifyComplete();
 
         assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    @Test
+    void passes_the_buffering_choice_through_to_the_action_unchanged() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        List<Boolean> offered = new ArrayList<>();
+        model.subscribeRaw("sub", (cloudEvent, bufferIfNotLive) -> {
+            offered.add(bufferIfNotLive);
+            return Mono.just(true);
+        });
+
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> {
+        })).verifyComplete();
+        StepVerifier.create(model.acceptRaw(cloudEvent("2"), true, (cloudEvent, outcome) -> {
+        })).verifyComplete();
+
+        assertThat(offered).containsExactly(false, true);
     }
 
     @Test
@@ -449,12 +467,20 @@ class RegisteringSubscribableRouteReportingMatchTest {
             super(Consumers.ONE, dataFieldReader);
         }
 
-        void subscribeRaw(String subscriptionId, @Nullable SubscriptionFilter filter, RoutingAction action) {
-            subscribeReportingDelivery(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);
+        void subscribeRaw(String subscriptionId, @Nullable SubscriptionFilter filter, Function<CloudEvent, Mono<Boolean>> action) {
+            subscribeReportingDelivery(subscriptionId, filter, StartAt.subscriptionModelDefault(), (cloudEvent, bufferIfNotLive) -> action.apply(cloudEvent));
+        }
+
+        void subscribeRaw(String subscriptionId, RoutingAction action) {
+            subscribeReportingDelivery(subscriptionId, null, StartAt.subscriptionModelDefault(), action);
         }
 
         Mono<Void> acceptRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
-            return routeReportingMatch(cloudEvent, matchObserver);
+            return acceptRaw(cloudEvent, true, matchObserver);
+        }
+
+        Mono<Void> acceptRaw(CloudEvent cloudEvent, boolean bufferIfNotLive, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+            return routeReportingMatch(cloudEvent, bufferIfNotLive, matchObserver);
         }
     }
 }

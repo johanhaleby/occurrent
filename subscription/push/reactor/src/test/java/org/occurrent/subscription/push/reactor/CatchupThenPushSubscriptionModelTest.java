@@ -759,7 +759,115 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(thrown).isInstanceOf(NullPointerException.class);
     }
 
+    // accept(..) buffers an event arriving during the replay and completes once it is applied. A broker can deliver
+    // it again, so acceptRedeliverable(..) refuses it instead and the handler never sees this delivery.
+    @Test
+    void accept_redeliverable_during_the_replay_errors_and_the_handler_never_sees_the_event() {
+        List<RoutingOutcome> outcomes = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel feed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce ->
+                Mono.fromRunnable(() -> {
+                    folded.add(ce.getId());
+                    replayReached.countDown();
+                    awaitLatch(releaseReplay);
+                }));
+        awaitLatch(replayReached);
+
+        List<Throwable> errors = new CopyOnWriteArrayList<>();
+        AtomicBoolean completed = new AtomicBoolean();
+        // Subscribed rather than blocked on, since a buffering call would wait for the replay this test holds open
+        feed.acceptRedeliverable(cloudEvent("2", "Updated")).subscribe(__ -> {
+        }, errors::add, () -> completed.set(true));
+        releaseReplay.countDown();
+        subscription.waitUntilStarted().block(Duration.ofSeconds(5));
+
+        assertThat(errors).singleElement().satisfies(error -> assertNotAccepted(error, RoutingOutcome.DEFERRED));
+        assertThat(completed).isFalse();
+        assertThat(folded).containsExactly("1");
+        assertThat(outcomes).containsExactly(RoutingOutcome.DEFERRED);
+    }
+
+    // stop() stops the live feed too, so the event reaches no subscription at all
+    @Test
+    void accept_redeliverable_after_a_stop_before_the_replay_finished_errors() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce ->
+                Mono.fromRunnable(() -> {
+                    folded.add(ce.getId());
+                    replayReached.countDown();
+                    awaitLatch(releaseReplay);
+                }));
+        awaitLatch(replayReached);
+        model.stop();
+
+        List<Throwable> errors = new CopyOnWriteArrayList<>();
+        AtomicBoolean completed = new AtomicBoolean();
+        feed.acceptRedeliverable(cloudEvent("2", "Updated")).subscribe(__ -> {
+        }, errors::add, () -> completed.set(true));
+        releaseReplay.countDown();
+        StepVerifier.create(subscription.waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(5));
+
+        assertThat(errors).singleElement().satisfies(error -> assertNotAccepted(error, RoutingOutcome.UNAVAILABLE));
+        assertThat(completed).isFalse();
+        assertThat(folded).containsExactly("1");
+    }
+
+    @Test
+    void accept_redeliverable_completes_once_the_live_event_has_been_handled() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(delivered)).waitUntilStarted().block();
+
+        StepVerifier.create(feed.acceptRedeliverable(cloudEvent("2", "Updated"))).expectComplete().verify(Duration.ofSeconds(5));
+
+        assertThat(delivered).containsExactly("1", "2");
+    }
+
+    @Test
+    void accept_redeliverable_completes_for_a_live_copy_of_an_event_the_replay_already_applied() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(delivered)).waitUntilStarted().block();
+
+        StepVerifier.create(feed.acceptRedeliverable(cloudEvent("1", "Created"))).expectComplete().verify(Duration.ofSeconds(5));
+
+        assertThat(delivered).containsExactly("1");
+    }
+
+    @Test
+    void accept_redeliverable_after_a_failed_catch_up_errors_with_the_catch_up_failure() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), feed, null);
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        assertThat(catchThrowable(() -> subscription.waitUntilStarted().block())).hasMessageContaining("replay boom");
+
+        StepVerifier.create(feed.acceptRedeliverable(cloudEvent("1", "Created")))
+                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(IllegalStateException.class)
+                        .isNotInstanceOf(EventNotAcceptedException.class)
+                        .hasMessageContaining("Catch-up failed"))
+                .verify(Duration.ofSeconds(5));
+    }
+
     // --- helpers ---
+
+    private static void assertNotAccepted(Throwable error, RoutingOutcome expected) {
+        assertThat(error).isInstanceOfSatisfying(EventNotAcceptedException.class, notAccepted -> assertThat(notAccepted.outcome()).isEqualTo(expected));
+    }
 
     private static Function<CloudEvent, Mono<Void>> recordInto(List<String> delivered) {
         return ce -> Mono.fromRunnable(() -> delivered.add(ce.getId()));
