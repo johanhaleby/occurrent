@@ -43,9 +43,9 @@ import static org.awaitility.Awaitility.await;
  * The {@link DeliveryFailurePolicy#REDELIVER} twin of {@code RabbitMqCloudEventBridgeNestedRefusalTest}, which only
  * exercises {@code PARK}: CLAIM 5 of PR #895's adversarial verification asks for both policies. The routing
  * decision under test, whether a {@code PreDispatchRefusalException} is this bridge's own model refusing
- * permanently versus an ordinary handler failure that happened to touch a different, broken model, is read from
- * {@code outcomeChannel.takeLastOutcome()} before {@code routeFailure} is ever consulted, so it does not branch on
- * policy at all; this proves the same fix holds under the other one too.
+ * permanently versus an ordinary handler failure that happened to touch a different, broken model, is whether
+ * {@code acceptRedeliverable(..)} returns {@code REFUSED} or throws, decided before {@code routeFailure} is ever
+ * consulted, so it does not branch on policy at all. This proves the same fix holds under the other one too.
  * <p>
  * Under {@code REDELIVER}, id-1's nested, unrelated refusal fails identically on every attempt, so this bridge
  * nacks-with-requeue and retries it forever (paced through {@code heldFailedDeliveryTags}) rather than resolving it
@@ -59,7 +59,7 @@ class RabbitMqCloudEventBridgeNestedRefusalRedeliverTest extends RabbitMqTestSup
 
     @Test
     void a_nested_handovers_permanent_refusal_under_redeliver_does_not_stop_this_bridges_own_healthy_model() throws Exception {
-        PushSubscriptionModel otherLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), new RoutingOutcomeChannel());
+        PushSubscriptionModel otherLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore otherStore = new InMemoryEventStore();
         otherStore.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
         CatchupThenPushSubscriptionModel otherWrapper = new CatchupThenPushSubscriptionModel(otherStore, otherLiveFeed, null);
@@ -72,17 +72,16 @@ class RabbitMqCloudEventBridgeNestedRefusalRedeliverTest extends RabbitMqTestSup
 
         String queue = declareAndBindQueue(OrderPlaced.class.getName());
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         List<String> handled = new CopyOnWriteArrayList<>();
         liveFeed.subscribe("proj", ce -> {
             handled.add(ce.getId());
             if (ce.getId().equals("id-1")) {
-                otherLiveFeed.acceptRedeliverable(cloudEvent("id-1-fanout", OrderPlaced.class.getName()));
+                otherLiveFeed.accept(cloudEvent("id-1-fanout", OrderPlaced.class.getName()));
             }
         });
 
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, queue)
                 .declareTopology(false)
                 .pollInterval(POLL_INTERVAL)
                 .onDeliveryFailure(DeliveryFailurePolicy.REDELIVER)

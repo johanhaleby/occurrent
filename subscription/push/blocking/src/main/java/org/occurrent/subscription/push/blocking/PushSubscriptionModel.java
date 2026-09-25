@@ -140,16 +140,19 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * can redeliver the same event later, never from a write path that cannot, since a write-path event this call
      * refuses is lost rather than protected, the same reason {@link #accept(CloudEvent)} itself never refuses.
      * <p>
-     * Acknowledge the message when this returns {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED},
-     * the two outcomes for which {@link RoutingOutcome#mayAcknowledge()} is true, and have the broker redeliver it
-     * otherwise. It returns {@link RoutingOutcome#DELIVERED} once the handler has run, {@link RoutingOutcome#FILTERED}
-     * when the subscription's filter declines the event, {@link RoutingOutcome#UNAVAILABLE} when no subscription is
-     * registered, this model is stopped or the subscription is paused, and {@link RoutingOutcome#DEFERRED} for an
-     * event refused during the replay or whose earlier delivery is still running on another thread.
+     * Act on the {@link RoutingOutcome#disposition()} of what this returns. It returns {@link RoutingOutcome#DELIVERED}
+     * once the handler has run and {@link RoutingOutcome#FILTERED} when the subscription's filter declines the event,
+     * the two outcomes for which {@link RoutingOutcome#mayAcknowledge()} is true. It returns
+     * {@link RoutingOutcome#UNAVAILABLE} when no subscription is registered, this model is stopped or the subscription
+     * is paused, and {@link RoutingOutcome#DEFERRED} for an event refused during the replay or, with a
+     * {@code CatchupThenPushSubscriptionModel} in front, whose earlier delivery is still running on another thread.
+     * Have the broker redeliver the message for those two. It returns {@link RoutingOutcome#REFUSED} when the catch-up
+     * in front has failed for good, which no redelivery can get past, so stop consuming. Any other refusal decided
+     * before the handler would run comes back as {@link RoutingOutcome#NOT_DELIVERABLE}, for the listener's failure
+     * policy.
      * <p>
-     * It throws instead of returning when the handler throws, when the subscription's filter throws, and when the
-     * catch-up has failed, in each case with that failure, so a listener that redelivers on an exception redelivers
-     * those events too.
+     * It throws instead of returning only when the handler throws or the subscription's filter throws, in each case
+     * with that failure. {@link #accept(CloudEvent)} still throws for a failed catch-up.
      * <p>
      * Always evaluates the full routing decision, even when this model was built with no {@link PushObserver},
      * rather than taking {@link #accept(CloudEvent)}'s fast path for that case. A configured {@link PushObserver} is
@@ -161,13 +164,13 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     public RoutingOutcome acceptRedeliverable(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         AtomicReference<@Nullable RoutingOutcome> reported = new AtomicReference<>();
-        routeReportingMatch(cloudEvent, false, (event, outcome) -> {
+        routeRedeliverable(cloudEvent, (event, outcome) -> {
             reported.set(outcome);
             notifyObserver(event, outcome);
         });
         RoutingOutcome outcome = reported.get();
         if (outcome == null) {
-            // routeReportingMatch reports an outcome on every path that returns, so this is reached only if that changes
+            // routeRedeliverable reports an outcome on every path that returns, so this is reached only if that changes
             throw new IllegalStateException("No routing outcome was reported for event with id '" + cloudEvent.getId() + "'.");
         }
         return outcome;

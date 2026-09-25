@@ -75,15 +75,21 @@ import java.util.stream.Stream;
  *             acknowledges the message only when the outcome it returns is
  *             {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or
  *             {@link org.occurrent.subscription.RoutingOutcome#FILTERED}. During the replay it refuses the event instead of buffering it, so the broker delivers it again, and a delivery
- *             after this model has gone live applies it. Delivery is at-least-once, so applying the same event twice
+ *             after this model has gone live applies it. Once the catch-up has failed it returns
+ *             {@link org.occurrent.subscription.RoutingOutcome#REFUSED} for every event, and the listener stops.
+ *             Delivery is at-least-once, so applying the same event twice
  *             must leave the projection as applying it once would, the same contract as the change-stream path.</li>
  *         <li>Fed from the event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)}, nothing
  *             records which live events the subscription has handled. When the application crashes after a write
- *             has committed but before the handler has run, this subscription never sees that event. A crash during
- *             the replay is the one exception. {@code accept(...)} buffers an event arriving then and returns before
- *             it is applied, and the marker below is written only after the buffered events are applied, so the next
- *             start replays the whole history, that event included. Use a durable subscription if losing an event is
- *             not acceptable.</li>
+ *             has committed but before the handler has run, and the catch-up-complete marker below has been written,
+ *             this subscription never sees that event, since the next start skips the replay. With no
+ *             {@link CheckpointStorage} to write a marker in, every start replays the whole history, that event
+ *             included. A crash during the replay is the other
+ *             exception. {@code accept(...)} buffers an event arriving then and returns before it is applied, and the
+ *             marker is written only after the buffered events are applied, so the next start replays that event too.
+ *             That holds only while no other instance sharing the same marker storage writes the marker first, since
+ *             the next start then skips the replay. Use a durable subscription if losing an event is not
+ *             acceptable.</li>
  *       </ul></li>
  *   <li>A one-shot <strong>catch-up-complete marker</strong> (an optional {@link CheckpointStorage}) records that the
  *       replay finished, so a restart skips it and lets the broker resume. The stored value marks completion, it is not
@@ -303,9 +309,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // IllegalStateException the call could throw, since the handler itself can throw one too (deliverOutsideLock
         // runs it inside this same try), and a handler that genuinely ran must report DELIVERED, not
         // NOT_DELIVERABLE, whatever it threw. Route (unobserved) and routeReportingMatch (observed) both unwrap
-        // Refusal back to the original cause before it ever reaches a caller, so accept(..) and
-        // acceptRedeliverable(..) both still throw the plain IllegalStateException a catch-up failure always has,
-        // whether or not a PushObserver is configured.
+        // Refusal back to the original cause before it ever reaches a caller, so accept(..) still throws the plain
+        // IllegalStateException a catch-up failure always has, whether or not a PushObserver is configured.
+        // acceptRedeliverable(..) goes through routeRedeliverable, which returns the refusal's outcome instead,
+        // REFUSED for a failed catch-up.
         RoutingSubscribeAction routingAction = (cloudEvent, bufferIfNotLive) -> {
                     try {
                         return bufferIfNotLive ? handover.acceptReportingDelivery(cloudEvent) : handover.acceptIfLive(cloudEvent);

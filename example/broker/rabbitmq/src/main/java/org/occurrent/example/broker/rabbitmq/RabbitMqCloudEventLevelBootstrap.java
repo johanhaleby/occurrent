@@ -30,7 +30,6 @@ import org.occurrent.broker.api.blocking.CloudEventForwarder;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
-import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
 import org.occurrent.dsl.projection.blocking.ProjectionRunner;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
@@ -179,8 +178,7 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
             CloudEventForwarder forwarder = new CloudEventForwarder(forwarderSubscription, sink);
             forwarder.forward(SUBSCRIPTION_ID + "-forwarder");
 
-            RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-            PushSubscriptionModel pushModel = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+            PushSubscriptionModel pushModel = new PushSubscriptionModel(DataFieldReader.refusing());
             // In-memory, paired with the in-memory orderStatusViews below, not the durable event store. Both are
             // lost together on a real restart, so a fresh run genuinely replays rather than a durable marker
             // skipping a replay the read model never actually got. See the class javadoc.
@@ -190,7 +188,7 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
             // reassigned above (from the null this try/catch needs for cleanup), so it cannot be captured directly.
             final CatchupThenPushSubscriptionModel catchupThenPushForReadiness = catchupThenPush;
 
-            bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, outcomeChannel, QUEUE)
+            bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, QUEUE)
                     .resolver(resolver)
                     // Pacing only: RoutingOutcome.DEFERRED already keeps the bridge from acking a message
                     // catchupThenPush's replay has only buffered, not folded. This just cuts down on how often

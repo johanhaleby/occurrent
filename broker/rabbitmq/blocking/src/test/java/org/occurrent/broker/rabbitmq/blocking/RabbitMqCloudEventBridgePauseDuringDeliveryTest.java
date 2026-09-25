@@ -67,8 +67,7 @@ class RabbitMqCloudEventBridgePauseDuringDeliveryTest extends RabbitMqTestSuppor
         adminChannel.queueDeclare(parkingQueue, false, false, false, null);
         adminChannel.queueBind(parkingQueue, parkingExchange, "#");
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<String> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", ce -> {
             handled.add(ce.getId());
@@ -83,7 +82,7 @@ class RabbitMqCloudEventBridgePauseDuringDeliveryTest extends RabbitMqTestSuppor
         // held message released back onto the source queue within the test's own timeout.
         Duration pollInterval = Duration.ofMillis(500);
 
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, queue)
                 .declareTopology(false)
                 .pollInterval(pollInterval)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)

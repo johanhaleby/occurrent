@@ -853,17 +853,91 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(delivered).containsExactly("1");
     }
 
+    // REFUSED is how a listener learns to stop, so it arrives as the outcome rather than as an error
     @Test
-    void accept_redeliverable_after_a_failed_catch_up_errors_with_the_catch_up_failure() {
-        PushSubscriptionModel feed = new PushSubscriptionModel();
+    void accept_redeliverable_after_a_failed_catch_up_returns_refused() {
+        List<RoutingOutcome> outcomes = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel feed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), feed, null);
         Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
         assertThat(catchThrowable(() -> subscription.waitUntilStarted().block())).hasMessageContaining("replay boom");
 
         StepVerifier.create(feed.acceptRedeliverable(cloudEvent("1", "Created")))
-                .expectErrorSatisfies(error -> assertThat(error).isInstanceOf(IllegalStateException.class)
-                        .hasMessageContaining("Catch-up failed"))
+                .expectNext(RoutingOutcome.REFUSED)
+                .expectComplete()
                 .verify(Duration.ofSeconds(5));
+        assertThat(outcomes).containsExactly(RoutingOutcome.REFUSED);
+    }
+
+    // A full live buffer may drain, so this refusal is not permanent and goes to the listener's failure policy
+    @Test
+    void accept_redeliverable_returns_not_deliverable_when_the_live_buffer_is_full() throws Exception {
+        int cap = 2;
+        CountDownLatch slowEntered = new CountDownLatch(1);
+        CountDownLatch releaseSlow = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Flux::empty, 0), feed, null,
+                new CatchupThenLiveOptions(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE, cap));
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
+            if (ce.getId().equals("slow")) {
+                slowEntered.countDown();
+                awaitLatch(releaseSlow);
+            }
+            delivered.add(ce.getId());
+        })).waitUntilStarted().block(Duration.ofSeconds(5));
+
+        // Holds the live pipeline, so nothing offered below reaches the handler until it is released
+        List<RoutingOutcome> slowOutcome = new CopyOnWriteArrayList<>();
+        Thread slow = Thread.ofVirtual().start(() -> feed.acceptRedeliverable(cloudEvent("slow", "Created")).subscribe(slowOutcome::add));
+        awaitLatch(slowEntered);
+
+        List<RoutingOutcome> queuedOutcome = new CopyOnWriteArrayList<>();
+        feed.acceptRedeliverable(cloudEvent("queued", "Created")).subscribe(queuedOutcome::add);
+        List<RoutingOutcome> overflowOutcome = new CopyOnWriteArrayList<>();
+        List<Throwable> overflowErrors = new CopyOnWriteArrayList<>();
+        feed.acceptRedeliverable(cloudEvent("overflow", "Created")).subscribe(overflowOutcome::add, overflowErrors::add);
+
+        assertThat(overflowOutcome).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(overflowErrors).isEmpty();
+
+        releaseSlow.countDown();
+        slow.join();
+        await().atMost(Duration.ofSeconds(5)).until(() -> queuedOutcome.size() == 1);
+        assertThat(slowOutcome).containsExactly(RoutingOutcome.DELIVERED);
+        assertThat(queuedOutcome).containsExactly(RoutingOutcome.DELIVERED);
+        assertThat(delivered).containsExactly("slow", "queued");
+    }
+
+    // With a catch-up model in front, a second copy of an event waits for the first rather than running the handler again
+    @Test
+    void accept_redeliverable_waits_behind_an_earlier_delivery_of_the_same_event() throws Exception {
+        CountDownLatch firstEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Flux::empty, 0), feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
+            delivered.add(ce.getId());
+            firstEntered.countDown();
+            awaitLatch(releaseFirst);
+        })).waitUntilStarted().block(Duration.ofSeconds(5));
+
+        List<RoutingOutcome> firstOutcome = new CopyOnWriteArrayList<>();
+        Thread first = Thread.ofVirtual().start(() -> feed.acceptRedeliverable(cloudEvent("2", "Updated")).subscribe(firstOutcome::add));
+        awaitLatch(firstEntered);
+
+        List<RoutingOutcome> secondOutcome = new CopyOnWriteArrayList<>();
+        feed.acceptRedeliverable(cloudEvent("2", "Updated")).subscribe(secondOutcome::add);
+        assertThat(secondOutcome).as("the second copy must not be answered while the first is still running").isEmpty();
+
+        releaseFirst.countDown();
+        first.join();
+        await().atMost(Duration.ofSeconds(5)).until(() -> secondOutcome.size() == 1);
+        assertThat(firstOutcome).containsExactly(RoutingOutcome.DELIVERED);
+        assertThat(secondOutcome).containsExactly(RoutingOutcome.DELIVERED);
+        assertThat(delivered).containsExactly("2");
     }
 
     // --- helpers ---

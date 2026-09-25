@@ -72,13 +72,20 @@ import java.util.function.Supplier;
  * <p>
  * Fed from the event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)}, nothing records
  * which live events the subscription has handled. When the application crashes after a write has committed but before
- * the handler has run, this subscription never sees that event. The replay does not bring it back either, because a
- * restart skips the replay once the marker exists. Use a durable subscription if that is not acceptable.
+ * the handler has run, and the catch-up-complete marker has been recorded, this subscription never sees that event,
+ * since a restart skips the replay once the marker exists. A crash before the marker is recorded, during the replay
+ * say, is the exception. The next start replays the whole history, that event included, and so does every start
+ * with no {@link CheckpointStorage} to record a marker in. The marker is recorded
+ * before the events buffered during the replay are applied, so a crash between the two loses those events too. The
+ * exception holds only while no other instance sharing the same marker storage records the marker first, since the
+ * next start then skips the replay. Use a durable subscription if losing an event is not acceptable.
  * <p>
  * Fed from a broker, call {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} and acknowledge the message
  * only when its {@link Mono} completes with {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or
  * {@link org.occurrent.subscription.RoutingOutcome#FILTERED}. It refuses an event arriving during the replay instead of
  * buffering it, so the broker delivers that event again, and a delivery after this model has gone live applies it.
+ * Once the catch-up has failed, the {@link Mono} completes with
+ * {@link org.occurrent.subscription.RoutingOutcome#REFUSED} for every event, and the listener stops.
  * Delivery is at-least-once, so
  * a handler that sees the same event twice has to leave the same state as seeing it once. Do not acknowledge on {@code accept(..)} completing, since it also completes for
  * an event nothing applied, one fed before any subscription is registered say.

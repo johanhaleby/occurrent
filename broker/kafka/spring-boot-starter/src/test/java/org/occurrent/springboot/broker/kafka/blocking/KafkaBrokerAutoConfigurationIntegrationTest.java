@@ -21,12 +21,12 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.broker.kafka.blocking.KafkaCloudEventBridge;
 import org.occurrent.broker.kafka.blocking.KafkaCloudEventSink;
-import org.occurrent.broker.kafka.blocking.RoutingOutcomeChannel;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
+import org.occurrent.subscription.push.blocking.PushObserver;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -82,11 +82,10 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
                     KafkaCloudEventBridgeFactory bridgeFactory = context.getBean(KafkaCloudEventBridgeFactory.class);
 
                     BlockingQueue<CloudEvent> received = new LinkedBlockingQueue<>();
-                    RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-                    PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+                    PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
                     model.subscribe("test-subscription", received::add);
 
-                    KafkaCloudEventBridge bridge = bridgeFactory.forGroup("test-group-" + UUID.randomUUID(), model, outcomeChannel).build();
+                    KafkaCloudEventBridge bridge = bridgeFactory.forGroup("test-group-" + UUID.randomUUID(), model).build();
                     try {
                         CloudEvent event = CloudEventBuilder.v1()
                                 .withId(UUID.randomUUID().toString())
@@ -143,12 +142,12 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
                     KafkaCloudEventBridgeFactory bridgeFactory = context.getBean(KafkaCloudEventBridgeFactory.class);
 
                     BlockingQueue<CloudEvent> received = new LinkedBlockingQueue<>();
-                    RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel((cloudEvent, outcome) -> {
+                    PushObserver deferredCounter = (cloudEvent, outcome) -> {
                         if (outcome == RoutingOutcome.DEFERRED) {
                             deferredCount.incrementAndGet();
                         }
-                    });
-                    PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+                    };
+                    PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), deferredCounter);
                     InMemoryEventStore store = new InMemoryEventStore();
                     store.write("s1", List.of(CloudEventBuilder.v1()
                             .withId("historical")
@@ -174,7 +173,7 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
                     });
                     assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
-                    KafkaCloudEventBridge bridge = bridgeFactory.forGroup("test-group-" + UUID.randomUUID(), liveFeed, outcomeChannel).build();
+                    KafkaCloudEventBridge bridge = bridgeFactory.forGroup("test-group-" + UUID.randomUUID(), liveFeed).build();
                     try {
                         CloudEvent event = CloudEventBuilder.v1()
                                 .withId(UUID.randomUUID().toString())

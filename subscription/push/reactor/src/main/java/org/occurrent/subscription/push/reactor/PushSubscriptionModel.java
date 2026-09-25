@@ -49,8 +49,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * the application crashes after a write has committed but before the handler has run, this subscription never sees
  * that event. Use a durable subscription if that is not acceptable. Fed from a broker, call
  * {@link #acceptRedeliverable(CloudEvent)} and acknowledge the message only when its {@link Mono} completes with
- * {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}, so the broker delivers every other message
- * again.
+ * {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}. That method says what each of the other
+ * outcomes asks for, {@link RoutingOutcome#REFUSED} being the one that means stop consuming.
  * <p>
  * <strong>One model feeds one subscription</strong>, and a second {@code subscribe} is refused. The acknowledgement is
  * what forces it: this model has exactly one per received event, so several handlers on it would share the decision to
@@ -130,30 +130,36 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     /**
      * Feed a single event from a broker, or from any other source that delivers the event again when it is not
      * acknowledged. As {@link #accept(CloudEvent)}, except an event that would only buffer, a
-     * {@link CatchupThenPushSubscriptionModel} in front still replaying, say, is refused instead of buffered.
+     * {@link CatchupThenPushSubscriptionModel} in front still replaying, say, is refused instead of buffered. One narrow
+     * case still waits. A replay that starts on an already live catch-up model after this call found it live, and
+     * before the event reaches its handler, holds the event until that replay ends rather than refusing it. The
+     * returned {@link Mono} waits for it all the same.
      * <p>
-     * Acknowledge the message when the returned {@link Mono} completes with {@link RoutingOutcome#DELIVERED} or
-     * {@link RoutingOutcome#FILTERED}, the two outcomes for which {@link RoutingOutcome#mayAcknowledge()} is true, and
-     * have the broker redeliver it otherwise.
+     * Act on the {@link RoutingOutcome#disposition()} of the outcome the returned {@link Mono} completes with.
+     * Acknowledge the message on {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}, the two outcomes
+     * for which {@link RoutingOutcome#mayAcknowledge()} is true.
      * <ul>
      *     <li>{@link RoutingOutcome#DELIVERED} once the registered handler has applied the event, or once a
      *     {@link CatchupThenPushSubscriptionModel} in front finds it had already applied it, from its replay or from
-     *     an earlier delivery. An event offered while an earlier delivery of the same event is still running waits
-     *     behind that delivery.</li>
-     *     <li>{@link RoutingOutcome#FILTERED} when the subscription's filter declined the event. A declined event
-     *     gets the same answer however many times it is delivered.</li>
+     *     an earlier delivery. With a {@link CatchupThenPushSubscriptionModel} in front, an event offered while an
+     *     earlier delivery of the same event is still running waits behind that delivery.</li>
+     *     <li>{@link RoutingOutcome#FILTERED} when the subscription's filter declined the event. Redelivering it to
+     *     the same filter would only be declined again.</li>
      *     <li>{@link RoutingOutcome#DEFERRED} when a {@link CatchupThenPushSubscriptionModel} in front has not gone
-     *     live, because its replay is still running, say. The handler never ran, so delivering it again later is
-     *     safe.</li>
+     *     live, because its replay is still running, say. The handler never ran, so have the broker deliver it again
+     *     later.</li>
      *     <li>{@link RoutingOutcome#UNAVAILABLE} when no subscription is registered, this model is stopped, or the
      *     subscription is paused. Stopping a {@link CatchupThenPushSubscriptionModel} in front stops this model too,
-     *     whether or not its replay had finished.</li>
+     *     whether or not its replay had finished. Have the broker deliver it again later.</li>
+     *     <li>{@link RoutingOutcome#REFUSED} when the catch-up in front has failed for good. No redelivery gets past
+     *     that, so stop consuming.</li>
+     *     <li>{@link RoutingOutcome#NOT_DELIVERABLE} for any other refusal decided before the handler would run, a
+     *     full live buffer in the catch-up in front, say. Apply the listener's failure policy.</li>
      * </ul>
      * <p>
-     * The {@link Mono} errors instead of completing with an outcome when the subscription's filter or the handler failed, with that
-     * failure, and when the catch-up in front failed or its live buffer is full, with an
-     * {@link IllegalStateException}, the same as for {@link #accept(CloudEvent)}. A listener that redelivers on an
-     * error redelivers those events too.
+     * The {@link Mono} errors instead of completing with an outcome only when the subscription's filter or the
+     * handler failed, with that failure. {@link #accept(CloudEvent)} still errors for a failed catch-up or a full
+     * live buffer.
      * <p>
      * Never call this from a write path. An event it refuses there is lost, since nothing delivers it again. A
      * configured {@link PushObserver} is told the event's {@link RoutingOutcome} on the same terms as for
@@ -167,7 +173,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         return Mono.defer(() -> {
             AtomicReference<@Nullable RoutingOutcome> reported = new AtomicReference<>();
-            return routeReportingMatch(cloudEvent, false, (event, outcome) -> {
+            return routeRedeliverable(cloudEvent, (event, outcome) -> {
                 reported.set(outcome);
                 notifyObserver(event, outcome);
             }).then(Mono.defer(() -> reportedOutcome(cloudEvent, reported.get())));

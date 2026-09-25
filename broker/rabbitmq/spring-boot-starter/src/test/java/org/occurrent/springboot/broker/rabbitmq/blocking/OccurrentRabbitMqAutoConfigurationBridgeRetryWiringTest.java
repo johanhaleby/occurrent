@@ -20,7 +20,6 @@ import com.rabbitmq.client.Connection;
 import org.junit.jupiter.api.Test;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqBridgeException;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
-import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
 import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventBridge;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.springboot.broker.rabbitmq.blocking.domain.RabbitMqDomainEventBridgeFactory;
@@ -64,7 +63,7 @@ class OccurrentRabbitMqAutoConfigurationBridgeRetryWiringTest {
                         "occurrent.broker.rabbitmq.bridge.retry.max-attempts=1")
                 .run(context -> {
                     RabbitMqCloudEventBridgeFactory factory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
-                    RabbitMqCloudEventBridge.Builder builder = factory.forQueue("orders-projection", new PushSubscriptionModel(), new RoutingOutcomeChannel());
+                    RabbitMqCloudEventBridge.Builder builder = factory.forQueue("orders-projection", new PushSubscriptionModel());
 
                     assertThatThrownBy(builder::build).isInstanceOf(RabbitMqBridgeException.class);
                 });
@@ -86,7 +85,7 @@ class OccurrentRabbitMqAutoConfigurationBridgeRetryWiringTest {
                         "occurrent.broker.rabbitmq.bridge.retry.max-attempts=3")
                 .run(context -> {
                     RabbitMqCloudEventBridgeFactory factory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
-                    RabbitMqCloudEventBridge.Builder builder = factory.forQueue("orders-projection", new PushSubscriptionModel(), new RoutingOutcomeChannel());
+                    RabbitMqCloudEventBridge.Builder builder = factory.forQueue("orders-projection", new PushSubscriptionModel());
 
                     assertThatThrownBy(builder::build).isInstanceOf(RabbitMqBridgeException.class);
                 });

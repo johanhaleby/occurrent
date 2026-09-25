@@ -101,8 +101,7 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
         adminChannel.queueDeclare(queue, false, false, false, null);
         adminChannel.queueBind(queue, exchange, OrderPlaced.class.getName());
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
@@ -119,7 +118,7 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
         });
         assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, liveFeed, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, liveFeed, queue)
                 .declareTopology(false)
                 .pollInterval(Duration.ofSeconds(2))
                 .build()) {
@@ -154,8 +153,7 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
         adminChannel.queueDeclare(queue, false, false, false, null);
         adminChannel.queueBind(queue, exchange, OrderPlaced.class.getName());
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
@@ -190,7 +188,7 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
             }
         });
 
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, liveFeed, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, liveFeed, queue)
                 .declareTopology(false)
                 .pollInterval(Duration.ofSeconds(2))
                 .build()) {
@@ -233,8 +231,7 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
             }
         });
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         CountDownLatch firstCallEntered = new CountDownLatch(1);
         CountDownLatch releaseFirstCall = new CountDownLatch(1);
         List<String> handled = new CopyOnWriteArrayList<>();
@@ -250,7 +247,7 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
             }
         });
 
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, queue)
                 .declareTopology(false)
                 .pollInterval(Duration.ofMillis(200))
                 .build()) {
@@ -309,8 +306,7 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
                 }
             });
 
-            RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-            PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+            PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
             CountDownLatch firstCallEntered = new CountDownLatch(1);
             CountDownLatch releaseFirstCall = new CountDownLatch(1);
             List<String> handled = new CopyOnWriteArrayList<>();
@@ -327,7 +323,7 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
             bridgeLog.start();
             bridgeLogger.addAppender(bridgeLog);
 
-            try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(slowRecoveryConnection, model, outcomeChannel, queue)
+            try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(slowRecoveryConnection, model, queue)
                     .declareTopology(false)
                     .pollInterval(Duration.ofMillis(200))
                     .build()) {

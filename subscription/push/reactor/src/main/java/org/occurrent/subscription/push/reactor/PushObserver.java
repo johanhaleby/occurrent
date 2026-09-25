@@ -78,7 +78,7 @@ import org.occurrent.subscription.RoutingOutcome;
  * <p>
  * Any other {@link Error} the observer throws is not caught. Where it goes next depends on whether the model
  * already had a failure of its own to propagate, not on which outcome the observer was told. Reported alongside
- * such a failure, whether it came from the filter, the action or a refusal, the observer's
+ * such a failure, whether it came from the filter, the action or a refusal {@code accept(...)} errors with, the observer's
  * {@link Error} is attached to it through {@link Throwable#addSuppressed(Throwable)} and that failure is what
  * propagates, so a failure is never replaced by a failure in reporting it. Reported with nothing else in flight,
  * it propagates on its own. {@link RoutingOutcome#DELIVERED} reaches the observer both ways, since an action that

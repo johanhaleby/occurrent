@@ -453,6 +453,65 @@ class RegisteringSubscribableRouteReportingMatchTest {
         assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
     }
 
+    // A caller that can offer the event again takes the refusal as its outcome, so the Mono completes
+    @Test
+    void route_redeliverable_reports_refused_for_a_permanent_refusal_and_completes() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        List<Boolean> offered = new ArrayList<>();
+        model.subscribeRaw("sub", (cloudEvent, bufferIfNotLive) -> {
+            offered.add(bufferIfNotLive);
+            return Mono.error(new RegisteringSubscribable.RoutingAction.Refusal(new IllegalStateException("catch-up has failed"), true));
+        });
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyComplete();
+
+        assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
+        assertThat(offered).containsExactly(false);
+    }
+
+    @Test
+    void route_redeliverable_reports_not_deliverable_for_a_transient_refusal_and_completes() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(new RegisteringSubscribable.RoutingAction.Refusal(new IllegalStateException("the live buffer is full"), false)));
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyComplete();
+
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+    }
+
+    @Test
+    void route_redeliverable_still_errors_when_the_matcher_throws() {
+        RuntimeException matcherFailure = new IllegalStateException("the filter cannot answer");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw matcherFailure;
+        };
+        RawConsumersOneModel model = new RawConsumersOneModel(throwingReader);
+        model.subscribeRaw("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> Mono.just(true));
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(matcherFailure));
+
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+    }
+
+    @Test
+    void route_redeliverable_still_errors_when_the_action_errors() {
+        RuntimeException actionFailure = new IllegalStateException("action failed");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(actionFailure));
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(actionFailure));
+
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
     // A plain Error, deliberately not a VirtualMachineError, ThreadDeath or LinkageError: Reactor's
     // Exceptions.throwIfFatal rethrows those three rather than turning them into an error signal, which
     // would prove nothing about what matchObserver is told.
@@ -481,6 +540,10 @@ class RegisteringSubscribableRouteReportingMatchTest {
 
         Mono<Void> acceptRaw(CloudEvent cloudEvent, boolean bufferIfNotLive, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
             return routeReportingMatch(cloudEvent, bufferIfNotLive, matchObserver);
+        }
+
+        Mono<Void> acceptRedeliverableRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+            return routeRedeliverable(cloudEvent, matchObserver);
         }
     }
 }

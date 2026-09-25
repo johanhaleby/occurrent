@@ -21,7 +21,6 @@ import org.occurrent.broker.api.blocking.CloudEventSink;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.kafka.blocking.KafkaCloudEventBridge;
 import org.occurrent.broker.kafka.blocking.KafkaCloudEventSink;
-import org.occurrent.broker.kafka.blocking.RoutingOutcomeChannel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -147,7 +146,7 @@ class OccurrentKafkaAutoConfigurationWiringTest {
         contextRunner.withPropertyValues("occurrent.broker.kafka.bootstrap-servers=" + FAKE_BOOTSTRAP_SERVERS)
                 .run(context -> {
                     KafkaCloudEventBridgeFactory factory = context.getBean(KafkaCloudEventBridgeFactory.class);
-                    KafkaCloudEventBridge.Builder builder = factory.forGroup("orders-projection", new PushSubscriptionModel(), new RoutingOutcomeChannel());
+                    KafkaCloudEventBridge.Builder builder = factory.forGroup("orders-projection", new PushSubscriptionModel());
                     assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class).hasMessageContaining("resolver");
                 });
     }
@@ -160,7 +159,7 @@ class OccurrentKafkaAutoConfigurationWiringTest {
                         "occurrent.broker.kafka.bridge.on-delivery-failure=PARK")
                 .run(context -> {
                     KafkaCloudEventBridgeFactory factory = context.getBean(KafkaCloudEventBridgeFactory.class);
-                    KafkaCloudEventBridge.Builder builder = factory.forGroup("orders-projection", new PushSubscriptionModel(), new RoutingOutcomeChannel());
+                    KafkaCloudEventBridge.Builder builder = factory.forGroup("orders-projection", new PushSubscriptionModel());
                     assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class).hasMessageContaining("parkingDestination");
                 });
     }

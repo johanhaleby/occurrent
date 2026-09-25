@@ -40,6 +40,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -369,7 +370,8 @@ class CatchupThenPushSubscriptionModelTest {
      * refusal decided before any dispatch was attempted must report {@link RoutingOutcome#REFUSED}, never
      * {@link RoutingOutcome#DELIVERED}, so a bridge stops instead of acknowledging a message nothing consumed. A
      * failed catch-up never clears, which is what makes the refusal permanent and the outcome REFUSED rather than
-     * {@link RoutingOutcome#NOT_DELIVERABLE}.
+     * {@link RoutingOutcome#NOT_DELIVERABLE}. The broker path returns it rather than throwing, since it is the whole
+     * answer a bridge needs.
      */
     @Test
     void a_catch_up_failure_reports_refused_rather_than_delivered_on_the_broker_path() {
@@ -384,9 +386,9 @@ class CatchupThenPushSubscriptionModelTest {
         Throwable replayFailure = catchThrowable(subscription::waitUntilStarted);
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
-        Throwable thrown = catchThrowable(() -> liveFeed.acceptRedeliverable(cloudEvent("1", "Created")));
+        RoutingOutcome outcome = liveFeed.acceptRedeliverable(cloudEvent("1", "Created"));
 
-        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(outcome).isEqualTo(RoutingOutcome.REFUSED);
         assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
     }
 
@@ -1668,6 +1670,34 @@ class CatchupThenPushSubscriptionModelTest {
 
         assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(delivered).containsExactly("1");
+    }
+
+    // The first delivery decides whether the event is applied, so a second copy arriving meanwhile is not acknowledged
+    @Test
+    void accept_redeliverable_returns_deferred_while_an_earlier_delivery_of_the_same_event_is_still_running() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CountDownLatch firstDeliveryRunning = new CountDownLatch(1);
+        CountDownLatch releaseFirstDelivery = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Stream::empty, 0), feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            // Only the first call blocks, so a second dispatch fails the DEFERRED assertion instead of hanging
+            boolean firstCall = delivered.isEmpty();
+            delivered.add(ce.getId());
+            if (firstCall) {
+                firstDeliveryRunning.countDown();
+                awaitLatch(releaseFirstDelivery);
+            }
+        }).waitUntilStarted();
+
+        CompletableFuture<RoutingOutcome> first = CompletableFuture.supplyAsync(() -> feed.acceptRedeliverable(cloudEvent("2", "Updated")));
+        awaitLatch(firstDeliveryRunning);
+        RoutingOutcome second = feed.acceptRedeliverable(cloudEvent("2", "Updated"));
+        releaseFirstDelivery.countDown();
+
+        assertThat(second).isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(first.get(5, TimeUnit.SECONDS)).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(delivered).containsExactly("2");
     }
 
     private static void awaitLatch(CountDownLatch latch) {

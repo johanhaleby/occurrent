@@ -88,18 +88,16 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         CountDownLatch releaseBlockedHandler = new CountDownLatch(1);
         List<CloudEvent> handledByHealthyBridge = new CopyOnWriteArrayList<>();
 
-        RoutingOutcomeChannel blockedOutcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel blockedModel = new PushSubscriptionModel(DataFieldReader.refusing(), blockedOutcomeChannel);
+        PushSubscriptionModel blockedModel = new PushSubscriptionModel(DataFieldReader.refusing());
         blockedModel.subscribe("blocked", cloudEvent -> {
             blockedHandlerEntered.countDown();
             awaitQuietly(releaseBlockedHandler);
         });
-        RoutingOutcomeChannel healthyOutcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel healthyModel = new PushSubscriptionModel(DataFieldReader.refusing(), healthyOutcomeChannel);
+        PushSubscriptionModel healthyModel = new PushSubscriptionModel(DataFieldReader.refusing());
         healthyModel.subscribe("healthy", handledByHealthyBridge::add);
 
-        try (RabbitMqCloudEventBridge blockedBridge = bridge(blockedModel, blockedOutcomeChannel, blockedQueue).build();
-             RabbitMqCloudEventBridge healthyBridge = bridge(healthyModel, healthyOutcomeChannel, healthyQueue).build()) {
+        try (RabbitMqCloudEventBridge blockedBridge = bridge(blockedModel, blockedQueue).build();
+             RabbitMqCloudEventBridge healthyBridge = bridge(healthyModel, healthyQueue).build()) {
             publish("blocked", "blocked-1");
             assertThat(blockedHandlerEntered.await(5, TimeUnit.SECONDS)).as("the blocked handler started").isTrue();
 
@@ -121,8 +119,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         Set<String> handlerThreadNames = ConcurrentHashMap.newKeySet();
         AtomicInteger handlersRunning = new AtomicInteger();
         AtomicBoolean overlapped = new AtomicBoolean();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("ordered", cloudEvent -> {
             if (handlersRunning.incrementAndGet() > 1) {
                 overlapped.set(true);
@@ -134,7 +131,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         });
         List<String> publishedIds = IntStream.range(0, 20).mapToObj(i -> "id-" + i).toList();
 
-        try (RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue).prefetchCount(10).build()) {
+        try (RabbitMqCloudEventBridge bridge = bridge(model, queue).prefetchCount(10).build()) {
             for (String id : publishedIds) {
                 publish("ordered", id);
             }
@@ -153,14 +150,13 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         CountDownLatch handlerEntered = new CountDownLatch(1);
         CountDownLatch releaseHandler = new CountDownLatch(1);
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("closing", cloudEvent -> {
             handlerEntered.countDown();
             awaitQuietly(releaseHandler);
             handled.add(cloudEvent);
         });
-        RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue).build();
+        RabbitMqCloudEventBridge bridge = bridge(model, queue).build();
         publish("closing", "id-1");
         assertThat(handlerEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
@@ -181,8 +177,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         CountDownLatch neverReleased = new CountDownLatch(1);
         AtomicBoolean handlerInterrupted = new AtomicBoolean();
         List<String> startedIds = new CopyOnWriteArrayList<>();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("stuck", cloudEvent -> {
             startedIds.add(cloudEvent.getId());
             handlerEntered.countDown();
@@ -196,7 +191,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
             }
         });
 
-        try (RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue).prefetchCount(3).closeTimeout(Duration.ofMillis(200)).build()) {
+        try (RabbitMqCloudEventBridge bridge = bridge(model, queue).prefetchCount(3).closeTimeout(Duration.ofMillis(200)).build()) {
             publish("stuck", "id-1");
             publish("stuck", "id-2");
             publish("stuck", "id-3");
@@ -223,8 +218,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         String queue = declareAndBindQueue("erroring");
         AtomicBoolean firstCall = new AtomicBoolean(true);
         CountDownLatch handlerFailed = new CountDownLatch(1);
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("erroring", cloudEvent -> {
             if (firstCall.compareAndSet(true, false)) {
                 handlerFailed.countDown();
@@ -232,7 +226,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
             }
         });
 
-        try (RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue).build()) {
+        try (RabbitMqCloudEventBridge bridge = bridge(model, queue).build()) {
             publish("erroring", "id-1");
             publish("erroring", "id-2");
 
@@ -259,8 +253,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         String queue = declareAndBindQueue("checked");
         AtomicBoolean firstCall = new AtomicBoolean(true);
         CountDownLatch handlerFailed = new CountDownLatch(1);
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("checked", cloudEvent -> {
             if (firstCall.compareAndSet(true, false)) {
                 handlerFailed.countDown();
@@ -268,7 +261,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
             }
         });
 
-        try (RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue).build()) {
+        try (RabbitMqCloudEventBridge bridge = bridge(model, queue).build()) {
             publish("checked", "id-1");
             publish("checked", "id-2");
 
@@ -293,8 +286,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         CountDownLatch firstCallEntered = new CountDownLatch(1);
         CountDownLatch releaseFirstCall = new CountDownLatch(1);
         List<String> handledIds = new CopyOnWriteArrayList<>();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("restarted", cloudEvent -> {
             handledIds.add(cloudEvent.getId());
             if (handledIds.size() == 1) {
@@ -303,7 +295,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
             }
         });
 
-        try (RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue).readinessSource(subscriptionId -> ready.get()).build()) {
+        try (RabbitMqCloudEventBridge bridge = bridge(model, queue).readinessSource(subscriptionId -> ready.get()).build()) {
             publish("restarted", "id-1");
             assertThat(firstCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
@@ -334,8 +326,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         String queue = declareAndBindQueue("double-close");
         CountDownLatch handlerEntered = new CountDownLatch(1);
         CountDownLatch releaseHandler = new CountDownLatch(1);
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("double-close", cloudEvent -> {
             handlerEntered.countDown();
             boolean released = false;
@@ -352,7 +343,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         logged.start();
         bridgeLog.addAppender(logged);
 
-        RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue).closeTimeout(Duration.ofMillis(200)).build();
+        RabbitMqCloudEventBridge bridge = bridge(model, queue).closeTimeout(Duration.ofMillis(200)).build();
         try {
             publish("double-close", "id-1");
             assertThat(handlerEntered.await(5, TimeUnit.SECONDS)).isTrue();
@@ -382,8 +373,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         String parkingQueue = declareAndBindQueue("parked");
         CountDownLatch handlerEntered = new CountDownLatch(1);
         CountDownLatch neverReleased = new CountDownLatch(1);
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("parking-at-close", cloudEvent -> {
             handlerEntered.countDown();
             try {
@@ -394,7 +384,7 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
             }
         });
 
-        try (RabbitMqCloudEventBridge bridge = bridge(model, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = bridge(model, queue)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)
                 .parkingDestination(RabbitMqDestination.of(exchange, "parked"))
                 .closeTimeout(Duration.ofMillis(200))
@@ -409,8 +399,8 @@ class RabbitMqCloudEventBridgeWorkerThreadTest extends RabbitMqTestSupport {
         assertThat(queueMessageCount(parkingQueue)).isZero();
     }
 
-    private RabbitMqCloudEventBridge.Builder bridge(PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, String queue) {
-        return RabbitMqCloudEventBridge.builder(singleThreadedConnection, model, outcomeChannel, queue)
+    private RabbitMqCloudEventBridge.Builder bridge(PushSubscriptionModel model, String queue) {
+        return RabbitMqCloudEventBridge.builder(singleThreadedConnection, model, queue)
                 .declareTopology(false)
                 .pollInterval(POLL_INTERVAL);
     }

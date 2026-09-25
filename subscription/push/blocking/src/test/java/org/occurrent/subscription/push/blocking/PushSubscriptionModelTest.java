@@ -867,6 +867,25 @@ class PushSubscriptionModelTest {
         assertThat(outcomes).containsExactly(DELIVERED);
     }
 
+    // A filter that cannot answer is a failure, not a refusal, so it throws rather than returning an outcome
+    @Test
+    void accept_redeliverable_throws_the_filters_own_failure() {
+        List<RoutingOutcome> outcomes = new ArrayList<>();
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw new IllegalStateException("payload unreadable");
+        };
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader,
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
+        List<String> received = new ArrayList<>();
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> received.add(cloudEvent.getId()));
+
+        Throwable thrown = catchThrowable(() -> model.acceptRedeliverable(cloudEvent("1", "NameDefined")));
+
+        assertThat(thrown).isExactlyInstanceOf(IllegalStateException.class).hasMessage("payload unreadable");
+        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
+        assertThat(received).isEmpty();
+    }
+
     @SuppressWarnings("unchecked")
     private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
         throw (T) throwable;

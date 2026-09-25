@@ -28,7 +28,6 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
-import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.StartAt;
@@ -103,11 +102,10 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
                     RabbitMqCloudEventBridgeFactory bridgeFactory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
 
                     BlockingQueue<CloudEvent> received = new LinkedBlockingQueue<>();
-                    RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-                    PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+                    PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
                     model.subscribe("test-subscription", received::add);
 
-                    RabbitMqCloudEventBridge bridge = bridgeFactory.forQueue("test-queue-" + UUID.randomUUID(), model, outcomeChannel).build();
+                    RabbitMqCloudEventBridge bridge = bridgeFactory.forQueue("test-queue-" + UUID.randomUUID(), model).build();
                     try {
                         // The type has to be a resolvable fully qualified class name, not an arbitrary string.
                         // ReflectionCloudEventTypeMapper.qualified() round-trips it through Class.forName(...) on
@@ -165,8 +163,7 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
                     RabbitMqCloudEventBridgeFactory bridgeFactory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
 
                     BlockingQueue<CloudEvent> received = new LinkedBlockingQueue<>();
-                    RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-                    PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+                    PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
                     InMemoryEventStore store = new InMemoryEventStore();
                     store.write("s1", List.of(CloudEventBuilder.v1()
                             .withId("historical")
@@ -192,7 +189,7 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
                     });
                     assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
-                    RabbitMqCloudEventBridge bridge = bridgeFactory.forQueue(queue, liveFeed, outcomeChannel).build();
+                    RabbitMqCloudEventBridge bridge = bridgeFactory.forQueue(queue, liveFeed).build();
                     try {
                         CloudEvent event = CloudEventBuilder.v1()
                                 .withId(UUID.randomUUID().toString())

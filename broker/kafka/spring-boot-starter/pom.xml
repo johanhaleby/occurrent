@@ -49,7 +49,7 @@
             <artifactId>occurrent-retry</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- PushSubscriptionModel and RoutingOutcomeChannel appear directly in the CloudEvent bridge factory's own
+        <!-- PushSubscriptionModel appears directly in the CloudEvent bridge factory's own
              public API, so it's declared rather than left to arrive transitively. -->
         <dependency>
             <groupId>org.occurrent</groupId>

@@ -70,8 +70,7 @@ class KafkaCloudEventBridgePauseDuringDeliveryTest extends KafkaTestSupport {
         publishCloudEvent(topic, "stream-1", orderPlaced("id-4"));
         publishCloudEvent(topic, "stream-1", orderPlaced("id-5"));
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<String> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", ce -> {
             handled.add(ce.getId());
@@ -83,7 +82,7 @@ class KafkaCloudEventBridgePauseDuringDeliveryTest extends KafkaTestSupport {
             }
         });
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)

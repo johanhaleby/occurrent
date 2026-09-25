@@ -122,7 +122,8 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
          * Thrown or emitted by {@link #route(CloudEvent, boolean)} to report a refusal decided before any dispatch was
          * attempted, wrapping the real failure as {@link #getCause()}. {@code routeReportingMatch} never reports
          * {@link RoutingOutcome#DELIVERED} for one of these, and propagates the wrapped cause unchanged, exactly as
-         * it would have propagated without this wrapper.
+         * it would have propagated without this wrapper. {@code routeRedeliverable} reports it the same way and
+         * completes instead of erroring.
          * <p>
          * {@code permanent} is the action's promise about its own refusal, and it decides which outcome is
          * reported. Pass {@code true} only when offering the same event to this same registration again is certain
@@ -416,6 +417,28 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * @return A {@link Mono} that completes when the action, if any ran, has completed.
      */
     protected final Mono<Void> routeReportingMatch(CloudEvent cloudEvent, boolean bufferIfNotLive, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+        return routeReportingMatch(cloudEvent, bufferIfNotLive, true, matchObserver);
+    }
+
+    /**
+     * As {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)} with {@code bufferIfNotLive} {@code false},
+     * for a caller that can offer the event again later, a broker listener say. The one difference is a
+     * {@link RoutingAction.Refusal}. It is reported to {@code matchObserver} as {@link RoutingOutcome#REFUSED} or
+     * {@link RoutingOutcome#NOT_DELIVERABLE}, the same as there, and then the returned {@link Mono} completes
+     * instead of erroring with the refusal's cause. A caller stops on
+     * {@link RoutingOutcome#REFUSED} and applies its failure policy on {@link RoutingOutcome#NOT_DELIVERABLE}. A matcher
+     * that throws or an action that errors any other way still errors, exactly as it does there.
+     *
+     * @param cloudEvent    The event to route.
+     * @param matchObserver Told this event's {@link RoutingOutcome} at most once, on the same terms as
+     *                      {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)}.
+     * @return A {@link Mono} that completes when the action, if any ran, has completed or refused.
+     */
+    protected final Mono<Void> routeRedeliverable(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+        return routeReportingMatch(cloudEvent, false, false, matchObserver);
+    }
+
+    private Mono<Void> routeReportingMatch(CloudEvent cloudEvent, boolean bufferIfNotLive, boolean throwRefusal, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         Objects.requireNonNull(matchObserver, "matchObserver cannot be null");
         if (consumers != Consumers.ONE) {
@@ -479,6 +502,11 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                                 RoutingOutcome outcome;
                                 Throwable propagate;
                                 if (error instanceof RoutingAction.Refusal refusal) {
+                                    if (!throwRefusal) {
+                                        // The caller takes the outcome instead of the cause
+                                        matchObserver.accept(cloudEvent, refusal.outcome());
+                                        return Mono.<Boolean>empty();
+                                    }
                                     outcome = refusal.outcome();
                                     propagate = refusal.unwrap();
                                 } else {

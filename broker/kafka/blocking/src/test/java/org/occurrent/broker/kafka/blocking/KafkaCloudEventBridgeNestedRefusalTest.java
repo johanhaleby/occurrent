@@ -68,9 +68,9 @@ class KafkaCloudEventBridgeNestedRefusalTest extends KafkaTestSupport {
 
     @Test
     void a_nested_handovers_permanent_refusal_escaping_a_handler_does_not_stop_this_bridges_own_healthy_model() throws Exception {
-        // otherWrapper: its own catch-up fold throws, so its inner live feed's acceptRedeliverable(...) throws
+        // otherWrapper's own catch-up fold throws, so its inner live feed's accept(...) throws
         // PreDispatchRefusalException on every later call, unrelated to the bridge under test here.
-        PushSubscriptionModel otherLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), new RoutingOutcomeChannel());
+        PushSubscriptionModel otherLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore otherStore = new InMemoryEventStore();
         otherStore.write("s1", List.of(orderPlacedWithId("historical")));
         CatchupThenPushSubscriptionModel otherWrapper = new CatchupThenPushSubscriptionModel(otherStore, otherLiveFeed, null);
@@ -85,19 +85,18 @@ class KafkaCloudEventBridgeNestedRefusalTest extends KafkaTestSupport {
         String parkingTopic = "parking-topic-" + UUID.randomUUID();
         createNamedTopic(parkingTopic, 1);
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         List<String> handled = new CopyOnWriteArrayList<>();
         liveFeed.subscribe("proj", ce -> {
             handled.add(ce.getId());
             if (ce.getId().equals("id-1")) {
                 // The nested, unrelated refusal, escaping this handler unwrapped, the same as a handler that fans
                 // an event out to a second projection or saga would let it.
-                otherLiveFeed.acceptRedeliverable(orderPlacedWithId("id-1-fanout"));
+                otherLiveFeed.accept(orderPlacedWithId("id-1-fanout"));
             }
         });
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), liveFeed, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), liveFeed)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)

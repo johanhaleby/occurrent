@@ -26,6 +26,7 @@ import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
+import org.occurrent.subscription.push.blocking.PushObserver;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
 import java.io.IOException;
@@ -62,12 +63,11 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
     @Test
     void a_readiness_source_answering_false_keeps_a_matching_message_on_the_queue_and_never_invokes_the_handler() throws Exception {
         String queue = declareAndBindQueue(OrderPlaced.class.getName());
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, queue)
                 .declareTopology(false)
                 .pollInterval(POLL_INTERVAL)
                 .readinessSource(subscriptionId -> false)
@@ -86,13 +86,12 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
     @Test
     void flipping_readiness_to_true_drains_and_acknowledges_a_message_that_arrived_while_not_ready() throws Exception {
         String queue = declareAndBindQueue(OrderPlaced.class.getName());
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
         AtomicBoolean ready = new AtomicBoolean(false);
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, queue)
                 .declareTopology(false)
                 .pollInterval(POLL_INTERVAL)
                 .readinessSource(subscriptionId -> ready.get())
@@ -119,13 +118,12 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
     @Test
     void a_readiness_source_that_throws_does_not_end_the_poll_that_starts_this_bridges_consumer() throws Exception {
         String queue = declareAndBindQueue(OrderPlaced.class.getName());
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
         AtomicInteger readinessCalls = new AtomicInteger();
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, queue)
                 .declareTopology(false)
                 .pollInterval(POLL_INTERVAL)
                 .readinessSource(subscriptionId -> {
@@ -150,12 +148,11 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
     @Test
     void no_readiness_source_configured_consumes_immediately_the_same_as_before_this_capability_existed() throws Exception {
         String queue = declareAndBindQueue(OrderPlaced.class.getName());
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, queue)
                 .declareTopology(false)
                 .pollInterval(POLL_INTERVAL)
                 .build()) {
@@ -176,8 +173,7 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
     @Test
     void a_message_that_arrives_during_a_catch_up_replay_is_never_acknowledged_and_is_delivered_once_live_with_no_readiness_source_configured() throws Exception {
         String queue = declareAndBindQueue(OrderPlaced.class.getName());
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
@@ -194,7 +190,7 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
         });
         assertThat(replayEntered.await(5, TimeUnit.SECONDS)).as("the replay reached its one historical event").isTrue();
 
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, queue)
                 .declareTopology(false)
                 .pollInterval(POLL_INTERVAL)
                 .build()) {
@@ -229,8 +225,7 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
         adminChannel.queueDeclare(parkingQueue, false, false, false, null);
         adminChannel.queueBind(parkingQueue, parkingExchange, "#");
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
@@ -245,7 +240,7 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
         });
         assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, queue)
                 .declareTopology(false)
                 .pollInterval(POLL_INTERVAL)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)
@@ -281,12 +276,12 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
     void a_deferred_delivery_with_no_readiness_source_is_redelivered_at_most_once_per_poll_interval() throws Exception {
         String queue = declareAndBindQueue(OrderPlaced.class.getName());
         AtomicInteger deferredCount = new AtomicInteger();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel((cloudEvent, outcome) -> {
+        PushObserver deferredCounter = (cloudEvent, outcome) -> {
             if (outcome == RoutingOutcome.DEFERRED) {
                 deferredCount.incrementAndGet();
             }
-        });
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        };
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), deferredCounter);
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
@@ -301,7 +296,7 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
         });
         assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, queue)
                 .declareTopology(false)
                 .pollInterval(POLL_INTERVAL)
                 .build()) {
@@ -337,9 +332,8 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
     @Test
     void close_while_a_deferred_delivery_is_held_completes_promptly_and_does_not_lose_the_message() throws Exception {
         String queue = declareAndBindQueue(OrderPlaced.class.getName());
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel((cloudEvent, outcome) -> {
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), (cloudEvent, outcome) -> {
         });
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
@@ -354,7 +348,7 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
         });
         assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
-        RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, outcomeChannel, queue)
+        RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, queue)
                 .declareTopology(false)
                 .pollInterval(POLL_INTERVAL)
                 .build();

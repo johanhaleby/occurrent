@@ -336,6 +336,28 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void accept_redeliverable_errors_with_the_filters_own_failure() {
+        // Only a refusal decided before dispatch comes back as an outcome, a filter that fails to answer still errors
+        List<RoutingOutcome> outcomes = new ArrayList<>();
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw new IllegalStateException("payload unreadable");
+        };
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader,
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
+        List<String> received = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))),
+                cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+
+        StepVerifier.create(model.acceptRedeliverable(cloudEvent("1", "NameDefined")))
+                .verifyErrorSatisfies(error -> assertThat(error)
+                        .isExactlyInstanceOf(IllegalStateException.class)
+                        .hasMessage("payload unreadable"));
+
+        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
+        assertThat(received).isEmpty();
+    }
+
+    @Test
     void the_observer_still_sees_the_event_when_evaluating_the_filter_itself_fails_an_assertion() {
         // Same as the RuntimeException case above, but for a DataFieldReader instrumented as a test double, which is
         // as likely to throw AssertionError as a spy observer is.
