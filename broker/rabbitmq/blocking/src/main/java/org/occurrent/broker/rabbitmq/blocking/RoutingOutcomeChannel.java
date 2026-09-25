@@ -38,8 +38,9 @@ import static java.util.Objects.requireNonNull;
  *         .build();
  * }</pre>
  * <p>
- * and the bridge reads the outcome of the {@code acceptRedeliverable(...)} call it just made off the same instance, rather than
- * needing the model to return one.
+ * {@code acceptRedeliverable(...)} returns its outcome, and the bridge reads that. A call that throws returns nothing,
+ * so for that case the bridge reads the outcome off this instance instead. {@link RoutingOutcome#REFUSED}, the one
+ * outcome the bridge stops for, always arrives that way.
  * <p>
  * The outcome is captured per calling thread rather than in a single shared field, so correctness never depends on
  * how the bridge happens to configure RabbitMQ's prefetch. It only has to hold for the one thread currently inside

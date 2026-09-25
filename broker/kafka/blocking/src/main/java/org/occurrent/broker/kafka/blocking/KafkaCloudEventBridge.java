@@ -57,7 +57,8 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * Bridges a Kafka topic into a {@link PushSubscriptionModel}, the CloudEvent-level consume side ADR 133 decision 1
  * describes. Rebuilds each record as a {@link CloudEvent} through {@link KafkaCloudEventMapper}, hands it to
  * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}, and commits only once the {@link RoutingOutcome}
- * that reported through a shared {@link RoutingOutcomeChannel} says the event was actually consumed.
+ * that call returns says the event was actually consumed. A call that throws returns nothing, so for that case the
+ * bridge reads the outcome the model reported to a shared {@link RoutingOutcomeChannel}.
  * <p>
  * <strong>Holds a {@link PushSubscriptionModel}, never a {@link CatchupThenPushSubscriptionModel}</strong>, for the
  * same reason {@code RabbitMqCloudEventBridge} does. ADR 133 decision 1 is explicit that a bridge feeds the live
@@ -159,7 +160,8 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * later live event before attempting any dispatch, and promises that refusing is permanent, which
  * {@code RegisteringSubscribable.routeReportingMatch} reports as {@link RoutingOutcome#REFUSED}. That outcome is
  * reported for nothing else, so this bridge decides on it alone rather than on the type of whatever exception came
- * with it. A handler that reached into some other permanently failed engine reports
+ * with it. {@code acceptRedeliverable(...)} throws for it rather than returning it, so this bridge reads it off the
+ * {@link RoutingOutcomeChannel}. A handler that reached into some other permanently failed engine reports
  * {@link RoutingOutcome#DELIVERED} instead and goes through {@link DeliveryFailurePolicy} like any other handler
  * failure.
  * <p>
@@ -514,12 +516,14 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         }
         RoutingOutcome outcome;
         try {
-            model.acceptRedeliverable(cloudEvent);
-            outcome = outcomeChannel.takeLastOutcome();
+            outcome = model.acceptRedeliverable(cloudEvent);
+            // Discarded so an exception on a later record never reads this record's outcome off the channel
+            outcomeChannel.takeLastOutcome();
         } catch (RuntimeException | AssertionError e) {
             // Catches AssertionError too, since a filter or the handler can throw one, and an uncaught Error here
-            // would leave the loop thread dead with the partition never advancing past this record. Which of the
-            // two things went wrong is read off the reported outcome rather than off the exception type. REFUSED
+            // would leave the loop thread dead with the partition never advancing past this record. An exception
+            // has no return value, so which of the two things went wrong is read off the outcome the channel
+            // was told rather than off the exception type. REFUSED
             // is reported only when this bridge's own model refused before attempting dispatch and promised that
             // refusing is permanent, so a handler that reached into some other permanently failed engine reports
             // DELIVERED and goes through the failure policy below where it belongs.
@@ -540,17 +544,6 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             permanentlyStopped = true;
             running = false;
             return false;
-        }
-        if (outcome == null) {
-            // Only reachable when model was constructed with a different RoutingOutcomeChannel than the one this
-            // bridge reads, a wiring defect ADR 133 decision 1 requires against, not an ordinary delivery failure.
-            // Named explicitly rather than falling into the generic "not deliverable" branch below, which would
-            // say nothing about the actual cause.
-            log.error("No RoutingOutcome was captured for a record on topic \"{}\" partition {} offset {}. This " +
-                    "model was very likely constructed with a different RoutingOutcomeChannel than the one this " +
-                    "bridge reads; both must be the exact same instance, per RoutingOutcomeChannel's own javadoc.",
-                    record.topic(), record.partition(), record.offset());
-            return resolve(record, toCommit, failureAction.apply(record));
         }
         return switch (outcome.disposition()) {
             case ACKNOWLEDGE -> {

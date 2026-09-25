@@ -56,7 +56,8 @@ import static java.util.Objects.requireNonNull;
  * Bridges a RabbitMQ queue into a {@link PushSubscriptionModel}, the CloudEvent-level consume side ADR 133 decision 1
  * describes. Rebuilds each message as a {@link CloudEvent} through {@link RabbitMqCloudEventMapper}, hands it to
  * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}, and acknowledges only once the {@link RoutingOutcome}
- * that reported through a shared {@link RoutingOutcomeChannel} says the event was actually consumed.
+ * that call returns says the event was actually consumed. A call that throws returns nothing, so for that case the
+ * bridge reads the outcome the model reported to a shared {@link RoutingOutcomeChannel}.
  * <p>
  * <strong>Holds a {@link PushSubscriptionModel}, never a {@link CatchupThenPushSubscriptionModel}.</strong> ADR 133
  * decision 1 is explicit that a bridge feeds the live model, not the catch-up wrapper in front of it, since a
@@ -141,7 +142,8 @@ import static java.util.Objects.requireNonNull;
  * every later live event before attempting any dispatch, and promises that refusing is permanent, which
  * {@code RegisteringSubscribable.routeReportingMatch} reports as {@link RoutingOutcome#REFUSED}. That outcome is
  * reported for nothing else, so this bridge decides on it alone rather than on the type of whatever exception came
- * with it. A handler that reached into some other permanently failed engine reports
+ * with it. {@code acceptRedeliverable(...)} throws for it rather than returning it, so this bridge reads it off the
+ * {@link RoutingOutcomeChannel}. A handler that reached into some other permanently failed engine reports
  * {@link RoutingOutcome#DELIVERED} instead and goes through {@link DeliveryFailurePolicy} like any other handler
  * failure.
  * <p>
@@ -432,13 +434,16 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
         }
+        RoutingOutcome outcome;
         try {
-            model.acceptRedeliverable(cloudEvent);
+            outcome = model.acceptRedeliverable(cloudEvent);
+            // Discarded so an exception on a later delivery never reads this delivery's outcome off the channel
+            outcomeChannel.takeLastOutcome();
         } catch (RuntimeException | AssertionError e) {
             // Catches AssertionError too, since a filter or the handler can throw one, and it belongs in the failure
             // policy like any other handler failure. Any other Error stops this bridge instead, see
-            // handleDeliveryOrStop. Which of the two things went wrong is read off the reported outcome rather than off the
-            // exception type. REFUSED is reported only when this bridge's own model refused before attempting
+            // handleDeliveryOrStop. An exception has no return value, so which of the two things went wrong is
+            // read off the outcome the channel was told rather than off the exception type. REFUSED is reported only when this bridge's own model refused before attempting
             // dispatch and promised that refusing is permanent, so a handler that reached into some other
             // permanently failed engine reports DELIVERED and lands in the failure policy below where it belongs.
             RoutingOutcome refusedOutcome = outcomeChannel.takeLastOutcome();
@@ -456,20 +461,6 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
                     + "closes, so it stays visible on the queue until the wrapper's catch-up is fixed and restarted.",
                     queue, deliveryTag, e);
             stopPermanently();
-            return;
-        }
-        RoutingOutcome outcome = outcomeChannel.takeLastOutcome();
-        if (outcome == null) {
-            // Only reachable when model was constructed with a different RoutingOutcomeChannel than the one this
-            // bridge reads, a wiring defect ADR 133 decision 1 requires against, not an ordinary delivery failure.
-            // Named explicitly rather than falling into the generic "not deliverable" branch below, which would
-            // say nothing about the actual cause. Logged at error, distinct from and in addition to whatever
-            // routeFailure itself logs for the delivery: this line diagnoses the wiring defect, not the delivery.
-            log.error("No RoutingOutcome was captured for a message on queue \"{}\", delivery tag {}. This model " +
-                    "was very likely constructed with a different RoutingOutcomeChannel than the one this bridge " +
-                    "reads; both must be the exact same instance, per RoutingOutcomeChannel's own javadoc.",
-                    queue, deliveryTag);
-            routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
         }
         route(outcome, deliveryTag, delivery.getProperties(), delivery.getBody());
