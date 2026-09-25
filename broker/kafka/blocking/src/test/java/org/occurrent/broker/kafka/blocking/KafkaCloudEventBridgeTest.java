@@ -26,9 +26,14 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.condition.Condition;
+import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
+import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
 import java.net.URI;
@@ -743,6 +748,57 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
                     assertThat(id1Attempts.get()).isGreaterThanOrEqualTo(2));
             await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                     assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+        }
+    }
+
+    /**
+     * The CloudEvent-bridge twin of {@code KafkaDomainEventBridgeTest}'s
+     * {@code an_unreadable_live_filter_leaves_the_group_immediately_even_under_static_membership}. A permanently
+     * failed catch-up (the fold throws for the one historical event, as in
+     * {@link KafkaCloudEventBridgeCatchUpFailureParkTest}) reports {@link RoutingOutcome#REFUSED} for the next
+     * live event and stops this bridge for good. Under {@code group.instance.id} (static membership) an ordinary
+     * {@code Consumer.close()} deliberately keeps the assignment in place rather than leaving, correct for a
+     * caller restarting the same bridge but wrong for a permanent stop with nothing coming back to reclaim it.
+     * Proves the permanent stop still forces an immediate departure on this configuration.
+     */
+    @Test
+    void a_permanently_failed_catch_up_leaves_the_group_immediately_even_under_static_membership() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, groupId,
+                ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, "instance-" + UUID.randomUUID(),
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false",
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(orderPlaced("historical")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
+
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            throw new RuntimeException("simulated catch-up fold failure for " + ce.getId());
+        });
+        assertThatThrownBy(() -> subscription.waitUntilStarted(Duration.ofSeconds(5)))
+                .as("the catch-up replay must have failed and propagated the failure")
+                .hasMessageContaining("simulated catch-up fold failure");
+
+        KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig, liveFeed, outcomeChannel)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build();
+        try {
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isEqualTo(1));
+
+            publishCloudEvent(topic, "stream-1", orderPlaced("id-1"));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isZero());
+            assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isNull();
+        } finally {
+            bridge.close();
         }
     }
 

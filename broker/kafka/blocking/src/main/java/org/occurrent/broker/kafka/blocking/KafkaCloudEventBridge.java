@@ -17,6 +17,7 @@
 package org.occurrent.broker.kafka.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.apache.kafka.clients.consumer.CloseOptions;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -300,9 +301,18 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
                 }
             }
         } finally {
-            // Only this thread ever closes the Consumer, see the class javadoc.
+            // Only this thread ever closes the Consumer, see the class javadoc. Reached whether the loop above
+            // exits because close() set running false or because a permanent stop did the same inside
+            // handleRecord. A permanent stop forces LEAVE_GROUP so a static member (group.instance.id configured)
+            // still departs immediately, since nothing is coming back to reclaim its assignment, unlike an
+            // ordinary close of the same bridge.
             try {
-                consumer.close(closeTimeout);
+                if (permanentlyStopped) {
+                    consumer.close(CloseOptions.timeout(closeTimeout)
+                            .withGroupMembershipOperation(CloseOptions.GroupMembershipOperation.LEAVE_GROUP));
+                } else {
+                    consumer.close(closeTimeout);
+                }
             } catch (RuntimeException e) {
                 log.warn("Failed to close the Kafka consumer cleanly during shutdown.", e);
             }
