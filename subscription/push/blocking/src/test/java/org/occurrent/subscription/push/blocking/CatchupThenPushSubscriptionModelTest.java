@@ -40,6 +40,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -369,7 +370,8 @@ class CatchupThenPushSubscriptionModelTest {
      * refusal decided before any dispatch was attempted must report {@link RoutingOutcome#REFUSED}, never
      * {@link RoutingOutcome#DELIVERED}, so a bridge stops instead of acknowledging a message nothing consumed. A
      * failed catch-up never clears, which is what makes the refusal permanent and the outcome REFUSED rather than
-     * {@link RoutingOutcome#NOT_DELIVERABLE}.
+     * {@link RoutingOutcome#NOT_DELIVERABLE}. The broker path returns it rather than throwing, since it is the whole
+     * answer a bridge needs.
      */
     @Test
     void a_catch_up_failure_reports_refused_rather_than_delivered_on_the_broker_path() {
@@ -384,9 +386,9 @@ class CatchupThenPushSubscriptionModelTest {
         Throwable replayFailure = catchThrowable(subscription::waitUntilStarted);
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
-        Throwable thrown = catchThrowable(() -> liveFeed.acceptRedeliverable(cloudEvent("1", "Created")));
+        RoutingOutcome outcome = liveFeed.acceptRedeliverable(cloudEvent("1", "Created"));
 
-        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(outcome).isEqualTo(RoutingOutcome.REFUSED);
         assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
     }
 
@@ -1588,6 +1590,114 @@ class CatchupThenPushSubscriptionModelTest {
         // The handover is gone along with the registration, the same "nothing here is tracking this id" answer as
         // an id never subscribed at all.
         assertThat(model.isReadyForLiveDelivery("proj")).isFalse();
+    }
+
+    // accept(..) buffers an event arriving during the replay. A broker can deliver it again, so
+    // acceptRedeliverable(..) refuses it instead and the handler never sees this delivery.
+    @Test
+    void accept_redeliverable_during_the_replay_returns_deferred_and_the_handler_never_sees_the_event() {
+        List<RoutingOutcome> outcomes = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel feed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Stream.of(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            folded.add(ce.getId());
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        awaitLatch(replayReached);
+
+        RoutingOutcome outcome = feed.acceptRedeliverable(cloudEvent("2", "Updated"));
+        releaseReplay.countDown();
+        subscription.waitUntilStarted();
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(folded).containsExactly("1");
+        assertThat(outcomes).containsExactly(RoutingOutcome.DEFERRED);
+    }
+
+    // stop() stops the live feed too, so the event reaches no subscription at all
+    @Test
+    void accept_redeliverable_after_a_stop_before_the_replay_finished_returns_unavailable() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Stream.of(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            folded.add(ce.getId());
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        awaitLatch(replayReached);
+        model.stop();
+
+        RoutingOutcome outcome = feed.acceptRedeliverable(cloudEvent("2", "Updated"));
+        releaseReplay.countDown();
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.UNAVAILABLE);
+        assertThat(folded).containsExactly("1");
+    }
+
+    @Test
+    void accept_redeliverable_returns_delivered_once_the_live_event_has_been_handled() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Stream.of(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
+
+        RoutingOutcome outcome = feed.acceptRedeliverable(cloudEvent("2", "Updated"));
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(delivered).containsExactly("1", "2");
+    }
+
+    @Test
+    void accept_redeliverable_returns_delivered_for_a_live_copy_of_an_event_the_replay_already_applied() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Stream.of(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
+
+        RoutingOutcome outcome = feed.acceptRedeliverable(cloudEvent("1", "Created"));
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(delivered).containsExactly("1");
+    }
+
+    // The first delivery decides whether the event is applied, so a second copy arriving meanwhile is not acknowledged
+    @Test
+    void accept_redeliverable_returns_deferred_while_an_earlier_delivery_of_the_same_event_is_still_running() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CountDownLatch firstDeliveryRunning = new CountDownLatch(1);
+        CountDownLatch releaseFirstDelivery = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Stream::empty, 0), feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            // Only the first call blocks, so a second dispatch fails the DEFERRED assertion instead of hanging
+            boolean firstCall = delivered.isEmpty();
+            delivered.add(ce.getId());
+            if (firstCall) {
+                firstDeliveryRunning.countDown();
+                awaitLatch(releaseFirstDelivery);
+            }
+        }).waitUntilStarted();
+
+        CompletableFuture<RoutingOutcome> first = CompletableFuture.supplyAsync(() -> feed.acceptRedeliverable(cloudEvent("2", "Updated")));
+        awaitLatch(firstDeliveryRunning);
+        RoutingOutcome second = feed.acceptRedeliverable(cloudEvent("2", "Updated"));
+        releaseFirstDelivery.countDown();
+
+        assertThat(second).isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(first.get(5, TimeUnit.SECONDS)).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(delivered).containsExactly("2");
     }
 
     private static void awaitLatch(CountDownLatch latch) {

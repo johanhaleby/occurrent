@@ -66,10 +66,29 @@ import java.util.function.Supplier;
  * de-dup cache needs no locking.
  * <p>
  * Contract (see ADR 62 and the blocking model): catch-up is Occurrent's job and runs once per subscription id, guarded
- * by an optional {@link CheckpointStorage} marker so a restart skips it. Live-resume is the broker's job, so no live
- * position watermark is persisted and delivery is at-least-once over idempotent folds. A live event's {@code accept}
- * {@link Mono} completes only once its handler has run (including events buffered during the replay), so the listener
- * can acknowledge after processing. Only stream and capability-agnostic subscription filters can be replayed.
+ * by an optional {@link CheckpointStorage} marker so a restart skips it. No live position is persisted, so resuming the
+ * live feed is the job of whatever feeds the {@link PushSubscriptionModel}. Only stream and capability-agnostic
+ * subscription filters can be replayed.
+ * <p>
+ * Fed from the event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)}, nothing records
+ * which live events the subscription has handled. When the application crashes after a write has committed but before
+ * the handler has run, and the catch-up-complete marker has been recorded, this subscription never sees that event,
+ * since a restart skips the replay once the marker exists. A crash before the marker is recorded, during the replay
+ * say, is the exception. The next start replays the whole history, that event included, and so does every start
+ * with no {@link CheckpointStorage} to record a marker in. The marker is recorded
+ * before the events buffered during the replay are applied, so a crash between the two loses those events too. The
+ * exception holds only while no other instance sharing the same marker storage records the marker first, since the
+ * next start then skips the replay. Use a durable subscription if losing an event is not acceptable.
+ * <p>
+ * Fed from a broker, call {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} and acknowledge the message
+ * only when its {@link Mono} completes with {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or
+ * {@link org.occurrent.subscription.RoutingOutcome#FILTERED}. It refuses an event arriving during the replay instead of
+ * buffering it, so the broker delivers that event again, and a delivery after this model has gone live applies it.
+ * Once the catch-up has failed, the {@link Mono} completes with
+ * {@link org.occurrent.subscription.RoutingOutcome#REFUSED} for every event, and the listener stops.
+ * Delivery is at-least-once, so
+ * a handler that sees the same event twice has to leave the same state as seeing it once. Do not acknowledge on {@code accept(..)} completing, since it also completes for
+ * an event nothing applied, one fed before any subscription is registered say.
  * <p>
  * The catch-up-then-live coordination itself (the bounded live sink, the de-dup cache, and the
  * replay-then-marker-then-live pipeline shape) is delegated per-subscription to {@link ReactiveHandover}, shared with
@@ -163,12 +182,15 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         ReactiveHandover<CloudEvent, CloudEventKey> handover = ReactiveHandover.create(action, CloudEventKey::of, options, "subscription");
 
         // Register on the live feed first, so events committing during the replay are buffered in the sink, not
-        // lost. Buffering, the write path, uses acceptReportingDelivery(..), never acceptIfLive(..), which would
-        // refuse rather than buffer a payload arriving during the replay. Only the dedicated pre-dispatch exception
-        // is wrapped as a Refusal, so routeReportingMatch reports NOT_DELIVERABLE or REFUSED for it, whichever
-        // handover.refusesPermanently() decides, and DELIVERED for a handler's own exception, the same
-        // one-evaluation fix the blocking stack already has.
-        RegisteringSubscribable.RoutingAction routingAction = cloudEvent -> handover.acceptReportingDelivery(cloudEvent)
+        // lost. PushSubscriptionModel.accept(..), the write path, buffers through acceptReportingDelivery(..).
+        // PushSubscriptionModel.acceptRedeliverable(..), a broker path that can redeliver, uses acceptIfLive(..)
+        // instead, which refuses a payload arriving before the handover is live rather than buffering it, reported
+        // as RoutingOutcome.DEFERRED. Only the dedicated pre-dispatch exception is wrapped as a Refusal, so
+        // routeReportingMatch reports NOT_DELIVERABLE or REFUSED for it, whichever handover.refusesPermanently()
+        // decides, and DELIVERED for a handler's own exception, the same one-evaluation fix the blocking stack
+        // already has.
+        RegisteringSubscribable.RoutingAction routingAction = (cloudEvent, bufferIfNotLive) ->
+                (bufferIfNotLive ? handover.acceptReportingDelivery(cloudEvent) : handover.acceptIfLive(cloudEvent))
                 .onErrorMap(ReactiveHandover.PreDispatchRefusalException.class, e -> e.thrownBy(handover)
                         ? new RegisteringSubscribable.RoutingAction.Refusal(e, handover.refusesPermanently())
                         // A different handover refused, which this handler reached by calling into it. This

@@ -17,7 +17,6 @@
 package org.occurrent.springboot.broker.kafka.blocking;
 
 import org.occurrent.broker.kafka.blocking.KafkaCloudEventBridge;
-import org.occurrent.broker.kafka.blocking.RoutingOutcomeChannel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
 /**
@@ -38,9 +37,8 @@ import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 public interface KafkaCloudEventBridgeFactory {
 
     /**
-     * @param groupId        This consumer's Kafka {@code group.id}, one per projection or saga per ADR 90.
-     * @param model          The live model this bridge feeds.
-     * @param outcomeChannel Shared with {@code model}'s own constructor, see {@link RoutingOutcomeChannel}.
+     * @param groupId This consumer's Kafka {@code group.id}, one per projection or saga per ADR 90.
+     * @param model   The live model this bridge feeds.
      */
-    KafkaCloudEventBridge.Builder forGroup(String groupId, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel);
+    KafkaCloudEventBridge.Builder forGroup(String groupId, PushSubscriptionModel model);
 }

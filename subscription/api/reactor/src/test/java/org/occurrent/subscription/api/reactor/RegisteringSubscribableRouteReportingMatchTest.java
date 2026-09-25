@@ -36,12 +36,13 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.condition.Condition.eq;
 
 /**
- * Exercises {@link RegisteringSubscribable#routeReportingMatch(CloudEvent, BiConsumer)} directly, with a raw
+ * Exercises {@link RegisteringSubscribable#routeReportingMatch(CloudEvent, boolean, BiConsumer)} directly, with a raw
  * {@code matchObserver} that has no swallowing of its own. {@code PushSubscriptionModel}'s own
  * {@code notifyObserver} already catches any {@code Exception} or an {@code AssertionError} from the configured
  * {@code PushObserver} before it could ever reach {@code routeReportingMatch}'s own guard against a shared
@@ -115,6 +116,23 @@ class RegisteringSubscribableRouteReportingMatchTest {
                 .verifyComplete();
 
         assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    @Test
+    void passes_the_buffering_choice_through_to_the_action_unchanged() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        List<Boolean> offered = new ArrayList<>();
+        model.subscribeRaw("sub", (cloudEvent, bufferIfNotLive) -> {
+            offered.add(bufferIfNotLive);
+            return Mono.just(true);
+        });
+
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> {
+        })).verifyComplete();
+        StepVerifier.create(model.acceptRaw(cloudEvent("2"), true, (cloudEvent, outcome) -> {
+        })).verifyComplete();
+
+        assertThat(offered).containsExactly(false, true);
     }
 
     @Test
@@ -435,6 +453,65 @@ class RegisteringSubscribableRouteReportingMatchTest {
         assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
     }
 
+    // A caller that can offer the event again takes the refusal as its outcome, so the Mono completes
+    @Test
+    void route_redeliverable_reports_refused_for_a_permanent_refusal_and_completes() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        List<Boolean> offered = new ArrayList<>();
+        model.subscribeRaw("sub", (cloudEvent, bufferIfNotLive) -> {
+            offered.add(bufferIfNotLive);
+            return Mono.error(new RegisteringSubscribable.RoutingAction.Refusal(new IllegalStateException("catch-up has failed"), true));
+        });
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyComplete();
+
+        assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
+        assertThat(offered).containsExactly(false);
+    }
+
+    @Test
+    void route_redeliverable_reports_not_deliverable_for_a_transient_refusal_and_completes() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(new RegisteringSubscribable.RoutingAction.Refusal(new IllegalStateException("the live buffer is full"), false)));
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyComplete();
+
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+    }
+
+    @Test
+    void route_redeliverable_still_errors_when_the_matcher_throws() {
+        RuntimeException matcherFailure = new IllegalStateException("the filter cannot answer");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw matcherFailure;
+        };
+        RawConsumersOneModel model = new RawConsumersOneModel(throwingReader);
+        model.subscribeRaw("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> Mono.just(true));
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(matcherFailure));
+
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+    }
+
+    @Test
+    void route_redeliverable_still_errors_when_the_action_errors() {
+        RuntimeException actionFailure = new IllegalStateException("action failed");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(actionFailure));
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(actionFailure));
+
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
     // A plain Error, deliberately not a VirtualMachineError, ThreadDeath or LinkageError: Reactor's
     // Exceptions.throwIfFatal rethrows those three rather than turning them into an error signal, which
     // would prove nothing about what matchObserver is told.
@@ -449,12 +526,24 @@ class RegisteringSubscribableRouteReportingMatchTest {
             super(Consumers.ONE, dataFieldReader);
         }
 
-        void subscribeRaw(String subscriptionId, @Nullable SubscriptionFilter filter, RoutingAction action) {
-            subscribeReportingDelivery(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);
+        void subscribeRaw(String subscriptionId, @Nullable SubscriptionFilter filter, Function<CloudEvent, Mono<Boolean>> action) {
+            subscribeReportingDelivery(subscriptionId, filter, StartAt.subscriptionModelDefault(), (cloudEvent, bufferIfNotLive) -> action.apply(cloudEvent));
+        }
+
+        void subscribeRaw(String subscriptionId, RoutingAction action) {
+            subscribeReportingDelivery(subscriptionId, null, StartAt.subscriptionModelDefault(), action);
         }
 
         Mono<Void> acceptRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
-            return routeReportingMatch(cloudEvent, matchObserver);
+            return acceptRaw(cloudEvent, true, matchObserver);
+        }
+
+        Mono<Void> acceptRaw(CloudEvent cloudEvent, boolean bufferIfNotLive, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+            return routeReportingMatch(cloudEvent, bufferIfNotLive, matchObserver);
+        }
+
+        Mono<Void> acceptRedeliverableRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+            return routeRedeliverable(cloudEvent, matchObserver);
         }
     }
 }

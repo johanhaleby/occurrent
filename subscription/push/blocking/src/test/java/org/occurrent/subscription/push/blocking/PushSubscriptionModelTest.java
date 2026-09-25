@@ -788,6 +788,104 @@ class PushSubscriptionModelTest {
         assertThat(received).containsExactly("1");
     }
 
+    // A broker listener acknowledges on the outcome acceptRedeliverable returns, so each case has to return its own
+    @Test
+    void accept_redeliverable_returns_unavailable_when_nothing_is_registered() {
+        List<RoutingOutcome> outcomes = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
+
+        RoutingOutcome outcome = model.acceptRedeliverable(cloudEvent("1", "NameDefined"));
+
+        assertThat(outcome).isEqualTo(UNAVAILABLE);
+        assertThat(outcomes).containsExactly(UNAVAILABLE);
+    }
+
+    @Test
+    void accept_redeliverable_returns_unavailable_while_the_model_is_stopped() {
+        List<String> received = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
+        model.stop();
+
+        RoutingOutcome outcome = model.acceptRedeliverable(cloudEvent("1", "NameDefined"));
+
+        assertThat(outcome).isEqualTo(UNAVAILABLE);
+        assertThat(received).isEmpty();
+    }
+
+    @Test
+    void accept_redeliverable_returns_unavailable_while_the_subscription_is_paused() {
+        List<String> received = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
+        model.pauseSubscription("sub");
+
+        RoutingOutcome outcome = model.acceptRedeliverable(cloudEvent("1", "NameDefined"));
+
+        assertThat(outcome).isEqualTo(UNAVAILABLE);
+        assertThat(received).isEmpty();
+    }
+
+    @Test
+    void accept_redeliverable_returns_delivered_once_the_handler_has_run() {
+        List<String> received = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
+
+        RoutingOutcome outcome = model.acceptRedeliverable(cloudEvent("1", "NameDefined"));
+
+        assertThat(outcome).isEqualTo(DELIVERED);
+        assertThat(received).containsExactly("1");
+    }
+
+    @Test
+    void accept_redeliverable_returns_filtered_for_an_event_the_filter_declines() {
+        List<String> received = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.type("SomethingElseHappened")),
+                cloudEvent -> received.add(cloudEvent.getId()));
+
+        RoutingOutcome outcome = model.acceptRedeliverable(cloudEvent("1", "NameDefined"));
+
+        assertThat(outcome).isEqualTo(FILTERED);
+        assertThat(received).isEmpty();
+    }
+
+    @Test
+    void accept_redeliverable_throws_the_handlers_own_failure() {
+        List<RoutingOutcome> outcomes = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
+        model.subscribe("boom", cloudEvent -> {
+            throw new IllegalStateException("handler failed");
+        });
+
+        Throwable thrown = catchThrowable(() -> model.acceptRedeliverable(cloudEvent("1", "NameDefined")));
+
+        assertThat(thrown).isExactlyInstanceOf(IllegalStateException.class).hasMessage("handler failed");
+        assertThat(outcomes).containsExactly(DELIVERED);
+    }
+
+    // A filter that cannot answer is a failure, not a refusal, so it throws rather than returning an outcome
+    @Test
+    void accept_redeliverable_throws_the_filters_own_failure() {
+        List<RoutingOutcome> outcomes = new ArrayList<>();
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw new IllegalStateException("payload unreadable");
+        };
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader,
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
+        List<String> received = new ArrayList<>();
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> received.add(cloudEvent.getId()));
+
+        Throwable thrown = catchThrowable(() -> model.acceptRedeliverable(cloudEvent("1", "NameDefined")));
+
+        assertThat(thrown).isExactlyInstanceOf(IllegalStateException.class).hasMessage("payload unreadable");
+        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
+        assertThat(received).isEmpty();
+    }
+
     @SuppressWarnings("unchecked")
     private static <T extends Throwable> void sneakyThrow(Throwable throwable) throws T {
         throw (T) throwable;

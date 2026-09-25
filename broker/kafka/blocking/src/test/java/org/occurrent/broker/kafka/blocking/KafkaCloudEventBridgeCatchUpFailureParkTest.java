@@ -65,8 +65,7 @@ class KafkaCloudEventBridgeCatchUpFailureParkTest extends KafkaTestSupport {
         String parkingTopic = "parking-topic-" + UUID.randomUUID();
         createNamedTopic(parkingTopic, 1);
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s1", List.of(orderPlacedWithId("historical")));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
@@ -82,7 +81,7 @@ class KafkaCloudEventBridgeCatchUpFailureParkTest extends KafkaTestSupport {
                 .hasMessageContaining("simulated catch-up fold failure");
         assertThat(model.isReadyForLiveDelivery("proj")).as("a failed catch-up is never ready for live delivery").isFalse();
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), liveFeed, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), liveFeed)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)

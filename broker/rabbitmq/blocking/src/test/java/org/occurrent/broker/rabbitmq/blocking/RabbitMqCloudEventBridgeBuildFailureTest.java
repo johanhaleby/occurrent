@@ -50,10 +50,9 @@ class RabbitMqCloudEventBridgeBuildFailureTest {
     @Test
     void onDeliveryFailure_PARK_without_a_parkingDestination_is_refused_before_any_channel_is_opened() throws Exception {
         Connection connection = mock(Connection.class);
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
 
-        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, "queue")
+        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, "queue")
                 .declareTopology(false)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK);
 
@@ -65,10 +64,9 @@ class RabbitMqCloudEventBridgeBuildFailureTest {
     @Test
     void an_explicit_empty_bindings_set_is_refused_before_any_channel_is_opened() throws Exception {
         Connection connection = mock(Connection.class);
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
 
-        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, "queue")
+        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, "queue")
                 .bindings(Set.of());
 
         assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class);
@@ -83,14 +81,13 @@ class RabbitMqCloudEventBridgeBuildFailureTest {
         when(connection.openChannel()).thenReturn(Optional.of(channel));
         when(channel.queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any()))
                 .thenThrow(new IOException("queue declare failed"));
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(EXCHANGE, ReflectionCloudEventTypeMapper.qualified());
 
         // retryStrategy(none()): this test is about the unwind on ONE failed attempt, not about retrying, and a
         // queue declare failure wrapped as RabbitMqBridgeException is retried by default (see
         // RabbitMqCloudEventBridgeBuildRetryTest), which would both slow this down and call close() more than once.
-        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, "queue")
+        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, "queue")
                 .resolver(resolver)
                 .retryStrategy(RetryStrategy.none());
 

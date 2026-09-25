@@ -38,10 +38,9 @@ class KafkaCloudEventBridgeBuildFailureTest {
 
     @Test
     void onDeliveryFailure_PARK_without_a_parkingDestination_is_refused_before_any_consumer_is_opened() {
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
 
-        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(validConsumerConfig(), model, outcomeChannel)
+        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(validConsumerConfig(), model)
                 .bindings(Set.of(KafkaDestination.of("topic")))
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK);
 
@@ -52,10 +51,9 @@ class KafkaCloudEventBridgeBuildFailureTest {
 
     @Test
     void onDeliveryFailure_PARK_with_a_pattern_typed_parkingDestination_is_refused() {
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
 
-        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(validConsumerConfig(), model, outcomeChannel)
+        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(validConsumerConfig(), model)
                 .bindings(Set.of(KafkaDestination.of("topic")))
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)
                 .parkingDestination(KafkaDestination.ofPattern("prefix-.*"));
@@ -67,10 +65,9 @@ class KafkaCloudEventBridgeBuildFailureTest {
 
     @Test
     void no_resolver_and_no_explicit_bindings_is_refused() {
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
 
-        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(validConsumerConfig(), model, outcomeChannel);
+        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(validConsumerConfig(), model);
 
         assertThatThrownBy(builder::build)
                 .isInstanceOf(IllegalStateException.class)
@@ -79,10 +76,9 @@ class KafkaCloudEventBridgeBuildFailureTest {
 
     @Test
     void an_explicit_empty_bindings_set_is_refused_before_any_consumer_is_opened() {
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
 
-        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(validConsumerConfig(), model, outcomeChannel)
+        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(validConsumerConfig(), model)
                 .bindings(Set.of());
 
         assertThatThrownBy(builder::build)
@@ -92,13 +88,12 @@ class KafkaCloudEventBridgeBuildFailureTest {
 
     @Test
     void consumerConfig_missing_group_id_is_refused_rather_than_failing_invisibly_later() {
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         Map<String, Object> consumerConfig = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "",
                 ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
 
-        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(consumerConfig, model, outcomeChannel)
+        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(consumerConfig, model)
                 .bindings(Set.of(KafkaDestination.of("topic")));
 
         assertThatThrownBy(builder::build)
@@ -114,14 +109,13 @@ class KafkaCloudEventBridgeBuildFailureTest {
      */
     @Test
     void consumerConfig_with_a_blank_group_id_is_refused_rather_than_failing_invisibly_later() {
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         Map<String, Object> consumerConfig = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "",
                 ConsumerConfig.GROUP_ID_CONFIG, "   ",
                 ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
 
-        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(consumerConfig, model, outcomeChannel)
+        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(consumerConfig, model)
                 .bindings(Set.of(KafkaDestination.of("topic")));
 
         assertThatThrownBy(builder::build)
@@ -131,13 +125,12 @@ class KafkaCloudEventBridgeBuildFailureTest {
 
     @Test
     void consumerConfig_with_enable_auto_commit_absent_is_refused() {
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         Map<String, Object> consumerConfig = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "",
                 ConsumerConfig.GROUP_ID_CONFIG, "test-group");
 
-        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(consumerConfig, model, outcomeChannel)
+        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(consumerConfig, model)
                 .bindings(Set.of(KafkaDestination.of("topic")));
 
         assertThatThrownBy(builder::build)
@@ -147,14 +140,13 @@ class KafkaCloudEventBridgeBuildFailureTest {
 
     @Test
     void consumerConfig_with_enable_auto_commit_set_to_true_is_refused() {
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         Map<String, Object> consumerConfig = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "",
                 ConsumerConfig.GROUP_ID_CONFIG, "test-group",
                 ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true");
 
-        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(consumerConfig, model, outcomeChannel)
+        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(consumerConfig, model)
                 .bindings(Set.of(KafkaDestination.of("topic")));
 
         assertThatThrownBy(builder::build)

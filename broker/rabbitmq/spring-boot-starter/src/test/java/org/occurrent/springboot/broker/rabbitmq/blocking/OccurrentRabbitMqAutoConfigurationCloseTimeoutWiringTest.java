@@ -18,7 +18,6 @@ package org.occurrent.springboot.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.Connection;
 import org.junit.jupiter.api.Test;
-import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.springboot.broker.rabbitmq.blocking.domain.RabbitMqDomainEventBridgeFactory;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
@@ -49,7 +48,7 @@ class OccurrentRabbitMqAutoConfigurationCloseTimeoutWiringTest {
         contextRunner.run(context -> {
             RabbitMqCloudEventBridgeFactory factory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
 
-            assertThat(factory.forQueue("orders-projection", new PushSubscriptionModel(), new RoutingOutcomeChannel()))
+            assertThat(factory.forQueue("orders-projection", new PushSubscriptionModel()))
                     .extracting("closeTimeout")
                     .isEqualTo(Duration.ofSeconds(7));
         });

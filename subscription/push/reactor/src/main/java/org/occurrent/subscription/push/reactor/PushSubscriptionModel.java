@@ -33,6 +33,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The reactive counterpart of the blocking {@code PushSubscriptionModel}: a register-only reactive {@link Subscribable}
@@ -40,9 +41,16 @@ import java.util.Objects;
  * <p>
  * It exists so a projection can be driven from any transport that already forwards Occurrent cloud events, such as a
  * RabbitMQ or Kafka listener, a Spring application event, or an HTTP endpoint. The application registers handlers
- * through the projection DSL and the listener hands each received event to {@link #accept(CloudEvent)}, which routes it
- * to the handler if its {@link SubscriptionFilter} matches. A handler error propagates through the returned
- * {@link Mono}, so the listener can decide whether to acknowledge or redeliver.
+ * through the projection DSL. A broker listener hands each received event to {@link #acceptRedeliverable(CloudEvent)},
+ * and a write path, an event store listener say, hands it to {@link #accept(CloudEvent)}. Both route it to the handler
+ * if its {@link SubscriptionFilter} matches, and a handler error propagates through the returned {@link Mono}.
+ * <p>
+ * Fed from the event store's write path, this model keeps no record of which events the subscription has handled. When
+ * the application crashes after a write has committed but before the handler has run, this subscription never sees
+ * that event. Use a durable subscription if that is not acceptable. Fed from a broker, call
+ * {@link #acceptRedeliverable(CloudEvent)} and acknowledge the message only when its {@link Mono} completes with
+ * {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}. That method says what each of the other
+ * outcomes asks for, {@link RoutingOutcome#REFUSED} being the one that means stop consuming.
  * <p>
  * <strong>One model feeds one subscription</strong>, and a second {@code subscribe} is refused. The acknowledgement is
  * what forces it: this model has exactly one per received event, so several handlers on it would share the decision to
@@ -98,11 +106,11 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * Feed a single event to the model, routing it to the registered handler if its filter matches.
      * <p>
      * <strong>An event fed before any subscription is registered is dropped, and the returned {@link Mono} completes
-     * normally.</strong> A listener that acknowledges on completion therefore acknowledges an event nothing consumed.
-     * Ask {@link #hasSubscriptions()} before feeding this model from a broker, and register the subscription before
-     * the listener starts consuming. This model cannot refuse the event on your behalf, because it is also fed from
-     * the write path, where the event is already durably stored and refusing would fail the write instead of
-     * protecting anything. The domain-event feed, which is broker-only, does refuse. See ADR 104. A configured
+     * normally.</strong> A listener that acknowledges on completion therefore acknowledges an event nothing consumed,
+     * so a broker listener calls {@link #acceptRedeliverable(CloudEvent)} instead, which reports
+     * {@link RoutingOutcome#UNAVAILABLE} for that event. This
+     * method cannot refuse the event on your behalf, because it is also fed from the write path, where the event is
+     * already durably stored and refusing would fail the write instead of protecting anything. See ADR 104. A configured
      * {@link PushObserver} is told the event's {@link RoutingOutcome}, and that is where to get visibility into it
      * instead. It is not told at all when the filter or the matched action fails in a way this model does not
      * catch, which {@link PushObserver} names. Told about the event even when a subscription's filter itself throws
@@ -117,6 +125,73 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     public Mono<Void> accept(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         return acceptEvent(cloudEvent);
+    }
+
+    /**
+     * Feed a single event from a broker, or from any other source that delivers the event again when it is not
+     * acknowledged. As {@link #accept(CloudEvent)}, except an event that would only buffer, a
+     * {@link CatchupThenPushSubscriptionModel} in front still replaying, say, is refused instead of buffered. One narrow
+     * case still waits. A replay that starts on an already live catch-up model after this call found it live, and
+     * before the event reaches its handler, holds the event until that replay ends rather than refusing it. The
+     * returned {@link Mono} waits for it all the same.
+     * <p>
+     * Act on the {@link RoutingOutcome#disposition()} of the outcome the returned {@link Mono} completes with.
+     * Acknowledge the message on {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}, the two outcomes
+     * for which {@link RoutingOutcome#mayAcknowledge()} is true.
+     * <ul>
+     *     <li>{@link RoutingOutcome#DELIVERED} once the registered handler has applied the event, or once a
+     *     {@link CatchupThenPushSubscriptionModel} in front finds it had already applied it, from its replay or from
+     *     an earlier delivery. With a {@link CatchupThenPushSubscriptionModel} in front, an event offered while an
+     *     earlier delivery of the same event is still running waits behind that delivery.</li>
+     *     <li>{@link RoutingOutcome#FILTERED} when the subscription's filter declined the event. Redelivering it to
+     *     the same filter would only be declined again.</li>
+     *     <li>{@link RoutingOutcome#DEFERRED} when a {@link CatchupThenPushSubscriptionModel} in front has not gone
+     *     live, because its replay is still running, say. The handler never ran, so have the broker deliver it again
+     *     later.</li>
+     *     <li>{@link RoutingOutcome#UNAVAILABLE} when no subscription is registered, this model is stopped, or the
+     *     subscription is paused. Stopping a {@link CatchupThenPushSubscriptionModel} in front stops this model too,
+     *     whether or not its replay had finished. Have the broker deliver it again later.</li>
+     *     <li>{@link RoutingOutcome#REFUSED} when the catch-up in front has failed for good. No redelivery gets past
+     *     that, so stop consuming.</li>
+     *     <li>{@link RoutingOutcome#NOT_DELIVERABLE} for any other refusal decided before the handler would run, a
+     *     full live buffer in the catch-up in front, say. Apply the listener's failure policy.</li>
+     * </ul>
+     * <p>
+     * The {@link Mono} errors instead of completing with an outcome only when the subscription's filter or the
+     * handler failed, with that failure. {@link #accept(CloudEvent)} still errors for a failed catch-up or a full
+     * live buffer.
+     * <p>
+     * Never call this from a write path. An event it refuses there is lost, since nothing delivers it again. The same
+     * holds for a call from inside another subscription's handler, so act on the outcome the returned {@link Mono}
+     * completes with there. Error on anything but {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED},
+     * say, so the outer handler fails instead of completing as if the event had been handled. Calling
+     * {@link #accept(CloudEvent)} there instead is no safer, since its {@link Mono} also completes normally for an
+     * event no running subscription takes, with nothing registered, this model stopped or the subscription paused.
+     * A configured {@link PushObserver} is told the event's {@link RoutingOutcome} on the same terms as for
+     * {@link #accept(CloudEvent)}.
+     *
+     * @param cloudEvent The event received from the broker, which the broker delivers again if this refuses it.
+     * @return A {@link Mono} that completes with the event's {@link RoutingOutcome}, which decides whether to
+     * acknowledge the message.
+     */
+    public Mono<RoutingOutcome> acceptRedeliverable(CloudEvent cloudEvent) {
+        Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
+        return Mono.defer(() -> {
+            AtomicReference<@Nullable RoutingOutcome> reported = new AtomicReference<>();
+            return routeRedeliverable(cloudEvent, (event, outcome) -> {
+                reported.set(outcome);
+                notifyObserver(event, outcome);
+            }).then(Mono.defer(() -> reportedOutcome(cloudEvent, reported.get())));
+        });
+    }
+
+    // Only reached when routing completed without an error
+    private static Mono<RoutingOutcome> reportedOutcome(CloudEvent cloudEvent, @Nullable RoutingOutcome outcome) {
+        if (outcome == null) {
+            // A routing action that completes empty reports nothing, and nothing reported proves nothing was applied
+            return Mono.error(new IllegalStateException("No routing outcome was reported for event with id '" + cloudEvent.getId() + "', so it cannot be acknowledged."));
+        }
+        return Mono.just(outcome);
     }
 
     /**
@@ -155,7 +230,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
         if (!observing) {
             return route(cloudEvent);
         }
-        return routeReportingMatch(cloudEvent, this::notifyObserver);
+        return routeReportingMatch(cloudEvent, true, this::notifyObserver);
     }
 
     // Keeps a broken observer from masquerading as a handler failure. accept(...) erroring is what tells a broker

@@ -17,7 +17,6 @@
 package org.occurrent.springboot.broker.rabbitmq.blocking;
 
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
-import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
 /**
@@ -38,10 +37,9 @@ import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 public interface RabbitMqCloudEventBridgeFactory {
 
     /**
-     * @param queue          The queue this bridge consumes from, and declares unless
-     *                       {@code occurrent.broker.rabbitmq.bridge.declare-topology} is {@code false}.
-     * @param model          The live model this bridge feeds.
-     * @param outcomeChannel Shared with {@code model}'s own constructor, see {@link RoutingOutcomeChannel}.
+     * @param queue The queue this bridge consumes from, and declares unless
+     *              {@code occurrent.broker.rabbitmq.bridge.declare-topology} is {@code false}.
+     * @param model The live model this bridge feeds.
      */
-    RabbitMqCloudEventBridge.Builder forQueue(String queue, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel);
+    RabbitMqCloudEventBridge.Builder forQueue(String queue, PushSubscriptionModel model);
 }

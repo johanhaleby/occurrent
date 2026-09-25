@@ -46,7 +46,9 @@ import org.occurrent.subscription.RoutingOutcome;
  * the event is not this consumer's under the filter currently registered for it. It must never acknowledge on any
  * of the other four, which is why {@link RoutingOutcome}'s values are kept apart rather than collapsed back into a
  * single flag. Read that enum for what each of them asks a caller to do next, since offering the event again,
- * applying a failure policy and stopping for good are three different answers. It shares the same
+ * applying a failure policy and stopping for good are three different answers.
+ * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} also returns the outcome it reports here, so a broker
+ * listener needs no observer to decide. The outcome shares the same
  * filter evaluation the actual dispatch
  * decision is made from, so the two can never disagree, and no lifecycle transition landing between the evaluation
  * and this call can change which outcome is reported.
@@ -76,7 +78,7 @@ import org.occurrent.subscription.RoutingOutcome;
  * <p>
  * Any other {@link Error} the observer throws is not caught. Where it goes next depends on whether the model
  * already had a failure of its own to propagate, not on which outcome the observer was told. Reported alongside
- * such a failure, whether it came from the filter, the action or a refusal, the observer's
+ * such a failure, whether it came from the filter, the action or a refusal {@code accept(...)} errors with, the observer's
  * {@link Error} is attached to it through {@link Throwable#addSuppressed(Throwable)} and that failure is what
  * propagates, so a failure is never replaced by a failure in reporting it. Reported with nothing else in flight,
  * it propagates on its own. {@link RoutingOutcome#DELIVERED} reaches the observer both ways, since an action that

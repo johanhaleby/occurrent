@@ -58,25 +58,28 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * Bridges a Kafka topic into a {@link PushSubscriptionModel}, the CloudEvent-level consume side ADR 133 decision 1
  * describes. Rebuilds each record as a {@link CloudEvent} through {@link KafkaCloudEventMapper}, hands it to
  * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}, and commits only once the {@link RoutingOutcome}
- * that reported through a shared {@link RoutingOutcomeChannel} says the event was actually consumed.
+ * that call returns says the event was actually consumed.
  * <p>
  * <strong>Holds a {@link PushSubscriptionModel}, never a {@link CatchupThenPushSubscriptionModel}</strong>, for the
  * same reason {@code RabbitMqCloudEventBridge} does. ADR 133 decision 1 is explicit that a bridge feeds the live
  * model, not the catch-up wrapper in front of it.
  * <p>
- * <strong>Acknowledgement.</strong> {@code acceptRedeliverable(...)} throwing (a handler exception, or a
- * subscription filter that failed to evaluate) never commits. A normal return is decided by
+ * <strong>Acknowledgement.</strong> A record for which {@code acceptRedeliverable(...)} throws (a handler
+ * exception, or a subscription filter that failed to evaluate) goes through the failure policy below, and its offset
+ * is committed only once a {@link DeliveryFailurePolicy#PARK} of it is confirmed. A normal return is decided by
  * {@link RoutingOutcome#disposition()} alone, so this bridge stages a record's offset for the next commit exactly
  * when {@link RoutingOutcome#mayAcknowledge()} answers true for the outcome.
  * {@link RoutingOutcome.Disposition#HOLD} seeks back and paces the record rather than sending it through a failure
- * policy, see below, and {@link RoutingOutcome.Disposition#STOP} stops this bridge for good, also below. A normal
- * return with {@link RoutingOutcome#NOT_DELIVERABLE} cannot happen, since that outcome always comes with an
- * exception, the filter's own or a transient action refusal's. For every other failure this bridge's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) seeks the consumer back to this record's offset,
+ * policy, see below, and {@link RoutingOutcome.Disposition#STOP} stops this bridge for good, also below.
+ * {@link RoutingOutcome#NOT_DELIVERABLE}, a refusal the model decided before dispatch without promising it is
+ * permanent, goes through the failure policy like an exception. For those failures this bridge's configured
+ * {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) seeks the consumer
+ * back to this record's offset,
  * {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only once that publish is confirmed
  * treats this record as resolved, exactly as a delivered one. A normal return with {@link RoutingOutcome#DEFERRED},
  * a {@link CatchupThenPushSubscriptionModel} wrapping {@code model} still replaying or draining, say, also never
  * commits, but always seeks the consumer back the same way {@code REDELIVER} does, bypassing
- * {@link DeliveryFailurePolicy} entirely: nothing here is broken, only not ready yet, and {@code PARK} exists for
+ * {@link DeliveryFailurePolicy} entirely, since nothing here is broken, only not ready yet, and {@code PARK} exists for
  * failures, not for pacing.
  * <p>
  * <strong>One dedicated thread owns the {@code Consumer} end to end</strong>, unlike {@code RabbitMqCloudEventBridge}'s
@@ -158,11 +161,9 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <strong>A permanently failed catch-up stops this bridge, it does not commit or redeliver into it.</strong> A
  * {@link CatchupThenPushSubscriptionModel} wrapping {@code model} whose replay has permanently failed refuses every
  * later live event before attempting any dispatch, and promises that refusing is permanent, which
- * {@code RegisteringSubscribable.routeReportingMatch} reports as {@link RoutingOutcome#REFUSED}. That outcome is
- * reported for nothing else, so this bridge decides on it alone rather than on the type of whatever exception came
- * with it. A handler that reached into some other permanently failed engine reports
- * {@link RoutingOutcome#DELIVERED} instead and goes through {@link DeliveryFailurePolicy} like any other handler
- * failure.
+ * {@code acceptRedeliverable(...)} returns as {@link RoutingOutcome#REFUSED}. That outcome is returned for nothing
+ * else, so this bridge decides on it alone. A handler that reached into some other permanently failed engine throws
+ * instead, and goes through {@link DeliveryFailurePolicy} like any other handler failure.
  * <p>
  * On {@link RoutingOutcome#REFUSED} this bridge logs at error once and stops the poll loop for good, leaving the
  * triggering record's offset uncommitted so it is refetched by the next consumer in this group once the wrapper's
@@ -187,7 +188,6 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
 
     private final KafkaConsumer<String, byte[]> consumer;
     private final PushSubscriptionModel model;
-    private final RoutingOutcomeChannel outcomeChannel;
     private final Duration pollTimeout;
     private final Duration closeTimeout;
     private final RetryStrategy commitRetryStrategy;
@@ -216,12 +216,11 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     // set false in the same place, which is what actually ends the loop, see the class javadoc.
     private volatile boolean permanentlyStopped = false;
 
-    private KafkaCloudEventBridge(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel,
+    private KafkaCloudEventBridge(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model,
                                    Duration pollTimeout, Duration closeTimeout, RetryStrategy commitRetryStrategy,
                                    KafkaDeliveryFailureAction failureAction, String groupId, Predicate<String> readinessSource) {
         this.consumer = consumer;
         this.model = model;
-        this.outcomeChannel = outcomeChannel;
         this.pollTimeout = pollTimeout;
         this.closeTimeout = closeTimeout;
         this.commitRetryStrategy = commitRetryStrategy;
@@ -250,10 +249,9 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
      *                       since seeking only works if nothing else commits.
      * @param model          The live model this bridge feeds. Never a {@link CatchupThenPushSubscriptionModel}, see
      *                       the class javadoc.
-     * @param outcomeChannel Shared with {@code model}'s own constructor, see {@link RoutingOutcomeChannel}.
      */
-    public static Builder builder(Map<String, Object> consumerConfig, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel) {
-        return new Builder(consumerConfig, model, outcomeChannel);
+    public static Builder builder(Map<String, Object> consumerConfig, PushSubscriptionModel model) {
+        return new Builder(consumerConfig, model);
     }
 
     private void runLoop() {
@@ -524,42 +522,13 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         }
         RoutingOutcome outcome;
         try {
-            model.acceptRedeliverable(cloudEvent);
-            outcome = outcomeChannel.takeLastOutcome();
+            outcome = model.acceptRedeliverable(cloudEvent);
         } catch (RuntimeException | AssertionError e) {
             // Catches AssertionError too, since a filter or the handler can throw one, and an uncaught Error here
-            // would leave the loop thread dead with the partition never advancing past this record. Which of the
-            // two things went wrong is read off the reported outcome rather than off the exception type. REFUSED
-            // is reported only when this bridge's own model refused before attempting dispatch and promised that
-            // refusing is permanent, so a handler that reached into some other permanently failed engine reports
-            // DELIVERED and goes through the failure policy below where it belongs.
-            RoutingOutcome refusedOutcome = outcomeChannel.takeLastOutcome();
-            if (refusedOutcome != RoutingOutcome.REFUSED) {
-                log.debug("A filter or handler failed for a record on topic \"{}\" partition {} offset {}.",
-                        record.topic(), record.partition(), record.offset(), e);
-                return resolve(record, toCommit, failureAction.apply(record));
-            }
-            // A CatchupThenPushSubscriptionModel wrapping this bridge's model has a permanently failed catch-up.
-            // Permanent, exactly like an unreadable live filter would be, so stop the whole loop rather than
-            // commit or redeliver into the same refusal forever. See the class javadoc.
-            log.error("A catch-up wrapping this bridge's model has permanently failed for topic \"{}\" partition "
-                    + "{}. Stopping this bridge rather than committing or redelivering into the same refusal. "
-                    + "Record at offset {} is left uncommitted so it is refetched by the next consumer in this "
-                    + "group once the wrapper's catch-up is fixed and restarted.",
+            // would leave the loop thread dead with the partition never advancing past this record. Only a filter
+            // or a handler failure throws, a refusal comes back as an outcome.
+            log.debug("A filter or handler failed for a record on topic \"{}\" partition {} offset {}.",
                     record.topic(), record.partition(), record.offset(), e);
-            permanentlyStopped = true;
-            running = false;
-            return false;
-        }
-        if (outcome == null) {
-            // Only reachable when model was constructed with a different RoutingOutcomeChannel than the one this
-            // bridge reads, a wiring defect ADR 133 decision 1 requires against, not an ordinary delivery failure.
-            // Named explicitly rather than falling into the generic "not deliverable" branch below, which would
-            // say nothing about the actual cause.
-            log.error("No RoutingOutcome was captured for a record on topic \"{}\" partition {} offset {}. This " +
-                    "model was very likely constructed with a different RoutingOutcomeChannel than the one this " +
-                    "bridge reads; both must be the exact same instance, per RoutingOutcomeChannel's own javadoc.",
-                    record.topic(), record.partition(), record.offset());
             return resolve(record, toCommit, failureAction.apply(record));
         }
         return switch (outcome.disposition()) {
@@ -578,22 +547,20 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
                 yield false;
             }
             case FAIL -> {
-                // NOT_DELIVERABLE, whether the filter itself failed to answer or a transient refusal reported it.
-                // It normally arrives with an exception, which the catch above already routed, so this branch is
-                // for one that arrived on its own.
+                // NOT_DELIVERABLE, a refusal the model decided before dispatch without promising it is permanent
                 log.debug("A record on topic \"{}\" partition {} offset {} could not be delivered. Routing it " +
                         "through the configured delivery failure policy.",
                         record.topic(), record.partition(), record.offset());
                 yield resolve(record, toCommit, failureAction.apply(record));
             }
             case STOP -> {
-                // REFUSED arriving on its own, with the refusal's own cause not propagating out of
-                // acceptRedeliverable(..) for the catch above to read. Stopped rather than routed through the
-                // failure policy, because offering the record again gets the same refusal.
-                log.error("A record on topic \"{}\" partition {} offset {} was permanently refused. Stopping "
-                        + "this bridge rather than committing or redelivering into the same refusal. The record "
-                        + "is left uncommitted so it is refetched by the next consumer in this group once the "
-                        + "refusing registration is fixed and restarted.",
+                // REFUSED, a catch-up wrapping this bridge's model has failed for good. Stopped rather than routed
+                // through the failure policy, because offering the record again gets the same refusal. See the
+                // class javadoc.
+                log.error("A catch-up wrapping this bridge's model has permanently failed, refusing the record on "
+                        + "topic \"{}\" partition {} offset {}. Stopping this bridge rather than committing or "
+                        + "redelivering into the same refusal. The record is left uncommitted so it is refetched by "
+                        + "the next consumer in this group once the wrapper's catch-up is fixed and restarted.",
                         record.topic(), record.partition(), record.offset());
                 permanentlyStopped = true;
                 running = false;
@@ -649,7 +616,6 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     public static final class Builder {
         private final Map<String, Object> consumerConfig;
         private final PushSubscriptionModel model;
-        private final RoutingOutcomeChannel outcomeChannel;
         private @Nullable DestinationResolver<KafkaDestination> resolver;
         private @Nullable SubscriptionFilter bindingFilter;
         private @Nullable Set<KafkaDestination> bindings;
@@ -660,11 +626,10 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         private RetryStrategy commitRetryStrategy = defaultCommitRetryStrategy();
         private Predicate<String> readinessSource = subscriptionId -> true;
 
-        private Builder(Map<String, Object> consumerConfig, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel) {
+        private Builder(Map<String, Object> consumerConfig, PushSubscriptionModel model) {
             requireNonNull(consumerConfig, "consumerConfig cannot be null");
             this.consumerConfig = new HashMap<>(consumerConfig);
             this.model = requireNonNull(model, PushSubscriptionModel.class.getSimpleName() + " cannot be null");
-            this.outcomeChannel = requireNonNull(outcomeChannel, RoutingOutcomeChannel.class.getSimpleName() + " cannot be null");
         }
 
         /**
@@ -837,7 +802,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             try {
                 failureAction = KafkaDeliveryFailureAction.create(consumerConfig, deliveryFailurePolicy, parkingDestination, log);
                 KafkaTopology.subscribe(consumer, destinations);
-                KafkaCloudEventBridge bridge = new KafkaCloudEventBridge(consumer, model, outcomeChannel, pollTimeout, closeTimeout, commitRetryStrategy, failureAction, groupId.toString(), readinessSource);
+                KafkaCloudEventBridge bridge = new KafkaCloudEventBridge(consumer, model, pollTimeout, closeTimeout, commitRetryStrategy, failureAction, groupId.toString(), readinessSource);
                 bridge.loopThread.start();
                 return bridge;
             } catch (RuntimeException e) {
