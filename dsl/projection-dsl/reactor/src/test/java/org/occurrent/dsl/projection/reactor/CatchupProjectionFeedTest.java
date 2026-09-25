@@ -34,9 +34,11 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
@@ -46,6 +48,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -178,6 +184,107 @@ class CatchupProjectionFeedTest {
         feed.accept(new Counted("keep-me")).block();
 
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(1));
+    }
+
+    @Test
+    void accept_during_the_catch_up_completes_only_once_the_event_is_folded() throws Exception {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", holdingTheReplayAt("1", folded, replaying, releaseReplay, null),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        try {
+            CompletableFuture<Void> catchUp = Mono.defer(feed::catchUp).subscribeOn(Schedulers.boundedElastic()).toFuture();
+            awaitLatch(replaying);
+
+            CompletableFuture<List<String>> foldedWhenAcceptCompleted = feed.accept(new Counted("live"))
+                    .then(Mono.fromCallable(() -> List.copyOf(folded)))
+                    .toFuture();
+            releaseReplay.countDown();
+
+            catchUp.get(5, TimeUnit.SECONDS);
+            assertThat(foldedWhenAcceptCompleted.get(5, TimeUnit.SECONDS)).as("what was folded when accept(..) completed")
+                    .containsExactly("1", "live");
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    @Test
+    void stopping_the_catch_up_while_accept_waits_errors_accept_and_folds_nothing_live() throws Exception {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", holdingTheReplayAt("1", folded, replaying, releaseReplay, null),
+                Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, null);
+        try {
+            CompletableFuture<Void> catchUp = Mono.defer(feed::catchUp).subscribeOn(Schedulers.boundedElastic()).toFuture();
+            awaitLatch(replaying);
+
+            CompletableFuture<Void> accepted = feed.accept(new Counted("live")).toFuture();
+            feed.stopCatchUp();
+            releaseReplay.countDown();
+
+            catchUp.get(5, TimeUnit.SECONDS);
+            assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what accept(..) errored with once the catch-up stopped")
+                    .cause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage(HandoverMessages.notApplied("projection feed"));
+            assertThat(folded).containsExactly("1");
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    @Test
+    void a_catch_up_failing_while_accept_waits_errors_accept_with_the_failure() throws Exception {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        IllegalStateException foldFailure = new IllegalStateException("fold failed");
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", holdingTheReplayAt("1", folded, replaying, releaseReplay, foldFailure),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        try {
+            CompletableFuture<Void> catchUp = Mono.defer(feed::catchUp).subscribeOn(Schedulers.boundedElastic()).toFuture();
+            awaitLatch(replaying);
+
+            CompletableFuture<Void> accepted = feed.accept(new Counted("live")).toFuture();
+            releaseReplay.countDown();
+
+            assertThatThrownBy(() -> catchUp.get(5, TimeUnit.SECONDS)).hasCause(foldFailure);
+            assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what accept(..) errored with once the catch-up failed")
+                    .cause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage(HandoverMessages.catchUpFailed("projection feed"))
+                    .hasCauseReference(foldFailure);
+            assertThat(folded).isEmpty();
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    // Records every event it folds, and holds the replay at the given event until released
+    private static Function<Counted, Mono<Void>> holdingTheReplayAt(String held, List<String> folded, CountDownLatch reached,
+                                                                    CountDownLatch release, RuntimeException failure) {
+        return event -> Mono.fromRunnable(() -> {
+            if (event.eventId().equals(held)) {
+                reached.countDown();
+                awaitLatch(release);
+                if (failure != null) {
+                    throw failure;
+                }
+            }
+            folded.add(event.eventId());
+        });
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).as("latch reached within the timeout").isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
     }
 
     @Test

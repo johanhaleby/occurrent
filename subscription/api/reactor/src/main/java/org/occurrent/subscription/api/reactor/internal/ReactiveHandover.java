@@ -104,10 +104,11 @@ public final class ReactiveHandover<T, K> {
          * next catch-up replays the whole history and the handover stays usable.
          * <p>
          * What the stop does with the live payloads depends on where the handover stood when the replay started. One
-         * that had not gone live drains nothing and does not go live, and live payloads arriving after the stop are
-         * dropped and their acks complete rather than hang, the same dropped-not-deferred contract a stopped
-         * subscription model has (ADR 85). One that was already live delivers what it held back and goes on
-         * delivering, see {@link ReactiveHandover#catchUp}.
+         * that had not gone live drains nothing and does not go live. The payloads it held and those arriving after
+         * the stop are answered as not applied rather than left hanging, so {@link ReactiveHandover#accept(Object)}
+         * errors for them and {@link ReactiveHandover#acceptReportingDelivery(Object)} completes {@code false}. One
+         * that was already live delivers what it held back and goes on delivering, see
+         * {@link ReactiveHandover#catchUp}.
          */
         default boolean keepReplaying() {
             return true;
@@ -149,9 +150,8 @@ public final class ReactiveHandover<T, K> {
          * about to be delivered. Called immediately before every drain, including the one for a source that was
          * already caught up and replayed nothing, which is what makes it different from {@link #replayCompleted()}.
          * <p>
-         * A buffered payload is delivered exactly once and never again, since whoever fed it here has already been
-         * told it was handled, so a source that reports its own catch-up phase has to stop calling this part of the
-         * work a replay before the drain rather than after it
+         * A buffered payload is delivered exactly once and never again, so a source that reports its own catch-up
+         * phase has to stop calling this part of the work a replay before the drain rather than after it
          * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
          * decision 6). The default does nothing.
          */
@@ -201,7 +201,9 @@ public final class ReactiveHandover<T, K> {
     /**
      * Thrown by {@link #acceptReportingDelivery(Object)} and {@link #acceptIfLive(Object)} for a refusal decided
      * before any dispatch was attempted, a permanently failed catch-up, a full live buffer with nothing draining
-     * it, or a {@code dedupId} function that returned {@code null} for the payload, none of them a delivery.
+     * it, or a {@code dedupId} function that returned {@code null} for the payload, none of them a delivery. Also
+     * what {@link #accept(Object)} errors with for every payload {@link #acceptReportingDelivery(Object)} would
+     * complete {@code false} for, so the caller offers it again.
      * Distinct from any other {@link IllegalStateException} either method can error with, in particular one a
      * delivered payload's own handler errors with, so a caller that needs to tell those apart can catch this type
      * specifically instead of classifying every {@link IllegalStateException} alike. Mirrors
@@ -351,26 +353,29 @@ public final class ReactiveHandover<T, K> {
     /**
      * Feed a live payload. The returned {@link Mono} completes once the payload has been folded (or immediately if it
      * is a de-duplicated overlap). Payloads fed before or during the catch-up are buffered and delivered after the
-     * replay.
+     * replay, and the {@link Mono} completes only then.
      * <p>
-     * A payload fed after a failed catch-up is refused rather than completed, and stays refused: the caller
-     * acknowledges on completion, so completing would acknowledge a payload nothing handled. Recovery is the caller's
-     * to choose, not this engine's (ADR 104).
+     * Errors rather than completing whenever the payload was not folded, since the caller acknowledges on completion
+     * and completing would acknowledge a payload nothing handled. That covers a replay stopped before the handover
+     * went live, which errors every payload it held, a payload fed while this handover is stopped, and a failed
+     * catch-up, which refuses every payload from then on. Recovery is the caller's to choose, not this engine's
+     * (ADR 104), and for a broker listener it means not acknowledging, so the broker delivers the payload again.
      */
     public Mono<Void> accept(T payload) {
-        return acceptReportingDelivery(payload).then();
+        return acceptReportingDelivery(payload).flatMap(applied -> applied
+                ? Mono.<Void>empty()
+                : Mono.error(new PreDispatchRefusalException(this, HandoverMessages.notApplied(noun))));
     }
 
     /**
-     * As {@link #accept(Object)}, additionally emitting whether the payload was genuinely handled (buffered for the
-     * replay to drain, delivered live, or already delivered by an earlier attempt) rather than silently dropped
-     * because a replay that would have drained it was stopped. A caller that acknowledges an externally sourced
-     * payload (a broker message, say) needs this to tell the two apart, since {@link #accept(Object)} completes
-     * normally either way.
+     * As {@link #accept(Object)}, except a payload that was not folded because this handover is stopped, or because
+     * a replay that would have drained it was stopped, completes {@code false} rather than erroring. Waits for the
+     * drain the same way {@link #accept(Object)} does.
      *
-     * @return A {@link Mono} that completes with {@code false} only when this handover is stopped and the payload
-     *         was dropped rather than buffered or delivered, and {@code true} otherwise, including a de-duplicated
-     *         repeat of an already-delivered payload. Errors for the same reasons {@link #accept(Object)} does.
+     * @return A {@link Mono} that completes with {@code true} once the payload has been folded, live or by the drain,
+     *         including a de-duplicated repeat of an already-delivered payload, and with {@code false} when this
+     *         handover is stopped or the replay was stopped before going live, so the payload was never folded.
+     *         Every {@code false} is safe to offer again. Errors for the other reasons {@link #accept(Object)} does.
      */
     public Mono<Boolean> acceptReportingDelivery(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
@@ -435,9 +440,10 @@ public final class ReactiveHandover<T, K> {
             return;
         }
         if (stopped && !live) {
-            // Dropped rather than buffered, and the ack completes rather than failing. The replay that would have
-            // drained this buffer was stopped, so nothing is coming to fold it. Dropped, not deferred (ADR 85). A
-            // handover that has gone live delivers instead, whatever a stop left behind, since its live pipeline runs.
+            // Answered false rather than buffered. The replay that would have drained this buffer was stopped, so
+            // nothing is coming to fold it, and accept(..) errors on the false so its caller offers the payload
+            // again. A handover that has gone live delivers instead, whatever a stop left behind, since its live
+            // pipeline runs.
             ackSink.success(false);
             return;
         }
@@ -780,9 +786,9 @@ public final class ReactiveHandover<T, K> {
                 }, error -> {
                     if (error == CatchupStopped.INSTANCE) {
                         // Stopped, not failed. No marker, no drain, and no terminal error, so the handover stays
-                        // usable. A handover that never went live drops what it buffered, and the acks of those
-                        // payloads complete rather than fail, because each was dropped rather than rejected. One that
-                        // was already live goes on delivering them, the same as the blocking engine.
+                        // usable. A handover that never went live drops what it buffered and answers each of those
+                        // payloads false, so accept(..) errors and its caller offers it again. One that was already
+                        // live goes on delivering them, the same as the blocking engine.
                         boolean wasLive = live;
                         if (!wasLive) {
                             stopped = true;

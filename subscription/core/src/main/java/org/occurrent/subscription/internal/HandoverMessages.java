@@ -84,6 +84,41 @@ public final class HandoverMessages {
     }
 
     /**
+     * Refuses a live event this handover did not apply, because its catch-up was stopped before going live or a
+     * delivery of the same event was still running on another thread. Neither is a failure, so it says to offer the event again
+     * rather than to rebuild anything.
+     *
+     * @param noun The noun describing what did not apply the event, e.g. {@code "projection feed"}.
+     */
+    public static String notApplied(String noun) {
+        return "This " + noun + " did not apply the event, because its catch-up was stopped before it went live or "
+                + "another delivery of the same event was still running. Do not acknowledge it. Offer it again and a "
+                + "later delivery applies it.";
+    }
+
+    /**
+     * Refuses a live event whose caller was interrupted while it waited for a catch-up replay to apply the event.
+     *
+     * @param noun The noun describing what the event was waiting on, e.g. {@code "projection feed"}.
+     */
+    public static String interruptedBeforeApplied(String noun) {
+        return "Interrupted while waiting for this " + noun + " to apply the event during its catch-up, so it may not "
+                + "have been applied. Do not acknowledge it. Offer it again and a later delivery applies it.";
+    }
+
+    /**
+     * Refuses a live event fed from inside this handover's own replay, a fold or a source callback, where waiting for
+     * the drain would wait for the thread that is waiting.
+     *
+     * @param noun The noun describing what was fed, e.g. {@code "projection feed"}.
+     */
+    public static String acceptedFromOwnReplay(String noun) {
+        return "A live event was fed to this " + noun + " from inside its own catch-up replay. It would wait for a drain "
+                + "that runs on this same thread after the replay, so it is refused instead. Feed live events from "
+                + "another thread.";
+    }
+
+    /**
      * Rejects a null replay-to-live de-dup key. The key function is caller-supplied and declared non-null, but nothing
      * enforces that at runtime, and a null reaches {@code BoundedIdCache} as a null element for its eviction queue,
      * which throws a bare {@link NullPointerException} from inside the cache. On the live path that happens after the

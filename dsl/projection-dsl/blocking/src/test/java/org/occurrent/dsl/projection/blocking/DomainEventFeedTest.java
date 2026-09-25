@@ -44,11 +44,13 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
@@ -191,13 +193,16 @@ class DomainEventFeedTest {
 
         // Buffered before the catch-up runs, so the third one exceeds the cap of two. The message names the cap, which
         // is what proves the constructor's options reached CatchupProjectionFeed rather than the defaults being used.
-        feed.accept(new Counted("l1"));
-        feed.accept(new Counted("l2"));
+        FutureTask<Void> first = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("l1")));
+        FutureTask<Void> second = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("l2")));
         Throwable thrown = catchThrowable(() -> feed.accept(new Counted("l3")));
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("buffer overflowed")
                 .hasMessageContaining("(cap 2)");
+        feed.stopCatchUp();
+        assertThat(first).failsWithin(Duration.ofSeconds(5));
+        assertThat(second).failsWithin(Duration.ofSeconds(5));
     }
 
     @Test
@@ -557,9 +562,10 @@ class DomainEventFeedTest {
             throw new IllegalStateException("drain boom");
         };
         feed5.register("counter", throwingView, Filter.type(counterConverter().getCloudEventType(Counted.class)));
-        feed5.accept(new Counted("buffered"));
+        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed5.accept(new Counted("buffered")));
         assertThat(catchThrowable(feed5::catchUpAll)).isNotNull();
         assertThat(feed5.isReadyForLiveDelivery()).as("the buffered live event's own fold threw during the drain").isFalse();
+        assertThat(fed).failsWithin(Duration.ofSeconds(5));
     }
 
     private static CheckpointStorage throwingOnExistsCheckpointStorage() {
@@ -973,7 +979,7 @@ class DomainEventFeedTest {
                 .build();
         feed.register("counter", blockingProjection, ViewStateRepository.create(repo::get, repo::put));
         // Buffered ahead of goLive(), since it is not registered as ready yet.
-        feed.accept(new Counted("1"));
+        FutureTask<Void> fed = feedWaitingForTheCatchUp(() -> feed.accept(new Counted("1")));
 
         Thread goLive = new Thread(() -> feed.goLive("counter"));
         goLive.start();
@@ -988,7 +994,21 @@ class DomainEventFeedTest {
 
         assertThat(goLive.isAlive()).isFalse();
         assertThat(feed.isReadyForLiveDelivery()).isTrue();
+        assertThat(fed).succeedsWithin(Duration.ofSeconds(5));
         assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    // accept(..) returns only once the catch-up has folded the event, so an event fed ahead of the catch-up comes from
+    // its own thread, already waiting in the buffer when this returns
+    private static FutureTask<Void> feedWaitingForTheCatchUp(Runnable accept) {
+        FutureTask<Void> feeding = new FutureTask<>(accept, null);
+        Thread thread = new Thread(feeding, "live-delivery");
+        thread.start();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (thread.isAlive() && thread.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        return feeding;
     }
 
     /**
