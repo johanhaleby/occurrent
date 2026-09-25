@@ -162,9 +162,13 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * live buffer.
      * <p>
      * Never call this from a write path. An event it refuses there is lost, since nothing delivers it again. The same
-     * holds for a call from inside another subscription's handler. Use {@link #accept(CloudEvent)} there, or act on
-     * the outcome the returned {@link Mono} completes with. A configured {@link PushObserver} is told the event's
-     * {@link RoutingOutcome} on the same terms as for {@link #accept(CloudEvent)}.
+     * holds for a call from inside another subscription's handler, so act on the outcome the returned {@link Mono}
+     * completes with there. Error on anything but {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED},
+     * say, so the outer handler fails instead of completing as if the event had been handled. Calling
+     * {@link #accept(CloudEvent)} there instead is no safer, since its {@link Mono} also completes normally for an
+     * event no running subscription takes, with nothing registered, this model stopped or the subscription paused.
+     * A configured {@link PushObserver} is told the event's {@link RoutingOutcome} on the same terms as for
+     * {@link #accept(CloudEvent)}.
      *
      * @param cloudEvent The event received from the broker, which the broker delivers again if this refuses it.
      * @return A {@link Mono} that completes with the event's {@link RoutingOutcome}, which decides whether to

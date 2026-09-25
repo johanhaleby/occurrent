@@ -139,8 +139,11 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * never delivered by this call. Call this instead of {@link #accept(CloudEvent)} from a broker listener that
      * can redeliver the same event later, never from a write path that cannot, since a write-path event this call
      * refuses is lost rather than protected, the same reason {@link #accept(CloudEvent)} itself never refuses. The
-     * same holds for a call from inside another subscription's handler. Use {@link #accept(CloudEvent)} there, or act
-     * on the returned outcome, because nothing delivers an event this call refuses again.
+     * same holds for a call from inside another subscription's handler, so act on the returned outcome there. Throw on
+     * anything but {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}, say, so the outer handler
+     * fails instead of returning as if the event had been handled. Calling {@link #accept(CloudEvent)} there instead
+     * is no safer, since it also returns normally for an event no running subscription takes, with nothing
+     * registered, this model stopped or the subscription paused.
      * <p>
      * Act on the {@link RoutingOutcome#disposition()} of what this returns. It returns {@link RoutingOutcome#DELIVERED}
      * once the handler has run, or once a {@code CatchupThenPushSubscriptionModel} in front finds it had already

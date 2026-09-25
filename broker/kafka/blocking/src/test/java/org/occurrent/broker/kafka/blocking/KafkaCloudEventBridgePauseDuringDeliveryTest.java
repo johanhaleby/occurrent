@@ -40,13 +40,13 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The Kafka half of {@code RabbitMqCloudEventBridgePauseDuringDeliveryTest}: {@code RoutingOutcome.NOT_DELIVERABLE}
- * covers both "the filter threw" and "the model is stopped / the subscription is paused / nothing registered"
- * alike, and only the first is a genuine failure. This bridge's coarse gate, {@code shouldConsume()}, is read once
- * before {@code poll()} and never rechecked inside {@code processBatch(...)}, so a {@code pauseSubscription(id)}
- * called from inside a record's own handler can still hand the bridge a lifecycle {@code NOT_DELIVERABLE} for a
- * later record in the very same poll batch. Before the fix this proves, every such record got parked and its
- * offset committed under {@link DeliveryFailurePolicy#PARK}, even though nothing about it was broken, only paced.
+ * The Kafka half of {@code RabbitMqCloudEventBridgePauseDuringDeliveryTest}. This bridge's coarse gate,
+ * {@code shouldConsume()}, is read once before {@code poll()} and never rechecked inside {@code processBatch(...)},
+ * so a {@code pauseSubscription(id)} called from inside a record's own handler hands the bridge
+ * {@code RoutingOutcome.UNAVAILABLE} for a later record in the very same poll batch. Nothing about that record is
+ * broken, so it must never be parked with its offset committed under {@link DeliveryFailurePolicy#PARK}. Only a
+ * {@code NOT_DELIVERABLE} outcome, or a {@code RuntimeException} or {@code AssertionError} thrown out of
+ * {@code acceptRedeliverable(..)}, goes through the failure policy.
  * <p>
  * Publishes five records to a single-partition topic before the bridge ever starts, so a single {@code poll()} is
  * very likely to return all five in one batch, pauses the subscription from the first record's own handler, and

@@ -35,15 +35,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * The RabbitMQ half of {@code KafkaCloudEventBridgePauseDuringDeliveryTest}: {@code RoutingOutcome.NOT_DELIVERABLE}
- * covers both "the filter threw" and "the model is stopped / the subscription is paused / nothing registered"
- * alike, and only the first is a genuine failure. A {@code pauseSubscription(id)} called from inside a message
- * handler while more messages are already queued behind it (prefetchCount == 1, so they arrive one at a time) can
- * hand the bridge a lifecycle {@code NOT_DELIVERABLE} for a message already in flight. Before the fix this proves,
- * every such message got parked and acknowledged under {@link DeliveryFailurePolicy#PARK}, even though nothing
- * about it was broken, only paced.
+ * The RabbitMQ half of {@code KafkaCloudEventBridgePauseDuringDeliveryTest}. A {@code pauseSubscription(id)} called
+ * from inside a message handler while more messages are already queued behind it (prefetchCount == 1, so they
+ * arrive one at a time) hands the bridge {@code RoutingOutcome.UNAVAILABLE} for the next message. Nothing about that
+ * message is broken, so it must never be parked and acknowledged under {@link DeliveryFailurePolicy#PARK}. Only a
+ * {@code NOT_DELIVERABLE} outcome, or a {@code RuntimeException} or {@code AssertionError} thrown out of
+ * {@code acceptRedeliverable(..)}, goes through the failure policy.
  * <p>
- * A lifecycle {@code NOT_DELIVERABLE} is paced exactly like {@code DEFERRED}: held unacked rather than acted on
+ * {@code UNAVAILABLE} is paced exactly like {@code DEFERRED}, held without being acknowledged rather than acted on
  * immediately, so with {@code prefetchCount == 1} the broker sends nothing further on this consumer until the next
  * poll releases it. An earlier revision of this bridge cancelled its own consumer and redelivered such a message
  * immediately instead, to avoid that message sitting invisible for a whole {@code pollInterval}. A Copilot review
