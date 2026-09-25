@@ -1402,6 +1402,50 @@ class ReactiveHandoverTest {
         assertThat(buffered.get(5, TimeUnit.SECONDS)).isFalse();
     }
 
+    // The caller of a payload answered false offers it again, so the next catch-up delivering the copy the stop
+    // answered as well would apply it twice. L2 is queued behind that copy, so its fold is the point to check at.
+    @Test
+    void a_payload_a_stopped_replay_answered_is_not_delivered_by_the_next_catch_up() throws Exception {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String, String> handover = handover(delivered);
+        CompletableFuture<Boolean> buffered = handover.acceptReportingDelivery("L1").toFuture();
+        FakeSource stopping = source(List.of("R1", "R2"), false);
+        stopping.stopAfter(1);
+        StepVerifier.create(handover.catchUp(stopping)).expectNext(false).verifyComplete();
+        assertThat(buffered.get(5, TimeUnit.SECONDS)).isFalse();
+
+        StepVerifier.create(handover.catchUp(source(List.of("R1", "R2"), false))).expectNext(true).verifyComplete();
+        StepVerifier.create(handover.acceptReportingDelivery("L2")).expectNext(true).verifyComplete();
+
+        assertThat(delivered).containsExactly("R1", "R1", "R2", "L2");
+    }
+
+    // The buffer holds one payload, and the stop answered the one it held, so a payload arriving during the next
+    // replay has that place to itself.
+    @Test
+    void a_payload_a_stopped_replay_answered_no_longer_takes_a_place_in_the_live_buffer() throws Exception {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        AtomicReference<CompletableFuture<Boolean>> duringNextReplay = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            delivered.add(payload);
+            if (payload.equals("B1")) {
+                duringNextReplay.set(self.get().acceptReportingDelivery("L2").toFuture());
+            }
+        }), payload -> payload, new CatchupThenLiveOptions(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE, 1), "test payload");
+        self.set(handover);
+        CompletableFuture<Boolean> buffered = handover.acceptReportingDelivery("L1").toFuture();
+        FakeSource stopping = source(List.of("A1", "A2"), false);
+        stopping.stopAfter(1);
+        StepVerifier.create(handover.catchUp(stopping)).expectNext(false).verifyComplete();
+        assertThat(buffered.get(5, TimeUnit.SECONDS)).isFalse();
+
+        StepVerifier.create(handover.catchUp(source(List.of("B1"), false))).expectNext(true).verifyComplete();
+
+        assertThat(duringNextReplay.get().get(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(delivered).containsExactly("A1", "B1", "L2");
+    }
+
     // A catch-up that arrives while an earlier one's buffered payloads are still being delivered counts its own
     // payloads and tells its own source. The earlier catch-up is still told when its own set is exhausted, which one
     // shared set of counters could not do, since the later catch-up took them over.
