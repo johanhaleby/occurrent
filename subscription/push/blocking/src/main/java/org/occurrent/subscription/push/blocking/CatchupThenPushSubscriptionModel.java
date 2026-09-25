@@ -68,15 +68,23 @@ import java.util.stream.Stream;
  *       CloudEvent id and source together (not by a position watermark: Occurrent positions can commit late and have permanent gaps, so a watermark would
  *       drop a late-committing low-position event, see ADR 62). Because buffering starts before the head is read, no
  *       reconcile pass is needed.</li>
- *   <li><strong>Live resume</strong> is the broker's job, not Occurrent's. After catch-up, the listener consumes the
- *       broker and acknowledges each message only once {@code accept(...)} returns, so an unprocessed event is
- *       redelivered by the broker. This model persists no live position watermark. Delivery is therefore at-least-once,
- *       so the projection fold must be idempotent, the same contract as the change-stream path. The "acknowledge after
- *       processing" guarantee holds for the live phase. During the catch-up window {@code accept(...)} buffers the event
- *       and returns before it is folded (the calling thread is not blocked for the whole replay), so a message may be
- *       acknowledged before it is applied. That is safe because the catch-up-complete marker is written only after the
- *       drain, so a crash mid-catch-up re-replays the whole history from the store, which is the backstop for any
- *       event acknowledged but not yet folded.</li>
+ *   <li><strong>Live resume</strong> is not Occurrent's job. This model persists no live position, so what becomes of
+ *       an event nothing handled depends on what feeds the {@link PushSubscriptionModel}.
+ *       <ul>
+ *         <li>Fed from a broker, the listener calls {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} and
+ *             acknowledges the message only when it returns normally and the {@link PushObserver} was told an outcome
+ *             for which {@link org.occurrent.subscription.RoutingOutcome#mayAcknowledge()} is true. During the
+ *             replay it refuses the event instead of buffering it, so the broker delivers it again, and a delivery
+ *             after this model has gone live applies it. Delivery is at-least-once, so applying the same event twice
+ *             must leave the projection as applying it once would, the same contract as the change-stream path.</li>
+ *         <li>Fed from the event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)}, nothing
+ *             records which live events the subscription has handled. When the application crashes after a write
+ *             has committed but before the handler has run, this subscription never sees that event. A crash during
+ *             the replay is the one exception. {@code accept(...)} buffers an event arriving then and returns before
+ *             it is applied, and the marker below is written only after the buffered events are applied, so the next
+ *             start replays the whole history, that event included. Use a durable subscription if losing an event is
+ *             not acceptable.</li>
+ *       </ul></li>
  *   <li>A one-shot <strong>catch-up-complete marker</strong> (an optional {@link CheckpointStorage}) records that the
  *       replay finished, so a restart skips it and lets the broker resume. The stored value marks completion, it is not
  *       a live resume position. Correctness across a restart then depends on the broker retaining the backlog for an
