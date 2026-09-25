@@ -97,24 +97,14 @@ public final class HandoverMessages {
 
     /**
      * Refuses a live event because another delivery of the same event was still running, so this call cannot tell
-     * whether it will be applied. Only the blocking engine delivers two copies of one event at once.
+     * whether it will be applied. Only the blocking engine refuses for this reason, since it delivers live events
+     * concurrently and turns away a second copy of one it is still delivering.
      *
      * @param noun The noun describing what the event was fed to, e.g. {@code "projection feed"}.
      */
     public static String sameEventStillDelivering(String noun) {
         return "Another delivery of the same event was still running on this " + noun + ", so this call did not apply "
                 + "it. Do not acknowledge it. Offer it again and a later delivery applies it or finds it already applied.";
-    }
-
-    /**
-     * Refuses a live event the reactor engine could not hand to its live delivery because that delivery had ended.
-     * Defence rather than a message anything produces today, since a stopped handover refuses first.
-     *
-     * @param noun The noun describing what the event was fed to, e.g. {@code "projection feed"}.
-     */
-    public static String liveDeliveryEnded(String noun) {
-        return "The live delivery of this " + noun + " had ended, so nothing applied the event. Do not acknowledge it. "
-                + "Offer it again and a later delivery applies it.";
     }
 
     /**
@@ -128,15 +118,16 @@ public final class HandoverMessages {
     }
 
     /**
-     * Refuses a live event fed from inside this handover's own replay, a fold or a source callback, where waiting for
-     * the drain would wait for the thread that is waiting.
+     * Refuses a live event fed, while the handover is not live, from inside one of its own deliveries or callbacks,
+     * such as a replayed or live fold or a source callback. Waiting would wait for a drain, or for a replay to start,
+     * that the waiting thread itself holds up.
      *
      * @param noun The noun describing what was fed, e.g. {@code "projection feed"}.
      */
-    public static String acceptedFromOwnReplay(String noun) {
-        return "A live event was fed to this " + noun + " from inside its own catch-up replay. It would wait for a drain "
-                + "that runs on this same thread after the replay, so it is refused instead. Feed live events from "
-                + "another thread.";
+    public static String acceptedFromOwnDelivery(String noun) {
+        return "A live event was fed to this " + noun + " from inside one of its own deliveries or callbacks while it "
+                + "was not live. It would wait for work this same thread holds up, so it is refused instead. Feed live "
+                + "events from another thread.";
     }
 
     /**

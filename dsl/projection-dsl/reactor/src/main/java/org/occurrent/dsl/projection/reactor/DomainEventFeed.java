@@ -398,8 +398,10 @@ public final class DomainEventFeed<E> {
      * Stop a catch-up replay that is still in flight, so a shutting-down application does not leave one folding into
      * a store that is closing with it. The replay notices at its next event and unwinds without recording the
      * completion marker, so the next start replays the whole history again. The {@link Mono} {@link #accept(Object)}
-     * returned for an event waiting on that replay errors rather than completing, so its listener does not acknowledge
-     * the event.
+     * returned for an event waiting on a replay that started before the feed went live errors rather than completing,
+     * so its listener does not acknowledge the event. One waiting on a replay started after {@link #goLive(String)}
+     * completes once the event is folded, since the feed still applies the events that arrived while that replay
+     * ran.
      * <p>
      * Stopping is what a caller cannot do for itself. Backgrounding is not, since the returned {@link Mono} from
      * {@link #catchUpAll()} is the caller's to compose or not.

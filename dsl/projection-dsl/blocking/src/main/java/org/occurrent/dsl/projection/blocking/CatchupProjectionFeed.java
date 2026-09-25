@@ -167,22 +167,24 @@ public final class CatchupProjectionFeed<E> {
 
     /**
      * Feed a live domain event and return once it has been folded. Call this from the broker listener, acknowledging
-     * the message only once it returns. Once the feed is live the event is folded on the calling thread. Before that,
-     * while the catch-up replay runs or before it has started, the event waits in the buffer and this call waits with
-     * it until the drain after the replay folds it.
+     * the message only once it returns. Once the feed is live the event is folded on the calling thread. Before the
+     * feed goes live, and while a catch-up runs on a feed that already went live, the event waits in the buffer and
+     * this call waits with it until the drain after the replay folds it.
      * <p>
      * A long replay can keep this call waiting for minutes. A Kafka consumer waiting past its
      * {@code max.poll.interval.ms}, five minutes by default, is taken out of its group and the record is delivered
      * again, which costs a redelivery rather than the event. Never call this on the thread that is about to call
-     * {@link #catchUp()} or {@link #goLive()}, since nothing else would drain the buffer.
+     * {@link #catchUp()} or {@link #goLive()}. It waits until another thread runs the catch-up, takes the feed live,
+     * calls {@link #stopCatchUp()} or interrupts it.
      *
      * @param event The domain event received from the external source.
      * @throws IllegalStateException if the event was not folded, because the catch-up was stopped before the feed
      *                               went live, the catch-up failed, the waiting thread was interrupted, the live
      *                               buffer is full, or another delivery of the same event was still running. The
      *                               listener must not acknowledge it, and the broker delivers it again. Also thrown
-     *                               when this is called before the feed is live on the thread running the replay,
-     *                               from the projection or a view, since that thread would wait for itself.
+     *                               when this is called while the feed is not live from inside the feed's own
+     *                               folds or callbacks, the projection's or a view's included, since the wait could
+     *                               only end once that same thread moved on.
      */
     public void accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");

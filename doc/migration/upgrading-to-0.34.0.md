@@ -39,9 +39,12 @@ Then a subscription handler Spring's proxy cannot invoke now fails startup inste
 and every annotation-based handler registers later, once singleton construction has finished, so a live-only
 subscription no longer sees an event a bean wrote from its own startup. Read
 [section 11](#11-a-subscription-handler-spring-cannot-invoke-now-fails-startup-and-a-live-subscription-can-miss-a-startup-write).
-Finally, a blocking projection feed's `accept(..)` now waits during a catch-up until the event is applied, and
-throws when it was not, so a call on the same thread that later starts the catch-up never returns. Read
-[section 12](#12-a-blocking-projection-feeds-accept-waits-until-the-event-is-applied-and-throws-when-it-is-not).
+Finally, a projection feed's `accept(..)` no longer reports an event it did not apply as handled. On the blocking
+stack it now waits during a catch-up until the event is applied and throws when it was not, so a call on the same
+thread that later starts the catch-up waits until another thread runs the catch-up, takes the feed live, calls
+`stopCatchUp()` or interrupts it. On the reactor stack its `Mono` now errors for an event fed while the feed is
+stopped. Read
+[section 12](#12-a-projection-feeds-accept-waits-until-the-event-is-applied-and-fails-when-it-is-not).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -992,20 +995,24 @@ depends on.
 There is no recipe for either change. A proxy-invocability failure and a startup ordering dependency are both
 runtime behavior, not a call site a rewrite could search for.
 
-## 12. A blocking projection feed's `accept(..)` waits until the event is applied, and throws when it is not
+## 12. A projection feed's `accept(..)` waits until the event is applied, and fails when it is not
 
-This covers `CatchupProjectionFeed.accept(..)` and `DomainEventFeed.accept(..)` on the blocking stack, fixed for
-[#1135](https://github.com/johanhaleby/occurrent/issues/1135). In 0.33.0 an event fed before the feed went live was
+This covers `CatchupProjectionFeed.accept(..)` and `DomainEventFeed.accept(..)` on both stacks, fixed for
+[#1135](https://github.com/johanhaleby/occurrent/issues/1135). The reactor stack changes in one case only, covered
+after the blocking cases. In 0.33.0 an event fed before the blocking feed went live was
 put in a buffer and `accept(..)` returned straight away. A listener acknowledges the message once `accept(..)`
 returns, so the broker discarded an event that was only held in memory, and a stop or a crash before the catch-up
 finished lost it.
 
-Before the feed goes live, `accept(..)` now waits until the catch-up has applied the event. Once the feed is live
-the event is applied on the calling thread, the same as in 0.33.0.
+Before the feed goes live, and while a catch-up runs on a feed that already went live, `accept(..)` now waits until
+the catch-up has applied the event. In 0.33.0 a catch-up on a live feed did not hold live events back, so
+`accept(..)` applied the event on the calling thread and returned. When the feed is live and no catch-up runs, the
+event is still applied on the calling thread.
 
 It's important to keep in mind that you must never call `accept(..)` on the thread that later calls `catchUp()`,
-`catchUpAll()` or `goLive()`. That thread waits for a catch-up it never gets to start, and only `stopCatchUp()`
-called from another thread releases it. A test or a startup routine that does this on one thread now hangs:
+`catchUpAll()` or `goLive()`. That thread waits for a catch-up it never gets to start, until another thread runs the
+catch-up, takes the feed live, calls `stopCatchUp()` or interrupts it. A test or a startup routine that does this on
+one thread now hangs:
 
 ```java
 feed.accept(event);
@@ -1019,18 +1026,30 @@ Run the catch-up on a thread of its own, or feed the event once the catch-up has
 - the catch-up was stopped before the feed went live, or the feed was stopped before any catch-up started
 - the catch-up failed
 - the waiting thread was interrupted
-- it was called on the catch-up's own thread, from inside the projection or a view the replay is updating
-- the feed is live and another delivery of the same event is still running on another thread
+- it was called while the feed was not live from inside the projection, a view or another callback of the same
+  feed, where the thread would wait for work it holds up itself
+- another delivery of the same event is still running on another thread
 
 In 0.33.0 a stopped feed and a second delivery of an event still being applied both returned normally, so the
 listener acknowledged an event that nothing had applied. Do not acknowledge the message when `accept(..)` throws,
 and the broker delivers it again. A listener that acknowledges only after `accept(..)` returns, and lets an
 exception reach the broker client, needs no change.
 
+In 0.33.0 an event fed while the feed was not live from inside the projection, a view or another callback of the
+same feed was applied. Now it is refused. Thrown while the catch-up replays history into the projection or a view,
+that refusal fails the catch-up, and the feed refuses every event until you build a new one. A caller that catches
+the refusal and continues drops the nested event.
+
 A long replay keeps the listener thread waiting. A Kafka consumer that waits past its `max.poll.interval.ms`, five
 minutes by default, is taken out of its consumer group, and the record is delivered again once the partition is
 reassigned. RabbitMQ closes the channel of a consumer that holds on to a message without acknowledging it for longer
 than `consumer_timeout`, 30 minutes by default, and delivers the message again. Both cost a redelivery, not the event.
+
+On the reactor stack, `CatchupProjectionFeed.accept(..)` and `DomainEventFeed.accept(..)` already returned a `Mono`
+that completes once the event is applied. That `Mono` now errors with an `IllegalStateException` for an event fed
+while the feed is stopped, after a catch-up was stopped before the feed went live and before the next one starts.
+0.33.0 completed it without applying the event, so the listener acknowledged an event nothing had applied. Do not
+acknowledge the message when the `Mono` errors.
 
 `DomainEventFeed.acceptCloudEvent(..)`, which the Kafka and RabbitMQ bridges call, is unchanged.
 

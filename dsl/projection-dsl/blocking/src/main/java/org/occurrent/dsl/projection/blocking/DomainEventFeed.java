@@ -218,8 +218,9 @@ public final class DomainEventFeed<E> {
      * message only once it returns.
      * <p>
      * Once the projection is live the event is folded on the calling thread, and an exception from the projection
-     * propagates. Before that this waits until the drain that takes the projection live has folded the event, and
-     * throws when it does not fold it, a stopped or failed catch-up say. {@link CatchupProjectionFeed#accept(Object)}
+     * propagates. Before the projection goes live, and while a catch-up runs on a projection that already went live,
+     * this waits until the drain after the replay has folded the event, and throws when it does not fold it, a
+     * catch-up stopped or failed before the projection went live, say. {@link CatchupProjectionFeed#accept(Object)}
      * has the details, including what a long wait does to a Kafka consumer.
      *
      * @throws IllegalStateException if the event was not folded, for the reasons
@@ -238,9 +239,11 @@ public final class DomainEventFeed<E> {
      * about it, so a projection keyed on the stream id, version or position works on the live path and not only during
      * the catch-up replay. Use this when the broker message carries those values and your listener can read them.
      * Otherwise call {@link #accept(Object)}, which folds with no metadata.
+     * <p>
+     * Waits for the catch-up and throws when the event was not folded, for the reasons {@link #accept(Object)} gives.
      *
-     * @throws IllegalStateException if no projection is registered on this feed, for the reason
-     *                               {@link #accept(Object)} gives.
+     * @throws IllegalStateException if the event was not folded, or if no projection is registered on this feed, for
+     *                               the reasons {@link #accept(Object)} gives.
      */
     public void accept(EventMetadata metadata, E event) {
         Objects.requireNonNull(metadata, "metadata cannot be null");

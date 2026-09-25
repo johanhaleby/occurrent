@@ -366,7 +366,6 @@ public final class ReactiveHandover<T, K> {
         return offer(payload).flatMap(outcome -> switch (outcome) {
             case APPLIED -> Mono.<Void>empty();
             case STOPPED -> Mono.error(new PreDispatchRefusalException(this, HandoverMessages.stoppedBeforeApplied(noun)));
-            case ENDED -> Mono.error(new PreDispatchRefusalException(this, HandoverMessages.liveDeliveryEnded(noun)));
             case NOT_LIVE -> Mono.error(new AssertionError("Only acceptIfLive(..) answers a payload as not live."));
         });
     }
@@ -449,8 +448,9 @@ public final class ReactiveHandover<T, K> {
         }
         if (stopped && !live) {
             // Answered as stopped rather than buffered. The replay that would have drained this buffer was stopped,
-            // so nothing is coming to fold it, and accept(..) errors so its caller offers the payload again. A handover that has gone live delivers instead, whatever a stop left behind, since its live
-            // pipeline runs.
+            // so nothing is coming to fold it, and accept(..) errors so its caller offers the payload again. A
+            // handover that has gone live delivers instead, whatever a stop left behind, since its live pipeline
+            // runs.
             ackSink.success(Outcome.STOPPED);
             return;
         }
@@ -576,13 +576,17 @@ public final class ReactiveHandover<T, K> {
                     // Left at the head, so whatever runs next starts with it and the order holds.
                     return true;
                 }
-                // The pipeline is gone, so nothing is coming to deliver this payload. Dropped rather than
-                // refused, like the stopped check above, but answered with its own reason. Also defence rather than a reachable
-                // path, since that check runs first and catches every way the pipeline ends today.
+                // The live pipeline has ended, so nothing is coming to deliver this payload. No path reaches this, since
+                // only the live phase takes from the sink and deliverItem(..) recovers from every live delivery error.
+                // An error outside a delivery would end it, and the pipeline's error handler records and logs that
+                // error. A null failure means the handler has not run yet, and the refusal still points to that log.
                 case FAIL_TERMINATED, FAIL_CANCELLED -> {
                     pendingOffers.poll();
                     dropFromBacklogAndDrains(pending.item());
-                    pending.ack().success(Outcome.ENDED);
+                    Throwable failure = terminalError.get();
+                    pending.ack().error(failure == null
+                            ? new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun))
+                            : catchUpFailed(failure));
                 }
                 default -> {
                     pendingOffers.poll();
@@ -794,7 +798,7 @@ public final class ReactiveHandover<T, K> {
                     if (error == CatchupStopped.INSTANCE) {
                         // Stopped, not failed. No marker, no drain, and no terminal error, so the handover stays
                         // usable. A handover that never went live drops what it buffered and answers each of those
-                        // payloads false, so accept(..) errors and its caller offers it again. One that was already
+                        // payloads STOPPED, so accept(..) errors and its caller offers it again. One that was already
                         // live goes on delivering them, the same as the blocking engine.
                         boolean wasLive = live;
                         if (!wasLive) {
@@ -1153,7 +1157,7 @@ public final class ReactiveHandover<T, K> {
     // How a live payload's offer ended. acceptReportingDelivery(..) and acceptIfLive(..) report APPLIED as true and
     // everything else as false, and accept(..) errors with the reason.
     private enum Outcome {
-        APPLIED, NOT_LIVE, STOPPED, ENDED
+        APPLIED, NOT_LIVE, STOPPED
     }
 
     // A live payload's acknowledgement. A stop and the path that delivers or refuses the payload both claim it, and
