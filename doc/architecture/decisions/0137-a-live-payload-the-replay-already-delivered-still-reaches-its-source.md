@@ -140,7 +140,15 @@ A `goLive()` the view makes from code the engine is running returns `true` at on
 the hold on live delivery it would wait for cannot end before the view's call does. That code is a fold, live or
 replayed, the report that the replay already delivered a payload, and the replay callbacks `replayStarted()`,
 `replayCompleted()` and `replayAbandoned()`. A live fold counts because a replay that starts waits for it before
-replaying. `acceptIfLive` goes on refusing until the replay ends.
+replaying. Code that runs once `acceptIfLive` has completed, such as a `goLive()` chained after it, belongs to the
+caller rather than the view, even on the thread the fold ran on, so it gets the answer a `goLive()` from any other
+code gets.
+
+While a replay that starts waits for a live fold, `acceptIfLive` on the reactive engine refuses, and goes on refusing
+until the replay ends. The blocking engine stops live delivery before that wait, but only counts the replay as running
+once the wait ends. A `goLive()` in between takes the handover live, from the live fold or from any other thread, so
+`acceptIfLive` accepts until the replay starts. The replay waits for those deliveries too, so they reach the view before
+it replays.
 
 The engines recognize the call in different ways, so what is left uncovered differs. The blocking engine counts these
 calls per thread, so a view that hands the call to another thread and waits for it never finishes. The reactive engine
