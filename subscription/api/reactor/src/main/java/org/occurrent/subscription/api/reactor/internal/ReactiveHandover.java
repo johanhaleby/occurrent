@@ -1182,10 +1182,10 @@ public final class ReactiveHandover<T, K> {
         return subscribedAsOwnCode(Mono.defer(item.deliver())).doOnSuccess(v -> replayedIds.add(item.dedupKey()));
     }
 
-    // Marks the thread only while it subscribes the fold, so a later task on the same pooled thread is not taken for
-    // code of this handover.
-    private Mono<Void> subscribedAsOwnCode(Mono<Void> fold) {
-        return Mono.from(subscriber -> runAsOwnCode(() -> fold.subscribe(subscriber)));
+    // Marks the thread only while it subscribes the fold or callback, so a later task on the same pooled thread is not
+    // taken for code of this handover.
+    private Mono<Void> subscribedAsOwnCode(Mono<Void> code) {
+        return Mono.from(subscriber -> runAsOwnCode(() -> code.subscribe(subscriber)));
     }
 
     private void runAsOwnCode(Runnable code) {
