@@ -22,6 +22,7 @@ import com.mongodb.MongoConnectionPoolClearedException;
 import com.mongodb.MongoException;
 import com.mongodb.MongoNodeIsRecoveringException;
 import com.mongodb.MongoNotPrimaryException;
+import com.mongodb.MongoSecurityException;
 import com.mongodb.MongoSocketException;
 import com.mongodb.MongoWriteException;
 import com.mongodb.client.MongoClient;
@@ -150,7 +151,8 @@ public final class UpdateEventRepair {
      * logged at WARN with the error that caused it. That is the set MongoDB's retryable reads and retryable writes
      * specifications retry on, a network error, a cleared connection pool, an error labelled
      * {@code RetryableWriteError}, and a command or write concern error with one of the codes those specifications
-     * list, such as a primary stepping down or a server shutting down. Any other error, a missing privilege or no
+     * list, such as a primary stepping down or a server shutting down. A failure to authenticate that one of those
+     * caused is retried too, as the MongoDB driver retries it. Any other error, a missing privilege or no
      * server to select before the driver's server selection timeout for instance, fails the run at once, and running
      * it again resumes from the checkpoint.
      *
@@ -689,20 +691,25 @@ public final class UpdateEventRepair {
             13436 // NotPrimaryOrSecondary
     );
 
-    // What CommandOperationHelper.isRetryableException accepts, a network error, a cleared connection pool, which the
-    // retryable reads specification also lists, a not primary or node is recovering error, which the driver also
-    // raises for an older server that sends only a message, or one of the codes above, and besides that the
-    // RetryableWriteError label a 4.4 or later server puts on a write it may retry
+    // What the driver's CommandOperationHelper retries a read or a write on, an error isRetryableException accepts or
+    // a MongoSecurityException whose cause it accepts, which is how a connection lost while authenticating arrives,
+    // and besides that the RetryableWriteError label a 4.4 or later server puts on a write it may retry
     static boolean retryable(Throwable error) {
-        if (!(error instanceof MongoException mongoException)) {
-            return false;
-        }
-        return mongoException instanceof MongoSocketException
+        return retryableByDriver(error)
+                || error instanceof MongoSecurityException && retryableByDriver(error.getCause())
+                || error instanceof MongoException mongoException && mongoException.hasErrorLabel("RetryableWriteError");
+    }
+
+    // CommandOperationHelper.isRetryableException, a network error, a cleared connection pool, which the retryable
+    // reads specification also lists, a not primary or node is recovering error, which the driver also raises for an
+    // older server that sends only a message, or one of the codes above
+    private static boolean retryableByDriver(@Nullable Throwable error) {
+        return error instanceof MongoException mongoException
+                && (mongoException instanceof MongoSocketException
                 || mongoException instanceof MongoConnectionPoolClearedException
                 || mongoException instanceof MongoNotPrimaryException
                 || mongoException instanceof MongoNodeIsRecoveringException
-                || RETRYABLE_ERROR_CODES.contains(mongoException.getCode())
-                || mongoException.hasErrorLabel("RetryableWriteError");
+                || RETRYABLE_ERROR_CODES.contains(mongoException.getCode()));
     }
 
     private static RetryStrategy defaultRetryStrategy() {

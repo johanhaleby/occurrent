@@ -67,8 +67,8 @@ public final class StoredCounterShapes {
     public static Stream<Shape> shapes() {
         long counter = StoredPositionShapes.COUNTER;
         return Stream.of(
-                new Shape("the long 2, as written", counter, true),
-                new Shape("the int 2", (int) counter, true),
+                new Shape("the long 2, as the native store writes it", counter, true),
+                new Shape("the int 2, as the Spring stores write it", (int) counter, true),
                 new Shape("the long 99, above the highest position", 99L, true),
                 new Shape("the long 2^53 + 1, which $inc keeps exact", TWO_TO_THE_53 + 1, true),
                 new Shape("the double 2.0, which $inc rounds past 2^53", (double) counter, false),

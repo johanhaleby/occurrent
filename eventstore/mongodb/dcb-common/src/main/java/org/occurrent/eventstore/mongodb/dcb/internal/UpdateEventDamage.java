@@ -248,9 +248,9 @@ public final class UpdateEventDamage {
      * The value a counter document's {@code position} holds if it is what a writer stores. Every writer stores an int32
      * or an int64 there, the stores and the position backfill with {@code $inc} of an int or a long and the backfill's
      * seed with {@code $max} of a long, and {@code $inc} keeps either exact. A {@code double} counter, which is what
-     * mongosh stores for a bare number, rounds once {@code $inc} takes it past 2^53, so two appends can reserve the same
-     * position, and the stores read a {@code Decimal128} through a {@code double}, which can round it above 2^53. A
-     * negative counter makes the next append reserve a position at or below zero.
+     * mongosh stores for a bare number outside the int32 range, rounds once {@code $inc} takes it past 2^53, so two
+     * appends can reserve the same position, and the stores read a {@code Decimal128} through a {@code double}, which
+     * can round it above 2^53. A negative counter makes the next append reserve a position at or below zero.
      *
      * @param stored the stored counter value
      * @return the counter, or {@code null} if {@code stored} is not an int32 or int64 at or above zero

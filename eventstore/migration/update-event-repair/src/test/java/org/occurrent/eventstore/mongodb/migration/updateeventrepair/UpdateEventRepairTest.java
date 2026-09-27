@@ -24,6 +24,8 @@ import com.mongodb.MongoNodeIsRecoveringException;
 import com.mongodb.MongoNotPrimaryException;
 import com.mongodb.MongoSocketReadException;
 import com.mongodb.MongoTimeoutException;
+import com.mongodb.MongoCredential;
+import com.mongodb.MongoSecurityException;
 import com.mongodb.MongoWriteConcernException;
 import com.mongodb.bulk.WriteConcernError;
 import com.mongodb.ServerAddress;
@@ -1471,6 +1473,7 @@ class UpdateEventRepairTest {
         labelledRetryableWrite.addLabel("RetryableWriteError");
         MongoException labelledTransient = new MongoException(1, "labelled by the server");
         labelledTransient.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+        MongoCredential credential = MongoCredential.createScramSha256Credential("repair", "admin", "test".toCharArray());
         return Stream.of(
                 Arguments.of("a lost connection", new MongoSocketReadException("lost", new ServerAddress()), true),
                 Arguments.of("a server that is no longer primary", new MongoNotPrimaryException(commandError(10107, "NotWritablePrimary"), new ServerAddress()), true),
@@ -1481,6 +1484,8 @@ class UpdateEventRepairTest {
                 Arguments.of("an unlabelled ReadConcernMajorityNotAvailableYet", new MongoCommandException(commandError(134, "ReadConcernMajorityNotAvailableYet"), new ServerAddress()), true),
                 Arguments.of("an unlabelled PrimarySteppedDown", new MongoCommandException(commandError(189, "PrimarySteppedDown"), new ServerAddress()), true),
                 Arguments.of("a write concern error ShutdownInProgress", new MongoWriteConcernException(new WriteConcernError(91, "ShutdownInProgress", "shutting down", new BsonDocument()), null, new ServerAddress()), true),
+                Arguments.of("a failure to authenticate caused by a lost connection", new MongoSecurityException(credential, "authentication failed", new MongoSocketReadException("lost", new ServerAddress())), true),
+                Arguments.of("a failure to authenticate caused by a wrong password", new MongoSecurityException(credential, "authentication failed", new MongoCommandException(commandError(18, "AuthenticationFailed"), new ServerAddress())), false),
                 Arguments.of("no server to select, which neither specification retries", new MongoTimeoutException("no server"), false),
                 Arguments.of("an error labelled TransientTransactionError, which the repair never runs in a transaction to get", labelledTransient, false),
                 Arguments.of("a write concern error UnsatisfiableWriteConcern", new MongoWriteConcernException(new WriteConcernError(100, "UnsatisfiableWriteConcern", "no", new BsonDocument()), null, new ServerAddress()), false),

@@ -133,13 +133,14 @@ If the process is killed part way, run it again. It resumes from a checkpoint do
 repaired stay repaired, and it only touches events that still look damaged, so a repeated run cannot double-apply
 anything.
 
-The run retries the MongoDB errors that MongoDB's retryable reads and retryable writes specifications retry, with a
-backoff that grows to 2 seconds and no limit on attempts. That is a lost connection, a cleared connection pool, an
-error labelled `RetryableWriteError`, and a command or write concern error with one of the codes those
-specifications list, a primary stepping down or a server shutting down for instance. Each retry is logged at WARN
-with the error that caused it. Any other error ends the run at once, a user without the privileges the run needs for
-instance, and so does finding no server before the driver's server selection timeout runs out. Fix the cause and run
-it again, and it resumes from the checkpoint.
+The run retries the errors the MongoDB driver retries a read or a write on, as MongoDB's retryable reads and
+retryable writes specifications define them, with a backoff that grows to 2 seconds and no limit on attempts. That is
+a lost connection, a cleared connection pool, an error labelled `RetryableWriteError`, a command or write concern
+error with one of the codes those specifications list, and a failure to authenticate that one of those caused. A
+primary stepping down and a server shutting down are two of the listed codes. Each retry is logged at WARN with the
+error that caused it. Any other error ends the run at once, a user without the privileges the run needs for instance,
+and so does finding no server before the driver's server selection timeout runs out. Fix the cause and run it again,
+and it resumes from the checkpoint.
 
 ### 5. [you] Deal with what could not be repaired
 
@@ -219,20 +220,36 @@ position an event already holds. An event collection renamed without its `_posit
 Every writer stores the counter as an int32 or an int64, and a counter that is anything else, or is negative, keeps
 the store refusing too. The stores cannot read a string at all. They can read a `Decimal128` above 2^53 as a
 different number, and once a double counter reaches 2^53, adding one to it can leave it where it was, so two appends
-get the same position. If you still have the old counter document, in the collection the rename left behind or in a backup,
-restore it. Otherwise find the highest position an event holds and raise the counter to it:
+get the same position.
+
+Never lower the counter. A DCB read returns it as `lastSequencePosition`, so a consumer may have recorded any value
+the counter has held, including positions no event holds because the append that reserved them failed. Lower the
+counter below such a value and the next appends take positions that consumer has already read past, so it never sees
+their events. None of the commands below lowers it.
+
+If you still have the old counter document, in the collection the rename left behind or in a backup, restore it.
+Otherwise turn a double or `Decimal128` counter into an int64, find the highest position an event holds, and raise
+the counter to at least that:
 
 ```javascript
+db.events_position.updateOne({ _id: "dcb", position: { $type: ["double", "decimal"] } }, [{ $set: { position: { $toLong: { $ceil: "$position" } } } }])
 db.events.find({ $expr: { $isNumber: "$position" } }, { position: 1 }).sort({ position: -1 }).limit(1)
-db.events_position.updateOne({ _id: "dcb" }, { $max: { position: NumberLong(<highest stored position>) } }, { upsert: true })
+db.events_position.updateOne({ _id: "dcb" }, { $max: { position: NumberLong("<n>") } }, { upsert: true })
 ```
 
-`upsert` creates the counter document when there is none, and `$max` never lowers a counter that appends are still
-raising, so this is safe while the application runs. Keep the `NumberLong`, since mongosh stores a bare number as a
-double, which the stores refuse. `$max` replaces only a value lower than the one you give it, and MongoDB orders a
-string above every number, so it does not change a counter holding a string, or a double or `Decimal128` at or above
-the highest stored position. For those, stop every application that writes to the store and set the counter with
-`$set` in place of `$max`.
+The first update keeps the counter's value and rounds a fraction up. On a `NaN`, an infinite counter or one beyond
+the int64 range it fails without changing anything, so handle that counter as the next paragraph describes. `<n>` is the position the `find` returns, or a higher position a consumer recorded if the
+counter document was lost rather than never written. A value above what is needed only skips some positions, which
+every store already allows. `upsert` creates the counter document when there is none, and `$max` raises only a
+number below `<n>`. Each update changes one document atomically and neither lowers the counter, so both are safe
+while the application runs. Keep the quotes in `NumberLong("<n>")`. mongosh stores a bare number outside the int32
+range as a double, which the stores refuse, and an unquoted number above 2^53 is rounded by JavaScript before
+`NumberLong` sees it.
+
+`$max` does not change a counter that is neither a number nor `null`, a string, an array, an object or a boolean
+for instance, because MongoDB orders every one of them above numbers. Restore such a counter from a backup if you can. Otherwise
+stop every application that writes to the store and replace it with `$set: { position: NumberLong("<n>") }` in place
+of `$max`, where `<n>` is at least the highest stored position and at least every position a consumer recorded.
 
 `PositionBackfill.seedCounter()` from `occurrent-eventstore-mongodb-position-backfill` runs the same `$max` with
 `upsert`, to the number of events plus its `counterSeedSlack`, 10,000 by default, and fails on a counter document
@@ -251,7 +268,7 @@ stored as a string. The first query in step 6 finds them. Deciding to live witho
 while the string is there. Set the position your own records say it had:
 
 ```javascript
-db.events.updateOne({ _id: ObjectId("<_id>") }, { $set: { position: NumberLong(<position>) } })
+db.events.updateOne({ _id: ObjectId("<_id>") }, { $set: { position: NumberLong("<position>") } })
 ```
 
 Without such a record, leave the string in place and turn `requireRepairedEvents` off once you have accepted the
@@ -271,7 +288,7 @@ integer and its tag array, if it had one, is back. Check both limits after the f
 ```javascript
 db.events.find({ position: { $lte: 0 } })
 db.events_position.findOne({ _id: "dcb" })
-db.events.find({ position: { $gt: NumberLong(<counter>) } })
+db.events.find({ position: { $gt: NumberLong("<counter>") } })
 ```
 
 `events_position` is your event collection name followed by `_position`. The first query should find nothing. The
@@ -421,8 +438,8 @@ skipped and arrives through ordinary catch-up without your help. A range sitting
 returns nothing, which is the right answer for it.
 
 ```javascript
-db.events.find({ position: { $gte: NumberLong(<minRepairedPosition>),
-                             $lte: NumberLong(<maxRepairedPosition, or the checkpoint if that is lower>) } })
+db.events.find({ position: { $gte: NumberLong("<minRepairedPosition>"),
+                             $lte: NumberLong("<maxRepairedPosition, or the checkpoint if that is lower>") } })
          .sort({ position: 1 })
 ```
 
@@ -434,9 +451,9 @@ cover the same stretch, so one event can come back from more than one query. The
 because a consumer's logic depends on position order and MongoDB returns no particular order without being asked.
 
 Feed only the ones the consumer actually missed into its logic, once each however many queries returned them, by hand
-or with a targeted script, leaving its checkpoint where it is. `NumberLong` matters once a store's position passes
-2^53, since mongosh reads a bare number as a JavaScript double and a comparison against a `position` that large
-silently rounds.
+or with a targeted script, leaving its checkpoint where it is. The quotes in `NumberLong("...")` matter once a
+store's position passes 2^53, since JavaScript holds an unquoted number as a double, and a comparison against a
+`position` that large silently rounds.
 
 ## The damage this cannot find
 

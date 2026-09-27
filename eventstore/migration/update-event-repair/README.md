@@ -88,14 +88,15 @@ Run one instance at a time. Two concurrent runs share one checkpoint document, a
 while the other is still going, so a later resume would start from the wrong place. If you run this as a Kubernetes
 Job, make sure a retry cannot overlap the run it is retrying.
 
-The run retries the MongoDB errors that MongoDB's retryable reads and retryable writes specifications retry, with a
-backoff from 100 ms up to 2 seconds and no limit on attempts, and every retry is logged at WARN with the error that
-caused it. That is a lost connection, a cleared connection pool, an error labelled `RetryableWriteError`, and a
-command or write concern error with one of the codes those specifications list, a primary stepping down or a server
-shutting down for instance. Any other error ends the run at once, a user without the privileges the run needs for
+The run retries the errors the MongoDB driver retries a read or a write on, as MongoDB's retryable reads and
+retryable writes specifications define them, with a backoff from 100 ms up to 2 seconds and no limit on attempts, and
+every retry is logged at WARN with the error that caused it. That is a lost connection, a cleared connection pool, an
+error labelled `RetryableWriteError`, a command or write concern error with one of the codes those specifications
+list, and a failure to authenticate that one of those caused. A primary stepping down and a server shutting down are
+two of the listed codes. Any other error ends the run at once, a user without the privileges the run needs for
 instance, and so does finding no server before the driver's server selection timeout runs out. Running it again
-resumes from the checkpoint. Pass a `RetryStrategy` to
-the four-argument constructor to change how those errors are retried.
+resumes from the checkpoint. Pass a `RetryStrategy` to the four-argument constructor to change how those errors are
+retried.
 
 `report()` writes nothing, but it is not cheap. Finding an event whose tag array does not hold its tags cannot use an index, so
 both `report()` and `run()` read the whole collection. On a large store, run them during a quiet period.

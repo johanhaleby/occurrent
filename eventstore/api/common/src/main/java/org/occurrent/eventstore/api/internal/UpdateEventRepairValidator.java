@@ -66,7 +66,9 @@ public final class UpdateEventRepairValidator {
                 + " This store is configured to require repaired events, so it will not start. Run the repair"
                 + " described in " + RUNBOOK + ". An event the repair reports as unrecoverable can keep this store"
                 + " from starting until you fix it by hand as step 5 of the runbook describes, and the queries in"
-                + " its step 6 find every event that still does. To start with the damage still in place, turn off"
-                + " requireRepairedEvents.");
+                + " its step 6 find every event that still does. A position counter below the highest position, a"
+                + " missing one counting as zero, or one that is not the int32 or int64 every writer stores keeps it"
+                + " from starting too, and step 5 says how to restore it. To start with the damage still in place,"
+                + " turn off requireRepairedEvents.");
     }
 }
