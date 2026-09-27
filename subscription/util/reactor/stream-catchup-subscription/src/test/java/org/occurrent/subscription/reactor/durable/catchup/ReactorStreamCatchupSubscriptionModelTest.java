@@ -33,6 +33,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -63,6 +64,19 @@ class ReactorStreamCatchupSubscriptionModelTest {
         assertThat(wrapped.subscribeCalls)
                 .as("the id never reached the wrapped model, so cancelling here must not either")
                 .isEmpty();
+    }
+
+    @Test
+    void shutting_down_while_a_replay_is_in_flight_fails_the_started_signal_instead_of_leaving_it_waiting() {
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(new NamedRecordingSubscriptionModel(), new StuckPositionOrderedReader());
+
+        Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        catchup.shutdown();
+
+        StepVerifier.create(subscription.waitUntilStarted())
+                .expectError(SubscriptionModelShutdownException.class)
+                .verify(Duration.ofSeconds(5));
     }
 
     // The wrapped model here accepts a subscribe after its shutdown, so only the catch-up model itself can refuse

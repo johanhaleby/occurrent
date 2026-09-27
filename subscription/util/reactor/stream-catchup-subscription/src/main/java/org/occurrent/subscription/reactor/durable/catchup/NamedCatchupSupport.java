@@ -73,10 +73,10 @@ import static java.util.Objects.requireNonNull;
  * the same way and replays only once the model starts. This is deliberately safer than the blocking catch-up model,
  * which abandons a stop-interrupted replay outright. The blocking composition never notices, because its durable
  * model parks subscriptions before the catch-up model sees them, a gate the delegating path here does not run
- * through. Cancelling or shutting down aborts in-flight replays. Waiting on a subscription that was cancelled before
- * its handover fails, since that subscription never started and nothing will start it, and the blocking
- * {@code CancelledSubscription} answers {@code false} for the same case. Model-wide calls forward to the wrapped
- * model, so give each composition its own wrapped model rather than sharing one.
+ * through. Cancelling or shutting down aborts in-flight replays. Waiting on a subscription that was cancelled, or
+ * whose model was shut down, before its handover fails, since that subscription never started and nothing will start
+ * it, and the blocking {@code CancelledSubscription} answers {@code false} for the same cases. Model-wide calls
+ * forward to the wrapped model, so give each composition its own wrapped model rather than sharing one.
  */
 @NullMarked
 final class NamedCatchupSupport {
@@ -433,10 +433,16 @@ final class NamedCatchupSupport {
         new ArrayList<>(catchingUp.keySet()).forEach(subscriptionId -> {
             CatchupState state = catchingUp.remove(subscriptionId);
             if (state != null) {
-                state.cancelled.set(true);
-                Disposable replaying = state.replaying.get();
-                if (replaying != null) {
-                    replaying.dispose();
+                synchronized (state) {
+                    state.cancelled.set(true);
+                    Disposable replaying = state.replaying.get();
+                    if (replaying != null) {
+                        replaying.dispose();
+                    }
+                    // Disposing the replay runs none of its callbacks, so without this waitUntilStarted() never completes.
+                    if (!state.handedOver.get()) {
+                        state.started.tryEmitError(new SubscriptionModelShutdownException());
+                    }
                 }
             }
         });
