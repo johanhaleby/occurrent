@@ -37,19 +37,20 @@ import org.occurrent.subscription.RoutingOutcome;
  * whether that action then succeeds or throws a {@link RuntimeException} or an {@link AssertionError}. It is
  * {@link RoutingOutcome#FILTERED} when that same subscription evaluated the event and declined it, and
  * {@link RoutingOutcome#UNAVAILABLE} when there was no running, unpaused subscription for the event to reach at
- * all, whether because nothing is registered, the model is stopped, or the subscription is paused. A caller
- * acknowledging an externally sourced event may acknowledge on {@link RoutingOutcome#DELIVERED} once
- * {@code accept(...)} has returned normally, and on {@link RoutingOutcome#FILTERED}, where redelivering would loop
- * forever against this same registration, since the event is not this consumer's under the filter currently
- * registered for it. It must never acknowledge on any of the other four, which is why {@link RoutingOutcome}'s
- * values are kept apart rather than collapsed back into a single flag. Read that enum for what each of them asks a
- * caller to do next, since offering the event again, applying a failure policy and stopping for good are three
- * different answers. It shares the same filter evaluation the actual
+ * all, whether because nothing is registered, the model is stopped, or the subscription is paused.
+ * <p>
+ * A broker listener acknowledges on the outcome {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}
+ * returns, never on what this observer is told for {@code accept(...)}. Behind a
+ * {@link CatchupThenPushSubscriptionModel}, {@code accept(...)} reports {@link RoutingOutcome#DELIVERED} for an
+ * event that model has only buffered, and an action that threw is reported {@link RoutingOutcome#DELIVERED} too.
+ * {@link RoutingOutcome}'s values are kept apart rather than collapsed back into a single flag. Read that enum for
+ * what each of them asks a caller to do next, since offering the event again, applying a failure policy and
+ * stopping for good are three different answers. The outcome shares the same filter evaluation the actual
  * dispatch decision is made from, so the two can never disagree, and no lifecycle transition landing between the
  * evaluation and this call can change which outcome is reported.
  * <p>
- * <strong>A broker bridge feeding this model from outside the process, rather than the in-process write path
- * {@link PushSubscriptionModel#accept(CloudEvent)} serves, should call
+ * <strong>A broker bridge feeding this model from outside the process, rather than the in-memory event store's
+ * write path that {@code accept(..)} serves, should call
  * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} instead.</strong> When this model is wrapped in a
  * {@link CatchupThenPushSubscriptionModel} that has not reached live yet,
  * {@code acceptRedeliverable(...)} refuses such an event outright rather than buffering it, reported
@@ -58,9 +59,7 @@ import org.occurrent.subscription.RoutingOutcome;
  * and {@code KafkaCloudEventBridge} do exactly this, and are correct with no further configuration:
  * {@link CatchupThenPushSubscriptionModel#isReadyForLiveDelivery(String)} and their own {@code readinessSource}
  * remain available, but only as an optional pacing hint that cuts down on how often that refuse-and-redeliver round
- * trip happens, not as a correctness requirement. Fed directly through {@code accept(...)}, with no catch-up
- * wrapper in front, {@code DELIVERED} is exactly what it always was, safe to acknowledge on once
- * {@code accept(...)} returns.
+ * trip happens, not as a correctness requirement.
  * <p>
  * A filter that throws while being evaluated (a supplied {@code DataFieldReader} can) never gets to answer whether
  * it matched. A {@link RuntimeException} or {@link AssertionError} is reported to the observer as
