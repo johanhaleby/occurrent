@@ -31,6 +31,7 @@ import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
@@ -68,7 +69,26 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
     @Test
     void shutting_down_while_a_replay_is_in_flight_fails_the_started_signal_instead_of_leaving_it_waiting() {
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        ReleasablePositionOrderedReader reader = new ReleasablePositionOrderedReader();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+
+        Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        catchup.shutdown();
+        // A replay that shutdown did not stop would finish here and hand over.
+        reader.release();
+
+        StepVerifier.create(subscription.waitUntilStarted())
+                .expectError(SubscriptionModelShutdownException.class)
+                .verify(Duration.ofSeconds(5));
+        assertThat(wrapped.subscribeCalls).isEmpty();
+    }
+
+    @Test
+    void shutting_down_a_subscription_parked_by_a_stop_fails_the_started_signal() {
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(new NamedRecordingSubscriptionModel(), new StuckPositionOrderedReader());
+        catchup.stop();
 
         Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
                 StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
@@ -76,6 +96,35 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
         StepVerifier.create(subscription.waitUntilStarted())
                 .expectError(SubscriptionModelShutdownException.class)
+                .verify(Duration.ofSeconds(5));
+    }
+
+    // The handover asks the wrapped model whether the id runs only for a pause requested during the replay, and it
+    // asks after the handover is recorded but before the id is removed from the replaying subscriptions. Shutting
+    // down from there reaches a subscription that has handed over, and the wrapped model's start signal decides it.
+    @Test
+    void shutting_down_after_the_handover_leaves_the_started_signal_to_the_wrapped_model() {
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        Sinks.Empty<Void> wrappedStarted = Sinks.empty();
+        wrapped.startedSignal = wrappedStarted.asMono();
+        ReleasablePositionOrderedReader reader = new ReleasablePositionOrderedReader();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+
+        Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        catchup.pauseSubscription("sub");
+        AtomicBoolean shutDownDuringHandover = new AtomicBoolean(false);
+        wrapped.whenAskedWhetherRunning = () -> {
+            catchup.shutdown();
+            shutDownDuringHandover.set(true);
+        };
+        reader.release();
+        wrappedStarted.tryEmitEmpty();
+
+        assertThat(wrapped.subscribeCalls).containsExactly("sub");
+        assertThat(shutDownDuringHandover).isTrue();
+        StepVerifier.create(subscription.waitUntilStarted())
+                .expectComplete()
                 .verify(Duration.ofSeconds(5));
     }
 
@@ -319,6 +368,31 @@ class ReactorStreamCatchupSubscriptionModelTest {
         }
     }
 
+    // Like StuckPositionOrderedReader until release(), after which every window it reads is empty, so the replay
+    // finishes and hands over.
+    private static final class ReleasablePositionOrderedReader implements PositionOrderedReader {
+        private final Sinks.Empty<Void> released = Sinks.empty();
+
+        void release() {
+            released.tryEmitEmpty();
+        }
+
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            return released.asMono().thenMany(Flux.empty());
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return Mono.just(10L);
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return true;
+        }
+    }
+
     // A named subscription model with a resolvable checkpoint, so a catch-up wrapping it can capture a live token
     // and start replaying. Records every named subscribe/cancel it is asked to do, so a test can assert the wrapped
     // model was never told about a subscription whose replay never handed over.
@@ -327,6 +401,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
         final List<String> cancelCalls = new CopyOnWriteArrayList<>();
         volatile Runnable whenAskedWhetherRunning = () -> {
         };
+        volatile Mono<Void> startedSignal = Mono.empty();
 
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
@@ -349,7 +424,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
                 @Override
                 public Mono<Void> waitUntilStarted() {
-                    return Mono.empty();
+                    return startedSignal;
                 }
             };
         }
