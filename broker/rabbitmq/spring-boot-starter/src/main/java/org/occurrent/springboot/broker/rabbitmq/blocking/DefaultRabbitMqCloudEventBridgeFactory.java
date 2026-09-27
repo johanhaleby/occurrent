@@ -21,7 +21,6 @@ import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqBuildFailureClassifier;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
-import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.Logger;
@@ -50,9 +49,9 @@ class DefaultRabbitMqCloudEventBridgeFactory implements RabbitMqCloudEventBridge
     }
 
     @Override
-    public RabbitMqCloudEventBridge.Builder forQueue(String queue, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel) {
+    public RabbitMqCloudEventBridge.Builder forQueue(String queue, PushSubscriptionModel model) {
         RabbitMqBrokerProperties.Bridge bridgeProperties = properties.getBridge();
-        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, queue)
+        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, queue)
                 .declareTopology(bridgeProperties.isDeclareTopology())
                 .onDeliveryFailure(bridgeProperties.getOnDeliveryFailure())
                 .pollInterval(bridgeProperties.getPollInterval())

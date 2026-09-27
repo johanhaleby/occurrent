@@ -56,7 +56,7 @@ import static java.util.Objects.requireNonNull;
  * Bridges a RabbitMQ queue into a {@link PushSubscriptionModel}, the CloudEvent-level consume side ADR 133 decision 1
  * describes. Rebuilds each message as a {@link CloudEvent} through {@link RabbitMqCloudEventMapper}, hands it to
  * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}, and acknowledges only once the {@link RoutingOutcome}
- * that reported through a shared {@link RoutingOutcomeChannel} says the event was actually consumed.
+ * that call returns says the event was actually consumed.
  * <p>
  * <strong>Holds a {@link PushSubscriptionModel}, never a {@link CatchupThenPushSubscriptionModel}.</strong> ADR 133
  * decision 1 is explicit that a bridge feeds the live model, not the catch-up wrapper in front of it, since a
@@ -64,19 +64,21 @@ import static java.util.Objects.requireNonNull;
  * as a constructor argument and replays history through it before handing over. An application that wants catch-up
  * builds one from the same {@link PushSubscriptionModel} this bridge is given, in front of it, not instead of it.
  * <p>
- * <strong>Acknowledgement.</strong> {@code acceptRedeliverable(...)} throwing (a handler exception, or a
- * subscription filter that failed to evaluate) never acknowledges. A normal return is decided by
+ * <strong>Acknowledgement.</strong> A message for which {@code acceptRedeliverable(...)} throws (a handler
+ * exception, or a subscription filter that failed to evaluate) goes through the failure policy below, and is
+ * acknowledged only once a {@link DeliveryFailurePolicy#PARK} of it is confirmed. A normal return is decided by
  * {@link RoutingOutcome#disposition()} alone, so this bridge acknowledges an outcome exactly when
  * {@link RoutingOutcome#mayAcknowledge()} answers true for it.
  * {@link RoutingOutcome.Disposition#HOLD} holds the delivery unacknowledged and paces it rather than sending it
  * through a failure policy, see below, and {@link RoutingOutcome.Disposition#STOP} stops this bridge for good, also
- * below. A normal return with {@link RoutingOutcome#NOT_DELIVERABLE} cannot happen, since that outcome always comes
- * with an exception, the filter's own or a transient action refusal's. For every other failure this bridge's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) negatively
- * acknowledges with requeue, {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only then
+ * below. {@link RoutingOutcome#NOT_DELIVERABLE}, a refusal the model decided before dispatch without promising it is
+ * permanent, goes through the failure policy like an exception. For those failures this bridge's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) holds the
+ * delivery unacknowledged and negatively acknowledges it with requeue on the next poll, {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only then
  * acknowledges the original. A normal return with {@link RoutingOutcome#DEFERRED}, a
  * {@link CatchupThenPushSubscriptionModel} wrapping {@code model} still replaying or draining, say, also never
- * acknowledges, but always negatively acknowledges with requeue, bypassing {@link DeliveryFailurePolicy} entirely:
- * nothing here is broken, only not ready yet, and {@code PARK} exists for failures, not for pacing.
+ * acknowledges. It is held unacknowledged the same way and released with requeue on the next poll, bypassing
+ * {@link DeliveryFailurePolicy} entirely, since nothing here is broken, only not ready yet, and {@code PARK} exists for
+ * failures, not for pacing.
  * <p>
  * <strong>Topology.</strong> By default this bridge declares its own queue (durable, not exclusive, not
  * auto-delete) and binds it to {@link Builder#bindings(Set)} if given, or else to
@@ -139,11 +141,9 @@ import static java.util.Objects.requireNonNull;
  * <strong>A permanently failed catch-up stops this bridge, it does not park or redeliver into it.</strong> A
  * {@link CatchupThenPushSubscriptionModel} wrapping {@code model} whose replay has permanently failed refuses
  * every later live event before attempting any dispatch, and promises that refusing is permanent, which
- * {@code RegisteringSubscribable.routeReportingMatch} reports as {@link RoutingOutcome#REFUSED}. That outcome is
- * reported for nothing else, so this bridge decides on it alone rather than on the type of whatever exception came
- * with it. A handler that reached into some other permanently failed engine reports
- * {@link RoutingOutcome#DELIVERED} instead and goes through {@link DeliveryFailurePolicy} like any other handler
- * failure.
+ * {@code acceptRedeliverable(...)} returns as {@link RoutingOutcome#REFUSED}. That outcome is returned for nothing
+ * else, so this bridge decides on it alone. A handler that reached into some other permanently failed engine throws
+ * instead, and goes through {@link DeliveryFailurePolicy} like any other handler failure.
  * <p>
  * On {@link RoutingOutcome#REFUSED} this bridge logs at error once and stops consuming for good.
  * {@link #stopPermanently()} cancels the consumer, releases every tag this bridge is still holding
@@ -185,7 +185,6 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(RabbitMqCloudEventBridge.class);
 
     private final PushSubscriptionModel model;
-    private final RoutingOutcomeChannel outcomeChannel;
     private final Channel consumeChannel;
     private final String queue;
     private final int prefetchCount;
@@ -228,11 +227,10 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
 
     // Package-private rather than private so RabbitMqCloudEventBridgeOutcomeRoutingTest can build one over a
     // mocked Channel. Nothing here talks to a broker, the builder's own start(..) does that.
-    RabbitMqCloudEventBridge(PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, Channel consumeChannel,
+    RabbitMqCloudEventBridge(PushSubscriptionModel model, Channel consumeChannel,
                                       String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction,
                                       Predicate<String> readinessSource, Duration closeTimeout) {
         this.model = model;
-        this.outcomeChannel = outcomeChannel;
         this.consumeChannel = consumeChannel;
         this.queue = queue;
         this.prefetchCount = prefetchCount;
@@ -253,12 +251,11 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
      *                       topology, and acknowledging.
      * @param model          The live model this bridge feeds. Never a {@link CatchupThenPushSubscriptionModel}, see
      *                       the class javadoc.
-     * @param outcomeChannel Shared with {@code model}'s own constructor, see {@link RoutingOutcomeChannel}.
      * @param queue          The queue this bridge consumes from, and declares unless {@link Builder#declareTopology(boolean)}
      *                       is set to {@code false}.
      */
-    public static Builder builder(Connection connection, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, String queue) {
-        return new Builder(connection, model, outcomeChannel, queue);
+    public static Builder builder(Connection connection, PushSubscriptionModel model, String queue) {
+        return new Builder(connection, model, queue);
     }
 
     private void start(Builder builder, Set<RabbitMqDestination> destinations) {
@@ -432,43 +429,14 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
         }
+        RoutingOutcome outcome;
         try {
-            model.acceptRedeliverable(cloudEvent);
+            outcome = model.acceptRedeliverable(cloudEvent);
         } catch (RuntimeException | AssertionError e) {
             // Catches AssertionError too, since a filter or the handler can throw one, and it belongs in the failure
             // policy like any other handler failure. Any other Error stops this bridge instead, see
-            // handleDeliveryOrStop. Which of the two things went wrong is read off the reported outcome rather than off the
-            // exception type. REFUSED is reported only when this bridge's own model refused before attempting
-            // dispatch and promised that refusing is permanent, so a handler that reached into some other
-            // permanently failed engine reports DELIVERED and lands in the failure policy below where it belongs.
-            RoutingOutcome refusedOutcome = outcomeChannel.takeLastOutcome();
-            if (refusedOutcome != RoutingOutcome.REFUSED) {
-                log.debug("A filter or handler failed for a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
-                routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
-                return;
-            }
-            // A CatchupThenPushSubscriptionModel wrapping this bridge's model has a permanently failed catch-up.
-            // Permanent, exactly like an unreadable live filter, so stop rather than park or redeliver into the
-            // same refusal forever. See the class javadoc.
-            log.error("A catch-up wrapping this bridge's model has permanently failed for queue \"{}\". Stopping "
-                    + "this bridge rather than parking or committing into the same refusal. Delivery tag {}, and "
-                    + "every other tag this bridge is still holding, is requeued by the channel this permanent stop "
-                    + "closes, so it stays visible on the queue until the wrapper's catch-up is fixed and restarted.",
-                    queue, deliveryTag, e);
-            stopPermanently();
-            return;
-        }
-        RoutingOutcome outcome = outcomeChannel.takeLastOutcome();
-        if (outcome == null) {
-            // Only reachable when model was constructed with a different RoutingOutcomeChannel than the one this
-            // bridge reads, a wiring defect ADR 133 decision 1 requires against, not an ordinary delivery failure.
-            // Named explicitly rather than falling into the generic "not deliverable" branch below, which would
-            // say nothing about the actual cause. Logged at error, distinct from and in addition to whatever
-            // routeFailure itself logs for the delivery: this line diagnoses the wiring defect, not the delivery.
-            log.error("No RoutingOutcome was captured for a message on queue \"{}\", delivery tag {}. This model " +
-                    "was very likely constructed with a different RoutingOutcomeChannel than the one this bridge " +
-                    "reads; both must be the exact same instance, per RoutingOutcomeChannel's own javadoc.",
-                    queue, deliveryTag);
+            // handleDeliveryOrStop. Only a filter or a handler failure throws, a refusal comes back as an outcome.
+            log.debug("A filter or handler failed for a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
             routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
         }
@@ -502,23 +470,21 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
                 yield RoutingOutcome.Disposition.HOLD;
             }
             case FAIL -> {
-                // NOT_DELIVERABLE, whether the filter itself failed to answer or a transient refusal reported it.
-                // It normally arrives with an exception, which the catch in handleDelivery already routed, so this
-                // branch is for one that arrived on its own.
+                // NOT_DELIVERABLE, a refusal the model decided before dispatch without promising it is permanent
                 log.debug("A message on queue \"{}\", delivery tag {}, could not be delivered. Routing it " +
                         "through the configured delivery failure policy.", queue, deliveryTag);
                 routeFailure(deliveryTag, properties, body);
                 yield RoutingOutcome.Disposition.FAIL;
             }
             case STOP -> {
-                // REFUSED arriving on its own, with the refusal's own cause not propagating out of
-                // acceptRedeliverable(..) for the catch in handleDelivery to read. Stopped rather than routed
-                // through the failure policy, because offering the message again gets the same refusal.
-                log.error("A message on queue \"{}\", delivery tag {}, was permanently refused. Stopping this "
-                        + "bridge rather than parking or committing into the same refusal. That tag, and every "
-                        + "other tag this bridge is still holding, is requeued by the channel this permanent stop "
-                        + "closes, so it stays visible on the queue until the refusing registration is fixed and "
-                        + "restarted.", queue, deliveryTag);
+                // REFUSED, a catch-up wrapping this bridge's model has failed for good. Stopped rather than routed
+                // through the failure policy, because offering the message again gets the same refusal. See the
+                // class javadoc.
+                log.error("A catch-up wrapping this bridge's model has permanently failed, refusing delivery tag {} "
+                        + "on queue \"{}\". Stopping this bridge rather than parking or redelivering into the same "
+                        + "refusal. That tag, and every other tag this bridge is still holding, is requeued by the "
+                        + "channel this permanent stop closes, so it stays visible on the queue until the wrapper's "
+                        + "catch-up is fixed and restarted.", deliveryTag, queue);
                 stopPermanently();
                 yield RoutingOutcome.Disposition.STOP;
             }
@@ -732,7 +698,6 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     public static final class Builder {
         private final Connection connection;
         private final PushSubscriptionModel model;
-        private final RoutingOutcomeChannel outcomeChannel;
         private final String queue;
         private @Nullable DestinationResolver<RabbitMqDestination> resolver;
         private @Nullable SubscriptionFilter bindingFilter;
@@ -746,10 +711,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         private Duration closeTimeout = Duration.ofSeconds(30);
         private RetryStrategy retryStrategy;
 
-        private Builder(Connection connection, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, String queue) {
+        private Builder(Connection connection, PushSubscriptionModel model, String queue) {
             this.connection = requireNonNull(connection, "connection cannot be null");
             this.model = requireNonNull(model, PushSubscriptionModel.class.getSimpleName() + " cannot be null");
-            this.outcomeChannel = requireNonNull(outcomeChannel, RoutingOutcomeChannel.class.getSimpleName() + " cannot be null");
             this.queue = requireNonNull(queue, "queue cannot be null");
             this.retryStrategy = defaultRetryStrategy(queue);
         }
@@ -946,7 +910,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             RabbitMqCloudEventBridge bridge = null;
             try {
                 failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log);
-                bridge = new RabbitMqCloudEventBridge(model, outcomeChannel, channel, queue, prefetchCount,
+                bridge = new RabbitMqCloudEventBridge(model, channel, queue, prefetchCount,
                         pollInterval, failureAction, readinessSource, closeTimeout);
                 bridge.start(this, destinations);
                 return bridge;

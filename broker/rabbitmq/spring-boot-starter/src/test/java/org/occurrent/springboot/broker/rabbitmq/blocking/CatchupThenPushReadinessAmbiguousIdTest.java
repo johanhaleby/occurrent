@@ -28,7 +28,6 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
-import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.StartAt;
@@ -97,7 +96,7 @@ class CatchupThenPushReadinessAmbiguousIdTest {
     void a_healthy_models_bridge_still_consumes_even_though_a_different_models_wrapper_sharing_its_subscription_id_has_permanently_failed() throws Exception {
         // The failing model: its catch-up fold throws, permanently failing its handover, so
         // isReadyForLiveDelivery("orders") answers false forever from this point on.
-        PushSubscriptionModel failingLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), new RoutingOutcomeChannel());
+        PushSubscriptionModel failingLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore failingStore = new InMemoryEventStore();
         failingStore.write("s1", List.of(CloudEventBuilder.v1()
                 .withId("historical")
@@ -113,11 +112,9 @@ class CatchupThenPushReadinessAmbiguousIdTest {
                 .hasMessageContaining("simulated permanent catch-up failure");
         assertThat(failingWrapper.isReadyForLiveDelivery("orders")).isFalse();
 
-        // The healthy model: nothing to replay, reaches live immediately. Its own outcomeChannel is kept, since
-        // the bridge built further down must share the exact same one this live feed was constructed with.
+        // The healthy model has nothing to replay and reaches live immediately.
         BlockingQueue<CloudEvent> healthyReceived = new LinkedBlockingQueue<>();
-        RoutingOutcomeChannel healthyOutcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel healthyLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), healthyOutcomeChannel);
+        PushSubscriptionModel healthyLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         CatchupThenPushSubscriptionModel healthyWrapper = new CatchupThenPushSubscriptionModel(new InMemoryEventStore(), healthyLiveFeed, null);
         healthyWrapper.subscribe("orders", null, StartAt.subscriptionModelDefault(), healthyReceived::add)
                 .waitUntilStarted(Duration.ofSeconds(5));
@@ -149,7 +146,7 @@ class CatchupThenPushReadinessAmbiguousIdTest {
                     // DefaultRabbitMqCloudEventBridgeFactory.forQueue pre-seeds for every bridge. Fed with the
                     // healthy model's own live feed, ADR 133 decision 1's "a bridge feeds the live model, never
                     // the wrapper" shape, the same as every other bridge test in this module.
-                    RabbitMqCloudEventBridge healthyBridge = bridgeFactory.forQueue(healthyQueue, healthyLiveFeed, healthyOutcomeChannel).build();
+                    RabbitMqCloudEventBridge healthyBridge = bridgeFactory.forQueue(healthyQueue, healthyLiveFeed).build();
                     try {
                         CloudEvent event = CloudEventBuilder.v1()
                                 .withId(UUID.randomUUID().toString())

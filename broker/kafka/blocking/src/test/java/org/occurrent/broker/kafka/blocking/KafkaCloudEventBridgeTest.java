@@ -61,12 +61,11 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     @Test
     void commits_on_delivered_and_the_committed_offset_advances() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -81,12 +80,11 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     @Test
     void a_filtered_event_commits_too_without_invoking_the_handler() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.type("com.acme.SomethingElse")), cloudEvent -> handled.add(cloudEvent));
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -107,12 +105,11 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     @Test
     void a_numeric_extension_survives_the_broker_round_trip_so_a_numeric_filter_still_matches_it() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.streamVersion(Condition.eq(3L))), cloudEvent -> handled.add(cloudEvent));
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -132,11 +129,10 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     @Test
     void the_bridge_does_not_consume_before_a_subscription_is_registered_then_starts_once_one_is() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -166,8 +162,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     @Test
     void a_handler_that_fails_once_is_redelivered_and_an_idempotent_fold_applies_the_event_exactly_once() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         AtomicInteger attempts = new AtomicInteger();
         Set<String> appliedIds = ConcurrentHashMap.newKeySet();
         model.subscribe("sub", cloudEvent -> {
@@ -178,7 +173,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
             }
         });
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -194,8 +189,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     @Test
     void a_handler_that_throws_an_assertionError_is_redelivered_rather_than_stalling_the_consumer() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         AtomicInteger attempts = new AtomicInteger();
         model.subscribe("sub", cloudEvent -> {
             if (attempts.incrementAndGet() == 1) {
@@ -203,7 +197,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
             }
         });
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -227,8 +221,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         publishCloudEvent(topic, "stream-1", orderPlaced("id-2"));
         publishCloudEvent(topic, "stream-1", orderPlaced("id-3"));
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<String> handled = new CopyOnWriteArrayList<>();
         AtomicInteger id2Attempts = new AtomicInteger();
         model.subscribe("sub", cloudEvent -> {
@@ -239,7 +232,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
             handled.add(cloudEvent.getId());
         });
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -262,15 +255,14 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     @Test
     void a_poison_record_backs_off_at_pollTimeout_instead_of_spinning() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         AtomicInteger attempts = new AtomicInteger();
         model.subscribe("sub", cloudEvent -> {
             attempts.incrementAndGet();
             throw new RuntimeException("poison record, never resolves");
         });
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(Duration.ofSeconds(2))
                 .build()) {
@@ -297,8 +289,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         publishCloudEvent(twoPartitionTopic, 1, null, orderPlaced("id-succeeds"));
 
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<String> handled = new CopyOnWriteArrayList<>();
         AtomicInteger idFailsAttempts = new AtomicInteger();
         model.subscribe("sub", cloudEvent -> {
@@ -309,7 +300,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
             handled.add(cloudEvent.getId());
         });
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(twoPartitionTopic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -329,13 +320,12 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         String parkingTopic = createTopic(1);
         KafkaDestination parkingDestination = KafkaDestination.of(parkingTopic);
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("sub", cloudEvent -> {
             throw new RuntimeException("always fails");
         });
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)
@@ -370,13 +360,12 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         KafkaDestination parkingDestination = KafkaDestination.of(parkingTopic)
                 .withHeaders(Map.of("parked-reason", "handler-failure"));
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("sub", cloudEvent -> {
             throw new RuntimeException("always fails");
         });
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)
@@ -406,13 +395,12 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         String parkingTopic = createTopic(1);
         KafkaDestination parkingDestination = KafkaDestination.of(parkingTopic, "parking-key");
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("sub", cloudEvent -> {
             throw new RuntimeException("always fails");
         });
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)
@@ -434,12 +422,11 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         String parkingTopic = createTopic(1);
         KafkaDestination parkingDestination = KafkaDestination.of(parkingTopic);
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("sub", cloudEvent -> {
         });
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)
@@ -468,8 +455,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     @Test
     void close_returns_at_the_join_timeout_and_the_consumer_only_closes_once_the_loop_thread_finishes() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         CountDownLatch handlerEntered = new CountDownLatch(1);
         CountDownLatch releaseHandler = new CountDownLatch(1);
         model.subscribe("sub", cloudEvent -> {
@@ -481,7 +467,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
             }
         });
 
-        KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .closeTimeout(Duration.ofMillis(200))
@@ -528,8 +514,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     @Test
     void close_called_from_a_handler_running_on_the_loop_thread_returns_promptly_rather_than_joining_itself() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         AtomicReference<KafkaCloudEventBridge> bridgeRef = new AtomicReference<>();
         AtomicLong closeElapsedNanos = new AtomicLong(-1);
         CountDownLatch closedFromHandler = new CountDownLatch(1);
@@ -540,7 +525,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
             closedFromHandler.countDown();
         });
 
-        KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .closeTimeout(Duration.ofSeconds(10))
@@ -566,12 +551,11 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver("", ReflectionCloudEventTypeMapper.qualified());
 
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .resolver(resolver)
                 .bindingFilter(StreamSubscriptionFilter.filter(Filter.type(eventATopic)))
                 .pollTimeout(POLL_TIMEOUT)
@@ -600,12 +584,11 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver("", ReflectionCloudEventTypeMapper.qualified());
 
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .resolver(resolver)
                 .bindingFilter(Filter.type(eventATopic))
                 .pollTimeout(POLL_TIMEOUT)
@@ -629,12 +612,11 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     void resolver_alone_falls_back_to_catchAllDestination_subscribing_by_literal_topic_for_the_shared_topic_resolver() throws Exception {
         KafkaSharedTopicDestinationResolver resolver = new KafkaSharedTopicDestinationResolver(topic);
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .resolver(resolver)
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -656,12 +638,11 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(prefix, ReflectionCloudEventTypeMapper.qualified());
 
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .resolver(resolver)
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -689,10 +670,9 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     @Test
     void a_bindings_set_mixing_literal_and_pattern_typed_destinations_is_refused_at_build() {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
 
-        assertThatThrownBy(() -> KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        assertThatThrownBy(() -> KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic), KafkaDestination.ofPattern("prefix-.*")))
                 .pollTimeout(POLL_TIMEOUT)
                 .build())
@@ -725,8 +705,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
                 ConsumerConfig.GROUP_PROTOCOL_CONFIG, "classic",
                 ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, "3000");
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         AtomicInteger id1Attempts = new AtomicInteger();
         model.subscribe("sub", cloudEvent -> {
             if (cloudEvent.getId().equals("id-1") && id1Attempts.incrementAndGet() == 1) {
@@ -740,7 +719,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
 
         publishCloudEvent(topic, "stream-1", orderPlaced("id-1"));
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig, model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig, model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {

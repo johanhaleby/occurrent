@@ -65,9 +65,9 @@ class RabbitMqCloudEventBridgeNestedRefusalTest extends RabbitMqTestSupport {
 
     @Test
     void a_nested_handovers_permanent_refusal_escaping_a_handler_does_not_stop_this_bridges_own_healthy_model() throws Exception {
-        // otherWrapper: its own catch-up fold throws, so its inner live feed's acceptRedeliverable(...) throws
+        // otherWrapper's own catch-up fold throws, so its inner live feed's accept(...) throws
         // PreDispatchRefusalException on every later call, unrelated to the bridge under test here.
-        PushSubscriptionModel otherLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), new RoutingOutcomeChannel());
+        PushSubscriptionModel otherLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore otherStore = new InMemoryEventStore();
         otherStore.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
         CatchupThenPushSubscriptionModel otherWrapper = new CatchupThenPushSubscriptionModel(otherStore, otherLiveFeed, null);
@@ -85,19 +85,18 @@ class RabbitMqCloudEventBridgeNestedRefusalTest extends RabbitMqTestSupport {
         adminChannel.queueDeclare(parkingQueue, false, false, false, null);
         adminChannel.queueBind(parkingQueue, parkingExchange, "#");
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         List<String> handled = new CopyOnWriteArrayList<>();
         liveFeed.subscribe("proj", ce -> {
             handled.add(ce.getId());
             if (ce.getId().equals("id-1")) {
                 // The nested, unrelated refusal, escaping this handler unwrapped, the same as a handler that fans
                 // an event out to a second projection or saga would let it.
-                otherLiveFeed.acceptRedeliverable(cloudEvent("id-1-fanout", OrderPlaced.class.getName()));
+                otherLiveFeed.accept(cloudEvent("id-1-fanout", OrderPlaced.class.getName()));
             }
         });
 
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, queue)
                 .declareTopology(false)
                 .pollInterval(POLL_INTERVAL)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)

@@ -53,7 +53,8 @@ import org.occurrent.subscription.RoutingOutcome;
  * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} instead.</strong> When this model is wrapped in a
  * {@link CatchupThenPushSubscriptionModel} that has not reached live yet,
  * {@code acceptRedeliverable(...)} refuses such an event outright rather than buffering it, reported
- * {@link RoutingOutcome#DEFERRED}, safe to redeliver and never a reason to acknowledge. {@code RabbitMqCloudEventBridge}
+ * {@link RoutingOutcome#DEFERRED}, safe to redeliver and never a reason to acknowledge. It also returns the outcome
+ * it reports here, so a broker listener needs no observer to decide. {@code RabbitMqCloudEventBridge}
  * and {@code KafkaCloudEventBridge} do exactly this, and are correct with no further configuration:
  * {@link CatchupThenPushSubscriptionModel#isReadyForLiveDelivery(String)} and their own {@code readinessSource}
  * remain available, but only as an optional pacing hint that cuts down on how often that refuse-and-redeliver round
@@ -76,7 +77,7 @@ import org.occurrent.subscription.RoutingOutcome;
  * <p>
  * Any other {@link Error} the observer throws is not caught. Where it goes next depends on whether the model
  * already had a failure of its own to propagate, not on which outcome the observer was told. Reported alongside
- * such a failure, whether it came from the filter, the action or a refusal, the observer's
+ * such a failure, whether it came from the filter, the action or a refusal {@code accept(...)} throws, the observer's
  * {@link Error} is attached to it through {@link Throwable#addSuppressed(Throwable)} and that failure is what
  * propagates, so a failure is never replaced by a failure in reporting it. Reported with nothing else in flight,
  * it propagates on its own. {@link RoutingOutcome#DELIVERED} reaches the observer both ways, since an action that

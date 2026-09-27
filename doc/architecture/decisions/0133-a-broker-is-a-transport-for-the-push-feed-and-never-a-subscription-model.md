@@ -96,20 +96,15 @@ So a CloudEvent bridge that only looked at whether `accept(...)` threw would ack
 states, before anything is registered, while the model is stopped, and while its subscription is paused. `route`
 returns normally in all three.
 
-**The acknowledgement decision comes from a `PushObserver`, not from a check taken before or after the push.**
-`PushSubscriptionModel` reports through `routeReportingMatch`, which evaluates the sole registration's eligibility
-once and tells the observer what it decided. (The 2026-08-21 amendment below moves that report to after the matched
-action runs, replacing the mechanism this paragraph originally described. The decision itself, one evaluation
-shared between the match and the report, is unchanged.)
+**The acknowledgement decision comes from the routing outcome, not from a check taken before or after the push.**
+`PushSubscriptionModel` decides it in `routeReportingMatch`, which evaluates the sole registration's eligibility
+once. The bridge gets that outcome as the return value of `acceptRedeliverable(...)`, and a `PushObserver` the
+application configured is told the same one. (The 2026-08-21 amendment below adds `acceptRedeliverable(...)` and moves
+the report to after the matched action runs, replacing the mechanism this paragraph originally described. The
+decision itself, one evaluation shared between the match and the report, is unchanged.)
 
-**The bridge cannot attach that observer, so the wiring order is part of this decision.** The observer is a
-constructor argument on `PushSubscriptionModel` and there is no method to set one afterwards, while the bridge is
-constructed from a model that already exists. So the application creates the outcome channel first, passes it to the
-model's constructor, and passes the same channel to the bridge, which reads its outcomes. That channel delegates to
-whatever `PushObserver` the application already wanted, so a deployment with its own diagnostics keeps them instead of
-having to choose. A check taken separately
-would be two steps, so a `stop()`, a `pauseSubscription` or a `cancelSubscription` landing between them would
-acknowledge into a model that then drops the event.
+A check taken separately would be two steps, so a `stop()`, a `pauseSubscription` or a `cancelSubscription` landing
+between them would acknowledge into a model that then drops the event.
 
 **`PushObserver` has to report why, not just whether, and that is a prerequisite this ADR creates.** Today it is told
 a boolean, and `routeReportingMatch` reports `false` for four different situations, the filter not matching, the model
@@ -137,8 +132,8 @@ the consume bridges in #415 and #417, which are what need the contract.
 changes this design needs outside the three broker modules, and both are prerequisites rather than improvements, so
 neither belongs at the end of an implementation plan.
 
-**The bridge therefore holds the `PushSubscriptionModel` rather than a bare `Pushable`.** The observer is a
-constructor argument on the model, and the readiness accessors are not reachable through `Pushable` either. The bridge
+**The bridge therefore holds the `PushSubscriptionModel` rather than a bare `Pushable`.** `acceptRedeliverable(...)`
+is a method on the model, and the readiness accessors are not reachable through `Pushable` either. The bridge
 uses `isRunning(subscriptionId)` to decide when to start and stop consuming, which is a coarse lifecycle question
 where a small delay is harmless, and never to decide a single message. `hasSubscriptions()` would be the wrong
 question even there, because it stays true for a paused subscription while `route` skips exactly that registration.
@@ -434,8 +429,8 @@ A filter whose type part cannot be derived returns an empty `Optional`, and the 
 `catchAllDestination()` too. Guessing narrower would drop an event the filter would have matched, so the imprecise
 answer has to be the inclusive one.
 
-A CloudEvent bridge that wants to see what arrived and whether it matched reads its `PushObserver`, which decision 1
-already requires it to have.
+A CloudEvent bridge sees whether each event it consumed matched from the outcome `acceptRedeliverable(...)` returns,
+`FILTERED` for one the filter declined.
 
 **The catch-all is a third method on the resolver rather than something the bridge works out**, because an empty
 `Optional` says only that the filter could not be narrowed and says nothing about where to listen instead. RabbitMQ
@@ -854,13 +849,15 @@ touching the buffer. `PushSubscriptionModel.accept(CloudEvent)`, the write path 
 another in-process caller uses, is unchanged and keeps buffering, since a write-path event has nowhere else to come
 from and refusing it would lose it rather than protect it. A new `PushSubscriptionModel.acceptRedeliverable(CloudEvent)`
 is for a caller that can redeliver, a broker bridge, and routes to `acceptIfLive` instead. It refuses rather than
-buffers, reports `DEFERRED`, and lets the caller ask again. `CatchupThenPushSubscriptionModel`'s own public surface,
+buffers, returns `DEFERRED`, and lets the caller ask again. It returns every outcome routing decides, a refusal made
+before dispatch included, and throws only for a filter or handler failure, so a bridge decides on the returned value
+alone. `CatchupThenPushSubscriptionModel`'s own public surface,
 every constructor and `subscribe`, does not change at all. Only which method its internal registration calls on the
 underlying handover does, chosen by which public entry point the caller used.
 
 `RabbitMqCloudEventBridge` and `KafkaCloudEventBridge`, and their domain-event equivalents, route
-`RoutingOutcome.DEFERRED` around `DeliveryFailurePolicy` entirely rather than through it. RabbitMQ negatively
-acknowledges with requeue, Kafka seeks back reusing the same per-partition throttle the earlier readiness gate
+`RoutingOutcome.DEFERRED` around `DeliveryFailurePolicy` entirely rather than through it. RabbitMQ holds the message
+unacknowledged and negatively acknowledges it with requeue on its next poll, Kafka seeks back reusing the same per-partition throttle the earlier readiness gate
 already relied on, and neither ever parks. Nothing here is broken or wrong, so parking it would be the exact
 avoidable dead-lettering `DEFERRED` exists to rule out.
 
@@ -1001,7 +998,8 @@ catch-up-then-live files, which are in the same change because they are the same
 the outcome.** That rule was true, but it was written down in two bridge class javadocs and in the amendment above,
 describing another module's control flow, and nothing in the type said it. The enum now has six values.
 `UNAVAILABLE` is the lifecycle answer, nothing registered, the model not running, or the sole subscription paused,
-and it never comes with an exception. `NOT_DELIVERABLE` narrows to two things, both of which do come with one.
+and it never comes with an exception. `NOT_DELIVERABLE` narrows to two things, both of which do come with one from
+`accept(...)`. `acceptRedeliverable(...)` returns a refusal without throwing, so there only the filter's failure does.
 The filter itself failing to answer is one. A registered action refusing before it attempted any dispatch, without
 promising that refusing is permanent, is the other, which is what a full live buffer during a replay gets.
 `REFUSED` is the same kind of refusal with that promise attached.

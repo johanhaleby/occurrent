@@ -37,6 +37,7 @@ import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -93,11 +94,10 @@ class KafkaCloudEventBridgeRewindTest {
         // That seek is made to throw, simulating a rebalance taking the partition away mid-batch.
         doThrow(new RuntimeException("simulated rebalance")).when(consumer).seek(eq(PARTITION_0), eq(5L));
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
-        // No subscription is registered on model, so both records report NOT_DELIVERABLE and neither ever commits.
-        // Only partition 0 throws on its own seek; partition 1 must still be safely rewound.
-        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model, outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        // No subscription is registered on model, so both records report UNAVAILABLE and neither ever commits.
+        // Only partition 0 throws on its own seek, and partition 1 must still be safely rewound.
+        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model);
 
         Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
         batch.put(PARTITION_0, List.of(record(PARTITION_0, 5L, "id-1")));
@@ -123,11 +123,10 @@ class KafkaCloudEventBridgeRewindTest {
         KafkaConsumer<String, byte[]> consumer = mockConsumer();
         doThrow(new KafkaException("simulated non-retriable commit failure")).when(consumer).commitSync(anyMapArg());
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("sub", cloudEvent -> {
         });
-        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model, outcomeChannel);
+        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model);
 
         Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
         batch.put(PARTITION_0, List.of(record(PARTITION_0, 5L, "id-1")));
@@ -153,12 +152,11 @@ class KafkaCloudEventBridgeRewindTest {
         KafkaConsumer<String, byte[]> consumer = mockConsumer();
         doThrow(new WakeupException()).when(consumer).commitSync(anyMapArg());
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("sub", cloudEvent -> {
         });
         Duration closeTimeout = Duration.ofSeconds(5);
-        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model, outcomeChannel, closeTimeout);
+        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model, closeTimeout);
         // Mirrors what close() itself does immediately before calling wakeup(), so the bounded retry below gets a
         // real, positive budget to work with rather than the unset Long.MAX_VALUE default.
         bridge.close();
@@ -189,14 +187,13 @@ class KafkaCloudEventBridgeRewindTest {
     void a_poison_record_pauses_only_its_own_partition_not_a_healthy_one_resolving_in_the_same_batch() throws Exception {
         KafkaConsumer<String, byte[]> consumer = mockConsumer();
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("sub", cloudEvent -> {
             if ("id-2".equals(cloudEvent.getId())) {
                 throw new RuntimeException("simulated permanently failing handler");
             }
         });
-        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model, outcomeChannel);
+        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model);
 
         Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
         batch.put(PARTITION_0, List.of(record(PARTITION_0, 5L, "id-1")));
@@ -225,17 +222,14 @@ class KafkaCloudEventBridgeRewindTest {
     void a_permanent_stop_mid_batch_rewinds_every_partition_it_had_not_yet_reached() throws Exception {
         KafkaConsumer<String, byte[]> consumer = mockConsumer();
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
         PushSubscriptionModel model = mock(PushSubscriptionModel.class);
         List<String> offered = new ArrayList<>();
         doAnswer(invocation -> {
             CloudEvent cloudEvent = invocation.getArgument(0);
             offered.add(cloudEvent.getId());
-            RoutingOutcome outcome = "id-1".equals(cloudEvent.getId()) ? RoutingOutcome.REFUSED : RoutingOutcome.DELIVERED;
-            outcomeChannel.observe(cloudEvent, outcome);
-            return null;
+            return "id-1".equals(cloudEvent.getId()) ? RoutingOutcome.REFUSED : RoutingOutcome.DELIVERED;
         }).when(model).acceptRedeliverable(any(CloudEvent.class));
-        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model, outcomeChannel);
+        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model);
 
         Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
         batch.put(PARTITION_0, List.of(record(PARTITION_0, 5L, "id-0")));
@@ -258,6 +252,94 @@ class KafkaCloudEventBridgeRewindTest {
         assertThat(commitCaptor.getValue())
                 .as("id-0 resolved before the stop and must still commit")
                 .containsOnlyKeys(PARTITION_0);
+    }
+
+    /**
+     * The bridge decides from the returned outcome alone. DEFERRED is held, seeked back without an offset staged,
+     * and never reaches the failure policy, since nothing is broken yet.
+     */
+    @Test
+    void a_deferred_outcome_seeks_back_without_committing_or_calling_the_failure_policy() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+        KafkaDeliveryFailureAction failureAction = mock(KafkaDeliveryFailureAction.class);
+        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, modelReturning(RoutingOutcome.DEFERRED), failureAction);
+
+        invokeProcessBatch(bridge, singleRecordBatch());
+
+        verify(consumer).seek(PARTITION_0, 5L);
+        verify(consumer, never()).commitSync(anyMapArg());
+        verify(failureAction, never()).apply(any());
+    }
+
+    /**
+     * NOT_DELIVERABLE is a refusal that was not promised to be permanent, so the configured failure policy decides.
+     * A policy that resolves the record gets its offset committed, and nothing is seeked back.
+     */
+    @Test
+    void a_not_deliverable_outcome_goes_to_the_failure_policy() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+        KafkaDeliveryFailureAction failureAction = mock(KafkaDeliveryFailureAction.class);
+        when(failureAction.apply(any())).thenReturn(KafkaDeliveryFailureAction.Outcome.RESOLVED);
+        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, modelReturning(RoutingOutcome.NOT_DELIVERABLE), failureAction);
+
+        invokeProcessBatch(bridge, singleRecordBatch());
+
+        verify(failureAction).apply(any());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<TopicPartition, OffsetAndMetadata>> commitCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(consumer).commitSync(commitCaptor.capture());
+        assertThat(commitCaptor.getValue()).containsEntry(PARTITION_0, new OffsetAndMetadata(6L));
+        verify(consumer, never()).seek(any(TopicPartition.class), anyLong());
+    }
+
+    /**
+     * REFUSED means stop. The record is neither committed nor handed to the failure policy, since offering it again
+     * only gets the same refusal.
+     */
+    @Test
+    void a_refused_outcome_stops_the_bridge_without_calling_the_failure_policy() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+        KafkaDeliveryFailureAction failureAction = mock(KafkaDeliveryFailureAction.class);
+        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, modelReturning(RoutingOutcome.REFUSED), failureAction);
+
+        invokeProcessBatch(bridge, singleRecordBatch());
+
+        verify(consumer).seek(PARTITION_0, 5L);
+        verify(consumer, never()).commitSync(anyMapArg());
+        verify(failureAction, never()).apply(any());
+        assertThat(permanentlyStopped(bridge)).isTrue();
+    }
+
+    /**
+     * Only a filter or a handler failure throws out of acceptRedeliverable(..), and that goes to the failure policy.
+     */
+    @Test
+    void an_exception_from_the_model_goes_to_the_failure_policy() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+        KafkaDeliveryFailureAction failureAction = mock(KafkaDeliveryFailureAction.class);
+        when(failureAction.apply(any())).thenReturn(KafkaDeliveryFailureAction.Outcome.REDELIVER);
+        PushSubscriptionModel model = mock(PushSubscriptionModel.class);
+        when(model.acceptRedeliverable(any(CloudEvent.class))).thenThrow(new IllegalStateException("handler failed"));
+        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model, failureAction);
+
+        invokeProcessBatch(bridge, singleRecordBatch());
+
+        verify(failureAction).apply(any());
+        verify(consumer).seek(PARTITION_0, 5L);
+        verify(consumer, never()).commitSync(anyMapArg());
+        assertThat(permanentlyStopped(bridge)).isFalse();
+    }
+
+    private static PushSubscriptionModel modelReturning(RoutingOutcome outcome) {
+        PushSubscriptionModel model = mock(PushSubscriptionModel.class);
+        when(model.acceptRedeliverable(any(CloudEvent.class))).thenReturn(outcome);
+        return model;
+    }
+
+    private static ConsumerRecords<String, byte[]> singleRecordBatch() {
+        Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
+        batch.put(PARTITION_0, List.of(record(PARTITION_0, 5L, "id-1")));
+        return new ConsumerRecords<>(batch);
     }
 
     private static Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> anyMapArg() {
@@ -284,25 +366,34 @@ class KafkaCloudEventBridgeRewindTest {
         return consumer;
     }
 
-    private static KafkaCloudEventBridge bridgeForTesting(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model,
-                                                            RoutingOutcomeChannel outcomeChannel) {
-        return bridgeForTesting(consumer, model, outcomeChannel, Duration.ofSeconds(5));
+    private static KafkaCloudEventBridge bridgeForTesting(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model) {
+        return bridgeForTesting(consumer, model, Duration.ofSeconds(5));
     }
 
     private static KafkaCloudEventBridge bridgeForTesting(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model,
-                                                            RoutingOutcomeChannel outcomeChannel, Duration closeTimeout) {
+                                                            Duration closeTimeout) {
+        KafkaDeliveryFailureAction failureAction = KafkaDeliveryFailureAction.create(
+                Map.of(), DeliveryFailurePolicy.REDELIVER, null, LoggerFactory.getLogger(KafkaCloudEventBridgeRewindTest.class));
+        return bridgeForTesting(consumer, model, closeTimeout, failureAction);
+    }
+
+    private static KafkaCloudEventBridge bridgeForTesting(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model,
+                                                            KafkaDeliveryFailureAction failureAction) {
+        return bridgeForTesting(consumer, model, Duration.ofSeconds(5), failureAction);
+    }
+
+    private static KafkaCloudEventBridge bridgeForTesting(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model,
+                                                            Duration closeTimeout, KafkaDeliveryFailureAction failureAction) {
         try {
-            KafkaDeliveryFailureAction failureAction = KafkaDeliveryFailureAction.create(
-                    Map.of(), DeliveryFailurePolicy.REDELIVER, null, LoggerFactory.getLogger(KafkaCloudEventBridgeRewindTest.class));
             Constructor<KafkaCloudEventBridge> constructor = KafkaCloudEventBridge.class.getDeclaredConstructor(
-                    KafkaConsumer.class, PushSubscriptionModel.class, RoutingOutcomeChannel.class, Duration.class,
+                    KafkaConsumer.class, PushSubscriptionModel.class, Duration.class,
                     Duration.class, RetryStrategy.class, KafkaDeliveryFailureAction.class, String.class, Predicate.class);
             constructor.setAccessible(true);
             // readinessSource fixed at "always ready" here: none of this class's cases are about the catch-up
             // readiness gate, which KafkaCloudEventBridgeReadinessTest covers on its own, through the public
             // builder rather than reflection.
             Predicate<String> alwaysReady = subscriptionId -> true;
-            return constructor.newInstance(consumer, model, outcomeChannel, Duration.ofSeconds(1), closeTimeout,
+            return constructor.newInstance(consumer, model, Duration.ofSeconds(1), closeTimeout,
                     defaultCommitRetryStrategyForTesting(), failureAction, "test-group", alwaysReady);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Could not construct " + KafkaCloudEventBridge.class.getSimpleName() + " for testing", unwrap(e));
@@ -330,6 +421,12 @@ class KafkaCloudEventBridgeRewindTest {
             }
             throw e;
         }
+    }
+
+    private static boolean permanentlyStopped(KafkaCloudEventBridge bridge) throws ReflectiveOperationException {
+        Field field = KafkaCloudEventBridge.class.getDeclaredField("permanentlyStopped");
+        field.setAccessible(true);
+        return field.getBoolean(bridge);
     }
 
     private static Throwable unwrap(ReflectiveOperationException e) {

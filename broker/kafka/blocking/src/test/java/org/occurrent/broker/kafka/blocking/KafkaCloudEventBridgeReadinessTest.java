@@ -67,12 +67,11 @@ class KafkaCloudEventBridgeReadinessTest extends KafkaTestSupport {
     @Test
     void a_readiness_source_answering_false_keeps_a_record_uncommitted_and_never_invokes_the_handler() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .readinessSource(subscriptionId -> false)
@@ -91,13 +90,12 @@ class KafkaCloudEventBridgeReadinessTest extends KafkaTestSupport {
     @Test
     void flipping_readiness_to_true_commits_a_record_that_arrived_while_not_ready() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
         AtomicBoolean ready = new AtomicBoolean(false);
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .readinessSource(subscriptionId -> ready.get())
@@ -124,12 +122,11 @@ class KafkaCloudEventBridgeReadinessTest extends KafkaTestSupport {
     void a_record_that_never_became_ready_before_the_bridge_closed_is_redelivered_to_a_fresh_bridge_on_the_same_group() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
 
-        RoutingOutcomeChannel outcomeChannel1 = new RoutingOutcomeChannel();
-        PushSubscriptionModel model1 = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel1);
+        PushSubscriptionModel model1 = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled1 = new CopyOnWriteArrayList<>();
         model1.subscribe("sub", cloudEvent -> handled1.add(cloudEvent));
 
-        try (KafkaCloudEventBridge bridge1 = KafkaCloudEventBridge.builder(consumerConfig(groupId), model1, outcomeChannel1)
+        try (KafkaCloudEventBridge bridge1 = KafkaCloudEventBridge.builder(consumerConfig(groupId), model1)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .readinessSource(subscriptionId -> false)
@@ -141,12 +138,11 @@ class KafkaCloudEventBridgeReadinessTest extends KafkaTestSupport {
         }
         // bridge1 closed above, simulating a crash before readiness ever flipped true. Nothing was ever committed.
 
-        RoutingOutcomeChannel outcomeChannel2 = new RoutingOutcomeChannel();
-        PushSubscriptionModel model2 = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel2);
+        PushSubscriptionModel model2 = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled2 = new CopyOnWriteArrayList<>();
         model2.subscribe("sub", cloudEvent -> handled2.add(cloudEvent));
 
-        try (KafkaCloudEventBridge bridge2 = KafkaCloudEventBridge.builder(consumerConfig(groupId), model2, outcomeChannel2)
+        try (KafkaCloudEventBridge bridge2 = KafkaCloudEventBridge.builder(consumerConfig(groupId), model2)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -160,12 +156,11 @@ class KafkaCloudEventBridgeReadinessTest extends KafkaTestSupport {
     @Test
     void no_readiness_source_configured_consumes_immediately_the_same_as_before_this_capability_existed() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<CloudEvent> handled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -187,8 +182,7 @@ class KafkaCloudEventBridgeReadinessTest extends KafkaTestSupport {
     @Test
     void a_record_that_arrives_during_a_catch_up_replay_is_never_committed_and_is_delivered_once_live_with_no_readiness_source_configured() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s1", List.of(orderPlacedWithId("historical")));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
@@ -205,7 +199,7 @@ class KafkaCloudEventBridgeReadinessTest extends KafkaTestSupport {
         });
         assertThat(replayEntered.await(5, TimeUnit.SECONDS)).as("the replay reached its one historical event").isTrue();
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), liveFeed, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), liveFeed)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
@@ -236,8 +230,7 @@ class KafkaCloudEventBridgeReadinessTest extends KafkaTestSupport {
     void park_configured_never_parks_a_deferred_record() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
         String parkingTopic = createTopic(1);
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s1", List.of(orderPlacedWithId("historical")));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
@@ -252,7 +245,7 @@ class KafkaCloudEventBridgeReadinessTest extends KafkaTestSupport {
         });
         assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), liveFeed, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), liveFeed)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)

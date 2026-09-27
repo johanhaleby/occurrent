@@ -59,12 +59,11 @@ class RabbitMqCloudEventBridgeBuildRetryTest {
                 .thenThrow(new IOException("expected, simulates a broker briefly unreachable"))
                 .thenThrow(new IOException("expected, simulates a broker briefly unreachable"))
                 .thenReturn(Optional.of(channel));
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
 
         // declareTopology(false): this test is about the retry around openChannel(), not about topology, so no
         // resolver or queueDeclare/queueBind mocking is needed to reach a successful build().
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, "queue")
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, "queue")
                 .declareTopology(false)
                 .build()) {
             assertThat(bridge).isNotNull();
@@ -77,12 +76,11 @@ class RabbitMqCloudEventBridgeBuildRetryTest {
     void retries_are_exhausted_and_the_last_failure_is_thrown_after_the_configured_bound() throws Exception {
         Connection connection = mock(Connection.class);
         when(connection.openChannel()).thenThrow(new IOException("expected, simulates a broker that never comes back"));
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
 
         // A fast, 3-attempt strategy in place of the (slower, 10-attempt) default: this test proves the bound gives
         // up and rethrows rather than hanging forever, not the default's own specific numbers.
-        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, "queue")
+        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, "queue")
                 .declareTopology(false)
                 .retryStrategy(RetryStrategy.fixed(Duration.ofMillis(1))
                         .maxAttempts(3)
@@ -100,10 +98,9 @@ class RabbitMqCloudEventBridgeBuildRetryTest {
         when(connection.openChannel()).thenReturn(Optional.of(channel));
         doThrow(new RuntimeException("expected, simulates a bug, not a broker failure"))
                 .when(channel).basicQos(1);
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
 
-        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, "queue")
+        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, "queue")
                 .declareTopology(false);
 
         assertThatThrownBy(builder::build)
@@ -129,11 +126,10 @@ class RabbitMqCloudEventBridgeBuildRetryTest {
         when(secondChannel.queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any()))
                 .thenThrow(new IOException("expected, simulates a broker briefly unreachable"));
         // thirdChannel.queueDeclare(...) is left unstubbed, so it succeeds on the third attempt.
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(EXCHANGE, ReflectionCloudEventTypeMapper.qualified());
 
-        RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, "queue")
+        RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, "queue")
                 .resolver(resolver)
                 .build();
         try {

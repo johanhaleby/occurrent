@@ -30,6 +30,8 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.internal.HandlerFailures;
 import org.occurrent.subscription.internal.SingleConsumerMessages;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.*;
@@ -124,7 +126,8 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
          * Thrown by {@link #route(CloudEvent, boolean)} to report a refusal decided before any dispatch was
          * attempted, wrapping the real failure as {@link #getCause()}. {@code routeReportingMatch} never reports
          * {@link RoutingOutcome#DELIVERED} for one of these, and rethrows the wrapped cause unchanged, exactly as
-         * it would have propagated without this wrapper.
+         * it would have propagated without this wrapper. {@code routeRedeliverable} reports it the same way and
+         * returns instead of throwing.
          * <p>
          * {@code permanent} is the action's promise about its own refusal, and it decides which outcome is
          * reported. Pass {@code true} only when offering the same event to this same registration again is certain
@@ -158,6 +161,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         }
     }
 
+    private final Logger log = LoggerFactory.getLogger(getClass());
     private final Set<String> subscriptionIds = ConcurrentHashMap.newKeySet();
     private final Set<String> pausedSubscriptions = ConcurrentHashMap.newKeySet();
     private final CopyOnWriteArrayList<Registration> registrations = new CopyOnWriteArrayList<>();
@@ -420,6 +424,27 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      *                        {@link RoutingOutcome#DELIVERED} arrives both ways.
      */
     protected final void routeReportingMatch(CloudEvent cloudEvent, boolean bufferIfNotLive, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+        routeReportingMatch(cloudEvent, bufferIfNotLive, true, matchObserver);
+    }
+
+    /**
+     * As {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)} with {@code bufferIfNotLive} {@code false},
+     * for a caller that can offer the event again later, a broker listener say. The one difference is a
+     * {@link RoutingAction.Refusal}. It is reported to {@code matchObserver} as {@link RoutingOutcome#REFUSED} or
+     * {@link RoutingOutcome#NOT_DELIVERABLE}, the same as there, and then this method returns normally instead of
+     * throwing the refusal's cause. A caller stops on
+     * {@link RoutingOutcome#REFUSED} and applies its failure policy on {@link RoutingOutcome#NOT_DELIVERABLE}. A matcher
+     * or an action that throws still throws, exactly as it does there.
+     *
+     * @param cloudEvent    The event to route.
+     * @param matchObserver Told this event's {@link RoutingOutcome} at most once, on the same terms as
+     *                      {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)}.
+     */
+    protected final void routeRedeliverable(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+        routeReportingMatch(cloudEvent, false, false, matchObserver);
+    }
+
+    private void routeReportingMatch(CloudEvent cloudEvent, boolean bufferIfNotLive, boolean throwRefusal, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         Objects.requireNonNull(matchObserver, "matchObserver cannot be null");
         if (consumers != Consumers.ONE) {
@@ -461,7 +486,14 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                 } catch (RoutingAction.Refusal refusal) {
                     // Decided before any dispatch was attempted, never a delivery, so this is never DELIVERED. The
                     // action's own promise about whether refusing is permanent picks REFUSED or NOT_DELIVERABLE.
-                    // The wrapped cause is what the caller sees, unchanged.
+                    // The wrapped cause is what the caller sees, unchanged, unless the caller takes the outcome instead.
+                    if (!throwRefusal) {
+                        // The outcome does not say why, so the cause is logged here instead
+                        log.debug("Subscription \"{}\" refused event {} before dispatch, reported as {}.",
+                                registration.id(), cloudEvent.getId(), refusal.outcome(), refusal.unwrap());
+                        matchObserver.accept(cloudEvent, refusal.outcome());
+                        return;
+                    }
                     RuntimeException cause = refusal.unwrap();
                     try {
                         matchObserver.accept(cloudEvent, refusal.outcome());

@@ -18,15 +18,26 @@ package org.occurrent.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.Delivery;
+import com.rabbitmq.client.Envelope;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.RoutingOutcome.Disposition;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.net.URI;
 import java.time.Duration;
+import java.util.Deque;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -36,12 +47,15 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * {@link RabbitMqCloudEventBridge#route(RoutingOutcome, long, BasicProperties, byte[])} against a mocked
  * {@link Channel}, one call per {@link RoutingOutcome}, with no broker behind it. The RabbitMQ half of what
  * {@code RoutingOutcomeTest} states for the outcomes themselves, so a mapping that compiles but sends an outcome
- * to the wrong branch fails here rather than on a queue somewhere.
+ * to the wrong branch fails here rather than on a queue somewhere. The tests that go through {@code handleDelivery}
+ * put a mocked {@link PushSubscriptionModel} in front, so what the bridge does follows from the outcome
+ * {@code acceptRedeliverable(..)} returns and from nothing else.
  */
 class RabbitMqCloudEventBridgeOutcomeRoutingTest {
 
@@ -133,6 +147,104 @@ class RabbitMqCloudEventBridgeOutcomeRoutingTest {
         verify(channel, never()).basicAck(anyLong(), anyBoolean());
     }
 
+    @Test
+    void a_returned_deferred_is_held_unacknowledged_and_bypasses_the_failure_policy() throws Exception {
+        Channel channel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        RabbitMqCloudEventBridge bridge = parkingBridgeOver(modelReturning(RoutingOutcome.DEFERRED), channel, parkingPublisher);
+
+        handleDelivery(bridge, delivery());
+
+        assertThat(heldDeferredDeliveryTags(bridge)).containsExactly(DELIVERY_TAG);
+        verify(channel, never()).basicAck(anyLong(), anyBoolean());
+        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
+        verify(parkingPublisher, never()).publish(anyString(), anyString(), any(), any());
+    }
+
+    @Test
+    void a_returned_not_deliverable_goes_to_the_failure_policy() throws Exception {
+        Channel channel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        RabbitMqCloudEventBridge bridge = parkingBridgeOver(modelReturning(RoutingOutcome.NOT_DELIVERABLE), channel, parkingPublisher);
+
+        handleDelivery(bridge, delivery());
+
+        verify(parkingPublisher).publish(anyString(), anyString(), any(), any());
+        assertThat(heldDeferredDeliveryTags(bridge)).isEmpty();
+        verify(channel, never()).close();
+    }
+
+    @Test
+    void a_returned_refused_stops_the_bridge_without_the_failure_policy() throws Exception {
+        Channel channel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        RabbitMqCloudEventBridge bridge = parkingBridgeOver(modelReturning(RoutingOutcome.REFUSED), channel, parkingPublisher);
+
+        handleDelivery(bridge, delivery());
+
+        verify(channel).close();
+        verify(channel, never()).basicAck(anyLong(), anyBoolean());
+        verify(parkingPublisher, never()).publish(anyString(), anyString(), any(), any());
+    }
+
+    @Test
+    void a_filter_or_handler_failure_thrown_by_the_model_goes_to_the_failure_policy() throws Exception {
+        Channel channel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        PushSubscriptionModel model = mock(PushSubscriptionModel.class);
+        when(model.acceptRedeliverable(any(CloudEvent.class))).thenThrow(new IllegalStateException("handler failed"));
+        RabbitMqCloudEventBridge bridge = parkingBridgeOver(model, channel, parkingPublisher);
+
+        handleDelivery(bridge, delivery());
+
+        verify(parkingPublisher).publish(anyString(), anyString(), any(), any());
+        verify(channel, never()).close();
+    }
+
+    private static PushSubscriptionModel modelReturning(RoutingOutcome outcome) {
+        PushSubscriptionModel model = mock(PushSubscriptionModel.class);
+        when(model.acceptRedeliverable(any(CloudEvent.class))).thenReturn(outcome);
+        return model;
+    }
+
+    private static RabbitMqCloudEventBridge parkingBridgeOver(PushSubscriptionModel model, Channel channel,
+                                                              RabbitMqConfirmPublisher parkingPublisher) {
+        RabbitMqDeliveryFailureAction failureAction = new RabbitMqDeliveryFailureAction(channel, DeliveryFailurePolicy.PARK,
+                parkingPublisher, RabbitMqDestination.of("exchange", "routingKey"),
+                LoggerFactory.getLogger(RabbitMqCloudEventBridgeOutcomeRoutingTest.class));
+        return new RabbitMqCloudEventBridge(model, channel, "queue", 1, Duration.ofSeconds(1), failureAction, null, Duration.ofSeconds(1));
+    }
+
+    private static Delivery delivery() {
+        CloudEvent cloudEvent = CloudEventBuilder.v1()
+                .withId("id-1")
+                .withSource(URI.create("urn:test"))
+                .withType("com.acme.OrderPlaced")
+                .build();
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, Map.of());
+        return new Delivery(new Envelope(DELIVERY_TAG, false, "exchange", "routingKey"), properties, RabbitMqCloudEventMapper.toBody(cloudEvent));
+    }
+
+    private static void handleDelivery(RabbitMqCloudEventBridge bridge, Delivery delivery) throws Exception {
+        Method method = RabbitMqCloudEventBridge.class.getDeclaredMethod("handleDelivery", Delivery.class);
+        method.setAccessible(true);
+        try {
+            method.invoke(bridge, delivery);
+        } catch (InvocationTargetException e) {
+            if (e.getTargetException() instanceof Exception exception) {
+                throw exception;
+            }
+            throw e;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Deque<Long> heldDeferredDeliveryTags(RabbitMqCloudEventBridge bridge) throws ReflectiveOperationException {
+        Field field = RabbitMqCloudEventBridge.class.getDeclaredField("heldDeferredDeliveryTags");
+        field.setAccessible(true);
+        return (Deque<Long>) field.get(bridge);
+    }
+
     private static RabbitMqCloudEventBridge bridgeOver(Channel channel, DeliveryFailurePolicy policy) {
         return bridgeOver(channel, new RabbitMqDeliveryFailureAction(channel, policy, null, null,
                 LoggerFactory.getLogger(RabbitMqCloudEventBridgeOutcomeRoutingTest.class)));
@@ -144,9 +256,9 @@ class RabbitMqCloudEventBridgeOutcomeRoutingTest {
                 LoggerFactory.getLogger(RabbitMqCloudEventBridgeOutcomeRoutingTest.class)));
     }
 
-    // The model, the outcome channel and the readiness source are left out because route(..) is handed an outcome
-    // that has already been reported and reads none of the three.
+    // The model and the readiness source are left out because route(..) is handed an outcome that has already been
+    // reported and reads neither.
     private static RabbitMqCloudEventBridge bridgeOver(Channel channel, RabbitMqDeliveryFailureAction failureAction) {
-        return new RabbitMqCloudEventBridge(null, null, channel, "queue", 1, Duration.ofSeconds(1), failureAction, null, Duration.ofSeconds(1));
+        return new RabbitMqCloudEventBridge(null, channel, "queue", 1, Duration.ofSeconds(1), failureAction, null, Duration.ofSeconds(1));
     }
 }

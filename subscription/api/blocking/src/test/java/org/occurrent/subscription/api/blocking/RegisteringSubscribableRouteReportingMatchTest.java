@@ -378,6 +378,86 @@ class RegisteringSubscribableRouteReportingMatchTest {
         assertThat(thrown).isSameAs(refusalCause);
     }
 
+    // A caller that can offer the event again takes the refusal as its outcome, so nothing is thrown
+    @Test
+    void route_redeliverable_reports_refused_for_a_permanent_refusal_and_throws_nothing() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        List<Boolean> bufferIfNotLiveSeen = new ArrayList<>();
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            bufferIfNotLiveSeen.add(bufferIfNotLive);
+            throw new RegisteringSubscribable.RoutingAction.Refusal(new IllegalStateException("catch-up has failed"), true);
+        });
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Throwable thrown = catchThrowable(() -> model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)));
+
+        assertThat(thrown).isNull();
+        assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
+        assertThat(bufferIfNotLiveSeen).containsExactly(false);
+    }
+
+    @Test
+    void route_redeliverable_reports_not_deliverable_for_a_transient_refusal_and_throws_nothing() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw new RegisteringSubscribable.RoutingAction.Refusal(new IllegalStateException("the live buffer is full"), false);
+        });
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Throwable thrown = catchThrowable(() -> model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)));
+
+        assertThat(thrown).isNull();
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+    }
+
+    @Test
+    void route_redeliverable_still_throws_when_the_matcher_throws() {
+        RuntimeException matcherFailure = new IllegalStateException("the filter cannot answer");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw matcherFailure;
+        };
+        RawConsumersOneModel model = new RawConsumersOneModel(throwingReader);
+        model.subscribeRaw("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), (cloudEvent, bufferIfNotLive) -> true);
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Throwable thrown = catchThrowable(() -> model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)));
+
+        assertThat(thrown).isSameAs(matcherFailure);
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+    }
+
+    @Test
+    void route_redeliverable_still_throws_when_the_action_throws() {
+        RuntimeException actionFailure = new IllegalStateException("action failed");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw actionFailure;
+        });
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Throwable thrown = catchThrowable(() -> model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)));
+
+        assertThat(thrown).isSameAs(actionFailure);
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    // No failure of the model's own is in flight, so the observer's Error has nothing to be attached to
+    @Test
+    void route_redeliverable_lets_a_matchObserver_error_on_a_refusal_propagate_on_its_own() {
+        Error observerFailure = new Error("matchObserver failed");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw new RegisteringSubscribable.RoutingAction.Refusal(new IllegalStateException("catch-up has failed"), true);
+        });
+
+        Throwable thrown = catchThrowable(() -> model.acceptRedeliverableRaw(cloudEvent("1"), (cloudEvent, outcome) -> {
+            throw observerFailure;
+        }));
+
+        assertThat(thrown).isSameAs(observerFailure);
+        assertThat(thrown.getSuppressed()).isEmpty();
+    }
+
     /**
      * #1116's other half. This is the behaviour the reactor stack was changed to match. The
      * {@code RuntimeException | AssertionError} catch misses an {@link Error}, so {@code matchObserver} is told
@@ -449,6 +529,10 @@ class RegisteringSubscribableRouteReportingMatchTest {
 
         void acceptRaw(CloudEvent cloudEvent, boolean bufferIfNotLive, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
             routeReportingMatch(cloudEvent, bufferIfNotLive, matchObserver);
+        }
+
+        void acceptRedeliverableRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+            routeRedeliverable(cloudEvent, matchObserver);
         }
     }
 }

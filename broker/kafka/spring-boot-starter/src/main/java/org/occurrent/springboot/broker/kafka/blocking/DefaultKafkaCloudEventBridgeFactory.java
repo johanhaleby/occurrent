@@ -19,7 +19,6 @@ package org.occurrent.springboot.broker.kafka.blocking;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.kafka.blocking.KafkaCloudEventBridge;
 import org.occurrent.broker.kafka.blocking.KafkaDestination;
-import org.occurrent.broker.kafka.blocking.RoutingOutcomeChannel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationContext;
@@ -42,10 +41,10 @@ class DefaultKafkaCloudEventBridgeFactory implements KafkaCloudEventBridgeFactor
     }
 
     @Override
-    public KafkaCloudEventBridge.Builder forGroup(String groupId, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel) {
+    public KafkaCloudEventBridge.Builder forGroup(String groupId, PushSubscriptionModel model) {
         KafkaBrokerProperties.Bridge bridgeProperties = properties.getBridge();
         Map<String, Object> consumerConfig = KafkaClientConfigs.consumerConfig(properties, groupId);
-        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(consumerConfig, model, outcomeChannel)
+        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(consumerConfig, model)
                 .onDeliveryFailure(bridgeProperties.getOnDeliveryFailure())
                 .pollTimeout(bridgeProperties.getPollTimeout())
                 .closeTimeout(bridgeProperties.getCloseTimeout())

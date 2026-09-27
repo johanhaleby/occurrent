@@ -25,7 +25,6 @@ import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
-import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.beans.factory.UnsatisfiedDependencyException;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -138,7 +137,7 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
                         "occurrent.broker.rabbitmq.bridge.declare-topology=false")
                 .run(context -> {
                     RabbitMqCloudEventBridgeFactory factory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
-                    assertThatCode(() -> factory.forQueue("orders-projection", new PushSubscriptionModel(), new RoutingOutcomeChannel()))
+                    assertThatCode(() -> factory.forQueue("orders-projection", new PushSubscriptionModel()))
                             .doesNotThrowAnyException();
                 });
     }
@@ -176,7 +175,7 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
     void bridge_declaring_topology_without_a_resolver_or_explicit_bindings_refuses_at_build() {
         contextRunner.withBean(Connection.class, () -> mock(Connection.class)).run(context -> {
             RabbitMqCloudEventBridgeFactory factory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
-            RabbitMqCloudEventBridge.Builder builder = factory.forQueue("orders-projection", new PushSubscriptionModel(), new RoutingOutcomeChannel());
+            RabbitMqCloudEventBridge.Builder builder = factory.forQueue("orders-projection", new PushSubscriptionModel());
             assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class).hasMessageContaining("resolver");
         });
     }
@@ -192,7 +191,7 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
                 )
                 .run(context -> {
                     RabbitMqCloudEventBridgeFactory factory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
-                    RabbitMqCloudEventBridge.Builder builder = factory.forQueue("orders-projection", new PushSubscriptionModel(), new RoutingOutcomeChannel());
+                    RabbitMqCloudEventBridge.Builder builder = factory.forQueue("orders-projection", new PushSubscriptionModel());
                     assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class).hasMessageContaining("parkingDestination");
                 });
     }

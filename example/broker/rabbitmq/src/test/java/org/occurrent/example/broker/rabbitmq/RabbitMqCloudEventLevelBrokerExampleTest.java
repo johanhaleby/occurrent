@@ -30,7 +30,6 @@ import org.occurrent.broker.api.blocking.CloudEventForwarder;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
-import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
@@ -89,9 +88,8 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
         RabbitMqTopicExchangeDestinationResolver resolver = newResolver(typeMapper);
         MongoEventStore eventStore = newEventStore();
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel pushModel = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, outcomeChannel, queue)
+        PushSubscriptionModel pushModel = new PushSubscriptionModel(DataFieldReader.refusing());
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, queue)
                 .resolver(resolver)
                 .pollInterval(Duration.ofMillis(50))
                 .build();
@@ -209,9 +207,8 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 // way instead of two explicit close() calls after the await means a failure anywhere above, the
                 // context registration, refresh(), the writes, or the await itself, still closes both rather than
                 // leaking a running context and a live consumer for the rest of the test run.
-                RoutingOutcomeChannel outcomeChannel1 = new RoutingOutcomeChannel();
-                PushSubscriptionModel pushModel1 = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel1);
-                try (RabbitMqCloudEventBridge bridge1 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel1, outcomeChannel1, queue)
+                PushSubscriptionModel pushModel1 = new PushSubscriptionModel(DataFieldReader.refusing());
+                try (RabbitMqCloudEventBridge bridge1 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel1, queue)
                         .resolver(resolver)
                         .pollInterval(Duration.ofMillis(50))
                         .build()) {
@@ -270,9 +267,8 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 // catch-up marker and the same read-model store. A reader that counts its own replay calls proves the
                 // catch-up is skipped this time, not merely fast.
                 CountingPositionOrderedReader countingReader = new CountingPositionOrderedReader(eventStore);
-                RoutingOutcomeChannel outcomeChannel2 = new RoutingOutcomeChannel();
-                PushSubscriptionModel pushModel2 = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel2);
-                try (RabbitMqCloudEventBridge bridge2 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel2, outcomeChannel2, queue)
+                PushSubscriptionModel pushModel2 = new PushSubscriptionModel(DataFieldReader.refusing());
+                try (RabbitMqCloudEventBridge bridge2 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel2, queue)
                         .resolver(resolver)
                         .pollInterval(Duration.ofMillis(50))
                         .build()) {
@@ -351,8 +347,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
         CountDownLatch releaseReplay = new CountDownLatch(1);
         PositionOrderedReader parkedReader = new ParkedUntilReleasedPositionOrderedReader(eventStore, replayStarted, releaseReplay);
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel pushModel = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel pushModel = new PushSubscriptionModel(DataFieldReader.refusing());
         CheckpointStorage pushCatchupMarker = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "push-catchup-checkpoints");
         Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
         ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, store::put);
@@ -381,7 +376,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
             assertThat(catchupThenPush.isReadyForLiveDelivery(projectionId)).isFalse();
 
             sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build();
-            bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, outcomeChannel, queue)
+            bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, queue)
                     .resolver(resolver)
                     .pollInterval(Duration.ofMillis(50))
                     .readinessSource(catchupThenPush::isReadyForLiveDelivery)

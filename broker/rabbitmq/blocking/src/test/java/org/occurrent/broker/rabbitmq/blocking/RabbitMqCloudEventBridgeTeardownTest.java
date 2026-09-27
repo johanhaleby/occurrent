@@ -132,7 +132,7 @@ class RabbitMqCloudEventBridgeTeardownTest {
         Channel channel = mock(Channel.class);
         RabbitMqDeliveryFailureAction failureAction = new RabbitMqDeliveryFailureAction(channel, DeliveryFailurePolicy.REDELIVER, null, null,
                 LoggerFactory.getLogger(RabbitMqCloudEventBridgeTeardownTest.class));
-        RabbitMqCloudEventBridge bridge = new RabbitMqCloudEventBridge(null, null, channel, "queue", 1, Duration.ofSeconds(1), failureAction, null, Duration.ofDays(365L * 300));
+        RabbitMqCloudEventBridge bridge = new RabbitMqCloudEventBridge(null, channel, "queue", 1, Duration.ofSeconds(1), failureAction, null, Duration.ofDays(365L * 300));
 
         Throwable thrown = catchThrowable(bridge::close);
 
@@ -151,11 +151,10 @@ class RabbitMqCloudEventBridgeTeardownTest {
         when(connection.openChannel()).thenReturn(Optional.of(channel));
         when(channel.basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class))).thenReturn("consumer-tag-1");
         doThrow(new StackOverflowError("cancel")).when(channel).basicCancel("consumer-tag-1");
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         model.subscribe("sub", cloudEvent -> {
         });
-        RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, "queue")
+        RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, "queue")
                 .declareTopology(false)
                 .pollInterval(Duration.ofMillis(20))
                 .build();
@@ -173,6 +172,6 @@ class RabbitMqCloudEventBridgeTeardownTest {
     }
 
     private static RabbitMqCloudEventBridge bridgeOver(Channel channel, RabbitMqDeliveryFailureAction failureAction) {
-        return new RabbitMqCloudEventBridge(null, null, channel, "queue", 1, Duration.ofSeconds(1), failureAction, null, Duration.ofSeconds(1));
+        return new RabbitMqCloudEventBridge(null, channel, "queue", 1, Duration.ofSeconds(1), failureAction, null, Duration.ofSeconds(1));
     }
 }

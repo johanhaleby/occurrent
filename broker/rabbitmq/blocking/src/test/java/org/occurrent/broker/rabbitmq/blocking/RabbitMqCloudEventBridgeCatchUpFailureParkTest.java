@@ -60,8 +60,7 @@ class RabbitMqCloudEventBridgeCatchUpFailureParkTest extends RabbitMqTestSupport
         adminChannel.queueDeclare(parkingQueue, false, false, false, null);
         adminChannel.queueBind(parkingQueue, parkingExchange, "#");
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
@@ -78,7 +77,7 @@ class RabbitMqCloudEventBridgeCatchUpFailureParkTest extends RabbitMqTestSupport
                 .hasMessageContaining("simulated catch-up fold failure");
         assertThat(model.isReadyForLiveDelivery("proj")).as("a failed catch-up is never ready for live delivery").isFalse();
 
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, queue)
                 .declareTopology(false)
                 .pollInterval(POLL_INTERVAL)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK)

@@ -86,8 +86,7 @@ class RabbitMqCloudEventBridgeBuildSurvivesBrokerOutageTest {
         adminChannel.queueDeclare(queue, false, false, false, null);
         adminChannel.queueBind(queue, exchange, OrderPlaced.class.getName());
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
         List<String> received = new CopyOnWriteArrayList<>();
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> received.add(ce.getId()));
 
@@ -101,7 +100,7 @@ class RabbitMqCloudEventBridgeBuildSurvivesBrokerOutageTest {
         // up to 2 seconds backoff, ten attempts) outlasts the 500 ms automatic recovery interval configured above,
         // so a later attempt lands once the client has reconnected to this same, never-stopped container, and
         // build() returns normally instead of throwing.
-        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, queue)
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, queue)
                 .declareTopology(false)
                 .build()) {
             assertThat(bridge).isNotNull();

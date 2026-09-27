@@ -42,9 +42,9 @@ import static org.awaitility.Awaitility.await;
  * The {@link DeliveryFailurePolicy#REDELIVER} twin of {@code KafkaCloudEventBridgeNestedRefusalTest}, which only
  * exercises {@code PARK}: CLAIM 5 of PR #895's adversarial verification asks for both policies. The routing
  * decision under test, whether a {@code PreDispatchRefusalException} is this bridge's own model refusing
- * permanently versus an ordinary handler failure that happened to touch a different, broken model, is read from
- * {@code outcomeChannel.takeLastOutcome()} before {@code failureAction} is ever consulted, so it does not branch on
- * policy at all; this proves the same fix holds under the other one too.
+ * permanently versus an ordinary handler failure that happened to touch a different, broken model, is whether
+ * {@code acceptRedeliverable(..)} returns {@code REFUSED} or throws, decided before {@code failureAction} is ever
+ * consulted, so it does not branch on policy at all. This proves the same fix holds under the other one too.
  * <p>
  * Under {@code REDELIVER}, id-1's nested, unrelated refusal fails identically on every attempt (the same one
  * historical event keeps failing {@code otherWrapper}'s already-dead catch-up), so this bridge seeks back to it and
@@ -59,7 +59,7 @@ class KafkaCloudEventBridgeNestedRefusalRedeliverTest extends KafkaTestSupport {
 
     @Test
     void a_nested_handovers_permanent_refusal_under_redeliver_does_not_stop_this_bridges_own_healthy_model() throws Exception {
-        PushSubscriptionModel otherLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), new RoutingOutcomeChannel());
+        PushSubscriptionModel otherLiveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore otherStore = new InMemoryEventStore();
         otherStore.write("s1", List.of(orderPlacedWithId("historical")));
         CatchupThenPushSubscriptionModel otherWrapper = new CatchupThenPushSubscriptionModel(otherStore, otherLiveFeed, null);
@@ -72,18 +72,17 @@ class KafkaCloudEventBridgeNestedRefusalRedeliverTest extends KafkaTestSupport {
 
         String groupId = "group-" + UUID.randomUUID();
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         List<String> handled = new CopyOnWriteArrayList<>();
         liveFeed.subscribe("proj", ce -> {
             handled.add(ce.getId());
             if (ce.getId().equals("id-1")) {
                 // The nested, unrelated refusal, escaping this handler unwrapped, on every single attempt.
-                otherLiveFeed.acceptRedeliverable(orderPlacedWithId("id-1-fanout"));
+                otherLiveFeed.accept(orderPlacedWithId("id-1-fanout"));
             }
         });
 
-        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), liveFeed, outcomeChannel)
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), liveFeed)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .onDeliveryFailure(DeliveryFailurePolicy.REDELIVER)

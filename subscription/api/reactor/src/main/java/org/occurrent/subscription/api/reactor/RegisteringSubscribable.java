@@ -30,6 +30,8 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.internal.HandlerFailures;
 import org.occurrent.subscription.internal.SingleConsumerMessages;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -89,12 +91,11 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
 
     /**
      * What a registration does with a matched event, and whether it genuinely landed rather than only being
-     * offered. {@link #routeReportingMatch(CloudEvent, BiConsumer)} reports {@link RoutingOutcome#DELIVERED} or
-     * {@link RoutingOutcome#DEFERRED} from this return value, evaluated after this method runs rather than guessed
-     * beforehand, so a caller wrapping a catch-up-then-live engine can refuse without buffering and report that
-     * refusal accurately. Mirrors the blocking {@code RegisteringSubscribable.RoutingAction}, except this one has no
-     * {@code bufferIfNotLive} flag. The reactor stack has one caller shape,
-     * {@code PushSubscriptionModel.accept(CloudEvent)}, so there is no second behaviour for a flag to select between.
+     * offered. {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)} reports {@link RoutingOutcome#DELIVERED}
+     * or {@link RoutingOutcome#DEFERRED} from this return value, evaluated after this method runs rather than guessed
+     * beforehand, so a caller wrapping a catch-up-then-live engine can refuse without buffering when
+     * {@code bufferIfNotLive} is {@code false} and report that refusal accurately. Mirrors the blocking
+     * {@code RegisteringSubscribable.RoutingAction}.
      * <p>
      * Public so a same-package-but-not-a-subclass caller reached through a {@code protected} pass-through, the
      * shape {@code org.occurrent.subscription.push.reactor.PushSubscriptionModel} exposes to
@@ -104,22 +105,27 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      */
     public interface RoutingAction {
         /**
-         * @param cloudEvent The matched event to route.
+         * @param cloudEvent      The matched event to route.
+         * @param bufferIfNotLive What to do when the target this action feeds is not ready right now: buffer the
+         *                        event for later if {@code true}, refuse it without buffering if {@code false}.
+         *                        An implementation with only one behavior, no buffering distinction to make, is
+         *                        free to ignore this parameter.
          * @return A {@link Mono} that completes with {@code true} once {@code cloudEvent} has genuinely landed,
          *         {@code false} when this call declined to hand it over at all (never when it was accepted and then
          *         failed; an error is how that propagates instead), or errors with {@link Refusal} to report a
          *         refusal decided before any dispatch was attempted (an engine-level guard, not a handler running
-         *         at all), so {@link #routeReportingMatch(CloudEvent, BiConsumer)} can tell it apart from a handler
-         *         that errored after genuinely being invoked. Any other error is taken to mean the opposite:
+         *         at all), so {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)} can tell it apart from a
+         *         handler that errored after genuinely being invoked. Any other error is taken to mean the opposite:
          *         dispatch was attempted and the handler behind it failed.
          */
-        Mono<Boolean> route(CloudEvent cloudEvent);
+        Mono<Boolean> route(CloudEvent cloudEvent, boolean bufferIfNotLive);
 
         /**
-         * Thrown or emitted by {@link #route(CloudEvent)} to report a refusal decided before any dispatch was
+         * Thrown or emitted by {@link #route(CloudEvent, boolean)} to report a refusal decided before any dispatch was
          * attempted, wrapping the real failure as {@link #getCause()}. {@code routeReportingMatch} never reports
          * {@link RoutingOutcome#DELIVERED} for one of these, and propagates the wrapped cause unchanged, exactly as
-         * it would have propagated without this wrapper.
+         * it would have propagated without this wrapper. {@code routeRedeliverable} reports it the same way and
+         * completes instead of erroring.
          * <p>
          * {@code permanent} is the action's promise about its own refusal, and it decides which outcome is
          * reported. Pass {@code true} only when offering the same event to this same registration again is certain
@@ -153,6 +159,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         }
     }
 
+    private final Logger log = LoggerFactory.getLogger(getClass());
     private final Set<String> subscriptionIds = ConcurrentHashMap.newKeySet();
     private final Set<String> pausedSubscriptions = ConcurrentHashMap.newKeySet();
     private final CopyOnWriteArrayList<Registration> registrations = new CopyOnWriteArrayList<>();
@@ -201,15 +208,16 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         Objects.requireNonNull(action, "action cannot be null");
         // Every event this released signature's action handles is reported delivered, matching what DELIVERED has
         // always meant here. The handler was genuinely invoked, whether it then completes or errors.
-        return doSubscribe(subscriptionId, filter, startAt, cloudEvent -> action.apply(cloudEvent).thenReturn(true));
+        return doSubscribe(subscriptionId, filter, startAt, (cloudEvent, bufferIfNotLive) -> action.apply(cloudEvent).thenReturn(true));
     }
 
     /**
      * As {@link #subscribe(String, SubscriptionFilter, StartAt, Function)}, except the registered action reports
-     * back whether the event it was given genuinely landed, so {@link #routeReportingMatch(CloudEvent, BiConsumer)}
-     * can report {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#DEFERRED} accurately instead of assuming
-     * delivery ahead of it. {@link Consumers#ONE} only, the same restriction
-     * {@link #routeReportingMatch(CloudEvent, BiConsumer)} itself already enforces at routing time.
+     * back whether the event it was given genuinely landed, so
+     * {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)} can report {@link RoutingOutcome#DELIVERED} or
+     * {@link RoutingOutcome#DEFERRED} accurately instead of assuming delivery ahead of it. {@link Consumers#ONE}
+     * only, the same restriction {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)} itself already
+     * enforces at routing time.
      */
     protected final Subscription subscribeReportingDelivery(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RoutingAction action) {
         return doSubscribe(subscriptionId, filter, startAt, action);
@@ -399,17 +407,41 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * this safe where restructuring {@link #route(CloudEvent)} itself would not be. That check runs eagerly, not
      * deferred, since it is a caller error rather than model state.
      *
-     * @param cloudEvent    The event to route.
-     * @param matchObserver Told this event's {@link RoutingOutcome} at most once, after its registration's action
-     *                      (if any) has run, whether that action completed, declined, or errored. The paragraphs
-     *                      above name the three failures it is not told about at all, two from the matcher and one
-     *                      from the action. Whatever it throws is suppressed onto the failure this method is
-     *                      already propagating, a matcher that threw, an action that errored or a refusal, and
-     *                      propagates on its own when there is no such failure.
-     *                      {@link RoutingOutcome#DELIVERED} arrives both ways.
+     * @param cloudEvent      The event to route.
+     * @param bufferIfNotLive Passed through to the matched registration's {@link RoutingAction#route(CloudEvent, boolean)}
+     *                        unchanged, and this method itself has no opinion on what it means.
+     * @param matchObserver   Told this event's {@link RoutingOutcome} at most once, after its registration's action
+     *                        (if any) has run, whether that action completed, declined, or errored. The paragraphs
+     *                        above name the three failures it is not told about at all, two from the matcher and
+     *                        one from the action. Whatever it throws is suppressed onto the failure this method is
+     *                        already propagating, a matcher that threw, an action that errored or a refusal, and
+     *                        propagates on its own when there is no such failure.
+     *                        {@link RoutingOutcome#DELIVERED} arrives both ways.
      * @return A {@link Mono} that completes when the action, if any ran, has completed.
      */
-    protected final Mono<Void> routeReportingMatch(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+    protected final Mono<Void> routeReportingMatch(CloudEvent cloudEvent, boolean bufferIfNotLive, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+        return routeReportingMatch(cloudEvent, bufferIfNotLive, true, matchObserver);
+    }
+
+    /**
+     * As {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)} with {@code bufferIfNotLive} {@code false},
+     * for a caller that can offer the event again later, a broker listener say. The one difference is a
+     * {@link RoutingAction.Refusal}. It is reported to {@code matchObserver} as {@link RoutingOutcome#REFUSED} or
+     * {@link RoutingOutcome#NOT_DELIVERABLE}, the same as there, and then the returned {@link Mono} completes
+     * instead of erroring with the refusal's cause. A caller stops on
+     * {@link RoutingOutcome#REFUSED} and applies its failure policy on {@link RoutingOutcome#NOT_DELIVERABLE}. A matcher
+     * that throws or an action that errors any other way still errors, exactly as it does there.
+     *
+     * @param cloudEvent    The event to route.
+     * @param matchObserver Told this event's {@link RoutingOutcome} at most once, on the same terms as
+     *                      {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)}.
+     * @return A {@link Mono} that completes when the action, if any ran, has completed or refused.
+     */
+    protected final Mono<Void> routeRedeliverable(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+        return routeReportingMatch(cloudEvent, false, false, matchObserver);
+    }
+
+    private Mono<Void> routeReportingMatch(CloudEvent cloudEvent, boolean bufferIfNotLive, boolean throwRefusal, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         Objects.requireNonNull(matchObserver, "matchObserver cannot be null");
         if (consumers != Consumers.ONE) {
@@ -451,7 +483,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     // Scoped to the action call alone, before the observer notification is attached, so a
                     // matchObserver failure on the success path below can never re-enter this same handler and be
                     // misclassified as an action failure.
-                    return Mono.defer(() -> registration.action().route(cloudEvent))
+                    return Mono.defer(() -> registration.action().route(cloudEvent, bufferIfNotLive))
                             .onErrorResume(error -> {
                                 // An action that ended in an Error delivered nothing, so matchObserver is told
                                 // nothing rather than DELIVERED, and the Error propagates on its own. The blocking
@@ -473,6 +505,13 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                                 RoutingOutcome outcome;
                                 Throwable propagate;
                                 if (error instanceof RoutingAction.Refusal refusal) {
+                                    if (!throwRefusal) {
+                                        // The caller takes the outcome instead of the cause, so the cause is logged here
+                                        log.debug("Subscription \"{}\" refused event {} before dispatch, reported as {}.",
+                                                registration.id(), cloudEvent.getId(), refusal.outcome(), refusal.unwrap());
+                                        matchObserver.accept(cloudEvent, refusal.outcome());
+                                        return Mono.<Boolean>empty();
+                                    }
                                     outcome = refusal.outcome();
                                     propagate = refusal.unwrap();
                                 } else {
@@ -524,7 +563,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     // RoutingAction.Refusal. That wrapper only ever matters to routeReportingMatch(..), which can act
                     // on it before propagating the same unwrapped cause, and a caller here gets that cause directly
                     // since this path has no observer to tell first.
-                    .concatMap(registration -> registration.action().route(cloudEvent)
+                    .concatMap(registration -> registration.action().route(cloudEvent, true)
                             .onErrorMap(RoutingAction.Refusal.class, RoutingAction.Refusal::unwrap))
                     .then();
         });
@@ -565,7 +604,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                             // matcher. A model given no reader at all refuses a payload filter earlier, at subscribe
                             // time.
                             .concatMap(registration -> Mono.defer(() -> registration.matcher().test(cloudEvent)
-                                            ? registration.action().route(cloudEvent)
+                                            ? registration.action().route(cloudEvent, true)
                                             : Mono.<Boolean>empty())
                                     .onErrorResume(error -> {
                                         // An Error is not a recoverable situation, so it keeps going. A checked

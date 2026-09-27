@@ -37,11 +37,13 @@ package org.occurrent.subscription;
  * </ul>
  * <p>
  * Two of the six always come with an exception propagating to the caller as well, {@link #NOT_DELIVERABLE} and
- * {@link #REFUSED}. {@link #DELIVERED} may, since a handler that ran and threw is still a handler that ran, and its
- * exception propagates after this outcome has been reported. {@link #FILTERED}, {@link #DEFERRED} and
- * {@link #UNAVAILABLE} never do.
+ * {@link #REFUSED}, with one exception. A push model's {@code acceptRedeliverable(..)} returns a refusal as its
+ * outcome without throwing, so only a filter's own failure propagates from it. {@link #DELIVERED} may come with an
+ * exception, since a handler that ran and threw is still a handler that ran, and its exception propagates after this
+ * outcome has been reported. {@link #FILTERED}, {@link #DEFERRED} and {@link #UNAVAILABLE} never do.
  * <p>
- * So an outcome that arrives on its own, with nothing thrown, is one of those three, and a caller can tell an event
+ * So outside {@code acceptRedeliverable(..)}, an outcome that arrives on its own, with nothing thrown, is one of
+ * those three, and a caller can tell an event
  * nothing was able to receive from an event something tried to receive and failed on without reading any state a
  * concurrent lifecycle call could have changed in the meantime.
  * <p>
@@ -73,14 +75,15 @@ public enum RoutingOutcome {
 
     /**
      * The filter was asked and threw instead of answering, so it neither accepted nor declined the event. The
-     * exception it threw propagates to the caller as well, which is why this outcome never arrives quietly. What to
+     * exception it threw propagates to the caller as well, which is why a filter failure never arrives quietly. What to
      * do next is the caller's own failure policy to decide, since a filter that fails on one event may answer the
      * next one, and a filter that fails on every event needs an operator rather than a redelivery.
      * <p>
      * Also reported for a registered action that refused the event before attempting dispatch without promising the
      * refusal is permanent, a catch-up-then-live engine whose live buffer is full while its replay is still
      * running, say. That refusal clears on its own once the replay drains, so it is a failure to report rather than
-     * a reason to stop. A refusal the action does promise is permanent reports {@link #REFUSED} instead.
+     * a reason to stop. A refusal the action does promise is permanent reports {@link #REFUSED} instead. A push
+     * model's {@code acceptRedeliverable(..)} returns this refusal without throwing its cause.
      */
     NOT_DELIVERABLE,
 
@@ -108,7 +111,8 @@ public enum RoutingOutcome {
     /**
      * A registered action refused the event before attempting any dispatch, and promised that refusing is permanent
      * for that registration. A catch-up-then-live engine whose replay has failed is the case this exists for. The
-     * refusal's own cause propagates to the caller as well.
+     * refusal's own cause propagates to the caller as well, except from a push model's {@code acceptRedeliverable(..)},
+     * which returns this outcome without throwing.
      * <p>
      * Offering the same event to the same registration again gets the same answer, so a caller stops rather than
      * parking, discarding or redelivering. Recovery is a lifecycle action, cancelling the subscription and
