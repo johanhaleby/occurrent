@@ -241,7 +241,7 @@ class SubscriptionAnnotationRegistrar {
                 call.subscribe(() -> describe(inPlace.peek()), false, subscribeEach(inPlace, claimedIds, reservedHandlers));
             }
             if (!fixed.isEmpty()) {
-                call.subscribe(() -> describe(fixed.peek()), true, subscribeEach(fixed, claimedIds, reservedHandlers));
+                call.subscribe(() -> describeFrom(fixed), true, subscribeEach(fixed, claimedIds, reservedHandlers));
             }
         } catch (RuntimeException | Error e) {
             release.run();
@@ -265,6 +265,18 @@ class SubscriptionAnnotationRegistrar {
     private static String describe(ResolvedRegistration registration) {
         Method method = registration.claim().method();
         return "the handler '%s' on %s#%s".formatted(registration.claim().id(), method.getDeclaringClass().getName(), method.getName());
+    }
+
+    // The first handler not subscribed yet, which is the one an attempt fails on, and the ones after it, which wait for
+    // it and are given back with it when it gives up
+    private static String describeFrom(Deque<ResolvedRegistration> pending) {
+        List<String> after = pending.stream().skip(1).map(registration -> "'" + registration.claim().id() + "'").toList();
+        String first = describe(pending.element());
+        if (after.isEmpty()) {
+            return first;
+        }
+        String listed = after.size() == 1 ? after.getFirst() : String.join(", ", after.subList(0, after.size() - 1)) + " and " + after.getLast();
+        return "%s, and after it the %s %s on the same bean".formatted(first, after.size() == 1 ? "handler" : "handlers", listed);
     }
 
     // Every handler on the bean is claimed and resolved into what it subscribes with before any of them

@@ -468,6 +468,34 @@ class LateRegistrationOnANonBlockingThreadTest {
         });
     }
 
+    // Two handlers with a fixed start subscribe one after the other, so the second waits for the first, and a give-up
+    // on the first gives back both
+    @Test
+    void a_late_subscribe_that_gives_up_names_the_handlers_after_the_failing_one_that_it_gives_back() {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(LateSubscriber.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, LazyTwoBeginningSubscriptionsConfiguration.class).run(context -> {
+                assertThat(context).hasNotFailed();
+                RecordingDelegate delegate = delegate(context);
+                delegate.refuseNextSubscribes(5, id -> new SubscriptionModelShutdownException());
+
+                resolvedOnAParallelThread(context, "twoBeginningSubscriptionsHolder");
+                awaitUntil(() -> appender.list.stream().anyMatch(event -> event.getFormattedMessage().startsWith("Gave up subscribing")));
+
+                assertThat(appender.list).filteredOn(event -> event.getFormattedMessage().startsWith("Gave up subscribing")).singleElement()
+                        .satisfies(event -> assertThat(event.getFormattedMessage())
+                                .containsPattern("the handler 'late-(first|second)-beginning' on .*, and after it the handler 'late-(first|second)-beginning' on the same bean")
+                                .contains("late-first-beginning", "late-second-beginning", "restart the application"));
+                assertThat(delegate.refusals).hasValue(1);
+            });
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
     // A refresh that fails after the startup scan destroys the post processor without a ContextClosedEvent
     @Test
     void destroying_the_post_processor_refuses_a_late_subscribe_as_closing_the_context_does() {
@@ -1410,6 +1438,27 @@ class LateRegistrationOnANonBlockingThreadTest {
         @Bean
         Marker dcbSubscriptionHolder(List<String> handled) {
             return new DcbSubscriptionHolder(handled);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class LazyTwoBeginningSubscriptionsConfiguration {
+        @Lazy
+        @Bean
+        Marker twoBeginningSubscriptionsHolder() {
+            return new TwoBeginningSubscriptionsHolder();
+        }
+    }
+
+    static class TwoBeginningSubscriptionsHolder implements Marker {
+        @org.occurrent.annotation.Subscription(id = "late-first-beginning", startAt = StartPosition.BEGINNING)
+        Mono<Void> first(TestEvent event) {
+            return Mono.empty();
+        }
+
+        @org.occurrent.annotation.Subscription(id = "late-second-beginning", startAt = StartPosition.BEGINNING)
+        Mono<Void> second(TestEvent event) {
+            return Mono.empty();
         }
     }
 
