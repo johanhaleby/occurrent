@@ -205,8 +205,8 @@ class SubscriptionAnnotationRegistrar {
     // subscribeCall is handed the release for the handlers not subscribed yet, and runs the subscribes once every
     // handler has resolved. For a bean built after startup on a Reactor non-blocking thread it can run them later on
     // another thread, and again after a failure, so a run starts at the first handler not subscribed yet (see
-    // LateSubscriber). The handlers only go there when every one of them starts at a position that does not depend on
-    // when it subscribes.
+    // LateSubscriber). Only the handlers that start at a position that does not depend on when they subscribe go
+    // there, after the rest subscribed on the calling thread.
     void registerSubscriptions(Object bean, List<Method> methods, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
                                Function<Runnable, LateSubscriber.SubscribeCall> subscribeCall, Predicate<Method> reserveHandler, Consumer<String> claimId,
                                Consumer<Method> releaseHandler, Consumer<String> releaseId) {
@@ -228,22 +228,38 @@ class SubscriptionAnnotationRegistrar {
             claimedIds.forEach(h -> releaseId.accept(h.id()));
             reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
         };
-        Deque<ResolvedRegistration> pending = new ArrayDeque<>(resolved);
-        boolean startIsFixed = resolved.stream().allMatch(registration -> registration.subscribe().startIsFixed());
+        // The handlers whose start depends on when they subscribe go first, and all of them subscribe before any
+        // handler with a fixed start subscribes or is handed to the scheduler. When one fails, no handler with a fixed
+        // start has subscribed, and all of them are released. Those that subscribed before it stay subscribed, see
+        // claimAndResolve.
+        Deque<ResolvedRegistration> inPlace = new ArrayDeque<>();
+        Deque<ResolvedRegistration> fixed = new ArrayDeque<>();
+        resolved.forEach(registration -> (registration.subscribe().startIsFixed() ? fixed : inPlace).add(registration));
+        LateSubscriber.SubscribeCall call = subscribeCall.apply(release);
         try {
-            subscribeCall.apply(release).subscribe(() -> describe(pending.peek()), startIsFixed, () -> {
-                while (!pending.isEmpty()) {
-                    ResolvedRegistration registration = pending.peek();
-                    registration.subscribe().call().run();
-                    pending.poll();
-                    claimedIds.remove(registration.claim());
-                    reservedHandlers.remove(registration.claim());
-                }
-            });
+            if (!inPlace.isEmpty()) {
+                call.subscribe(() -> describe(inPlace.peek()), false, subscribeEach(inPlace, claimedIds, reservedHandlers));
+            }
+            if (!fixed.isEmpty()) {
+                call.subscribe(() -> describe(fixed.peek()), true, subscribeEach(fixed, claimedIds, reservedHandlers));
+            }
         } catch (RuntimeException | Error e) {
             release.run();
             throw e;
         }
+    }
+
+    // Starts at the first handler not subscribed yet, so running it again after a failure goes on from there
+    private static Runnable subscribeEach(Deque<ResolvedRegistration> pending, List<PendingRegistration> claimedIds, List<PendingRegistration> reservedHandlers) {
+        return () -> {
+            while (!pending.isEmpty()) {
+                ResolvedRegistration registration = pending.peek();
+                registration.subscribe().call().run();
+                pending.poll();
+                claimedIds.remove(registration.claim());
+                reservedHandlers.remove(registration.claim());
+            }
+        };
     }
 
     private static String describe(ResolvedRegistration registration) {

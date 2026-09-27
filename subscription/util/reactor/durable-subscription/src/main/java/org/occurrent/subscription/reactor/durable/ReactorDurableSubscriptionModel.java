@@ -367,6 +367,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             pausedSubscriptions.put(subscriptionId, internalSubscription);
             return new ReactorDurableSubscription(subscriptionId, internalSubscription.started);
         }
+        // Assembled before anything is put into runningSubscriptions, since a dynamic StartAt is evaluated right here,
+        // on the calling thread, and can throw. Thrown after the put, that left the id behind with nothing running
+        // under it, and every later subscribe under the same id was refused as a duplicate. Nothing subscribes to it
+        // until below.
+        Mono<StartAt> resolvedStartAt = resolveStartAt(subscriptionId, currentStartAt.get(), positionAtRegistration);
         Sinks.Empty<Void> startedSink = Sinks.empty();
         // One stable identity for this call's whole lifetime: put into runningSubscriptions before subscribing, and
         // never replaced afterwards, so the error handler below always removes the same object it (or nothing) put
@@ -377,10 +382,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         Disposable.Swap subscriptionDisposable = Disposables.swap();
         InternalSubscription internalSubscription = new InternalSubscription(subscriptionDisposable, currentStartAt, filter, action, startedSink.asMono(), positionAtRegistration);
         runningSubscriptions.put(subscriptionId, internalSubscription);
-        Disposable disposable = resolveStartAt(subscriptionId, currentStartAt.get(), positionAtRegistration)
-                .flatMapMany(resolvedStartAt -> {
-                    currentStartAt.set(resolvedStartAt);
-                    return source(subscriptionId, filter, resolvedStartAt, action, currentStartAt, true, startedSink);
+        Disposable disposable = resolvedStartAt
+                .flatMapMany(startAt -> {
+                    currentStartAt.set(startAt);
+                    return source(subscriptionId, filter, startAt, action, currentStartAt, true, startedSink);
                 })
                 // An empty resolveStartAt means a dynamic StartAt opted out of starting (its function returned null),
                 // so read from the original StartAt without durable position handling, mirroring the blocking model's
@@ -583,8 +588,15 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         running = true;
         // Reuse the same currentStartAt reference so resume continues from the position of the last event delivered
         // before the subscription was paused, rather than replaying (or skipping) from the original StartAt.
-        return startInternalSubscription(subscriptionId, internalSubscription.filter, internalSubscription.currentStartAt, internalSubscription.action,
-                internalSubscription.positionAtRegistration);
+        try {
+            return startInternalSubscription(subscriptionId, internalSubscription.filter, internalSubscription.currentStartAt, internalSubscription.action,
+                    internalSubscription.positionAtRegistration);
+        } catch (RuntimeException | Error e) {
+            // A dynamic StartAt that throws puts nothing into runningSubscriptions, so it stays paused rather than
+            // being dropped from both maps
+            pausedSubscriptions.put(subscriptionId, internalSubscription);
+            throw e;
+        }
     }
 
     /**

@@ -526,8 +526,13 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // Stop every catch-up the projection registrar started, so no replay outlives the context that owns the store it
     // is folding into. The blocking twin has had this hook since the push catch-up gained a life cycle. This class
     // implemented no destroy callback at all until the reactor model gained one too.
+    //
+    // A refresh that fails after the startup scan destroys this without publishing a ContextClosedEvent, and so does
+    // a refreshable context replacing its bean factory, so the late subscriber is closed here as well, even though
+    // that is after the subscription model shut down. A second close finds nothing left to cancel.
     @Override
     public void destroy() {
+        lateSubscriber.close();
         if (projectionRegistrar != null) {
             projectionRegistrar.close();
         }
