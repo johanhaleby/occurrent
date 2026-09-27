@@ -333,11 +333,12 @@ public class EventStoreConfig {
 
         /**
          * When the event collection holds an event whose position or tag index no store would have written, fail
-         * construction with an {@link IllegalStateException}. That is any event whose position is anything other than a
-         * positive integer no greater than the store's position counter, and any DCB event without its {@code dcbTags}
-         * index. Reads in position order skip an event with such a position, read it wrong or fail on it. DCB reads
-         * also skip an event without its index, and a conditional append can then miss a conflict with a DCB event
-         * they skip. Occurrent's own {@code updateEvent}
+         * construction with an {@link IllegalStateException}. That is any event whose position is not a positive
+         * integer, or is above the store's position counter when there is a counter document, and any DCB event whose
+         * {@code dcbTags} index does not hold the tags its {@code dcbtags} lists. Reads in position order skip an event
+         * with such a position, read it wrong or fail on it. DCB reads find a DCB event by its index alone, so they skip
+         * it under a tag the index lacks, and a conditional append can then miss a conflict with a DCB event they
+         * skip. Occurrent's own {@code updateEvent}
          * produced such events in 0.33.0 or earlier, by storing a position as a string or by dropping a DCB event's
          * {@code dcbTags} index, its position, or both, and a position set by hand can produce one too. A non DCB event
          * with no position field at all is what {@code requireBackfilledPosition} checks instead. Off by default, and
@@ -347,8 +348,8 @@ public class EventStoreConfig {
          * <p>An event the repair described in {@code doc/runbooks/update-event-repair.md} cannot fix, such as a DCB
          * event whose position is gone, can keep the store from starting until you fix it by hand, as step 5 of that
          * runbook describes, or turn this off once you have accepted it. Step 6 of that runbook runs the same checks
-         * as queries. No index covers a missing {@code dcbTags} index, so a startup that finds no damage reads the
-         * whole collection.
+         * as queries. No index can compare a {@code dcbTags} index with {@code dcbtags}, so a startup that finds no
+         * damage reads the whole collection.
          *
          * <p>This applies whether or not the store writes position, since the two ways a store ends up writing none
          * are {@code withoutStreamPosition()} and position being turned off at startup over unpositioned history,

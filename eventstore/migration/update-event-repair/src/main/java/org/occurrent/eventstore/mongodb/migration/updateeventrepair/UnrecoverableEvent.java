@@ -58,23 +58,25 @@ public record UnrecoverableEvent(Object eventId, Reason reason, String detail) {
          */
         POSITION_ALREADY_TAKEN,
         /**
-         * The event's {@code position} is a string that is not a number, so the original position cannot be read back
-         * out of it. Nothing in the known {@code updateEvent} defect produces this, so it points at damage from
-         * somewhere else.
+         * The event's {@code position} is not a whole number that fits in a {@code long}, so the original position
+         * cannot be read back out of it. That covers a string that does not parse as one, and a stored value such as
+         * a fraction, NaN, an infinity, a number above {@code Long.MAX_VALUE}, an array or a document. Nothing in the
+         * known {@code updateEvent} defect produces this, so it points at damage from somewhere else, a position set
+         * by hand for instance.
          */
         POSITION_NOT_A_NUMBER,
         /**
-         * The event's {@code position} is a string holding zero or a negative number, which is not a position any
-         * store assigned. Positions start above zero, {@code OccurrentCloudEventExtension.getPosition} returns
+         * The event's {@code position} holds zero or a negative whole number, as a string or as a number, which is
+         * not a position any store assigned. Positions start above zero, {@code OccurrentCloudEventExtension.getPosition} returns
          * {@code 0} for an event that has none, and every position query reads {@code position > 0}. Writing such a
          * value back as a number would count as a repair and leave the event exactly as invisible as it was, so the
          * tool reports it instead. The old write-back preserved whatever position the update function returned, so a
-         * function that forged one produced this.
+         * function that forged one produced this, and so does a slip in a position set by hand.
          */
         POSITION_NOT_POSITIVE,
         /**
-         * The event's {@code position} is a string holding a number above the store's position counter, which is the
-         * highest position the store has ever handed out, so no store assigned it. DCB reads and reads in position
+         * The event's {@code position} holds a number above the store's position counter, as a string or as a number.
+         * The counter is the highest position the store has ever handed out, so no store assigned it. DCB reads and reads in position
          * order stop at that same counter, so writing the value back would count as a repair and they would still
          * skip the event, and a later append reaching that number would collide with it. The counter is re-read before
          * the event is reported, so a store that wrote while the repair walked cannot put an event here wrongly.

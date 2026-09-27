@@ -927,11 +927,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     // Warns, or fails when requireRepairedEvents is set, when the collection holds events whose position or tag index
     // is wrong. The warning looks for a string position only, what updateEvent wrote before 0.34.0, which reads no index
-    // keys on a store that was never damaged. requireRepairedEvents refuses every event whose position is anything
-    // other than a positive integer no greater than the counter, and every DCB event without its tag index, at the
-    // cost of a collection scan.
+    // keys on a store that was never damaged. requireRepairedEvents refuses every event whose position is not a
+    // positive integer, or is above the counter when there is a counter document, and every DCB event whose tag
+    // index does not hold the tags its dcbtags lists, at the cost of a collection scan.
     private static void warnOrFailOnEventsDamagedByUpdateEvent(MongoCollection<Document> eventCollection, MongoCollection<Document> positionCollection, boolean requireRepairedEvents) {
-        Bson damaged = requireRepairedEvents ? UpdateEventDamage.wrongPositionOrMissingTagIndex() : UpdateEventDamage.positionStoredAsString();
+        Bson damaged = requireRepairedEvents ? UpdateEventDamage.wrongPositionOrTagIndex() : UpdateEventDamage.positionStoredAsString();
         // Whether one exists, not what is in it. Without the projection this pulls a whole stored event, payload and
         // all, into the startup path of an affected store.
         Document firstDamagedEvent = eventCollection.find(damaged).limit(1).projection(Projections.include(ID)).first();

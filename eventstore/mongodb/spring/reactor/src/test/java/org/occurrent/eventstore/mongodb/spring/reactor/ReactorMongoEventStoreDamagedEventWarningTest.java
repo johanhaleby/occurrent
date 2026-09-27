@@ -47,6 +47,7 @@ import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.occurrent.testsupport.mongodb.StoredPositionShapes;
 import org.occurrent.testsupport.mongodb.StoredPositionShapes.Kind;
 import org.occurrent.testsupport.mongodb.StoredPositionShapes.Shape;
+import org.occurrent.testsupport.mongodb.StoredTagShapes;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -219,6 +220,24 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
         } else {
             assertThatThrownBy(this::newStoreRequiringRepairedEvents)
                     .as("anything else is not a position the store assigned, and reads skip it, read it as another value or fail on it")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("updateEvent damaged");
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("org.occurrent.testsupport.mongodb.StoredTagShapes#shapes")
+    void a_store_told_to_require_repaired_events_starts_only_when_a_dcb_events_tag_index_holds_the_tags_it_lists(StoredTagShapes.Shape shape) {
+        newEventStore().write("stream:1", Flux.just(event("Defined"))).block();
+        withEventCollection(events -> StoredTagShapes.give(events, shape));
+
+        if (shape.starts()) {
+            assertThatNoException()
+                    .as("an index holding the tags dcbtags lists is what every append writes, and a plain event has neither")
+                    .isThrownBy(this::newStoreRequiringRepairedEvents);
+        } else {
+            assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                    .as("DCB reads and the conflict query find an event by its index alone, so any other index hides it from them or shows it under the wrong tags")
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("updateEvent damaged");
         }

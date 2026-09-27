@@ -140,6 +140,7 @@ public final class StoredPositionShapes {
                 new Shape("the array [3, \"x\"]", Arrays.asList(3L, "x"), false, false),
                 new Shape("the double 2.0", 2.0d, true, true),
                 new Shape("the decimal 2", new Decimal128(2), true, true),
+                new Shape("the int 2", 2, true, true),
                 new Shape("the double 1.5", 1.5d, false, false),
                 new Shape("the decimal 1.5", Decimal128.parse("1.5"), false, false),
                 new Shape("the double 1e-300", 1e-300d, false, false),
@@ -150,6 +151,8 @@ public final class StoredPositionShapes {
                 new Shape("negative infinity", Double.NEGATIVE_INFINITY, false, false),
                 new Shape("positive infinity", Double.POSITIVE_INFINITY, false, false),
                 new Shape("the double 1e300", 1e300d, false, false),
+                new Shape("the double 2^63, one above the largest long", Math.pow(2, 63), false, false),
+                new Shape("negative zero", -0.0d, false, false),
                 new Shape("the long 2, at the counter", SHAPED_POSITION, true, true),
                 new Shape("the long 3, above the counter", COUNTER + 1, false, false)
         );

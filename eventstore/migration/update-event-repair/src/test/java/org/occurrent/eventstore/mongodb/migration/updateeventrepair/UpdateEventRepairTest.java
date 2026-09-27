@@ -28,6 +28,7 @@ import com.mongodb.client.MongoDatabase;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
+import org.bson.types.Decimal128;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +36,9 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
@@ -54,6 +58,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.occurrent.testsupport.mongodb.StoredTagShapes;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
@@ -73,6 +78,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
+import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -458,10 +464,17 @@ class UpdateEventRepairTest {
         // A wrong fix for step 5, a number but not one any store assigns
         events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 0L)));
 
+        UpdateEventRepairResult result = newRepair().run();
+
         assertAll(
-                () -> assertThat(newRepair().run().eventsRepaired())
-                        .as("a numeric position on an event without dcbtags is nothing the repair looks for")
+                () -> assertThat(result.eventsRepaired())
+                        .as("zero is not a position any store assigned, so there is nothing to put back")
                         .isZero(),
+                () -> assertThat(result.unrecoverableEvents())
+                        .as("the store refuses this event, so the repair has to name it")
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE),
                 () -> assertThatThrownBy(() -> newStreamOnlyEventStore(false))
                         .as("an event at position zero is missing from every position read, so the store must refuse")
                         .isInstanceOf(IllegalStateException.class)
@@ -675,8 +688,8 @@ class UpdateEventRepairTest {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
         // A typo in step 5's hand fix, written as a number rather than the damaged string the tool would otherwise
-        // still treat as string-typed damage. The tag array is still there to rebuild, so this event matches the
-        // filter through it, not through its position.
+        // still treat as string-typed damage. The event matches the filter through its position and through the tag
+        // array still there to rebuild.
         events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 0L)));
 
         UpdateEventRepairResult result = newRepair().run();
@@ -693,6 +706,137 @@ class UpdateEventRepairTest {
                 () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
                         .as("the tag array does not depend on the position, so a forged position must not cost the event its tags too")
                         .containsExactly("name:1")
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("org.occurrent.testsupport.mongodb.StoredTagShapes#shapes")
+    void the_repair_rebuilds_every_tag_index_a_store_requiring_repaired_events_refuses_and_reports_the_rest(StoredTagShapes.Shape shape) {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        StoredTagShapes.give(events(), shape);
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        if (shape.startsAfterRepair()) {
+            assertAll(
+                    () -> assertThatNoException()
+                            .as("the repair and the store share one idea of a damaged tag index, so whatever the repair rebuilds the store must start over")
+                            .isThrownBy(() -> newEventStore(true)),
+                    () -> assertThat(result.eventsRepaired())
+                            .as("an event the store already starts over has nothing to repair, and every other one is repaired")
+                            .isEqualTo(shape.starts() ? 0 : 1),
+                    () -> assertThat(result.unrecoverableEvents()).isEmpty()
+            );
+        } else {
+            assertAll(
+                    () -> assertThatThrownBy(() -> newEventStore(true))
+                            .as("a dcbtags that does not decode to a tag set gives the repair nothing to rebuild the index from")
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("updateEvent damaged"),
+                    () -> assertThat(result.unrecoverableEvents())
+                            .as("an event the store refuses and the repair cannot fix has to be named, or the refusal points at nothing")
+                            .singleElement()
+                            .extracting(UnrecoverableEvent::reason)
+                            .isEqualTo(UnrecoverableEvent.Reason.UNREADABLE)
+            );
+        }
+    }
+
+    @Test
+    void tags_written_back_with_whitespace_are_stored_the_way_an_append_writes_them() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1", "other:2")));
+        // Step 5 lets an operator write the tags back in any order and with whitespace around them
+        events().updateOne(new Document("id", "a"),
+                new Document("$unset", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, ""))
+                        .append("$set", new Document(DcbCloudEvents.TAGS, " other:2\nname:1 ")));
+
+        newRepair().run();
+
+        assertAll(
+                () -> assertThat(storedDocument("a").getString(DcbCloudEvents.TAGS))
+                        .as("the store compares the index with the lines of dcbtags as stored, so the whitespace has to go")
+                        .isEqualTo("name:1\nother:2"),
+                () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .containsExactly("name:1", "other:2"),
+                () -> assertThatNoException()
+                        .as("a step 5 fix the runbook allows must be enough for the store to start")
+                        .isThrownBy(() -> newEventStore(true))
+        );
+    }
+
+    static Stream<Arguments> handSetPositionsNoStoreAssigns() {
+        return Stream.of(
+                Arguments.of("the double 1.5", 1.5d, UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                Arguments.of("the decimal 1.5", Decimal128.parse("1.5"), UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                Arguments.of("a boolean", true, UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                Arguments.of("the double NaN", Double.NaN, UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                Arguments.of("the double 2^63", Math.pow(2, 63), UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                Arguments.of("negative zero", -0.0d, UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE),
+                Arguments.of("the decimal -1", new Decimal128(-1), UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE)
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("handSetPositionsNoStoreAssigns")
+    void a_hand_set_position_no_store_assigns_is_reported_rather_than_read_as_a_nearby_whole_number(String description, Object position, UnrecoverableEvent.Reason reason) {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        // A slip in step 5's hand fix, made before the second run has rebuilt the tag index
+        events().updateOne(new Document("id", "a"),
+                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, position))
+                        .append("$unset", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, "")));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .as("the store refuses this value, so the repair has to name it rather than take the whole number next to it")
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(reason),
+                () -> assertThat(result.minRepairedPosition())
+                        .as("a value no store assigned must not be reported as part of the repaired range")
+                        .isNull(),
+                () -> assertThat(result.maxRepairedPosition()).isNull(),
+                () -> assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
+                        .as("a position that cannot be used must be left exactly as it was found")
+                        .isEqualTo(position),
+                () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .as("the tag index does not depend on the position, so it must be rebuilt anyway")
+                        .containsExactly("name:1")
+        );
+    }
+
+    @Test
+    void an_array_position_is_reported_and_the_tag_array_is_rebuilt_once_the_position_is_fixed() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        // MongoDB accepts the array only because the tag array is gone, since the dcbTags and position index refuses
+        // a document holding both as arrays
+        events().updateOne(new Document("id", "a"),
+                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, List.of(1L)))
+                        .append("$unset", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, "")));
+
+        UpdateEventRepairResult firstRun = newRepair().run();
+
+        assertAll(
+                () -> assertThat(firstRun.unrecoverableEvents())
+                        .as("an array is not a position, so the repair has to name it rather than read the number inside it")
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                () -> assertThat(storedDocument("a").containsKey(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD))
+                        .as("writing the tag array next to an array position fails on every retry, so the run must not try")
+                        .isFalse()
+        );
+
+        // Step 5, the position set back by hand
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 1L)));
+        newRepair().run();
+
+        assertAll(
+                () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .as("once the position is a number the next run rebuilds the tag array")
+                        .containsExactly("name:1"),
+                () -> assertThatNoException().isThrownBy(() -> newEventStore(true))
         );
     }
 
@@ -1140,11 +1284,11 @@ class UpdateEventRepairTest {
     void a_resumed_run_still_reports_an_unrecoverable_finding_a_killed_run_could_no_longer_be_rediscovered_by() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
-        // A typo in step 5's hand fix, the same as in a_hand_set_position_that_is_not_positive_is_reported_rather_
-        // than_included_in_the_range. The tag array is still there to rebuild, so repairEvent's write reaches the
+        // A typo in step 5's hand fix, a whole number above the counter, which the filter cannot see because it
+        // cannot read the counter. The tag array is still there to rebuild, so repairEvent's write reaches the
         // server and fixes the one thing that matched this event against the filter, while its position stays
-        // exactly as unassignable as it was.
-        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 0L)));
+        // exactly as far above the counter as it was.
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 99L)));
 
         UpdateEventRepair killedRightAfterFixingTheTagArray = new UpdateEventRepair(
                 databaseFailingTheCheckpointWriteThatFollowsAnEventRepair(), EVENT_COLLECTION,
@@ -1168,7 +1312,7 @@ class UpdateEventRepairTest {
                         .as("nothing still matches the filter, so the resumed run repairs nothing itself")
                         .isZero(),
                 () -> assertThat(resumed.unrecoverableEventCount())
-                        .as("the killed run's checkpoint already counted a's unassignable position before the tag fix took it out of the filter's reach, and a kill before the post-batch write left that count there")
+                        .as("the killed run's checkpoint already counted a's position above the counter before the tag fix took it out of the filter's reach, and a kill before the post-batch write left that count there")
                         .isEqualTo(1)
         );
     }

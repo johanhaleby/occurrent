@@ -51,8 +51,9 @@ and has no `position` field, so also run:
 db.events.countDocuments({ dcbtags: { $exists: true }, dcbTags: { $exists: false } })
 ```
 
-That second query is a collection scan, so run it during a quiet period on a large collection. If both return `0`, no damage this tool can find is in the
-collection. That is not quite the same as not being affected. An update function that returned a replacement event
+That second query is a collection scan, so run it during a quiet period on a large collection. If both return `0`,
+the collection holds none of the damage `updateEvent` left that this tool can find. The checks in step 6 also cover
+damage from elsewhere, a position or tag array edited by hand for instance. That is not quite the same as not being affected. An update function that returned a replacement event
 built from scratch, without the `dcbtags` extension, left a document that matches neither query and that nothing
 can tell apart from an ordinary stream event. If you know you ran one of those over DCB events, read "The damage
 this cannot find" below before you stop. Otherwise the rest of this runbook does not apply to you.
@@ -125,8 +126,8 @@ Finish the deploy, or stop the writers, before you start.
 Raise `throttleMillis` to leave more room for production traffic. Run one instance at a time, since two concurrent
 runs share one checkpoint document and would resume from the wrong place.
 
-Both the report and the repair read the whole collection, because finding an event whose tag array is missing cannot
-use an index. Neither is expensive in writes, but on a large store give them a quiet period.
+Both the report and the repair read the whole collection, because finding an event whose tag array does not hold
+its tags cannot use an index. Neither is expensive in writes, but on a large store give them a quiet period.
 
 If the process is killed part way, run it again. It resumes from a checkpoint document, the events it already
 repaired stay repaired, and it only touches events that still look damaged, so a repeated run cannot double-apply
@@ -161,14 +162,18 @@ refuses to start while such an event is left, so turn the setting off once you h
 either document says which one is entitled to it. Look at both events and decide, then set the loser's position by
 hand or accept that it stays outside position-ordered reads.
 
-**`POSITION_NOT_A_NUMBER`.** No known Occurrent path produces this, so it points at damage from somewhere else.
+**`POSITION_NOT_A_NUMBER`.** The position is not a whole number, a string that does not parse as one or a stored
+fraction, NaN, array or number above the largest `long`. No known Occurrent path produces this, so it points at
+damage from somewhere else, a position set by hand for instance.
 Worth investigating before you do anything to it. The event's tag array is repaired even so, since it does not
-depend on the position.
+depend on the position, unless the position is an array. MongoDB refuses to index two arrays in one document under
+the `dcbTags` and `position` index, so set the position by hand first and run the repair again.
 
 **`POSITION_NOT_POSITIVE`.** The stored position is zero or negative, which no store assigns. Positions start above
 zero and every position query reads `position > 0`, so writing the value back would count as a repair and leave the
-event just as invisible. Only an update function that set `position` itself produces this, which makes the original
-value gone rather than misread. Treat it the way you treat `POSITION_LOST`. The tag array is repaired even so.
+event just as invisible. An update function that set `position` itself produces this, which makes the original
+value gone rather than misread, so treat it the way you treat `POSITION_LOST`. A slip in a position you set by hand
+produces it too, and then you set the position again. The tag array is repaired even so.
 
 **`POSITION_ABOVE_COUNTER`.** The stored position is above the store's position counter, the highest position it ever
 handed out, so the store never assigned it. DCB reads and reads in position order stop at that same counter, so
@@ -180,7 +185,8 @@ ceiling to compare against and this is never reported.
 outside Occurrent. The run continues past it, so one such event does not hold up the rest. Without its tag array
 the event is missing from DCB reads, and a store with `requireRepairedEvents` on refuses to start. The repair
 rebuilds the array once `dcbtags` holds the event's tags again, so write them back as one string, the tags joined
-with a newline in any order, and run the repair again. It sorts them and strips the whitespace around each one.
+with a newline in any order, and run the repair again. It builds the tag array from them, and rewrites `dcbtags`
+without any whitespace you left around a tag.
 
 ```javascript
 db.events.updateOne({ _id: ObjectId("<_id>") }, { $set: { dcbtags: "<first tag>\n<second tag>" } })
@@ -208,8 +214,9 @@ also turns position off for the whole collection at its next startup.
 **A position you set by hand has to be one the store could have assigned.** It has to be above zero, no other event
 may hold it, and it may not be above the store's position counter. The unique `position` index refuses a value
 another event holds, and a store with `requireRepairedEvents` on refuses to start over one at or below zero or above
-the counter. Without that setting nothing else checks, since the repair does not look at an event again once its
-position is a number and its tag array, if it had one, is back. Check both limits after the fix:
+the counter. Without that setting only a later run of the repair reports a value at or below zero, and nothing
+reports one above the counter, since the repair does not look at an event again once its position is a positive
+integer and its tag array, if it had one, is back. Check both limits after the fix:
 
 ```javascript
 db.events.find({ position: { $lte: 0 } })
@@ -251,18 +258,26 @@ const validPosition = { $and: [
   { $gt: ["$position", 0] },
   { $lte: ["$position", NumberLong("9223372036854775807")] },
   { $eq: ["$position", { $trunc: "$position" }] }] }
+const tagIndexMatchesTags = { $and: [
+  { $eq: [{ $type: "$dcbtags" }, "string"] },
+  { $isArray: "$dcbTags" },
+  { $setEquals: ["$dcbTags", { $cond: [{ $eq: ["$dcbtags", ""] }, [], { $split: ["$dcbtags", "\n"] }] }] }] }
 db.events.countDocuments({ position: { $exists: true }, $expr: { $not: [validPosition] } })
 db.events.countDocuments({ dcbtags: { $exists: true }, position: null })
-db.events.countDocuments({ dcbtags: { $exists: true }, dcbTags: { $exists: false } })
+db.events.countDocuments({ dcbtags: { $exists: true }, $expr: { $not: [tagIndexMatchesTags] } })
 db.events.find({ $expr: validPosition }, { position: 1 }).sort({ position: -1 }).limit(1)
 db.events_position.findOne({ _id: "dcb" })
 ```
 
-`validPosition` holds for a positive integer that fits in a `long`, the only kind of position a store assigns. The
-three counts should be `0`, except for the events step 5 left alone deliberately. The first counts a `position`
-that is anything else, a string, `null`, `NaN`, an array or a fraction included. The second counts a DCB event
-whose position is gone, whether the field is missing or holds `null`, and the third a DCB event without its tag
-array. Run the last two in this order. The `find` returns the highest valid position, never an array or a string,
+`validPosition` holds for a positive integer that fits in a `long`, the only kind of position a store assigns.
+`tagIndexMatchesTags` holds when the tag array holds the same tags as the lines of `dcbtags`, in any order, and none
+when `dcbtags` is empty, which is what every append writes. The three counts should be `0`, except for the events
+step 5 left alone deliberately. The first counts a `position` that is anything else, a string, `null`, `NaN`, an
+array or a fraction included. The second counts a DCB event whose position is gone, whether the field is missing or
+holds `null`, and the third a DCB event whose tag array is missing, is not an array or holds other tags. The first
+count can also find a plain stream event whose `position` holds `null`, which the repair neither reports nor fixes,
+since nothing in the document says what it was. Set the position your own records say it had, or turn
+`requireRepairedEvents` off once you have accepted the loss. Run the last two in this order. The `find` returns the highest valid position, never an array or a string,
 and it should be no higher than the `position` field of the counter document the `findOne` returns. Without a
 counter document there is nothing to compare. Restart the
 application and confirm the startup warning is gone.
