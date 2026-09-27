@@ -346,27 +346,44 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > `startupMode = BACKGROUND` starts it, and a failure is recorded in `PushCatchupStatus` rather than thrown. The
 > blocking stack still waits, since it is allowed to block whichever thread asked for the bean.
 >
-> The subscribe can block as well. `ReactorDurableSubscriptionModel`, which the reactive MongoDB starter registers,
-> reads the stored position with `block()` inside `subscribe` for `DEFAULT`, and for the beginning or an explicit
-> position the starter first checks for a stored position with `blockOptional()`. So what a late `@Subscription`,
+> The subscribe can block as well. For the beginning or an explicit position the reactive MongoDB starter first
+> checks for a stored position with `blockOptional()`. For `DEFAULT`, `ReactorDurableSubscriptionModel` reads the
+> stored position with `block()` inside `subscribe` when it wraps a `SubscriptionModel`, which is how the starter
+> builds it. Wrapping a model that is not a `SubscriptionModel`, it reads the position without blocking. So what a late `@Subscription`,
 > `@Snapshot` or event store `@Projection` does on a non-blocking thread depends on where it starts. That is decided
 > per handler, so one bean can have a handler of each kind.
 >
 > One that starts at the beginning or at an explicit position receives the same events whenever it subscribes, so it
-> subscribes on `Schedulers.boundedElastic()` after the bean is returned. An attempt that failed for a reason that can
-> go away is logged at ERROR and tried again, the delay doubling from 100 ms up to 30 seconds, until one succeeds or
-> the context starts closing. Its ids stay claimed while it tries. Which reasons can go away follows the split
-> `SubscriptionRefusedException` documents. An `IllegalArgumentException`, which every refusal there is, and an
-> `UnsupportedOperationException`, a `NullPointerException` or an `Error` say the call itself is wrong, so the attempt
-> is logged at ERROR once and gives its ids back. Everything else is tried again, an `IllegalStateException` and
-> whatever a storage or its driver throws, and so is an exception of any other type that nothing expected.
+> subscribes on `Schedulers.boundedElastic()` after the bean is returned. A failed attempt is tried again only when a
+> later attempt can succeed without the application changing its configuration or restarting. Then it is logged at
+> ERROR and tried again, the delay doubling from 100 ms up to 30 seconds, until one succeeds or the context starts
+> closing, and its ids stay claimed while it tries. Any other failure is logged at ERROR once and gives its ids back.
+> Which failures can go away follows the split `SubscriptionRefusedException` documents. An
+> `IllegalArgumentException`, which every refusal there is, an `UnsupportedOperationException`, a
+> `NullPointerException` and an `Error` say the call itself is wrong. A `BeansException` says the context has no bean
+> the subscribe needs, or could not build it. A `SubscriptionModelShutdownException` says the model was shut down and
+> can't be started again. `ReactorMongoSubscriptionModel` throws it from `subscribe` once it is shut down, and so does
+> `ReactorDurableSubscriptionModel` wrapping a model that is not a `SubscriptionModel`. Wrapping a `SubscriptionModel`,
+> it passes on whatever that model throws, which for the starter's `ReactorMongoSubscriptionModel` is this one.
+> Everything else is tried again, an `IllegalStateException` and whatever a storage or its driver
+> throws, and so is an exception of any other type that nothing expected. A failure that never goes away and is none
+> of those types is therefore tried every 30 seconds until the context closes, with its ids claimed the whole time. A
+> storage that stays unreachable does that, and so does a subscription model of your own that throws a plain
+> `IllegalStateException` once it is shut down.
+>
+> The beans a subscription handler subscribes through, `Subscriptions`, `StreamSubscriptions` and `DcbSubscriptions`,
+> are looked up while its bean is built, the same as for `@Projection` and `@Snapshot`, so a missing one fails the
+> bean instead of a subscribe on another thread. `CheckpointStorage` is looked up later. A start at the beginning or
+> at an explicit position with `resumeBehavior = DEFAULT` looks it up only when the subscription model evaluates that
+> start, since a model that never does needs none, and a missing one then fails with a `BeansException`.
 >
 > One that starts at `NOW`, or at `DEFAULT` with no position stored, starts from wherever the event feed has reached
 > when the subscribe runs. Subscribing it later would skip whatever the caller writes between getting the bean and
 > that subscribe, so it subscribes on the calling thread, and every such subscription handler on a bean does so before
-> the bean's other subscription handlers are handed to the scheduler. A `DEFAULT` handler with a position stored
-> resumes from there, but finding that out is the blocking read, so it goes the same way.
-> `ReactorDurableSubscriptionModel` blocks for `DEFAULT`, and then the bean fails to build with a message saying to
+> the bean's other subscription handlers are handed to the scheduler. A bean's subscription handlers subscribe in
+> that order on every thread, startup included, where the others then subscribe in place. A `DEFAULT` handler with a
+> position stored resumes from there, but finding that out is the blocking read, so it goes the same way.
+> `ReactorDurableSubscriptionModel` wrapping a `SubscriptionModel` blocks for `DEFAULT`, and then the bean fails to build with a message saying to
 > build it on a thread that may block or to start it at the beginning or at an explicit position. When that handler is
 > a subscription handler, the bean's other subscription handlers that start at the beginning or at an explicit
 > position have not been handed to the scheduler by then, and they give their ids back. Everything that registered
@@ -379,7 +396,7 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > The push subscription models in this repository do not block in `subscribe`, so a push projection subscribes in
 > place. When the context starts closing, a subscribe that has not run yet never runs, one waiting to be tried again
 > is cancelled, and both give back their ids. One that is running is waited for, up to 5 seconds, so the subscription
-> model stops it along with the rest when it shuts down. A refresh that fails after startup publishes no close event,
+> model stops it along with the rest when it shuts down. A refresh that fails after the startup scan publishes no close event,
 > so the same happens when the post processor is destroyed.
 
 **Moving there inherits how the existing descriptor annotations invoke a factory, including one hazard they already
