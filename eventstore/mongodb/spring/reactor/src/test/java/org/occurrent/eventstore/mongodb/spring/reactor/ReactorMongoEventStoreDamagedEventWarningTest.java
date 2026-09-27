@@ -28,12 +28,13 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
-import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
@@ -43,6 +44,9 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.occurrent.testsupport.mongodb.StoredPositionShapes;
+import org.occurrent.testsupport.mongodb.StoredPositionShapes.Kind;
+import org.occurrent.testsupport.mongodb.StoredPositionShapes.Shape;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -199,46 +203,35 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
                 .isThrownBy(this::newStoreRequiringRepairedEvents);
     }
 
-    @Test
-    void a_store_told_to_require_repaired_events_refuses_a_dcb_event_whose_position_is_null() {
-        newEventStore().write("stream:1", Flux.just(event("Defined"))).block();
-        loseTheTagIndex();
-        rebuildTheTagIndex();
-        setThePosition(null);
+    @ParameterizedTest(name = "{0} on {1}")
+    @MethodSource("org.occurrent.testsupport.mongodb.StoredPositionShapes#onADcbAndAPlainEvent")
+    void a_store_told_to_require_repaired_events_starts_only_when_every_position_is_a_positive_integer_no_greater_than_the_counter(Shape shape, Kind kind) {
+        newEventStore().write("stream:1", Flux.just(event("Defined"), event("Renamed"))).block();
+        assertThat(counter())
+                .as("every case assumes this counter, so that a fraction below it is refused for its fraction alone")
+                .isEqualTo(StoredPositionShapes.COUNTER);
+        withEventCollection(events -> StoredPositionShapes.give(events, shape, kind, dcbFields()));
 
-        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
-                .as("a null position keeps a DCB event out of DCB reads exactly as a missing one does")
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("updateEvent damaged");
+        if (shape.startsOn(kind)) {
+            assertThatNoException()
+                    .as("a positive integer no greater than the counter is a position the store assigned, and a plain event without one predates position")
+                    .isThrownBy(this::newStoreRequiringRepairedEvents);
+        } else {
+            assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                    .as("anything else is not a position the store assigned, and reads skip it, read it as another value or fail on it")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("updateEvent damaged");
+        }
     }
 
     @Test
-    void a_store_told_to_require_repaired_events_refuses_an_event_whose_position_is_null() {
-        newEventStore().write("stream:1", Flux.just(event("Defined"))).block();
-        setThePosition(null);
-
-        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
-                .as("a null position is a field that holds something other than a number, which position reads skip")
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("updateEvent damaged");
-    }
-
-    @Test
-    void a_store_told_to_require_repaired_events_refuses_a_dcb_event_whose_position_is_above_the_counter() {
-        newEventStore().write("stream:1", Flux.just(event("Defined"))).block();
-        loseTheTagIndex();
-        rebuildTheTagIndex();
+    void a_store_told_to_require_repaired_events_starts_without_a_position_counter() {
+        newEventStore().write("stream:1", Flux.just(event("Defined"), event("Renamed"))).block();
+        dropTheCounter();
 
         assertThatNoException()
-                .as("a DCB event at the counter is one the store assigned")
+                .as("without a counter no position can be above it, so the store must not refuse over the counter it lacks")
                 .isThrownBy(this::newStoreRequiringRepairedEvents);
-
-        setThePosition(counter() + 1);
-
-        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
-                .as("DCB reads and reads in position order stop at the counter, so they skip a position above it")
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("updateEvent damaged");
     }
 
     @Test
@@ -333,9 +326,16 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
                 new Document("$set", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, List.of(TAG.canonical())))));
     }
 
-    private void setThePosition(@Nullable Object position) {
-        withEventCollection(events -> events.updateOne(new Document(),
-                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, position))));
+    private static Document dcbFields() {
+        return new Document(DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(List.of(TAG)))
+                .append(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, List.of(TAG.canonical()));
+    }
+
+    private void dropTheCounter() {
+        try (com.mongodb.client.MongoClient blockingClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl())) {
+            blockingClient.getDatabase(databaseName).getCollection(DcbMarkerModel.positionCollectionName(EVENT_COLLECTION))
+                    .deleteOne(new Document("_id", DcbMarkerModel.POSITION_DOCUMENT_ID));
+        }
     }
 
     private long counter() {

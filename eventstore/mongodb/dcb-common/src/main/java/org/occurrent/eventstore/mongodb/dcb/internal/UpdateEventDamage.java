@@ -19,18 +19,18 @@ package org.occurrent.eventstore.mongodb.dcb.internal;
 import org.bson.BsonType;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.bson.types.Decimal128;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
 import static com.mongodb.client.model.Filters.exists;
 import static com.mongodb.client.model.Filters.expr;
-import static com.mongodb.client.model.Filters.lte;
-import static com.mongodb.client.model.Filters.not;
 import static com.mongodb.client.model.Filters.or;
 import static com.mongodb.client.model.Filters.type;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.POSITION;
@@ -91,31 +91,47 @@ public final class UpdateEventDamage {
     }
 
     /**
-     * Every event whose position or tag index is wrong, as far as a filter can tell without the position counter. A
-     * position read only returns an event whose {@code position} is a number above zero and no greater than the
-     * counter, and it reads a number with a fraction as the whole number below it, which can be another event's
-     * position. A DCB read also needs the event's tag index. So this matches a {@code position} field that holds
-     * anything other than a number, {@code null} included, a number at or below zero or with a fraction, a DCB event
-     * with no {@code position}, and a DCB event without its tag index. A non DCB event with no {@code position} field
-     * is left to {@code requireBackfilledPosition}. Whether a position is above the counter is what
-     * {@link #positionAboveCounter(Document, Document)} answers. No index covers the tag index half, so this filter
-     * reads the whole collection when nothing matches.
+     * Every event whose position or tag index is wrong, as far as a filter can tell without the position counter. That
+     * is an event with a {@code position} field that fails {@link #validPosition()}, a DCB event with no
+     * {@code position} or a {@code null} one, and a DCB event without its tag index. A non DCB event with no
+     * {@code position} field is left to {@code requireBackfilledPosition}. Whether a valid position is above the
+     * counter is what {@link #positionAboveCounter(Document, Document)} answers. No index narrows the expression or
+     * covers the tag index half, so this filter reads the whole collection when nothing matches.
      *
      * @return the filter
      */
     public static Bson wrongPositionOrMissingTagIndex() {
         return or(
-                and(exists(POSITION), not(type(POSITION, "number"))),
-                lte(POSITION, 0),
-                positionWithAFraction(),
+                and(exists(POSITION), expr(new Document("$not", List.of(validPosition())))),
                 positionLost(),
                 and(exists(DcbCloudEvents.TAGS), exists(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, false))
         );
     }
 
     /**
+     * An aggregation expression that holds when {@code position} is a positive integer that fits in a {@code long}, the
+     * only kind of value a store assigns. It is written as what a valid position is rather than as a list of what is
+     * wrong, since BSON has more kinds of wrong value than anyone lists. It is false for a missing field, {@code null},
+     * a string, an array, any other type, {@code NaN}, an infinity, zero, a negative number and a number with a
+     * fraction. {@code $and} stops at the first false clause, so {@code $trunc} only ever sees a number.
+     *
+     * @return the expression, for use inside {@code $expr}
+     */
+    public static Document validPosition() {
+        String position = "$" + POSITION;
+        return new Document("$and", List.of(
+                new Document("$isNumber", position),
+                new Document("$gt", List.of(position, 0)),
+                new Document("$lte", List.of(position, Long.MAX_VALUE)),
+                new Document("$eq", List.of(position, new Document("$trunc", position)))
+        ));
+    }
+
+    /**
      * An event whose {@code position} is a number. Sorted by {@code position} descending, the first match holds the
-     * highest position in the collection, and the {@code position} index serves that sort.
+     * highest position in the collection, and the {@code position} index serves that sort. An array holding a number
+     * matches too and can come first, so this finds the highest position only once
+     * {@link #wrongPositionOrMissingTagIndex()} has found nothing.
      *
      * @return the filter
      */
@@ -124,14 +140,15 @@ public final class UpdateEventDamage {
     }
 
     /**
-     * Whether the highest numeric position in the collection is above the store's position counter. No store assigns
-     * such a value, and DCB reads and reads in position order skip it, since they stop at the counter. Read
+     * Whether the highest position in the collection is above the store's position counter. No store assigns such a
+     * value, and DCB reads and reads in position order skip it, since they stop at the counter. Ask only once
+     * {@link #wrongPositionOrMissingTagIndex()} has found nothing, so that every position is valid. Read
      * {@code highestPositioned} first and {@code counter} second. Every writer raises the counter before the position
      * it reserved becomes visible, and nothing lowers it, so a counter read after the highest position is at least
      * that position, even with appends in flight. With no counter document there is nothing to compare against, and
      * the answer is no, as it is in the repair tool.
      *
-     * @param highestPositioned the event with the highest numeric {@code position}, or {@code null} if there is none
+     * @param highestPositioned the event with the highest {@code position}, or {@code null} if there is none
      * @param counter           the position counter document, or {@code null} if there is none
      * @return {@code true} if the highest position is above the counter
      */
@@ -144,17 +161,18 @@ public final class UpdateEventDamage {
         if (!(highest instanceof Number highestNumber) || !(ceiling instanceof Number ceilingNumber)) {
             return false;
         }
-        if (highestNumber instanceof Long || highestNumber instanceof Integer) {
-            return highestNumber.longValue() > ceilingNumber.longValue();
-        }
-        return highestNumber.doubleValue() > ceilingNumber.doubleValue();
+        return exactly(highestNumber).compareTo(exactly(ceilingNumber)) > 0;
     }
 
-    // A number that trunc changes has a fraction. Only a number goes through trunc, which fails on anything else, and
-    // an expression is not guaranteed to run after the rest of the filter.
-    private static Bson positionWithAFraction() {
-        String position = "$" + POSITION;
-        Document truncated = new Document("$cond", List.of(new Document("$isNumber", position), new Document("$trunc", position), position));
-        return expr(new Document("$ne", List.of(position, truncated)));
+    // Exact for any valid position, where comparing doubles would round a Decimal128 position above 2^53 onto the
+    // counter below it
+    private static BigDecimal exactly(Number number) {
+        if (number instanceof Decimal128 decimal) {
+            return decimal.bigDecimalValue();
+        }
+        if (number instanceof Long || number instanceof Integer) {
+            return BigDecimal.valueOf(number.longValue());
+        }
+        return new BigDecimal(number.doubleValue());
     }
 }

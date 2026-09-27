@@ -65,8 +65,8 @@ setting below.
 
 Set `EventStoreConfig.Builder.requireRepairedEvents(true)` if you would rather the store refused to start than kept
 accepting conditional appends against a damaged event. It is off by default. It refuses while any of the checks in
-step 6 finds an event, and those include both queries above. A startup that finds no such event reads the whole
-collection. It can also keep refusing after the repair has run, over an event the repair could not fix, until you fix that event by hand or turn the setting
+step 6 finds an event, and those find everything both queries above find. A startup that finds no such event reads
+the whole collection. It can also keep refusing after the repair has run, over an event the repair could not fix, until you fix that event by hand or turn the setting
 off, as step 5 describes. It applies whether or not the store writes position, so a store that turned position
 off over unpositioned history is refused too.
 
@@ -246,21 +246,25 @@ recorded above is the only record of it.
 ### 6. [you] Verify
 
 ```javascript
-db.events.countDocuments({ position: { $exists: true, $not: { $type: "number" } } })
-db.events.countDocuments({ dcbtags: { $exists: true }, dcbTags: { $exists: false } })
+const validPosition = { $and: [
+  { $isNumber: "$position" },
+  { $gt: ["$position", 0] },
+  { $lte: ["$position", NumberLong("9223372036854775807")] },
+  { $eq: ["$position", { $trunc: "$position" }] }] }
+db.events.countDocuments({ position: { $exists: true }, $expr: { $not: [validPosition] } })
 db.events.countDocuments({ dcbtags: { $exists: true }, position: null })
-db.events.countDocuments({ position: { $lte: 0 } })
-db.events.countDocuments({ $expr: { $ne: ["$position",
-  { $cond: [{ $isNumber: "$position" }, { $trunc: "$position" }, "$position"] }] } })
-db.events.find({ position: { $type: "number" } }, { position: 1 }).sort({ position: -1 }).limit(1)
+db.events.countDocuments({ dcbtags: { $exists: true }, dcbTags: { $exists: false } })
+db.events.find({ $expr: validPosition }, { position: 1 }).sort({ position: -1 }).limit(1)
 db.events_position.findOne({ _id: "dcb" })
 ```
 
-The first five should be `0`, except for the events step 5 left alone deliberately. The first counts a position
-that is anything other than a number, a string or `null` included. The third counts a DCB event whose position is
-gone, whether the field is missing or holds `null`, and the fifth a position with a fraction. Run the last two in
-this order. The `find` returns the highest position, which should be no higher than the `position` field of the
-counter document the `findOne` returns. Without a counter document there is nothing to compare. Restart the
+`validPosition` holds for a positive integer that fits in a `long`, the only kind of position a store assigns. The
+three counts should be `0`, except for the events step 5 left alone deliberately. The first counts a `position`
+that is anything else, a string, `null`, `NaN`, an array or a fraction included. The second counts a DCB event
+whose position is gone, whether the field is missing or holds `null`, and the third a DCB event without its tag
+array. Run the last two in this order. The `find` returns the highest valid position, never an array or a string,
+and it should be no higher than the `position` field of the counter document the `findOne` returns. Without a
+counter document there is nothing to compare. Restart the
 application and confirm the startup warning is gone.
 
 A store with `requireRepairedEvents` on runs these same checks when it starts and refuses while any of them finds an

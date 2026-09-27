@@ -309,9 +309,9 @@ public class EventStoreConfig {
          * When the event collection holds an event whose position or tag index no store would have written, fail
          * construction with an {@link IllegalStateException}. That is any event whose position is anything other than a
          * positive integer no greater than the store's position counter, and any DCB event without its {@code dcbTags}
-         * index. Reads in position order skip such a position without an error, or read one with a fraction as a whole
-         * number that can be another event's position. DCB reads also skip an event without its index, and a
-         * conditional append can then miss a conflict with a DCB event they skip. Occurrent's own {@code updateEvent}
+         * index. Reads in position order skip an event with such a position, read it wrong or fail on it. DCB reads
+         * also skip an event without its index, and a conditional append can then miss a conflict with a DCB event
+         * they skip. Occurrent's own {@code updateEvent}
          * produced such events in 0.33.0 or earlier, by storing a position as a string or by dropping a DCB event's
          * {@code dcbTags} index, its position, or both, and a position set by hand can produce one too. A non DCB event
          * with no position field at all is what {@code requireBackfilledPosition} checks instead. Off by default, and
