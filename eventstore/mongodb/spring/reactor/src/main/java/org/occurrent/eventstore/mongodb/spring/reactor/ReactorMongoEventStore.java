@@ -832,10 +832,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // Warns, or errors when requireRepairedEvents is set, when the collection holds events that updateEvent damaged
     // before 0.34.0. Those events are missing from the conflict query behind a conditional append, and from every
     // position query unless only their tag index is gone. The warning looks for a string position only, which reads
-    // no index keys on a store that was never damaged. requireRepairedEvents looks for everything the repair tool
-    // repairs, so a store refusing to start and the tool always agree, at the cost of a collection scan.
+    // no index keys on a store that was never damaged. requireRepairedEvents also looks for most of what the
+    // repair tool reports and cannot fix, at the cost of a collection scan.
     private Mono<Void> warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
-        Bson damaged = requireRepairedEvents ? UpdateEventDamage.damagedEvent() : UpdateEventDamage.positionStoredAsString();
+        Bson damaged = requireRepairedEvents ? UpdateEventDamage.damagedOrUnrecoverable() : UpdateEventDamage.positionStoredAsString();
         return mongoTemplate.execute(eventStoreCollectionName, collection ->
                 collection.find(damaged).limit(1).projection(Projections.include(ID)).first()).hasElements().flatMap(hasDamagedEvents -> {
             if (!hasDamagedEvents) {

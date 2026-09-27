@@ -117,7 +117,7 @@ can acquire the damage now that PR 901 has shipped, so nothing is added to the s
 the conflict query behind a conditional append, though, so every conditional append made against it while it is
 still damaged is accepted when it should have been refused, and each one is a wrong outcome the repair does not
 undo. An operator who would rather have the application down than let that keep happening turns
-`requireRepairedEvents` on until the repair has run.
+`requireRepairedEvents` on while damage is left.
 
 The default stays a warning because that choice belongs to the operator. Refusing by default makes an upgrade to
 0.34.0 unbootable for exactly the people the defect already harmed, and a store whose damaged event sits in a stream
@@ -129,20 +129,29 @@ does not simply mirror `requireBackfilledPosition`. A store writes no position i
 the store that otherwise hears nothing at all. Refusing to check there would leave the setting silent on the store
 that needs it most.
 
-`requireRepairedEvents` also checks more than the warning does. It refuses while anything matches the repair tool's
-own damaged-event filter, `UpdateEventDamage.damagedEvent()` in `occurrent-eventstore-mongodb-dcb-common`, which the
-tool and all three stores call. That filter adds the `dcbTags` half to the string position. An operator who asked to
-be refused until the repair has run needs the refusal and the repair to agree on what is damaged. A string position
-alone misses a DCB event whose position was dropped, and the hand-set event section 2 describes. Both are missing
-from the conflict query.
+`requireRepairedEvents` also checks more than the warning does. It refuses while anything matches
+`UpdateEventDamage.damagedOrUnrecoverable()` in `occurrent-eventstore-mongodb-dcb-common`, a class the tool and all
+three stores call. That filter is the repair tool's own damaged-event filter, which adds the `dcbTags` half to the
+string position, together with a DCB event that has no position and an event whose position is a number at or below
+zero. An operator who asked to be refused while damage is left needs the refusal to cover what the repair could
+not fix as well as what it would still fix. A string position alone misses a DCB event whose position was dropped, and
+the hand-set event section 2 describes. Both are missing from the conflict query.
+
+A `POSITION_LOST` event is why the damaged-event filter alone is not enough. The repair rebuilds its tag array,
+which stops that filter matching it, and the event is still missing from DCB reads and from the conflict query. A
+store checking only that filter started over it after a run that had just reported it.
+
+The filter does not find a numeric position above the store's position counter. That takes reading the counter at
+startup and ordering the read against appends in flight, in all three stores, and only a write outside Occurrent
+produces such a position. Step 5 of the runbook gives the operator a query for it instead.
 
 The price is that, with the setting on, a startup that finds no damage reads the whole collection, whether or not
 the store writes position, since no index covers the `dcbTags` half. Only an operator who asked for the refusal pays
 it.
 
 An event the repair reports as unrecoverable can still match the filter after a run, for instance one whose position
-is still a string or whose `dcbtags` does not decode. Such an event keeps the store down until someone fixes it by
-hand or turns the setting off. Step 5 of the runbook says how to fix each by hand, and the refusal message points
+is still a string, one whose `dcbtags` does not decode, or a `POSITION_LOST` event. Such an event keeps the store
+down until someone fixes it by hand or turns the setting off once they have accepted it. Step 5 of the runbook says how to fix each by hand, and the refusal message points
 there.
 
 Narrowing the filter so such an event no longer counts was rejected. A filter can exclude a `dcbtags` that is not a

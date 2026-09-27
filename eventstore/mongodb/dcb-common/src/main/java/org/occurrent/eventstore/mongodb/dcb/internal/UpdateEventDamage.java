@@ -23,14 +23,16 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.exists;
+import static com.mongodb.client.model.Filters.lte;
 import static com.mongodb.client.model.Filters.or;
 import static com.mongodb.client.model.Filters.type;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.POSITION;
 
 /**
  * What an event that {@code updateEvent} damaged before 0.34.0 looks like when stored. The update-event repair tool
- * repairs what {@link #damagedEvent()} matches, and a MongoDB event store with {@code requireRepairedEvents(true)}
- * refuses to start while anything matches it, so the tool and the store agree on what counts as damaged.
+ * repairs what {@link #damagedEvent()} matches and counts what {@link #positionLost()} matches as a position it cannot
+ * restore. A MongoDB event store with {@code requireRepairedEvents(true)} refuses to start while anything matches
+ * {@link #damagedOrUnrecoverable()}, which includes both.
  */
 @NullMarked
 public final class UpdateEventDamage {
@@ -63,5 +65,40 @@ public final class UpdateEventDamage {
                 positionStoredAsString(),
                 and(exists(DcbCloudEvents.TAGS), exists(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, false))
         );
+    }
+
+    /**
+     * An event that was written by a DCB append, so it had a position, and no longer has one. The repair cannot put
+     * it back, so this is what survives a completed run rather than what a run is looking for. The repair rebuilds
+     * such an event's tag array, after which {@link #damagedEvent()} no longer matches it.
+     *
+     * @return the filter
+     */
+    public static Bson positionLost() {
+        return and(exists(DcbCloudEvents.TAGS), exists(POSITION, false));
+    }
+
+    /**
+     * An event whose {@code position} is a number at or below zero, which no store assigns. A position read starts
+     * above zero, so such an event is missing from it. The repair never writes such a position, so an event gets here
+     * only when something outside Occurrent wrote it. A string never matches, since MongoDB compares a number only
+     * with numbers.
+     *
+     * @return the filter
+     */
+    public static Bson positionNotPositive() {
+        return lte(POSITION, 0);
+    }
+
+    /**
+     * Anything {@link #damagedEvent()}, {@link #positionLost()} or {@link #positionNotPositive()} matches, which is
+     * what the repair would still fix and what it reports but cannot fix, other than a numeric position above the
+     * store's position counter. Finding that one takes the counter as well, which a filter cannot read. No index
+     * covers the tag array half, so this filter reads the whole collection when nothing matches.
+     *
+     * @return the filter
+     */
+    public static Bson damagedOrUnrecoverable() {
+        return or(damagedEvent(), positionLost(), positionNotPositive());
     }
 }

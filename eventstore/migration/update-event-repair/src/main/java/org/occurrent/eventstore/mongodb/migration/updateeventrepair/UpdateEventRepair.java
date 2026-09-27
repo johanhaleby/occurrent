@@ -48,7 +48,6 @@ import java.util.function.Supplier;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
-import static com.mongodb.client.model.Filters.exists;
 import static com.mongodb.client.model.Filters.gt;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toCollection;
@@ -168,7 +167,7 @@ public final class UpdateEventRepair {
      */
     public UpdateEventRepairReport report() {
         long needingRepair = withRetry(() -> eventCollection.countDocuments(UpdateEventDamage.damagedEvent()));
-        long lostPosition = withRetry(() -> eventCollection.countDocuments(lostPositionFilter()));
+        long lostPosition = withRetry(() -> eventCollection.countDocuments(UpdateEventDamage.positionLost()));
         log.info("Repair report for collection '{}': {} events need repair. Separately, {} events have a position that cannot be restored.",
                 eventStoreCollectionName, needingRepair, lostPosition);
         return new UpdateEventRepairReport(needingRepair, lostPosition);
@@ -321,7 +320,7 @@ public final class UpdateEventRepair {
         // POSITION_LOST event gets its tag array rebuilt, which stops it matching the damaged-event filter, so a run
         // killed between that write and the batch checkpoint leaves an event no resumed run rediscovers. Counting
         // what is still there means a finished run cannot report a clean collection while a position is still gone.
-        long lostPosition = withRetry(() -> eventCollection.countDocuments(lostPositionFilter()));
+        long lostPosition = withRetry(() -> eventCollection.countDocuments(UpdateEventDamage.positionLost()));
 
         String repairedRange = minRepairedPosition == null
                 ? "No position was repaired"
@@ -340,14 +339,6 @@ public final class UpdateEventRepair {
         // otherwise checkpoints against.
         deleteCheckpoint();
         return new UpdateEventRepairResult(repaired, unrecoverableCount, lostPosition, unrecoverable, minRepairedPosition, maxRepairedPosition);
-    }
-
-    /**
-     * An event that was written by a DCB append, so it had a position, and no longer has one. The repair cannot put
-     * it back, so this is what survives a completed run rather than what a run is looking for.
-     */
-    private static Bson lostPositionFilter() {
-        return and(exists(DcbCloudEvents.TAGS), exists(POSITION, false));
     }
 
     /**

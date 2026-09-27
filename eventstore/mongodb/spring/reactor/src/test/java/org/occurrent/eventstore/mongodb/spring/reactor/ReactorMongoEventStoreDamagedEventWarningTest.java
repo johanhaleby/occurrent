@@ -157,7 +157,7 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
     }
 
     @Test
-    void a_store_told_to_require_repaired_events_refuses_a_dcb_event_that_lost_its_tag_index_and_its_position() {
+    void a_store_told_to_require_repaired_events_refuses_a_dcb_event_that_lost_its_position_even_once_its_tag_index_is_rebuilt() {
         newEventStore().write("stream:1", Flux.just(event("Defined"))).block();
         // What the old write-back left when an update function returned a DCB event built from scratch. No string
         // position is involved, so only a check that looks at the tag index can see it.
@@ -169,11 +169,13 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("updateEvent damaged");
 
+        // The state the repair writes for a POSITION_LOST event
         rebuildTheTagIndex();
 
-        assertThatNoException()
-                .as("the repair rebuilds the tag index and cannot restore the lost position, and that collection must start")
-                .isThrownBy(this::newStoreRequiringRepairedEvents);
+        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                .as("a DCB event without a position is still missing from DCB reads and the conflict query, so the store must keep refusing")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
     }
 
     @Test

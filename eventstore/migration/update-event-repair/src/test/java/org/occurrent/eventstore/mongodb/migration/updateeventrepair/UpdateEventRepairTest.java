@@ -396,11 +396,42 @@ class UpdateEventRepairTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("updateEvent damaged");
 
-        newRepair().run();
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.eventsWithLostPosition())
+                        .as("a lost its position, which the repair cannot restore")
+                        .isEqualTo(1L),
+                () -> assertThatThrownBy(() -> newEventStore(true))
+                        .as("the repair left a without a position, so it is still missing from DCB reads and the store must keep refusing")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("updateEvent damaged")
+        );
+
+        events().deleteOne(new Document("id", "a"));
 
         assertThatNoException()
-                .as("the store and the repair must agree on what is damaged, so a collection the repair fixed has to start")
+                .as("with the event the repair could not fix gone, a collection the repair fixed has to start")
                 .isThrownBy(() -> newEventStore(true));
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_refuses_an_event_whose_position_was_set_to_zero_by_hand() {
+        eventStore.write("stream:1", List.of(event("a", "Defined")));
+        eventStore.write("stream:1", List.of(event("b", "Renamed")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        // A wrong fix for step 5, a number but not one any store assigns
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 0L)));
+
+        assertAll(
+                () -> assertThat(newRepair().run().eventsRepaired())
+                        .as("a numeric position on an event without dcbtags is nothing the repair looks for")
+                        .isZero(),
+                () -> assertThatThrownBy(() -> newStreamOnlyEventStore(false))
+                        .as("an event at position zero is missing from every position read, so the store must refuse")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("updateEvent damaged")
+        );
     }
 
     @Test
@@ -439,7 +470,7 @@ class UpdateEventRepairTest {
     }
 
     @Test
-    void a_store_requiring_repaired_events_refuses_a_position_left_as_a_string_until_it_is_removed() {
+    void a_store_requiring_repaired_events_keeps_refusing_a_dcb_event_whose_position_left_as_a_string_is_removed() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
         long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
@@ -454,9 +485,8 @@ class UpdateEventRepairTest {
                 .as("deciding to live without b's position changes nothing while the string is still there")
                 .isInstanceOf(IllegalStateException.class);
 
-        // Step 5: with no record of b's position, the operator removes the string from a DCB event only
-        events().updateOne(new Document("id", "b").append(DcbCloudEvents.TAGS, new Document("$exists", true)),
-                new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
+        // Removing the string instead of setting a position, which step 5 says does not help
+        events().updateOne(new Document("id", "b"), new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
 
         assertThatThrownBy(() -> newEventStore(true))
                 .as("the rejected update left b's tag array unwritten too, so removing the string alone is not enough")
@@ -465,9 +495,10 @@ class UpdateEventRepairTest {
         newRepair().run();
 
         assertAll(
-                () -> assertThatNoException()
-                        .as("step 5's fix for a position left as a string must be enough for the store to start")
-                        .isThrownBy(() -> newEventStore(true)),
+                () -> assertThatThrownBy(() -> newEventStore(true))
+                        .as("b is now a POSITION_LOST event, still missing from DCB reads, so the store must keep refusing until the setting is turned off")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("updateEvent damaged"),
                 () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:2"))))
                         .as("a DCB event without a position is still missing from DCB reads, as step 5 says")
                         .isEmpty()
@@ -521,16 +552,10 @@ class UpdateEventRepairTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("updateEvent damaged");
 
-        // Step 5: the documented removal matches only a DCB event, so it must not change a plain stream event
-        long removed = events().updateOne(new Document("id", "a").append(DcbCloudEvents.TAGS, new Document("$exists", true)),
-                new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, ""))).getModifiedCount();
         // Step 5: the operator sets the position their own records say a had, as a NumberLong
         events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, positionOfA)));
 
         assertAll(
-                () -> assertThat(removed)
-                        .as("the documented removal must not match an event without dcbtags")
-                        .isZero(),
                 () -> assertThat(newStreamOnlyEventStore(false).writesPosition())
                         .as("the oldest event has its position back, so a store whose position is only on by default must keep it on")
                         .isTrue(),

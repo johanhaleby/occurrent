@@ -928,10 +928,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // Warns, or fails when requireRepairedEvents is set, when the collection holds events that updateEvent damaged
     // before 0.34.0. Those events are missing from the conflict query behind a conditional append, and from every
     // position query unless only their tag index is gone. The warning looks for a string position only, which reads
-    // no index keys on a store that was never damaged. requireRepairedEvents looks for everything the repair tool
-    // repairs, so a store refusing to start and the tool always agree, at the cost of a collection scan.
+    // no index keys on a store that was never damaged. requireRepairedEvents also looks for most of what the
+    // repair tool reports and cannot fix, at the cost of a collection scan.
     private static void warnOrFailOnEventsDamagedByUpdateEvent(MongoCollection<Document> eventCollection, boolean requireRepairedEvents) {
-        Bson damaged = requireRepairedEvents ? UpdateEventDamage.damagedEvent() : UpdateEventDamage.positionStoredAsString();
+        Bson damaged = requireRepairedEvents ? UpdateEventDamage.damagedOrUnrecoverable() : UpdateEventDamage.positionStoredAsString();
         // Whether one exists, not what is in it. Without the projection this pulls a whole stored event, payload and
         // all, into the startup path of an affected store.
         Document firstDamagedEvent = eventCollection.find(damaged).limit(1).projection(Projections.include(ID)).first();

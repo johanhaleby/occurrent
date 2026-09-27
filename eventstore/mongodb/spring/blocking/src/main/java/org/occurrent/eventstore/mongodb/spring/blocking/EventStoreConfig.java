@@ -50,7 +50,7 @@ public class EventStoreConfig {
     // while the gap shows in logs.
     private static final boolean DEFAULT_REQUIRE_BACKFILLED_POSITION = false;
     // Default to a warning rather than a hard fail on events that pre-0.34.0 updateEvent damaged, so an operator can
-    // opt into failing until the repair has run.
+    // opt into failing while any are left.
     private static final boolean DEFAULT_REQUIRE_REPAIRED_EVENTS = false;
 
     public final String eventStoreCollectionName;
@@ -334,18 +334,17 @@ public class EventStoreConfig {
         /**
          * When the event collection holds events that {@code updateEvent} damaged in Occurrent 0.33.0 or earlier, fail
          * construction with an {@link IllegalStateException}. Such an event has its position stored as a string, or it
-         * was written by a DCB append and lost its {@code dcbTags} index, sometimes along with its position. An event
-         * without a numeric position is missing from position-ordered reads. DCB reads and the conflict query behind a
+         * was written by a DCB append and lost its {@code dcbTags} index, its position, or both. An event without a
+         * numeric position is missing from position-ordered reads. DCB reads and the conflict query behind a
          * conditional append only see a DCB event that has both its {@code dcbTags} index and a numeric position, so an
          * append that should have been refused can be accepted instead. Off by default, and then a store that writes
          * position logs a warning about a string position and says nothing about a lost {@code dcbTags} index. Turn it
-         * on to keep the application down until the repair described in {@code doc/runbooks/update-event-repair.md} has
-         * run.
+         * on to keep the application down while such an event is left.
          *
-         * <p>The check looks for the same events the repair looks for, so a collection the repair has fixed starts.
-         * An event the repair reports as unrecoverable can keep the store from starting until you fix it by hand,
-         * as step 5 of that runbook describes, or turn this off. No index covers a missing {@code dcbTags} index, so
-         * a startup that finds no damage reads the whole collection.
+         * <p>An event the repair described in {@code doc/runbooks/update-event-repair.md} cannot fix, such as a DCB
+         * event whose position is gone, can keep the store from starting until you fix it by hand, as step 5 of that
+         * runbook describes, or turn this off once you have accepted it. No index covers a missing {@code dcbTags}
+         * index, so a startup that finds no damage reads the whole collection.
          *
          * <p>This applies whether or not the store writes position, since the two ways a store ends up writing none
          * are {@code withoutStreamPosition()} and position being turned off at startup over unpositioned history,

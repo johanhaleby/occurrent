@@ -980,15 +980,14 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * Warns, or fails when {@code requireRepairedEvents} is set, when the collection holds events that
      * {@code updateEvent} damaged before 0.34.0. Those events are missing from the conflict query behind a conditional
      * append, and from every position query unless only their tag index is gone. The warning looks for a string
-     * position only, which reads no index keys on a store that was never damaged. {@code requireRepairedEvents} looks
-     * for everything the repair tool repairs, so a store refusing to start and the tool always agree, at the cost of a
-     * collection scan.
+     * position only, which reads no index keys on a store that was never damaged. {@code requireRepairedEvents} also
+     * looks for most of what the repair tool reports and cannot fix, at the cost of a collection scan.
      */
     private static void warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, MongoTemplate mongoTemplate, boolean requireRepairedEvents) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
             return;
         }
-        Bson damaged = requireRepairedEvents ? UpdateEventDamage.damagedEvent() : UpdateEventDamage.positionStoredAsString();
+        Bson damaged = requireRepairedEvents ? UpdateEventDamage.damagedOrUnrecoverable() : UpdateEventDamage.positionStoredAsString();
         Boolean hasDamagedEvents = mongoTemplate.execute(eventStoreCollectionName, collection ->
                 collection.find(damaged).limit(1).projection(Projections.include(ID)).first() != null);
         if (!Boolean.TRUE.equals(hasDamagedEvents)) {

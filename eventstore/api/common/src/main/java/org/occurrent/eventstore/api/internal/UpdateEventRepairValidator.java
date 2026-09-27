@@ -47,7 +47,7 @@ public final class UpdateEventRepairValidator {
 
     /**
      * Create the {@link IllegalStateException} to throw when {@code requireRepairedEvents(true)} is set and the event
-     * collection holds an event the update-event repair tool would repair.
+     * collection holds an event that still looks damaged.
      *
      * @param eventStoreCollectionName the name of the event collection that contains damaged events
      * @return the exception to throw
@@ -56,7 +56,7 @@ public final class UpdateEventRepairValidator {
         return new IllegalStateException(problem(eventStoreCollectionName)
                 + " This store is configured to require repaired events, so it will not start. Run the repair"
                 + " described in " + RUNBOOK + ". An event the repair reports as unrecoverable can keep this store"
-                + " from starting until you fix it by hand as step 5 of the runbook describes, and the two queries in"
+                + " from starting until you fix it by hand as step 5 of the runbook describes, and the queries in"
                 + " its step 6 find every event that still does. To start with the damage still in place, turn off"
                 + " requireRepairedEvents.");
     }
@@ -64,8 +64,8 @@ public final class UpdateEventRepairValidator {
     private static String problem(String eventStoreCollectionName) {
         return "The event collection '" + eventStoreCollectionName + "' contains events that Occurrent's own"
                 + " updateEvent damaged in version 0.33.0 or earlier. Such an event has its position stored as a"
-                + " string instead of a number, or it was written by a DCB append and lost its tag index, and"
-                + " sometimes its position as well. Position ordered reads and position based catch-up skip an event"
+                + " string instead of a number, or it was written by a DCB append and lost its tag index, its"
+                + " position, or both. Position ordered reads and position based catch-up skip an event"
                 + " without a numeric position. DCB reads and conditional appends only see a DCB event that has both"
                 + " its tag index and a numeric position, so a conditional append can miss a conflict against a"
                 + " damaged one. None of this raises an error.";
