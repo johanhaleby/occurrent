@@ -774,19 +774,20 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
     }
 
     /**
-     * A projection that sets the loop thread's interrupt flag makes the next {@code poll()} throw Kafka's
-     * {@code InterruptException}, which sets the flag again. Unless the bridge clears it, every later poll throws the
-     * same way and the backoff sleep returns at once, so the loop logs a failed iteration thousands of times a second.
+     * A projection that sets the loop thread's interrupt flag and then fails stages nothing, so the flag is still set
+     * when the next {@code poll()} runs. That poll throws Kafka's {@code InterruptException}, which sets the flag
+     * again. Unless the bridge clears it, every later poll throws the same way and the backoff sleep returns at once,
+     * so the loop logs a failed iteration thousands of times a second.
      */
     @Test
     void a_projection_that_interrupts_the_loop_thread_does_not_spin_the_poll_loop() throws Exception {
         String groupId = "group-" + UUID.randomUUID();
-        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        AtomicInteger attempts = new AtomicInteger();
         DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
         feed.register("proj", event -> {
-            handled.add(event);
-            if (event.orderId().equals("order-1")) {
+            if (attempts.incrementAndGet() == 1) {
                 Thread.currentThread().interrupt();
+                throw new IllegalStateException("simulated failure after interrupting");
             }
         }, Filter.type(TestOrderPlaced.class.getName()));
         feed.goLive("proj");
@@ -800,21 +801,100 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
             publish("stream-1", "id-1", "order-1");
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(handled).contains(new TestOrderPlaced("order-1")));
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(attempts).hasPositiveValue());
             Thread.sleep(POLL_TIMEOUT.toMillis() * 20);
 
-            assertThat(failedIterations(appender)).isLessThan(5);
-            publish("stream-1", "id-2", "order-2");
+            assertThat(logged(appender, groupId, "failed this iteration")).isLessThan(5);
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(2L));
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
         } finally {
             logger.detachAppender(appender);
         }
     }
 
-    private static long failedIterations(ListAppender<ILoggingEvent> appender) {
+    /**
+     * {@code commitSync} on an interrupted thread throws Kafka's {@code InterruptException}, which is not retriable,
+     * right after its first attempt to send the commit and without waiting to learn whether the broker applied it. A
+     * projection that sets the loop thread's interrupt flag and returns normally must not fail the commit of its batch.
+     */
+    @Test
+    void a_projection_that_interrupts_the_loop_thread_does_not_fail_the_commit_of_its_batch() {
+        String groupId = "group-" + UUID.randomUUID();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> Thread.currentThread().interrupt(), Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(KafkaDomainEventBridge.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        try (KafkaDomainEventBridge<TestOrderPlaced> bridge = KafkaDomainEventBridge.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+            assertThat(logged(appender, groupId, "Failed to commit")).isZero();
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
+    /**
+     * {@code Consumer#close} on an interrupted thread throws Kafka's {@code InterruptException} from its leave-group
+     * step, right after one non-blocking attempt to send the request, and skips waiting for it to go out. A projection
+     * that sets the loop thread's interrupt flag and then throws an {@link Error} must still get a whole close.
+     */
+    @Test
+    void a_projection_that_interrupts_the_loop_thread_and_then_throws_an_error_still_closes_the_consumer_cleanly() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, groupId,
+                ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, "instance-" + UUID.randomUUID(),
+                ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, "60000",
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false",
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> {
+            Thread.currentThread().interrupt();
+            throw new Error("simulated projection error after interrupting");
+        }, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(KafkaDomainEventBridge.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        KafkaDomainEventBridge<TestOrderPlaced> bridge = KafkaDomainEventBridge.builder(consumerConfig, feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build();
+        try {
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isEqualTo(1));
+
+            publish("stream-1", "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(10)).dontCatchUncaughtExceptions().untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isZero());
+            // Joins the loop thread, so its own close of the Consumer has finished before the log is read
+            bridge.close();
+            assertThat(logged(appender, groupId, "Failed to close the Kafka consumer cleanly")).isZero();
+        } finally {
+            bridge.close();
+            logger.detachAppender(appender);
+        }
+    }
+
+    // Counts only what this test's own bridge logged, since its loop thread's name contains the group id
+    private static long logged(ListAppender<ILoggingEvent> appender, String groupId, String text) {
         synchronized (appender) {
-            return appender.list.stream().filter(event -> event.getFormattedMessage().contains("failed this iteration")).count();
+            return appender.list.stream()
+                    .filter(event -> event.getThreadName().contains(groupId) && event.getFormattedMessage().contains(text))
+                    .count();
         }
     }
 

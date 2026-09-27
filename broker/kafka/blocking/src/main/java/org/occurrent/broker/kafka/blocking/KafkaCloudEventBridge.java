@@ -332,6 +332,11 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             // handleRecord, or because the catch above stopped this bridge for good. A permanent stop forces
             // LEAVE_GROUP so a static member (group.instance.id configured) still departs immediately, since
             // nothing is coming back to reclaim its assignment, unlike an ordinary close of the same bridge.
+            // The interrupt flag is cleared first. On an interrupted thread Consumer#close throws
+            // InterruptException right after one non-blocking attempt to send LEAVE_GROUP, instead of waiting up
+            // to closeTimeout for it to go out. A handler that sets the flag and then throws an Error gets here
+            // without passing either of the other places that clear it.
+            Thread.interrupted();
             try {
                 if (permanentlyStopped) {
                     consumer.close(CloseOptions.timeout(closeTimeout)
@@ -469,6 +474,10 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             throw e;
         }
         if (!toCommit.isEmpty()) {
+            // Cleared so a handler that left this thread's interrupt flag set does not fail this batch's commit. On an
+            // interrupted thread commitSync throws InterruptException, which is not retriable, right after its first
+            // attempt to send the commit and without waiting to learn whether the broker applied it.
+            Thread.interrupted();
             try {
                 commitWithRetry(toCommit);
             } catch (RuntimeException e) {

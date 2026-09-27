@@ -288,6 +288,11 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
             // stopped this bridge for good. A permanent stop forces
             // LEAVE_GROUP so a static member (group.instance.id configured) still departs immediately, since
             // nothing is coming back to reclaim its assignment, unlike an ordinary close of the same bridge.
+            // The interrupt flag is cleared first. On an interrupted thread Consumer#close throws
+            // InterruptException right after one non-blocking attempt to send LEAVE_GROUP, instead of waiting up
+            // to closeTimeout for it to go out. A handler that sets the flag and then throws an Error gets here
+            // without passing either of the other places that clear it.
+            Thread.interrupted();
             try {
                 if (permanentlyStopped) {
                     consumer.close(CloseOptions.timeout(closeTimeout)
@@ -301,7 +306,7 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                 // A permanent stop never calls close() itself, nothing is coming back to trigger it, so the parking
                 // producer failureAction owns would otherwise leak until some other caller happens to close this
                 // bridge. A finally, so an Error from the Consumer close above does not skip it either.
-                // KafkaDeliveryFailureAction#close() already does nothing on a second call, so close() calling it
+                // KafkaDeliveryFailureAction#close() does nothing on a second call, so close() calling it
                 // again afterward, on an ordinary shutdown, is harmless.
                 failureAction.close();
             }
@@ -439,6 +444,10 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         // retriable commit failure here to the single best-effort attempt the class javadoc promises, instead of
         // retrying uncapped against a coordinator outage while running still read true.
         if (!toCommit.isEmpty()) {
+            // Cleared so a handler that left this thread's interrupt flag set does not fail this batch's commit. On an
+            // interrupted thread commitSync throws InterruptException, which is not retriable, right after its first
+            // attempt to send the commit and without waiting to learn whether the broker applied it.
+            Thread.interrupted();
             try {
                 commitWithRetry(toCommit);
             } catch (RuntimeException e) {
