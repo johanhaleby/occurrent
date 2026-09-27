@@ -456,7 +456,9 @@ public final class DomainEventFeed<E> {
      * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection returns only
      * once the replay has ended, so {@link #acceptCloudEvent(CloudEvent)} returns {@link RoutingOutcome#DELIVERED}
      * for a matching event after that, unless another replay has started since. When the replay fails, this throws an
-     * {@link IllegalStateException}. An interrupt ends the wait early and stays on the thread.
+     * {@link IllegalStateException}. An interrupt ends the wait early and stays on the thread. A call the view makes
+     * while this feed is calling it, from its fold or from a callback such as {@code replayStarted()}, returns at once
+     * instead, since the replay it would wait for cannot end before that call returns.
      *
      * @throws IllegalArgumentException if no projection with that id is registered on this feed
      */

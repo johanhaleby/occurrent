@@ -323,7 +323,10 @@ public final class CatchupProjectionFeed<E> {
      * nothing was replayed, so a later {@link #catchUp()} still replays the full history.
      * <p>
      * A call while {@link #catchUp()} is still replaying returns only once that replay has ended, and throws an
-     * {@link IllegalStateException} when the replay fails. An interrupt ends the wait early and stays on the thread.
+     * {@link IllegalStateException} when the replay fails. An interrupt ends the wait early and stays on the thread. A
+     * call the view makes while this feed is calling it, from its fold or from a callback such as
+     * {@code replayStarted()}, returns at once instead, since the replay it would wait for cannot end before that call
+     * returns.
      * <p>
      * Delivery is still at-least-once here, so the view has to tolerate the same event arriving twice. The de-dup
      * cache only suppresses the overlap between a replay and the live feed, and there is no replay on this path, so
