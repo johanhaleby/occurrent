@@ -23,6 +23,7 @@ import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.DcbSnapshotView;
@@ -50,6 +51,8 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
 
 import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWaitUntilStarted;
 import static org.occurrent.springboot.common.SubscriptionAnnotations.subscriptionsStartOnTheirOwn;
@@ -76,8 +79,12 @@ class SnapshotAnnotationRegistrar {
     //
     // mayBlock is false for a bean built after startup, on whichever thread asked for it. block() can throw on a
     // Reactor non-blocking thread, and only once the subscription is running, so a late snapshot never waits.
+    //
+    // subscribeCall runs an asynchronous snapshot's subscribe. The subscription model can block inside it, so on a
+    // Reactor non-blocking thread it runs later on another thread (see LateSubscriber).
     @SuppressWarnings("unchecked")
-    <E, S> void processSnapshotAnnotation(Object bean, Method method, org.occurrent.annotation.Snapshot annotation, boolean mayBlock) {
+    <E, S> void processSnapshotAnnotation(Object bean, Method method, org.occurrent.annotation.Snapshot annotation, boolean mayBlock,
+                                          Consumer<Runnable> subscribeCall) {
         String id = annotation.id();
         if (method.getParameterCount() != 0) {
             throw new IllegalArgumentException("@Snapshot factory method %s#%s must take no parameters and return a SnapshotView.".formatted(bean.getClass().getName(), method.getName()));
@@ -96,7 +103,7 @@ class SnapshotAnnotationRegistrar {
             throw new IllegalArgumentException("@Snapshot '%s' everyNEvents must be at least 1, but was %d.".formatted(id, everyNEvents));
         }
         if (descriptor instanceof DcbSnapshotView<?, ?> rawDcb) {
-            processDcbSnapshot(id, annotation, synchronous, converter, (DcbSnapshotView<S, E>) rawDcb, this.<S>resolveReactiveSnapshotStore(annotation, method, id), everyNEvents, mayBlock);
+            processDcbSnapshot(id, annotation, synchronous, converter, (DcbSnapshotView<S, E>) rawDcb, this.<S>resolveReactiveSnapshotStore(annotation, method, id), everyNEvents, mayBlock, subscribeCall);
             return;
         }
         if (!(descriptor instanceof SnapshotView<?, ?>)) {
@@ -169,16 +176,20 @@ class SnapshotAnnotationRegistrar {
         startPositionSupport.applyStartupWorkarounds();
         if (stream) {
             StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
-            var result = streamSubscriptions.subscribe(id, filter(eventFilter), startAt, consumer);
-            if (waitUntilStarted) {
-                result.waitUntilStarted().block();
-            }
+            subscribeCall.accept(() -> {
+                var result = streamSubscriptions.subscribe(id, filter(eventFilter), startAt, consumer);
+                if (waitUntilStarted) {
+                    result.waitUntilStarted().block();
+                }
+            });
         } else {
             Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
-            var result = subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, consumer);
-            if (waitUntilStarted) {
-                result.waitUntilStarted().block();
-            }
+            subscribeCall.accept(() -> {
+                var result = subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, consumer);
+                if (waitUntilStarted) {
+                    result.waitUntilStarted().block();
+                }
+            });
         }
     }
 
@@ -189,7 +200,8 @@ class SnapshotAnnotationRegistrar {
     @SuppressWarnings("unchecked")
     private <E, S> void processDcbSnapshot(String id, org.occurrent.annotation.Snapshot annotation, boolean synchronous,
                                            CloudEventConverter<E> converter, DcbSnapshotView<S, E> dcbSnapshotView,
-                                           ReactiveSnapshotStore<S> store, int everyNEvents, boolean mayBlock) {
+                                           ReactiveSnapshotStore<S> store, int everyNEvents, boolean mayBlock,
+                                           Consumer<Runnable> subscribeCall) {
         if (synchronous) {
             throw new IllegalArgumentException("@Snapshot '%s' returns a DcbSnapshotView with mode = SYNCHRONOUS, which is not supported. Use the default asynchronous mode for a DCB snapshot, or maintain a synchronous DCB snapshot through the DSL.".formatted(id));
         }
@@ -202,7 +214,9 @@ class SnapshotAnnotationRegistrar {
         DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
         startPositionSupport.applyStartupWorkarounds();
         DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
-        var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, (dcbMetadata, event) -> {
+        boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
+        boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+        BiFunction<DcbEventMetadata, E, Mono<Void>> consumer = (dcbMetadata, event) -> {
             long position = dcbMetadata.eventMetadata().getPosition();
             return store.findLatest(key).map(Optional::of).defaultIfEmpty(Optional.empty()).flatMap(loaded -> {
                 // DCB positions are global and monotonic, they never reset, so a snapshot can never be ahead of the true
@@ -222,11 +236,13 @@ class SnapshotAnnotationRegistrar {
                     return store.save(key, new Snapshot<>(foldWithMetadata(view, base.state(), range, converter), position, schemaVersion));
                 });
             });
+        };
+        subscribeCall.accept(() -> {
+            var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, consumer);
+            if (waitUntilStarted) {
+                subscription.waitUntilStarted().block();
+            }
         });
-        boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
-        if (mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
-            subscription.waitUntilStarted().block();
-        }
     }
 
     @SuppressWarnings("unchecked")

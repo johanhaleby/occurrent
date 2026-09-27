@@ -33,7 +33,9 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
+import org.springframework.context.ApplicationListener;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ClassUtils;
 
@@ -49,6 +51,7 @@ import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -71,7 +74,8 @@ import java.util.function.Supplier;
  * registry, and delegates the actual annotation processing to the package-private collaborators built in
  * {@link #setApplicationContext}.
  */
-class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton, DisposableBean {
+class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton, DisposableBean,
+        ApplicationListener<ContextClosedEvent> {
 
     private ApplicationContext applicationContext;
 
@@ -119,6 +123,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
     private ProjectionAnnotationRegistrar projectionRegistrar;
     private SnapshotAnnotationRegistrar snapshotRegistrar;
+    private final LateSubscriber lateSubscriber = new LateSubscriber();
 
     @Override
     public void setApplicationContext(@NonNull ApplicationContext applicationContext) throws BeansException {
@@ -373,6 +378,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             // is a new instance here, and a factory free to return a different implementation would otherwise have
             // this register a method whose id went through no duplicate check and no refusal.
             subscriptionRegistrar.registerSubscriptions(bean, staged.getValue(), handlerTargets.apply(beanName, bean), mayBlockForReplay,
+                    subscribe -> lateSubscriber.subscribe("the handlers on bean '%s'".formatted(beanName), subscribe, () -> {
+                    }),
                     method -> markRegistered(beanName, method),
                     this::claimSubscriptionId,
                     method -> registeredHandlers.remove(handlerKey(beanName, method)),
@@ -387,7 +394,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (markRegistered(beanName, method)) {
                 registerDescriptor(beanName, method, projection.id(),
                         "Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(projection.id(), method.getDeclaringClass().getName(), method.getName()),
-                        () -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply(beanName), method, projection, mayBlock));
+                        release -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply(beanName), method, projection, mayBlock,
+                                subscribe -> lateSubscriber.subscribe("@Projection '%s'".formatted(projection.id()), subscribe, release)));
             }
         }
         // Catch up each domain-push feed once, after all its projections are registered.
@@ -399,7 +407,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (markRegistered(beanName, method)) {
                 registerDescriptor(beanName, method, snapshot.id(),
                         "Duplicate subscription/projection/snapshot id '%s' (used by @Snapshot on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(snapshot.id(), method.getDeclaringClass().getName(), method.getName()),
-                        () -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply(beanName), method, snapshot, mayBlock));
+                        release -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply(beanName), method, snapshot, mayBlock,
+                                subscribe -> lateSubscriber.subscribe("@Snapshot '%s'".formatted(snapshot.id()), subscribe, release)));
             }
         }
         for (String beanName : beansToBuild) {
@@ -437,16 +446,21 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // A DuplicateSubscriptionIdException from inside the registration comes from the subscription model instead,
     // for a programmatic subscription already on that id, and the id this call added is still this call's to take
     // back.
-    private void registerDescriptor(String beanName, Method method, String id, String duplicateIdMessage, Runnable registration) {
+    //
+    // The registration is handed the same release, for a subscribe that failed after it returned.
+    private void registerDescriptor(String beanName, Method method, String id, String duplicateIdMessage, Consumer<Runnable> registration) {
         if (!registeredIds.add(id)) {
             registeredHandlers.remove(handlerKey(beanName, method));
             throw new DuplicateSubscriptionIdException(id, duplicateIdMessage);
         }
-        try {
-            registration.run();
-        } catch (RuntimeException | Error e) {
+        Runnable release = () -> {
             registeredIds.remove(id);
             registeredHandlers.remove(handlerKey(beanName, method));
+        };
+        try {
+            registration.accept(release);
+        } catch (RuntimeException | Error e) {
+            release.run();
             throw e;
         }
     }
@@ -517,6 +531,15 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     public void destroy() {
         if (projectionRegistrar != null) {
             projectionRegistrar.close();
+        }
+    }
+
+    // Not destroy(), which runs after the subscription model has already shut down, since this post processor was
+    // created before it. A child context's close reaches this listener too, so only this context's own counts.
+    @Override
+    public void onApplicationEvent(ContextClosedEvent event) {
+        if (event.getApplicationContext() == applicationContext) {
+            lateSubscriber.close();
         }
     }
 

@@ -67,7 +67,7 @@ class SubscriptionAnnotationRegistrarTest {
         Set<Method> reservedHandlers = ConcurrentHashMap.newKeySet();
         Set<String> claimedIds = ConcurrentHashMap.newKeySet();
 
-        assertThatThrownBy(() -> registrar.registerSubscriptions(bean, validFirst, () -> bean, false,
+        assertThatThrownBy(() -> registrar.registerSubscriptions(bean, validFirst, () -> bean, false, Runnable::run,
                 reservedHandlers::add,
                 id -> {
                     if (!claimedIds.add(id)) {

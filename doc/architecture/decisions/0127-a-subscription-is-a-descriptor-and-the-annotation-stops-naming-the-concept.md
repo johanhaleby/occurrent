@@ -345,6 +345,17 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > replay failed the bean with the projection still running. A push projection's catch-up now starts there the way
 > `startupMode = BACKGROUND` starts it, and a failure is recorded in `PushCatchupStatus` rather than thrown. The
 > blocking stack still waits, since it is allowed to block whichever thread asked for the bean.
+>
+> The subscribe can block as well. `ReactorDurableSubscriptionModel`, which the reactive MongoDB starter registers,
+> reads the stored position with `block()` inside `subscribe` for a `DEFAULT` start. On a non-blocking thread a late
+> `@Subscription`, `@Snapshot` or event store `@Projection` therefore subscribes on `Schedulers.boundedElastic()`
+> after the bean is returned. A failure there is logged and gives back the id, since the caller already holds the
+> bean and nothing is left to throw to. A push projection's model does not block in `subscribe`, so it subscribes in
+> place. When the context starts closing, a subscribe that has not run yet never runs, and one that is running is
+> waited for, up to 5 seconds, so the subscription model stops it along with the rest when it shuts down. A new
+> subscription with no stored position starts from where the feed has reached when the subscribe runs, which is a
+> little after the bean was built. That widens the #979 window further, and a subscription resuming from a stored
+> position is unaffected.
 
 **Moving there inherits how the existing descriptor annotations invoke a factory, including one hazard they already
 have.** `OccurrentBlockingAnnotationBeanPostProcessor` resolves the bean from the context and `invokeFactory` calls the

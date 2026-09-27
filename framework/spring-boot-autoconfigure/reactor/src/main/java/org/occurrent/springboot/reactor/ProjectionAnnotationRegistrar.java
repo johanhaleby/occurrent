@@ -192,7 +192,12 @@ class ProjectionAnnotationRegistrar {
     // mayBlock is false for a bean built after startup, on whichever thread asked for it. block() can throw on a
     // Reactor non-blocking thread, and by then the projection is subscribed, so waiting there could fail the bean with
     // its projection still running. Not waiting is also what WAIT_UNTIL_STARTED means once the application is up.
-    <E, S, ID> void processProjectionAnnotation(Object bean, Method method, org.occurrent.annotation.Projection annotation, boolean mayBlock) {
+    //
+    // subscribeCall runs an event-store projection's subscribe. The subscription model can block inside it, so on a
+    // Reactor non-blocking thread it runs later on another thread (see LateSubscriber). A push projection's model
+    // does not block there, so it subscribes in place.
+    <E, S, ID> void processProjectionAnnotation(Object bean, Method method, org.occurrent.annotation.Projection annotation, boolean mayBlock,
+                                                Consumer<Runnable> subscribeCall) {
         String id = annotation.id();
         if (method.getParameterCount() != 0) {
             throw new IllegalArgumentException("@Projection factory method %s#%s must take no parameters and return a Projection or DcbProjection.".formatted(bean.getClass().getName(), method.getName()));
@@ -252,10 +257,14 @@ class ProjectionAnnotationRegistrar {
             SubscriptionModelCapability capability = fluxSubscriptionModel instanceof SubscriptionModelCapability c ? c : null;
             CatchupResolution recordingResolution = annotation.recordAppliedAppends() ? resolveCatchupModel(id, capability) : null;
             warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution, capability));
-            var subscription = projectDcb(runner, id, annotation, dcbProjection, resolveStore(annotation, id), startAt, recordingResolution);
-            if (mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
-                subscription.waitUntilStarted().block();
-            }
+            Object store = resolveStore(annotation, id);
+            boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+            subscribeCall.accept(() -> {
+                var subscription = projectDcb(runner, id, annotation, dcbProjection, store, startAt, recordingResolution);
+                if (waitUntilStarted) {
+                    subscription.waitUntilStarted().block();
+                }
+            });
         } else if (descriptor instanceof Projection<?, ?, ?> raw) {
             Projection<S, E, ID> projection = (Projection<S, E, ID>) raw;
             boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
@@ -282,10 +291,14 @@ class ProjectionAnnotationRegistrar {
                 startPositionSupport.applyStartupWorkarounds();
                 CatchupResolution recordingResolution = annotation.recordAppliedAppends() ? resolveCatchupModel(id, subscribable) : null;
                 warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution, subscribable));
-                var subscription = projectAgnosticOrStream(runner, id, annotation, projection, resolveStore(annotation, id), startAt, recordingResolution);
-                if (mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
-                    subscription.waitUntilStarted().block();
-                }
+                Object store = resolveStore(annotation, id);
+                boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+                subscribeCall.accept(() -> {
+                    var subscription = projectAgnosticOrStream(runner, id, annotation, projection, store, startAt, recordingResolution);
+                    if (waitUntilStarted) {
+                        subscription.waitUntilStarted().block();
+                    }
+                });
             }
         } else {
             throw new IllegalArgumentException("@Projection '%s' method %s#%s must return a Projection or DcbProjection, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor.getClass().getName()));

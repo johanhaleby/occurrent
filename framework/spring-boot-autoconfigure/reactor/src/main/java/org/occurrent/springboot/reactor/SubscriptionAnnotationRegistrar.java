@@ -198,8 +198,12 @@ class SubscriptionAnnotationRegistrar {
     // A replay on its own thread can still deliver before creation finishes, which is the race the coordinator and
     // ADR 127 both describe. It also matches what WAIT_UNTIL_STARTED means, which is finishing before the
     // application is up, and the application is already up by the time a lazily built bean is asked for.
+    //
+    // subscribeCall runs the subscribes once every handler has resolved. It runs them in place, unless the bean is
+    // being built on a Reactor non-blocking thread, where a subscription model that blocks inside subscribe would
+    // throw, and then it runs them later on another thread. The releases below happen on whichever thread that is.
     void registerSubscriptions(Object bean, List<Method> methods, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
-                               Predicate<Method> reserveHandler, Consumer<String> claimId,
+                               Consumer<Runnable> subscribeCall, Predicate<Method> reserveHandler, Consumer<String> claimId,
                                Consumer<Method> releaseHandler, Consumer<String> releaseId) {
         // Tracked apart, because a call can hold a handler reservation without holding the id. claimId throws when
         // the id belongs to another registration, and at that moment this call has reserved the handler and
@@ -215,17 +219,19 @@ class SubscriptionAnnotationRegistrar {
             reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
             throw e;
         }
-        for (ResolvedRegistration registration : resolved) {
-            try {
-                registration.subscribe().run();
-            } catch (RuntimeException | Error e) {
-                claimedIds.forEach(h -> releaseId.accept(h.id()));
-                reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
-                throw e;
+        subscribeCall.accept(() -> {
+            for (ResolvedRegistration registration : resolved) {
+                try {
+                    registration.subscribe().run();
+                } catch (RuntimeException | Error e) {
+                    claimedIds.forEach(h -> releaseId.accept(h.id()));
+                    reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
+                    throw e;
+                }
+                claimedIds.remove(registration.claim());
+                reservedHandlers.remove(registration.claim());
             }
-            claimedIds.remove(registration.claim());
-            reservedHandlers.remove(registration.claim());
-        }
+        });
     }
 
     // Every handler on the bean is claimed and resolved into what it subscribes with before any of them
