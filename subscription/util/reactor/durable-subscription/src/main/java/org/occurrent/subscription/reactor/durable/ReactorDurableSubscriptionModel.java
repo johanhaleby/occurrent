@@ -216,9 +216,15 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
         if (delegate != null) {
+            // Refused here rather than left to the wrapped model, which may accept the subscribe and fail it only
+            // later, a catch-up model replaying history and then failing at the handover for example.
+            if (shutdown) {
+                throw new SubscriptionModelShutdownException();
+            }
             // Deliberately outside this model's monitor. Reading the start position waits on the checkpoint store, and
             // holding the monitor across that would let one slow read block every life cycle call, shutdown included.
-            // The wrapped model does its own locking, and this model keeps no state of its own on this path.
+            // The wrapped model does its own locking, and what this model keeps on this path, the shutdown flag and
+            // the ids it handed over, needs no monitor.
             return subscribeByDelegating(delegate, subscriptionId, filter, startAt, action);
         }
 
@@ -634,12 +640,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public synchronized void shutdown() {
+        shutdown = true;
         if (delegate != null) {
             delegate.shutdown();
             delegatedSubscriptionIds.clear();
             return;
         }
-        shutdown = true;
         running = false;
         runningSubscriptions.values().forEach(internalSubscription -> internalSubscription.disposable.dispose());
         runningSubscriptions.clear();

@@ -38,6 +38,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorStreamCatchupSubscriptionModelTest {
@@ -61,6 +62,25 @@ class ReactorStreamCatchupSubscriptionModelTest {
         assertThat(wrapped.subscribeCalls)
                 .as("the id never reached the wrapped model, so cancelling here must not either")
                 .isEmpty();
+    }
+
+    // The wrapped model here accepts a subscribe after its shutdown, so only the catch-up model itself can refuse
+    // before the replay delivers history into a model that is shut down.
+    @Test
+    void subscribing_after_the_model_is_shut_down_throws_subscription_model_shutdown_exception_before_replaying_anything() {
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new GrowingPositionOrderedReader());
+        List<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+        catchup.shutdown();
+
+        assertThatThrownBy(() -> catchup.subscribe("replaying", StreamSubscriptionFilter.filter(Filter.all()),
+                StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.fromRunnable(() -> delivered.add(cloudEvent))))
+                .isExactlyInstanceOf(SubscriptionModelShutdownException.class);
+        assertThatThrownBy(() -> catchup.subscribe("live", StreamSubscriptionFilter.filter(Filter.all()),
+                StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> delivered.add(cloudEvent))))
+                .isExactlyInstanceOf(SubscriptionModelShutdownException.class);
+        assertThat(delivered).isEmpty();
+        assertThat(wrapped.subscribeCalls).isEmpty();
     }
 
     // The contract a recording projection is told, rather than one it reads per delivery. The start arrives before

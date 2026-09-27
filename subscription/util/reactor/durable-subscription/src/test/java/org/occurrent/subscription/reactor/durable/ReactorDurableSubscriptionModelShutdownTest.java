@@ -23,6 +23,7 @@ import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Mono;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -35,5 +36,18 @@ class ReactorDurableSubscriptionModelShutdownTest {
 
         assertThatThrownBy(() -> model.subscribe("someSubscription", __ -> Mono.empty()))
                 .isExactlyInstanceOf(SubscriptionModelShutdownException.class);
+    }
+
+    // The wrapped model here accepts a subscribe after its shutdown, as a catch-up model that replays history first
+    // and fails only at the handover did.
+    @Test
+    void subscribing_after_the_model_is_shut_down_throws_subscription_model_shutdown_exception_without_asking_the_model_it_wraps() {
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel("global");
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+        model.shutdown();
+
+        assertThatThrownBy(() -> model.subscribe("someSubscription", __ -> Mono.empty()))
+                .isExactlyInstanceOf(SubscriptionModelShutdownException.class);
+        assertThat(wrapped.subscribedIds).isEmpty();
     }
 }

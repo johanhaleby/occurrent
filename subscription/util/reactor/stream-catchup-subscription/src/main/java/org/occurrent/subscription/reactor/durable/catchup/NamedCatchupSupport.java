@@ -24,6 +24,7 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
@@ -90,6 +91,9 @@ final class NamedCatchupSupport {
     // handOver park instead of subscribing the delegate on a stopped model. Same role as the blocking
     // AbstractCatchupSubscriptionModel's stopped flag.
     private volatile boolean stopped = false;
+    // Set by shutdown() and never cleared, since a shut-down model cannot be started again. Refuses every named
+    // subscribe, so none replays history and then fails at the handover to a wrapped model that is shut down.
+    private volatile boolean shutdown = false;
     // Who to tell about each id's catch-up boundaries. Kept until this model shuts down, since the registration
     // outlives any one catch-up and a recorder that stopped being told would record the next one's history as
     // though it were live.
@@ -128,6 +132,12 @@ final class NamedCatchupSupport {
     // fields inside the state are separate volatiles, but only the launcher writes them and it writes the generation
     // last, so a reader that saw this generation saw at least this launch's history flag.
 
+    private void requireNotShutdown() {
+        if (shutdown) {
+            throw new SubscriptionModelShutdownException();
+        }
+    }
+
     private SubscriptionModel requireNamed() {
         if (named == null) {
             throw new IllegalStateException(modelClass.getSimpleName() + " can only manage named subscriptions when the model it wraps manages them itself (implements " + SubscriptionModel.class.getSimpleName() + "). The wrapped " + wrapped.getClass().getName() + " only offers the plain (cold) subscribe(filter, startAt) primitive, so use that primitive directly, or wrap a model that manages named subscriptions.");
@@ -146,6 +156,7 @@ final class NamedCatchupSupport {
                                       CatchupReader reader, long windowSize, int handoverCacheSize, long startPosition,
                                       Function<CloudEvent, Mono<Void>> action) {
         SubscriptionModel delegate = requireNamed();
+        requireNotShutdown();
         // The wrapped model already knowing the id means an earlier catch-up handed it over (or someone subscribed it
         // directly). Refuse synchronously, like every other subscribe path, instead of replaying history a second
         // time and failing asynchronously at the handover.
@@ -238,6 +249,7 @@ final class NamedCatchupSupport {
     Subscription subscribeStraightToLive(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
                                          StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         SubscriptionModel delegate = requireNamed();
+        requireNotShutdown();
         return delegate.subscribe(subscriptionId, liveSubscriptionFilter, startAt,
                 cloudEvent -> livePredicate.test(cloudEvent) ? action.apply(cloudEvent) : Mono.empty());
     }
@@ -400,6 +412,7 @@ final class NamedCatchupSupport {
     }
 
     void shutdown() {
+        shutdown = true;
         catchupListeners.clear();
         new ArrayList<>(catchingUp.keySet()).forEach(subscriptionId -> {
             CatchupState state = catchingUp.remove(subscriptionId);

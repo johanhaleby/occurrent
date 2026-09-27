@@ -21,9 +21,11 @@ package org.occurrent.subscription;
  * again, so subscribing to it again fails the same way until the application creates a new one.
  * <p>
  * This extends {@link IllegalStateException}, which is what a model that was shut down threw before this type existed,
- * so code catching that still catches it. {@code ReactorMongoSubscriptionModel} throws it from {@code subscribe} once it
- * is shut down, and so does {@code ReactorDurableSubscriptionModel} wrapping a model that is not a
- * {@code SubscriptionModel}. Wrapping a {@code SubscriptionModel}, it passes on whatever that model throws.
+ * so code catching that still catches it. These throw it from a named {@code subscribe} once they are shut down:
+ * {@code ReactorMongoSubscriptionModel}, {@code ReactorDurableSubscriptionModel}, and the reactor catch-up models
+ * {@code ReactorCatchupSubscriptionModel}, {@code ReactorStreamCatchupSubscriptionModel} and
+ * {@code ReactorDcbCatchupSubscriptionModel} wrapping a model that manages named subscriptions. The catch-up models
+ * throw it before replaying any history. Other models throw what they threw before.
  */
 public class SubscriptionModelShutdownException extends IllegalStateException {
 
