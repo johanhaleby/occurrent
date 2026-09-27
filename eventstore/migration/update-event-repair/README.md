@@ -43,7 +43,8 @@ warning naming this tool. A store with no damage logs nothing.
 
 The startup check runs only the query above, because it is the one that costs nothing. It does not look for an event
 whose tag array is missing but whose position is fine, since that needs a collection scan. So a silent startup rules
-out a damaged position, not every kind of damage. The tool checks both.
+out a damaged position, not every kind of damage. The tool checks both, and so does a store with
+`requireRepairedEvents(true)`, which refuses to start instead of warning.
 
 **Ask the tool.** `report()` writes nothing and returns two counts, how many events the repair would touch and how
 many have DCB tags and no position at all. It sizes a repair rather than predicting its outcome. A position another

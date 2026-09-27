@@ -7,6 +7,9 @@ Date: 2026-08-22
 Accepted. Number 0136 allocated at the rel34 plan gate for [#906](https://github.com/johanhaleby/occurrent/issues/906).
 0134 is the maximum on `main` and 0135 is taken by the concurrent unit on PR 941.
 
+Amended in place before 0.34.0 shipped, on what `requireRepairedEvents` checks. It refuses on the repair tool's own
+damaged-event filter rather than on a string position alone. Sections 2 and 4 say why.
+
 ## Context
 
 Up to and including 0.33.0, `updateEvent` rebuilt the stored document through the stream-only
@@ -65,12 +68,21 @@ no damage examined zero index keys and zero documents.
 
 The `dcbTags` half stays out of startup. Looking for a document that holds the `dcbtags` extension without the
 array derived from it cannot use an index, and measured against a healthy 20000 event collection it read all 20000
-documents. That check belongs in the offline tool, which is allowed to take its time.
+documents. That check belongs in the offline tool, which is allowed to take its time. `requireRepairedEvents` is the
+one exception, covered in section 4.
 
-Together the two checks cover every damaged event. Before PR 901, whenever the updated event still had a
-position, the write-back always turned it into a string, so anything that kept a position trips the new check.
-Anything that lost its position entirely has no `position` field and trips the existing un-backfilled events check,
-which already warns today, although it names the wrong remedy. The upgrade guide says so.
+The two warnings see every event the old write-back left behind, on a store that writes position. Before PR 901,
+whenever the updated event still had a position, the write-back always turned it into a string, so anything that
+kept a position trips the new check. Anything that lost its position entirely has no `position` field and trips the
+existing un-backfilled events check, which already warns today, although it names the wrong remedy. The upgrade
+guide says so.
+
+Neither warning sees a DCB event whose position is a number and whose tag array is missing. The write-back never
+produced one, but step 5 of the repair runbook does, when an operator sets a colliding event's position by hand
+before the second run rebuilds its tag array. That event is missing from DCB reads and from the conflict query.
+Neither warning can refuse over a lost position either, since the un-backfilled check refuses only under
+`requireBackfilledPosition` and then names the backfill. Section 4 covers what `requireRepairedEvents` checks
+instead.
 
 ### 3. The damage check runs before the un-backfilled check
 
@@ -115,9 +127,27 @@ nobody writes to loses nothing by starting and running the repair afterwards.
 does not simply mirror `requireBackfilledPosition`. A store writes no position in exactly two cases, an explicit
 `withoutStreamPosition()` and the resolver above turning position off over unpositioned history, and the second is
 the store that otherwise hears nothing at all. Refusing to check there would leave the setting silent on the store
-that needs it most. The check reads no index keys where the position index exists, so on a store that writes no
-position it can cost a collection scan at startup, which is a price only an operator who asked for the refusal
-pays.
+that needs it most.
+
+`requireRepairedEvents` also checks more than the warning does. It refuses while anything matches the repair tool's
+own damaged-event filter, `UpdateEventDamage.damagedEvent()` in `occurrent-eventstore-mongodb-dcb-common`, which the
+tool and all three stores call. That filter adds the `dcbTags` half to the string position. An operator who asked to
+be refused until the repair has run needs the refusal and the repair to agree on what is damaged. A string position
+alone misses a DCB event whose position was dropped, and the hand-set event section 2 describes. Both are missing
+from the conflict query.
+
+The price is a collection scan at every startup with the setting on, whether or not the store writes position, since
+no index covers the `dcbTags` half. Only an operator who asked for the refusal pays it.
+
+Most events the repair reports as unrecoverable still match the filter after a run, and each one keeps the store down
+until someone fixes it by hand or turns the setting off. A position another event holds, or one that is not a usable
+number, stays a string. The repair cannot rebuild the tag array of an event whose `dcbtags` is not a string, or
+does not decode. A lost position is the exception, since the repair rebuilds that event's tag array and nothing else
+about it matches. The refusal message points at steps 5 and 6 of the runbook for that reason.
+
+Narrowing the filter so such an event no longer counts was rejected. A filter can exclude a `dcbtags` that is not a
+string, but not one that fails to decode, so the message would still be needed. It would also stop the repair
+counting and reporting an event that is still missing from the conflict query.
 
 ### 5. This is not the un-backfilled position check wearing a different hat
 
@@ -192,7 +222,8 @@ signal an affected store ever gets.
 ## Consequences
 
 Three MongoDB stores gain one indexed lookup at startup, on the path that already runs the un-backfilled events
-check. On a healthy store it reads nothing.
+check. On a healthy store it reads nothing. With `requireRepairedEvents` on, the lookup reads the whole collection
+instead.
 
 An affected operator learns about the damage from a log line and runs a tool. Nobody's stored events change without
 them asking, which is the property worth having, because the damage is inert and a wrong repair is not.

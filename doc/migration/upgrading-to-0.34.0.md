@@ -897,9 +897,11 @@ on its next deploy. By default a store that writes no position does not run it, 
 there unless you turn on the setting below.
 
 If you would rather that store refused to start than kept accepting conditional appends against a damaged event
-until the repair has run, set `EventStoreConfig.Builder.requireRepairedEvents(true)`. It is off by default on all
-three MongoDB stores, so upgrading on its own changes nothing here. It also covers the third message below, the
-store that turns position off and would otherwise run no damage check at all.
+until the repair has run, set `EventStoreConfig.Builder.requireRepairedEvents(true)`. It looks for everything the
+repair looks for, both queries in step 1 of the [repair runbook](../runbooks/update-event-repair.md), so it reads the
+whole collection at every startup. It is off by default on all three MongoDB stores, so upgrading on its own changes
+nothing here. It also covers the third message below, the store that turns position off and would otherwise run no
+damage check at all.
 
 An event whose position was dropped rather than turned into a string has no `position` field at all. Your store
 already warns about events without a position, but that warning names the position backfill, which is the wrong
