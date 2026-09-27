@@ -17,6 +17,7 @@
 package org.occurrent.testsupport.mongodb;
 
 import com.mongodb.client.MongoCollection;
+import com.mongodb.client.model.UpdateOptions;
 import org.bson.Document;
 import org.bson.types.Decimal128;
 import org.jspecify.annotations.Nullable;
@@ -26,17 +27,21 @@ import java.util.stream.Stream;
 
 /**
  * Every shape a stored position counter can take, and whether a MongoDB event store with
- * {@code requireRepairedEvents(true)} starts over it. Every store casts the counter to a {@link Number}, reads it with
- * {@link Number#longValue()} and reads a missing counter document as zero. So the store starts only when the counter is
- * a whole number that call reads exactly and at least the highest position, with a missing document counting as zero.
+ * {@code requireRepairedEvents(true)} starts over it. Every writer stores the counter as an int32 or an int64 and
+ * {@code $inc} keeps either exact, while a {@code double} rounds once {@code $inc} takes it past 2^53 and a
+ * {@code Decimal128} is read through a {@code double}. A missing counter document reads as zero. So the store starts only
+ * when the counter is an int32 or int64 at or above zero and at least the highest position, with a missing document
+ * counting as zero.
  * <p>
- * Each case starts from a collection holding two events at positions 1 and 2, with the counter at
- * {@link StoredPositionShapes#COUNTER}, and gives the counter document its shape.
+ * The cases in {@link #shapes()} start from a collection holding two events at positions 1 and 2, with the counter at
+ * {@link StoredPositionShapes#COUNTER}, and the cases in {@link #shapesOverUnpositionedEvents()} from a collection whose
+ * events have no position. Each gives the counter document its shape.
  */
 public final class StoredCounterShapes {
 
     private static final Object NO_DOCUMENT = new Object();
     private static final Object NO_FIELD = new Object();
+    private static final long TWO_TO_THE_53 = 1L << 53;
 
     private StoredCounterShapes() {
     }
@@ -64,10 +69,12 @@ public final class StoredCounterShapes {
         return Stream.of(
                 new Shape("the long 2, as written", counter, true),
                 new Shape("the int 2", (int) counter, true),
-                new Shape("the double 2.0", (double) counter, true),
-                new Shape("the decimal 2", new Decimal128(counter), true),
                 new Shape("the long 99, above the highest position", 99L, true),
-                new Shape("the decimal 2^53 + 1, which longValue reads through a double", new Decimal128(new BigDecimal("9007199254740993")), false),
+                new Shape("the long 2^53 + 1, which $inc keeps exact", TWO_TO_THE_53 + 1, true),
+                new Shape("the double 2.0, which $inc rounds past 2^53", (double) counter, false),
+                new Shape("the double 2^53, where $inc of one leaves it unchanged", (double) TWO_TO_THE_53, false),
+                new Shape("the decimal 2", new Decimal128(counter), false),
+                new Shape("the decimal 2^53 + 1, which longValue reads through a double", new Decimal128(new BigDecimal(TWO_TO_THE_53 + 1)), false),
                 new Shape("the decimal one above the largest long", new Decimal128(new BigDecimal(Long.MAX_VALUE).add(BigDecimal.ONE)), false),
                 new Shape("the double 2.5", 2.5d, false),
                 new Shape("NaN", Double.NaN, false),
@@ -82,7 +89,22 @@ public final class StoredCounterShapes {
     }
 
     /**
-     * Give the counter document the shape.
+     * @return counters over events that have no position, where no position is above the counter and only the
+     * counter itself can be wrong
+     */
+    public static Stream<Shape> shapesOverUnpositionedEvents() {
+        return Stream.of(
+                new Shape("no counter document, which reads as zero", NO_DOCUMENT, true),
+                new Shape("zero", 0L, true),
+                new Shape("the int 5", 5, true),
+                new Shape("the long -1", -1L, false),
+                new Shape("the double 0", 0d, false),
+                new Shape("the string 0", "0", false)
+        );
+    }
+
+    /**
+     * Give the counter document the shape, creating the document when it has none.
      *
      * @param counters   the collection holding the counter document
      * @param documentId the counter document's {@code _id}
@@ -96,7 +118,7 @@ public final class StoredCounterShapes {
         } else if (shape.value() == NO_FIELD) {
             counters.updateOne(id, new Document("$unset", new Document(field, "")));
         } else {
-            counters.updateOne(id, new Document("$set", new Document(field, shape.value())));
+            counters.updateOne(id, new Document("$set", new Document(field, shape.value())), new UpdateOptions().upsert(true));
         }
     }
 }

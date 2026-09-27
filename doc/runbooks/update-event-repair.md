@@ -133,10 +133,13 @@ If the process is killed part way, run it again. It resumes from a checkpoint do
 repaired stay repaired, and it only touches events that still look damaged, so a repeated run cannot double-apply
 anything.
 
-A MongoDB error that a later attempt can get past, a lost connection, no reachable server or a primary stepping down,
-is retried with a backoff that grows to 2 seconds and no limit on attempts, and each retry is logged at WARN with the
-error. Any other error ends the run at once, a user without the privileges the run needs for instance. Fix the cause
-and run it again, and it resumes from the checkpoint.
+The run retries the MongoDB errors that MongoDB's retryable reads and retryable writes specifications retry, with a
+backoff that grows to 2 seconds and no limit on attempts. That is a lost connection, a cleared connection pool, an
+error labelled `RetryableWriteError`, and a command or write concern error with one of the codes those
+specifications list, a primary stepping down or a server shutting down for instance. Each retry is logged at WARN
+with the error that caused it. Any other error ends the run at once, a user without the privileges the run needs for
+instance, and so does finding no server before the driver's server selection timeout runs out. Fix the cause and run
+it again, and it resumes from the checkpoint.
 
 ### 5. [you] Deal with what could not be repaired
 
@@ -183,9 +186,9 @@ produces it too, and then you set the position again. The tag array is repaired 
 **`POSITION_ABOVE_COUNTER`.** The stored position is above the store's position counter, the highest position it ever
 handed out, so the store never assigned it. DCB reads and reads in position order stop at that same counter, so
 they skip the event, and a later append reaching that number would collide with it. Treat it the way
-you treat `POSITION_LOST`. The tag array is repaired even so. Without a counter document, or with a counter the
-stores cannot read exactly, the repair has no ceiling to compare against and never reports this. Restore the counter
-as described below.
+you treat `POSITION_LOST`. The tag array is repaired even so. Without a counter document, or with a counter that is
+not the int32 or int64 every writer stores, the repair has no ceiling to compare against and never reports this.
+Restore the counter as described below.
 
 **`UNREADABLE`.** The tool could not read the event well enough to repair it, which means its tag fields were
 edited outside Occurrent. That is a `dcbtags` that is not a string or does not decode, an empty line for instance,
@@ -213,16 +216,31 @@ If you cannot tell what the tags were, the tool has nothing to rebuild the tag a
 **A missing or unreadable position counter keeps `requireRepairedEvents` refusing.** Every store reads a missing
 counter document as zero, so DCB reads and reads in position order return nothing and the next append reserves a
 position an event already holds. An event collection renamed without its `_position` collection is in that state.
-A counter that is negative or is not a whole number the stores read exactly, a string or a `Decimal128` above 2^53
-for instance, is read wrong or not at all. If you still have the old counter document, in the collection the rename
-left behind or in a backup, restore it. Otherwise, for a missing counter document, run `PositionBackfill.seedCounter()`
-from `occurrent-eventstore-mongodb-position-backfill`, which raises the counter to the number of events plus its
-`counterSeedSlack` and never lowers it. That covers the highest position only when it is no higher than that sum.
-For a counter holding something else, set it by hand to at least the highest position:
+Every writer stores the counter as an int32 or an int64, and a counter that is anything else, or is negative, keeps
+the store refusing too. The stores cannot read a string at all. They can read a `Decimal128` above 2^53 as a
+different number, and once a double counter reaches 2^53, adding one to it can leave it where it was, so two appends
+get the same position. If you still have the old counter document, in the collection the rename left behind or in a backup,
+restore it. Otherwise find the highest position an event holds and raise the counter to it:
 
 ```javascript
-db.events_position.updateOne({ _id: "dcb" }, { $set: { position: NumberLong(<highest position>) } })
+db.events.find({ $expr: { $isNumber: "$position" } }, { position: 1 }).sort({ position: -1 }).limit(1)
+db.events_position.updateOne({ _id: "dcb" }, { $max: { position: NumberLong(<highest stored position>) } }, { upsert: true })
 ```
+
+`upsert` creates the counter document when there is none, and `$max` never lowers a counter that appends are still
+raising, so this is safe while the application runs. Keep the `NumberLong`, since mongosh stores a bare number as a
+double, which the stores refuse. `$max` replaces only a value lower than the one you give it, and MongoDB orders a
+string above every number, so it does not change a counter holding a string, or a double or `Decimal128` at or above
+the highest stored position. For those, stop every application that writes to the store and set the counter with
+`$set` in place of `$max`.
+
+`PositionBackfill.seedCounter()` from `occurrent-eventstore-mongodb-position-backfill` runs the same `$max` with
+`upsert`, to the number of events plus its `counterSeedSlack`, 10,000 by default, and fails on a counter document
+whose `position` is not a number. That is enough only when the highest stored position is no higher than that sum.
+A store reserves positions before the append's transaction starts, so an append that then fails or is refused never
+uses the positions it reserved, and no store reuses the position of a deleted event. On a store where that happened
+often enough, the highest position is above the number of events plus the slack, so run the `find` above and
+compare before relying on `seedCounter()`.
 
 The last two queries in step 6 say whether the counter now covers the highest position, and the store's next
 startup says whether it can use it.
@@ -321,7 +339,9 @@ count can also find a plain stream event whose `position` holds `null`, which th
 since nothing in the document says what it was. Set the position your own records say it had, or turn
 `requireRepairedEvents` off once you have accepted the loss. Run the last two in this order. The `find` returns the highest valid position, never an array or a string,
 and it should be no higher than the `position` field of the counter document the `findOne` returns. That field has
-to be a whole number at or above zero that the stores read exactly, which rules out a `Decimal128` above 2^53. Without
+to be an int32 or an int64 at or above zero. mongosh prints an int32 and a double the same way, so
+`db.events_position.findOne({ _id: "dcb", position: { $type: ["int", "long"] } })` is the check, and it returns
+nothing for any other type. Without
 a counter document the stores read the counter as zero, so the `find` should then return nothing. Restart the
 application and confirm the startup warning is gone.
 

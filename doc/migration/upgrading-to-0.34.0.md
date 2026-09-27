@@ -903,7 +903,7 @@ If you would rather that store refused to start than kept accepting conditional 
 `EventStoreConfig.Builder.requireRepairedEvents(true)`. It refuses while any event's position is not a positive
 integer or is above the store's position counter, while any DCB event's `dcbtags` has an empty line or whitespace
 around a tag or its `dcbTags` array does not hold the tags `dcbtags` lists, while an event without `dcbtags` has a
-`dcbTags` field, and while the counter is not a whole number the store reads exactly. A missing counter document
+`dcbTags` field, and while the counter is negative or is not the int32 or int64 every writer stores. A missing counter document
 counts as zero, since every read takes it to be zero. That takes in the query above, a DCB event whose position was
 dropped, a position set by hand above the counter or at or below zero, a `null`, `NaN` or array position, a tag
 array that is missing or names other tags, and an event collection renamed without its `_position` collection. The checks in step 6 of the [repair runbook](../runbooks/update-event-repair.md)

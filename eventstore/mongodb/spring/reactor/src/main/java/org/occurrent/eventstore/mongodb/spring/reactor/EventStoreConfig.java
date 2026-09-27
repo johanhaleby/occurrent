@@ -310,7 +310,7 @@ public class EventStoreConfig {
          * written, fail construction with an {@link IllegalStateException}. That is any event whose position is not a
          * positive integer, any DCB event whose {@code dcbtags} has a line that is empty or has whitespace around it or
          * whose {@code dcbTags} index does not hold the tags its {@code dcbtags} lists, any event with a {@code dcbTags}
-         * field and no {@code dcbtags}, a counter that is negative or not a whole number the store reads exactly, and a position
+         * field and no {@code dcbtags}, a counter that is not an int32 or int64 at or above zero, the types every writer stores, and a position
          * above the counter, which counts as zero when the counter document is missing, as every read takes it to be.
          * Reads in position order skip an event with such a position, read it wrong or fail on it, and with no counter
          * they return nothing. DCB reads find a DCB event by its index alone, so they skip it under a tag the index

@@ -135,7 +135,7 @@ that needs it most.
 of kinds of damage. It refuses while any event's position is not a positive integer or is above the store's
 position counter, while any DCB event's `dcbtags` has a line that is empty or has whitespace around it or its
 `dcbTags` array does not hold the tags its `dcbtags` lists, while an event without `dcbtags` has a `dcbTags` field,
-and while the counter is not a whole number every store reads exactly. A missing counter document counts as zero,
+and while the counter is negative or is not the int32 or int64 every writer stores. A missing counter document counts as zero,
 the value every store reads it as. Reads in position order and DCB reads skip
 an event whose position fails the first part, read it wrong, as with a fraction, which comes back cut to a whole
 number that can be another event's position, or fail on it, as with an array holding a number in range. DCB reads and
@@ -189,9 +189,10 @@ query. A store checking only that filter started over it after a run that had ju
 filter found nothing, so every position is then valid and the first document of a descending sort on `position` holds
 the highest one. Before that, an array can come first, and the comparison cannot read an array as a number, so an
 event above the counter behind it went unseen. The store reads the highest position first and the counter document
-second. It refuses if the counter fails `counterValue(...)`, which accepts a whole number at or above zero that
-`Number.longValue()`, the call every store reads the counter with, reads exactly. That rules out a `Decimal128` above
-2^53, whose `longValue()` goes through a `double`. It refuses too if the position is the higher one, a missing
+second. It refuses if the counter fails `counterValue(...)`, which accepts only an int32 or an int64 at or above
+zero, the two types every writer stores. `$inc` keeps either exact. A double counter rounds once `$inc` takes it past
+2^53, so two appends can reserve the same position, and every store reads a `Decimal128` through a `double`, which
+can round it above 2^53. It refuses too if the position is the higher one, a missing
 counter document counting as zero. That order is what keeps an append in flight from looking like
 damage. Every writer raises the counter before the position it reserved is written. All three stores `$inc` it before
 they insert, the position backfill seeds it with `$max` and reserves by `$inc` before it writes, `updateEvent` keeps
@@ -250,7 +251,7 @@ event by `_id` rather than guessed at:
   out, and DCB reads and reads in position order stop at it, so a value above it is unassignable and they skip it,
   and a later append reaching that number would collide with it. The counter is re-read before the event is reported, so a store
   written to while the repair walked cannot have an event wrongly condemned, and a store with no counter document, or
-  with a counter value the stores cannot read exactly, has no ceiling and is never reported on that ground.
+  with a counter value no writer would store, has no ceiling and is never reported on that ground.
   `requireRepairedEvents` refuses such a store until the counter is restored.
 - A `dcbtags` that is not a string or does not decode to a tag set, an empty line for instance, or a `dcbTags` array
   on an event with no `dcbtags`. Nothing Occurrent writes produces any of them. For the last, nothing says whether the

@@ -23,7 +23,6 @@ import com.mongodb.MongoException;
 import com.mongodb.MongoNodeIsRecoveringException;
 import com.mongodb.MongoNotPrimaryException;
 import com.mongodb.MongoSocketException;
-import com.mongodb.MongoTimeoutException;
 import com.mongodb.MongoWriteException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
@@ -52,6 +51,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import static com.mongodb.client.model.Filters.and;
@@ -60,7 +60,6 @@ import static com.mongodb.client.model.Filters.gt;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toCollection;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.POSITION;
-import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * Repairs events that Occurrent's own {@code updateEvent} damaged before 0.34.0, so they become visible to DCB reads
@@ -147,14 +146,19 @@ public final class UpdateEventRepair {
     }
 
     /**
-     * Only an error a later attempt can succeed on without anyone changing anything is retried, and each one is
-     * logged at WARN with its cause before the retry. That is an error the MongoDB driver labels
-     * {@code RetryableWriteError} or {@code TransientTransactionError}, a network error, a timeout waiting for a
-     * server, and a server that is not primary or is recovering. Any other error, a missing privilege for instance,
-     * fails the run at once, since retrying it would only repeat it.
+     * Only an error a later attempt can succeed on without anyone changing anything is retried, and each retry is
+     * logged at WARN with the error that caused it. That is the set MongoDB's retryable reads and retryable writes
+     * specifications retry on, a network error, a cleared connection pool, an error labelled
+     * {@code RetryableWriteError}, and a command or write concern error with one of the codes those specifications
+     * list, such as a primary stepping down or a server shutting down. Any other error, a missing privilege or no
+     * server to select before the driver's server selection timeout for instance, fails the run at once, and running
+     * it again resumes from the checkpoint.
      *
      * @param retryStrategy How to retry such an error. A repair walks a whole collection, so a strategy that gives up
-     *                      immediately turns a momentary outage into a run an operator has to notice and restart.
+     *                      immediately turns a momentary outage into a run an operator has to notice and restart. A
+     *                      strategy built by {@link RetryStrategy#retry()} keeps its own {@code retryIf} as well, so it
+     *                      can narrow the set above but not widen it. One you implement yourself decides on its own
+     *                      which errors to retry.
      */
     public UpdateEventRepair(MongoDatabase database, String eventStoreCollectionName, UpdateEventRepairOptions options, RetryStrategy retryStrategy) {
         requireNonNull(database, "database cannot be null");
@@ -539,7 +543,7 @@ public final class UpdateEventRepair {
      * same, because they stop at this same counter. The counter is re-read here rather than trusted from the start of the run, so a
      * store that wrote while the repair walked cannot have an event wrongly called forged. A counter of zero means
      * there is no ceiling to compare against, which is what {@link #positionCeiling()} returns for a missing counter
-     * document or one it cannot read exactly.
+     * document or one no writer would store.
      *
      * @return the position, or {@code null} if it was reported as unrecoverable instead.
      */
@@ -643,35 +647,62 @@ public final class UpdateEventRepair {
         withRetry(() -> checkpointCollection.deleteOne(eq(ID, UpdateEventRepairCheckpoint.CHECKPOINT_DOCUMENT_ID)));
     }
 
+    // Logged as the retry starts rather than when the error is caught, so an error the strategy has no attempts left
+    // for is not logged as retried
     private <T> T withRetry(Supplier<T> mongoOperation) {
-        Supplier<T> logged = () -> {
+        AtomicReference<RuntimeException> previousError = new AtomicReference<>();
+        return retryStrategy.execute(retryInfo -> {
+            RuntimeException previous = previousError.get();
+            if (previous != null) {
+                log.warn("Retrying a MongoDB operation in the repair of collection '{}', attempt {}, after the error below.",
+                        eventStoreCollectionName, retryInfo.getAttemptNumber(), previous);
+            }
             try {
                 return mongoOperation.get();
             } catch (RuntimeException e) {
-                if (retryable(e)) {
-                    log.warn("A MongoDB operation in the repair of collection '{}' failed with an error a later attempt can succeed on, so it is retried unless the retry strategy has run out of attempts.",
-                            eventStoreCollectionName, e);
-                }
+                previousError.set(e);
                 throw e;
             }
-        };
-        return executeWithRetry(logged, UpdateEventRepair::retryable, retryStrategy).get();
+        }, UpdateEventRepair::retryable);
     }
 
-    // The driver's own signals for an error that a later attempt can succeed on without anyone changing anything.
-    // RetryableWriteError is the label the server and driver put on a write the retryable-writes spec may retry, and
-    // the exception types are the ones that spec, and its retryable-reads counterpart, retry on, which covers a read
-    // that no such label marks.
+    // The codes the MongoDB specifications retry a read or a write on, "Retryable Error" in
+    // source/retryable-reads/retryable-reads.md and "Determining Retryable Write Errors" in
+    // source/retryable-writes/retryable-writes.md at github.com/mongodb/specifications, and the list
+    // CommandOperationHelper holds in driver 5.5.2. The two specifications list the same codes but for 134, which only
+    // a read gets. A command error and a write concern error can both hold one, since MongoWriteConcernException takes
+    // its code from the write concern error. A server selection timeout is not on either list, so an outage that
+    // outlasts the driver's server selection timeout ends the run, and running it again resumes from the checkpoint.
+    private static final Set<Integer> RETRYABLE_ERROR_CODES = Set.of(
+            6, // HostUnreachable
+            7, // HostNotFound
+            89, // NetworkTimeout
+            91, // ShutdownInProgress
+            134, // ReadConcernMajorityNotAvailableYet
+            189, // PrimarySteppedDown
+            262, // ExceededTimeLimit
+            9001, // SocketException
+            10107, // NotWritablePrimary
+            11600, // InterruptedAtShutdown
+            11602, // InterruptedDueToReplStateChange
+            13435, // NotPrimaryNoSecondaryOk
+            13436 // NotPrimaryOrSecondary
+    );
+
+    // What CommandOperationHelper.isRetryableException accepts, a network error, a cleared connection pool, which the
+    // retryable reads specification also lists, a not primary or node is recovering error, which the driver also
+    // raises for an older server that sends only a message, or one of the codes above, and besides that the
+    // RetryableWriteError label a 4.4 or later server puts on a write it may retry
     static boolean retryable(Throwable error) {
-        if (error instanceof MongoException mongoException
-                && (mongoException.hasErrorLabel("RetryableWriteError") || mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL))) {
-            return true;
+        if (!(error instanceof MongoException mongoException)) {
+            return false;
         }
-        return error instanceof MongoSocketException
-                || error instanceof MongoTimeoutException
-                || error instanceof MongoNotPrimaryException
-                || error instanceof MongoNodeIsRecoveringException
-                || error instanceof MongoConnectionPoolClearedException;
+        return mongoException instanceof MongoSocketException
+                || mongoException instanceof MongoConnectionPoolClearedException
+                || mongoException instanceof MongoNotPrimaryException
+                || mongoException instanceof MongoNodeIsRecoveringException
+                || RETRYABLE_ERROR_CODES.contains(mongoException.getCode())
+                || mongoException.hasErrorLabel("RetryableWriteError");
     }
 
     private static RetryStrategy defaultRetryStrategy() {

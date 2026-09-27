@@ -48,7 +48,7 @@ import static org.occurrent.cloudevents.OccurrentCloudEventExtension.POSITION;
  * {@code requireRepairedEvents(true)} refuses to start while anything matches {@link #wrongPositionOrTagIndex()} or
  * {@link #wrongCounter(Document, Document)} holds. Together those two cover every event whose position is anything
  * other than a positive integer, every DCB event whose {@code dcbtags} and tag index fail {@link #validTags()}, every
- * tag index on an event without {@code dcbtags}, a counter the stores cannot read exactly, and every position above
+ * tag index on an event without {@code dcbtags}, a counter that is not what a writer stores, and every position above
  * the counter, where a missing counter document counts as zero, the value every store reads it as. A non DCB event with
  * no position field at all is in neither, since {@code requireBackfilledPosition} is the check for that one.
  */
@@ -216,8 +216,8 @@ public final class UpdateEventDamage {
     /**
      * Whether the store's position counter is one the stores cannot use. Every store reads a missing counter document
      * as zero, so DCB reads and reads in position order, which stop at the counter, return nothing and the next append
-     * reserves a position an event already holds. A counter value {@link #counterValue(Object)} rejects is read wrongly
-     * or not at all. So this holds for a counter document with such a value, and for a highest position above the
+     * reserves a position an event already holds. A counter value {@link #counterValue(Object)} rejects is read wrongly,
+     * not at all, or rounded by the next append. So this holds for a counter document with such a value, and for a highest position above the
      * counter, zero when there is no counter document. A collection with no positioned event and no counter document is
      * how every store starts, and passes. Ask only once {@link #wrongPositionOrTagIndex()} has found nothing, so that
      * every position is valid. Read {@code highestPositioned} first and {@code counter} second. Every writer raises the
@@ -245,18 +245,20 @@ public final class UpdateEventDamage {
     }
 
     /**
-     * The value a counter document's {@code position} holds if every store reads it exactly. The stores cast it to
-     * {@link Number} and call {@link Number#longValue()}, so it has to be a number that call reads as the whole number
-     * it holds, which rules out a fraction, a value beyond a {@code long} and a {@code Decimal128} above 2^53, whose
-     * {@code longValue} goes through a {@code double}. It cannot be negative either, since the next append would then
-     * reserve a position at or below zero.
+     * The value a counter document's {@code position} holds if it is what a writer stores. Every writer stores an int32
+     * or an int64 there, the stores and the position backfill with {@code $inc} of an int or a long and the backfill's
+     * seed with {@code $max} of a long, and {@code $inc} keeps either exact. A {@code double} counter, which is what
+     * mongosh stores for a bare number, rounds once {@code $inc} takes it past 2^53, so two appends can reserve the same
+     * position, and the stores read a {@code Decimal128} through a {@code double}, which can round it above 2^53. A
+     * negative counter makes the next append reserve a position at or below zero.
      *
      * @param stored the stored counter value
-     * @return the counter, or {@code null} if {@code stored} is anything else
+     * @return the counter, or {@code null} if {@code stored} is not an int32 or int64 at or above zero
      */
     public static @Nullable Long counterValue(@Nullable Object stored) {
-        Long whole = wholeNumber(stored);
-        return whole != null && whole >= 0 && ((Number) stored).longValue() == whole ? whole : null;
+        return (stored instanceof Integer || stored instanceof Long) && ((Number) stored).longValue() >= 0
+                ? ((Number) stored).longValue()
+                : null;
     }
 
     /**

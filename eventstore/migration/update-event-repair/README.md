@@ -88,11 +88,13 @@ Run one instance at a time. Two concurrent runs share one checkpoint document, a
 while the other is still going, so a later resume would start from the wrong place. If you run this as a Kubernetes
 Job, make sure a retry cannot overlap the run it is retrying.
 
-A MongoDB error that a later attempt can get past without anyone changing anything is retried, with a backoff from
-100 ms up to 2 seconds and no limit on attempts, and every retry is logged at WARN with the error. That is an error
-the driver labels `RetryableWriteError` or `TransientTransactionError`, a network error, a timeout waiting for a
-server, and a server that is not primary or is recovering. Any other error ends the run at once, a user without the
-privileges the run needs for instance, and running it again resumes from the checkpoint. Pass a `RetryStrategy` to
+The run retries the MongoDB errors that MongoDB's retryable reads and retryable writes specifications retry, with a
+backoff from 100 ms up to 2 seconds and no limit on attempts, and every retry is logged at WARN with the error that
+caused it. That is a lost connection, a cleared connection pool, an error labelled `RetryableWriteError`, and a
+command or write concern error with one of the codes those specifications list, a primary stepping down or a server
+shutting down for instance. Any other error ends the run at once, a user without the privileges the run needs for
+instance, and so does finding no server before the driver's server selection timeout runs out. Running it again
+resumes from the checkpoint. Pass a `RetryStrategy` to
 the four-argument constructor to change how those errors are retried.
 
 `report()` writes nothing, but it is not cheap. Finding an event whose tag array does not hold its tags cannot use an index, so
@@ -134,7 +136,7 @@ none of the original's extensions, so no position was stored. The tool will not 
   handed out, and DCB reads and reads in position order stop at that same counter, so they skip a value above it as
   they skip one at or below zero, and a later append reaching that number would collide with it. Only an update function that forged
   the position produces this. Reported as `POSITION_ABOVE_COUNTER`. The tag array is still rebuilt. Without a counter
-  document, or with a counter the stores cannot read exactly, the tool has no ceiling to compare against and reports
+  document, or with a counter that is not the int32 or int64 every writer stores, the tool has no ceiling to compare against and reports
   nothing on that ground. A store with `requireRepairedEvents(true)` refuses to start over such a counter, and step 5
   of the runbook says how to restore it.
 

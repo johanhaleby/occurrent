@@ -981,7 +981,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * tag index is wrong. The warning looks for a string position only, what {@code updateEvent} wrote before 0.34.0,
      * which reads no index keys on a store that was never damaged. {@code requireRepairedEvents} refuses every event
      * whose position is not a positive integer, every event whose tag fields are not what an append writes, a counter
-     * the store cannot read exactly and a position above the counter, a missing one counting as zero, at the cost of a
+     * no writer would store and a position above the counter, a missing one counting as zero, at the cost of a
      * collection scan.
      */
     private static void warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, String positionCollectionName, MongoTemplate mongoTemplate, boolean requireRepairedEvents) {

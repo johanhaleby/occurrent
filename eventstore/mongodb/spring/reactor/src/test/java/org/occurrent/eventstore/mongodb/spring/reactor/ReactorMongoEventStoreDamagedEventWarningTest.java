@@ -246,7 +246,7 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("org.occurrent.testsupport.mongodb.StoredCounterShapes#shapes")
-    void a_store_told_to_require_repaired_events_starts_only_over_a_counter_it_reads_exactly_and_no_position_above_it(StoredCounterShapes.Shape shape) {
+    void a_store_told_to_require_repaired_events_starts_only_over_a_counter_a_writer_stores_and_no_position_above_it(StoredCounterShapes.Shape shape) {
         newEventStore().write("stream:1", Flux.just(event("Defined"), event("Renamed"))).block();
         assertThat(counter()).isEqualTo(StoredPositionShapes.COUNTER);
         try (com.mongodb.client.MongoClient blockingClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl())) {
@@ -256,23 +256,35 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
 
         if (shape.starts()) {
             assertThatNoException()
-                    .as("every store reads the counter with Number.longValue and a missing one as zero, and DCB reads and reads in position order stop at it, so only a counter that reads exactly and covers every position is one they handle")
+                    .as("every writer stores the counter as an int32 or int64, which $inc keeps exact, a missing one reads as zero, and DCB reads and reads in position order stop at it, so only such a counter covering every position is one the stores handle")
                     .isThrownBy(this::newStoreRequiringRepairedEvents);
         } else {
             assertThatThrownBy(this::newStoreRequiringRepairedEvents)
-                    .as("every store reads the counter with Number.longValue and a missing one as zero, and DCB reads and reads in position order stop at it, so only a counter that reads exactly and covers every position is one they handle")
+                    .as("every writer stores the counter as an int32 or int64, which $inc keeps exact, a missing one reads as zero, and DCB reads and reads in position order stop at it, so only such a counter covering every position is one the stores handle")
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("updateEvent damaged");
         }
     }
 
-    @Test
-    void a_store_told_to_require_repaired_events_starts_without_a_counter_when_no_event_has_a_position() {
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("org.occurrent.testsupport.mongodb.StoredCounterShapes#shapesOverUnpositionedEvents")
+    void a_store_told_to_require_repaired_events_over_events_without_a_position_starts_only_over_a_counter_a_writer_stores(StoredCounterShapes.Shape shape) {
         newEventStore(builder -> builder.withoutStreamPosition().requireRepairedEvents(true)).write("stream:1", Flux.just(event("Defined"), event("Renamed"))).block();
+        try (com.mongodb.client.MongoClient blockingClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl())) {
+            StoredCounterShapes.give(blockingClient.getDatabase(databaseName).getCollection(DcbMarkerModel.positionCollectionName(EVENT_COLLECTION)),
+                    DcbMarkerModel.POSITION_DOCUMENT_ID, DcbMarkerModel.COUNTER_POSITION, shape);
+        }
 
-        assertThatNoException()
-                .as("a missing counter reads as zero, which is only right while no event has a position, and a store that writes none keeps it that way")
-                .isThrownBy(() -> newEventStore(builder -> builder.withoutStreamPosition().requireRepairedEvents(true)));
+        if (shape.starts()) {
+            assertThatNoException()
+                    .as("with no event positioned only the counter itself can be wrong, and a missing one reads as zero, so the store starts over no counter or an int32 or int64 at or above zero and refuses anything else")
+                    .isThrownBy(() -> newEventStore(builder -> builder.withoutStreamPosition().requireRepairedEvents(true)));
+        } else {
+            assertThatThrownBy(() -> newEventStore(builder -> builder.withoutStreamPosition().requireRepairedEvents(true)))
+                    .as("with no event positioned only the counter itself can be wrong, and a missing one reads as zero, so the store starts over no counter or an int32 or int64 at or above zero and refuses anything else")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("updateEvent damaged");
+        }
     }
 
     @Test

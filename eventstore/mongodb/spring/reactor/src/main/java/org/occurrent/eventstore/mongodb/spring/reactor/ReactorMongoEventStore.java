@@ -832,8 +832,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // Warns, or errors when requireRepairedEvents is set, when the collection holds events whose position or tag
     // index is wrong. The warning looks for a string position only, what updateEvent wrote before 0.34.0, which reads no
     // index keys on a store that was never damaged. requireRepairedEvents refuses every event whose position is not a
-    // positive integer, every event whose tag fields are not what an append writes, a counter the store cannot read
-    // exactly and a position above the counter, a missing one counting as zero, at the cost of a collection scan.
+    // positive integer, every event whose tag fields are not what an append writes, a counter no writer would
+    // store and a position above the counter, a missing one counting as zero, at the cost of a collection scan.
     private Mono<Void> warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
         Bson damaged = requireRepairedEvents ? UpdateEventDamage.wrongPositionOrTagIndex() : UpdateEventDamage.positionStoredAsString();
         return mongoTemplate.execute(eventStoreCollectionName, collection ->

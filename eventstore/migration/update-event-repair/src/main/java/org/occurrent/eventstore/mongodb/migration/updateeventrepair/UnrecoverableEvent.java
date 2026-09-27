@@ -80,7 +80,7 @@ public record UnrecoverableEvent(Object eventId, Reason reason, String detail) {
          * order stop at that same counter, so writing the value back would count as a repair and they would still
          * skip the event, and a later append reaching that number would collide with it. The counter is re-read before
          * the event is reported, so a store that wrote while the repair walked cannot put an event here wrongly.
-         * A store with no counter document, or with a counter value it cannot read exactly, has no ceiling to compare
+         * A store with no counter document, or with a counter value no writer would store, has no ceiling to compare
          * against and this is not reported. requireRepairedEvents refuses such a store until the counter is restored.
          */
         POSITION_ABOVE_COUNTER,

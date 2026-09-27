@@ -24,6 +24,8 @@ import com.mongodb.MongoNodeIsRecoveringException;
 import com.mongodb.MongoNotPrimaryException;
 import com.mongodb.MongoSocketReadException;
 import com.mongodb.MongoTimeoutException;
+import com.mongodb.MongoWriteConcernException;
+import com.mongodb.bulk.WriteConcernError;
 import com.mongodb.ServerAddress;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
@@ -1441,6 +1443,23 @@ class UpdateEventRepairTest {
         );
     }
 
+    @Test
+    void an_error_code_a_later_attempt_can_succeed_on_is_retried_without_a_label() {
+        // ExceededTimeLimit is on the retryable reads list, and on a read the driver raises it as a plain
+        // MongoCommandException with no label and no subtype saying so. The driver retries a read once on its own,
+        // so the failpoint outlasts that and the error reaches the repair.
+        mongoClient.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand")
+                .append("mode", new Document("times", 4))
+                .append("data", new Document("failCommands", List.of("find")).append("errorCode", 262)));
+        try {
+            assertThatNoException()
+                    .as("a code the retryable reads specification lists is one a later attempt gets past, whatever exception type it arrives in")
+                    .isThrownBy(() -> assertTimeoutPreemptively(Duration.ofSeconds(30), () -> newRepair().run()));
+        } finally {
+            mongoClient.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", "off"));
+        }
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("errorsAndWhetherALaterAttemptCanSucceed")
     void the_repair_retries_only_an_error_a_later_attempt_can_succeed_on(String description, Throwable error, boolean retried) {
@@ -1454,11 +1473,17 @@ class UpdateEventRepairTest {
         labelledTransient.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
         return Stream.of(
                 Arguments.of("a lost connection", new MongoSocketReadException("lost", new ServerAddress()), true),
-                Arguments.of("no server to select", new MongoTimeoutException("no server"), true),
                 Arguments.of("a server that is no longer primary", new MongoNotPrimaryException(commandError(10107, "NotWritablePrimary"), new ServerAddress()), true),
                 Arguments.of("a server that is recovering", new MongoNodeIsRecoveringException(commandError(91, "ShutdownInProgress"), new ServerAddress()), true),
                 Arguments.of("an error labelled RetryableWriteError", labelledRetryableWrite, true),
-                Arguments.of("an error labelled TransientTransactionError", labelledTransient, true),
+                Arguments.of("an unlabelled HostUnreachable", new MongoCommandException(commandError(6, "HostUnreachable"), new ServerAddress()), true),
+                Arguments.of("an unlabelled ExceededTimeLimit", new MongoCommandException(commandError(262, "ExceededTimeLimit"), new ServerAddress()), true),
+                Arguments.of("an unlabelled ReadConcernMajorityNotAvailableYet", new MongoCommandException(commandError(134, "ReadConcernMajorityNotAvailableYet"), new ServerAddress()), true),
+                Arguments.of("an unlabelled PrimarySteppedDown", new MongoCommandException(commandError(189, "PrimarySteppedDown"), new ServerAddress()), true),
+                Arguments.of("a write concern error ShutdownInProgress", new MongoWriteConcernException(new WriteConcernError(91, "ShutdownInProgress", "shutting down", new BsonDocument()), null, new ServerAddress()), true),
+                Arguments.of("no server to select, which neither specification retries", new MongoTimeoutException("no server"), false),
+                Arguments.of("an error labelled TransientTransactionError, which the repair never runs in a transaction to get", labelledTransient, false),
+                Arguments.of("a write concern error UnsatisfiableWriteConcern", new MongoWriteConcernException(new WriteConcernError(100, "UnsatisfiableWriteConcern", "no", new BsonDocument()), null, new ServerAddress()), false),
                 Arguments.of("Unauthorized", new MongoCommandException(commandError(13, "Unauthorized"), new ServerAddress()), false),
                 Arguments.of("an unlabelled BadValue", new MongoCommandException(commandError(2, "BadValue"), new ServerAddress()), false),
                 Arguments.of("an error outside the driver", new IllegalStateException("not MongoDB"), false)
