@@ -750,8 +750,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
                 ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false",
                 ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
 
-        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing());
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s1", List.of(orderPlaced("historical")));
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
@@ -763,7 +762,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
                 .as("the catch-up replay must have failed and propagated the failure")
                 .hasMessageContaining("simulated catch-up fold failure");
 
-        KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig, liveFeed, outcomeChannel)
+        KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig, liveFeed)
                 .bindings(Set.of(KafkaDestination.of(topic)))
                 .pollTimeout(POLL_TIMEOUT)
                 .build();
