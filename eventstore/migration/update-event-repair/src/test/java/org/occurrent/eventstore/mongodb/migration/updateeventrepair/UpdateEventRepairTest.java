@@ -404,7 +404,7 @@ class UpdateEventRepairTest {
     }
 
     @Test
-    void a_store_requiring_repaired_events_still_refuses_an_event_the_repair_reports_as_unreadable() {
+    void a_store_requiring_repaired_events_refuses_an_unreadable_event_until_its_dcbtags_is_written_back() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         events().updateOne(new Document("id", "a"),
                 new Document("$unset", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, ""))
@@ -420,6 +420,44 @@ class UpdateEventRepairTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("step 5")
                 .hasMessageContaining("turn off requireRepairedEvents");
+
+        // Step 5: the operator writes the event's tags back the way a DCB append stores them and runs the repair again
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(DcbCloudEvents.TAGS, "name:1")));
+        newRepair().run();
+
+        assertThatNoException()
+                .as("step 5's fix for an unreadable dcbtags must be enough for the store to start")
+                .isThrownBy(() -> newEventStore(true));
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_refuses_a_position_left_as_a_string_until_it_is_removed() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        damageTheWayUpdateEventUsedTo("b", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(positionOfA))));
+
+        assertThat(newRepair().run().unrecoverableEvents())
+                .singleElement()
+                .extracting(UnrecoverableEvent::reason)
+                .isEqualTo(UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN);
+        assertThatThrownBy(() -> newEventStore(true))
+                .as("deciding to live without b's position changes nothing while the string is still there")
+                .isInstanceOf(IllegalStateException.class);
+
+        // Step 5: the operator accepts the loss by removing the string
+        events().updateOne(new Document("id", "b"), new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
+
+        assertThatThrownBy(() -> newEventStore(true))
+                .as("the rejected update left b's tag array unwritten too, so removing the string alone is not enough")
+                .isInstanceOf(IllegalStateException.class);
+
+        newRepair().run();
+
+        assertThatNoException()
+                .as("step 5's fix for a position left as a string must be enough for the store to start")
+                .isThrownBy(() -> newEventStore(true));
     }
 
     @Test

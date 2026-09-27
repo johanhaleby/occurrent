@@ -136,14 +136,14 @@ be refused until the repair has run needs the refusal and the repair to agree on
 alone misses a DCB event whose position was dropped, and the hand-set event section 2 describes. Both are missing
 from the conflict query.
 
-The price is a collection scan at every startup with the setting on, whether or not the store writes position, since
-no index covers the `dcbTags` half. Only an operator who asked for the refusal pays it.
+The price is that, with the setting on, a startup that finds no damage reads the whole collection, whether or not
+the store writes position, since no index covers the `dcbTags` half. Only an operator who asked for the refusal pays
+it.
 
-Most events the repair reports as unrecoverable still match the filter after a run, and each one keeps the store down
-until someone fixes it by hand or turns the setting off. A position another event holds, or one that is not a usable
-number, stays a string. The repair cannot rebuild the tag array of an event whose `dcbtags` is not a string, or
-does not decode. A lost position is the exception, since the repair rebuilds that event's tag array and nothing else
-about it matches. The refusal message points at steps 5 and 6 of the runbook for that reason.
+An event the repair reports as unrecoverable can still match the filter after a run, for instance one whose position
+is still a string or whose `dcbtags` does not decode. Such an event keeps the store down until someone fixes it by
+hand or turns the setting off. Step 5 of the runbook says how to fix each by hand, and the refusal message points
+there.
 
 Narrowing the filter so such an event no longer counts was rejected. A filter can exclude a `dcbtags` that is not a
 string, but not one that fails to decode, so the message would still be needed. It would also stop the repair
@@ -223,7 +223,7 @@ signal an affected store ever gets.
 
 Three MongoDB stores gain one indexed lookup at startup, on the path that already runs the un-backfilled events
 check. On a healthy store it reads nothing. With `requireRepairedEvents` on, the lookup reads the whole collection
-instead.
+whenever it finds no damage.
 
 An affected operator learns about the damage from a log line and runs a tool. Nobody's stored events change without
 them asking, which is the property worth having, because the damage is inert and a wrong repair is not.

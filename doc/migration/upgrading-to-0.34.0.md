@@ -896,10 +896,10 @@ it starts and logs a warning naming the repair when it finds something, so an af
 on its next deploy. By default a store that writes no position does not run it, so run the query above yourself
 there unless you turn on the setting below.
 
-If you would rather that store refused to start than kept accepting conditional appends against a damaged event
-until the repair has run, set `EventStoreConfig.Builder.requireRepairedEvents(true)`. It looks for everything the
-repair looks for, both queries in step 1 of the [repair runbook](../runbooks/update-event-repair.md), so it reads the
-whole collection at every startup. It is off by default on all three MongoDB stores, so upgrading on its own changes
+If you would rather that store refused to start than kept accepting conditional appends against a damaged event until
+the repair has run, set `EventStoreConfig.Builder.requireRepairedEvents(true)`. It looks for everything the repair looks
+for, both queries in step 1 of the [repair runbook](../runbooks/update-event-repair.md), so a startup that finds no
+damage reads the whole collection. It is off by default on all three MongoDB stores, so upgrading on its own changes
 nothing here. It also covers the third message below, the store that turns position off and would otherwise run no
 damage check at all.
 

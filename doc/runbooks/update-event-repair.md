@@ -64,10 +64,10 @@ default a store that writes no position runs neither query, so run both yourself
 setting below.
 
 Set `EventStoreConfig.Builder.requireRepairedEvents(true)` if you would rather the store refused to start than kept
-accepting conditional appends against a damaged event until you have run the repair. It is off by default. It looks
-for every event either query counts and refuses while either would return more than `0`, which costs a collection
-scan at every startup. It applies whether or not the store writes position, so a store that turned position off
-over unpositioned history is refused too.
+accepting conditional appends against a damaged event until you have run the repair. It is off by default. It looks for
+every event either query counts and refuses while either would return more than `0`, and a startup that finds no such
+event reads the whole collection. It applies whether or not the store writes position, so a store that turned position
+off over unpositioned history is refused too.
 
 ### 2. [tool] Take a report
 
@@ -175,9 +175,28 @@ you treat `POSITION_LOST`. The tag array is repaired even so. If your store has 
 ceiling to compare against and this is never reported.
 
 **`UNREADABLE`.** The tool could not read the event well enough to repair it, which means its `dcbtags` was edited
-outside Occurrent. The run continues past it, so one such event does not hold up the rest. Until you fix its
-`dcbtags` by hand, the event stays missing from DCB reads, and a store with `requireRepairedEvents` on refuses to
-start.
+outside Occurrent. The run continues past it, so one such event does not hold up the rest. The event stays missing
+from DCB reads, and a store with `requireRepairedEvents` on refuses to start, until `dcbtags` holds the event's tags
+again. Write them back as one string, each tag exactly as the application wrote it, joined with a newline, and run
+the repair again, which rebuilds the tag array from it:
+
+```javascript
+db.events.updateOne({ _id: <id> }, { $set: { dcbtags: "<first tag>\n<second tag>" } })
+```
+
+If you cannot tell what the tags were, the tool has nothing to rebuild the tag array from, so turn
+`requireRepairedEvents` off rather than guess.
+
+**A position that is still a string keeps `requireRepairedEvents` refusing.** That is every `POSITION_ALREADY_TAKEN`
+event, and a `POSITION_NOT_A_NUMBER`, `POSITION_NOT_POSITIVE` or `POSITION_ABOVE_COUNTER` event whose position was
+stored as a string. The first query in step 6 finds them. Deciding to live without the position changes nothing
+while the string is there. Set the position your own records say it had, or remove the string, after which the
+event is in the same state as a `POSITION_LOST` event:
+
+```javascript
+db.events.updateOne({ _id: <id> }, { $set: { position: NumberLong(<position>) } })
+db.events.updateOne({ _id: <id> }, { $unset: { position: "" } })
+```
 
 **Write down the range this run reported before you do anything else.** The finished-run log line names it,
 `Repaired positions ranged from X to Y`, or says `No position was repaired` when the run has nothing to report. A
@@ -195,10 +214,11 @@ back, because the rejected update left its tag array unwritten too. Working out 
 you nothing, so record every position you set. Step 7 needs them from you.
 
 **Then run the repair once more.** A `POSITION_ALREADY_TAKEN` event with DCB tags still has no tag array, because the
-rejected update covered both fields together. Setting its position by hand makes it visible to position queries but
-not to DCB reads, and it silences the startup warning, which then tells you nothing. `requireRepairedEvents` still
-refuses until the tag array is back. A second run rebuilds the tag array. A plain stream event has no tag array to
-rebuild, so the run does nothing for it and the position you recorded above is the only record of it.
+rejected update covered both fields together. Setting its position by hand makes it visible to position queries but not
+to DCB reads, and it silences the startup warning, which then tells you nothing. Removing its position does not bring it
+back to DCB reads either. `requireRepairedEvents` still refuses until the tag array is back. A second run rebuilds the
+tag array. A plain stream event has no tag array to rebuild, so the run does nothing for it and the position you
+recorded above is the only record of it.
 
 ### 6. [you] Verify
 
@@ -211,8 +231,8 @@ Both should be `0`, except for the events step 5 left alone deliberately. Restar
 startup warning is gone.
 
 A store with `requireRepairedEvents` on refuses to start while either query would return more than `0`, so an event
-you left alone keeps it down if either query still counts it. Fix the event by hand, or turn the setting off once you
-have decided to live with it.
+you left alone keeps it down if either query still counts it. Fix the event by hand as step 5 describes, or turn the
+setting off once you have decided to live with it.
 
 ### 7. [you] Recover consumers that read past a repaired position
 
