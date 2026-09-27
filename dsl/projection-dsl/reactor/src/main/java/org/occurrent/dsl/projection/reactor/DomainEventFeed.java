@@ -443,6 +443,11 @@ public final class DomainEventFeed<E> {
      * <p>
      * The lookup happens when the returned {@link Mono} is subscribed, the same as {@link #catchUp(String)}. An id
      * that matches nothing fails the {@link Mono} with an {@link IllegalArgumentException} rather than throwing here.
+     * <p>
+     * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection completes
+     * only once the replay has ended, so {@link #acceptCloudEvent(CloudEvent)} completes with
+     * {@link RoutingOutcome#DELIVERED} for a matching event after that, unless another replay has started since. When
+     * the replay fails, the {@link Mono} errors with an {@link IllegalStateException}.
      *
      * @return A {@link Mono} that completes once that projection is live.
      */

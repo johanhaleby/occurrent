@@ -251,6 +251,9 @@ public final class BlockingHandover<T, K> {
     // replayRunning, which ends when the drain starts, since the drain, the marker and the catch block read and write
     // the replay state this attempt set up.
     private boolean replayTurnHeld = false;
+    // How many times the replay turn has been taken, so a call waiting for the replay running now can tell it apart
+    // from one that takes the turn after it.
+    private long replayTurnsTaken = 0;
     // How many of this handover's own deliveries and callbacks the current thread is inside, a catch-up included. A
     // payload fed from there while the handover is not live would wait for a drain, or for a replay to start, that
     // this same thread holds up, so it is refused instead. Per thread, since only the thread holding things up
@@ -564,8 +567,14 @@ public final class BlockingHandover<T, K> {
      * A replay on a handover that is already live, a feed's {@code catchUp()} after its {@code goLive()}, waits for any
      * live delivery still running and then buffers live payloads until it ends, the same as before a first catch-up.
      * They are delivered when it ends, whether it completes or is stopped, since a view that buffers during a replay
-     * throws that buffer away on a stop. A catch-up with nothing to replay that arrives while a replay runs does not
-     * drain the buffer itself. The running replay drains it, and goes live even if it is stopped.
+     * throws that buffer away on a stop.
+     * <p>
+     * A catch-up with nothing to replay that arrives while a replay runs waits until that replay's catch-up returns or
+     * throws. The running replay drains the buffer and goes live even if it is stopped, so once this returns
+     * {@code true}, {@link #acceptIfLive(Object)} accepts unless a replay started after this call. When the replay it
+     * waited for failed, this throws instead. The one exception is a call from inside that replay's own folds, drain or
+     * {@link Source} callbacks, which returns {@code true} without waiting, because the replay cannot end before the
+     * call returns.
      * <p>
      * A replay also waits for a catch-up that is already replaying, until that catch-up returns or throws, so two
      * replays never fold into the view at once and each drain and marker belongs to the replay before it. Calling this
@@ -574,8 +583,9 @@ public final class BlockingHandover<T, K> {
      *
      * @return {@code true} when the catch-up finished and the handover is live, {@code false} when
      * {@link Source#keepReplaying()} stopped it partway, or when the calling thread was interrupted while waiting for
-     * the deliveries already running to end, which leaves the handover as it was and the interrupt on the thread. A
-     * failure throws rather than returning either.
+     * the deliveries or the replay already running to end. The interrupt stays on the thread. An interrupted wait for
+     * the deliveries changes nothing on the handover, and the replay an interrupted call waited for still goes live
+     * when it ends. A failure throws rather than returning either.
      */
     public boolean catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
@@ -597,15 +607,38 @@ public final class BlockingHandover<T, K> {
             enterOwnCall();
             enteredOwnCall = true;
             if (source.isAlreadyCaughtUp()) {
+                Throwable failedWhileWaiting = null;
                 synchronized (lock) {
-                    if (replayRunning) {
-                        // The running replay delivers the buffer when it ends, and goes live even if it is stopped.
+                    // Not from inside the running replay's own folds or callbacks, which cannot end while this call
+                    // waits for them.
+                    if (replayRunning && Objects.requireNonNull(callDepth.get()) == 1) {
+                        // Set before the wait, so the running replay goes live even if it is stopped meanwhile.
                         liveWhenReplayStops = true;
-                        return true;
+                        // Waits for that replay's catch-up to return or throw, so this call does not report the
+                        // handover live while acceptIfLive(..) still refuses.
+                        Throwable failureBeforeWaiting = catchUpFailure;
+                        if (!awaitRunningReplayUnderLock()) {
+                            return false;
+                        }
+                        if (catchUpFailure != failureBeforeWaiting) {
+                            failedWhileWaiting = catchUpFailure;
+                        }
                     }
-                    // Claimed under the same lock that read replayRunning, so a replay cannot start between the two
-                    // and find this call draining into a view it is about to replay into.
-                    liveTransitionsRunning++;
+                    if (failedWhileWaiting == null) {
+                        if (replayRunning) {
+                            // A replay this call does not wait for, one that started while it waited or one running
+                            // on this thread. It delivers the buffer when it ends, and goes live even if it is
+                            // stopped.
+                            liveWhenReplayStops = true;
+                            return true;
+                        }
+                        // Claimed under the same lock that read replayRunning, so a replay cannot start between the
+                        // two and find this call draining into a view it is about to replay into.
+                        liveTransitionsRunning++;
+                    }
+                }
+                if (failedWhileWaiting != null) {
+                    throw new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), failedWhileWaiting);
                 }
                 try {
                     drainBufferAndGoLive(source);
@@ -662,6 +695,7 @@ public final class BlockingHandover<T, K> {
                     this.source = source;
                     replayRunning = true;
                     replayTurnHeld = true;
+                    replayTurnsTaken++;
                     holdsReplayTurn = true;
                     // Cleared again here, not only when this call was entered, because the catch-up it waited for can
                     // have stopped in between. The payloads arriving during this replay belong in its buffer, and a
@@ -843,6 +877,22 @@ public final class BlockingHandover<T, K> {
     // returns. The interrupt stays on the thread for whoever asked for it.
     private boolean awaitLiveDeliveriesUnderLock() {
         while (!inFlight.isEmpty() || replayCallbacksRunning > 0 || liveTransitionsRunning > 0 || replayTurnHeld) {
+            try {
+                lock.wait();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Assumes lock is held. Releases it while it waits for the catch-up holding the replay turn now to return or
+    // throw, which is after its drain and its marker, and not for a replay that takes the turn after it. Returns false
+    // when the wait was interrupted, leaving the interrupt on the thread.
+    private boolean awaitRunningReplayUnderLock() {
+        long runningReplay = replayTurnsTaken;
+        while (replayTurnHeld && replayTurnsTaken == runningReplay) {
             try {
                 lock.wait();
             } catch (InterruptedException e) {

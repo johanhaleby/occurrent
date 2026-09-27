@@ -50,6 +50,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
@@ -957,6 +958,43 @@ class DomainEventFeedTest {
         feed.goLive("counter");
 
         assertThat(feed.isReadyForLiveDelivery()).isTrue();
+    }
+
+    // goLive(id) returning while catchUp(id) still replayed left acceptCloudEvent(..) returning DEFERRED after the
+    // caller was told the projection is live.
+    @Test
+    void go_live_while_the_catch_up_replays_returns_only_once_that_replay_has_ended() throws Exception {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+        feed.register("counter", event -> {
+            if (event.eventId().equals("1")) {
+                replaying.countDown();
+                awaitUninterruptibly(releaseReplay);
+            }
+            folded.add(event.eventId());
+        }, Filter.all());
+        Thread catchingUp = new Thread(() -> feed.catchUp("counter"), "catch-up");
+        catchingUp.start();
+        try {
+            awaitUninterruptibly(replaying);
+            FutureTask<Void> wentLive = new FutureTask<>(() -> feed.goLive("counter"), null);
+            new Thread(wentLive, "go-live").start();
+            Thread.sleep(300);
+
+            assertThat(wentLive).as("goLive(id) while the replay is held").isNotDone();
+            releaseReplay.countDown();
+            wentLive.get(5, TimeUnit.SECONDS);
+            assertThat(feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live")))).isEqualTo(RoutingOutcome.DELIVERED);
+            assertThat(folded).containsExactly("1", "live");
+        } finally {
+            releaseReplay.countDown();
+            catchingUp.join(5_000);
+        }
     }
 
     /**

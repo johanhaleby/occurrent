@@ -659,6 +659,12 @@ public final class ReactiveHandover<T, K> {
      * which matters on a handover that is already live, a feed's {@code catchUp()} after its {@code goLive()}. They are
      * delivered when it ends, whether it completes or is stopped, since a view that buffers during a replay throws that
      * buffer away on a stop.
+     * <p>
+     * A catch-up with nothing to replay that arrives while a replay holds the live payloads back completes only once
+     * that replay ends, so when it emits {@code true}, {@link #acceptIfLive(Object)} accepts unless a replay started
+     * after this call. When the replay it waited for failed, it errors instead. A fold or {@link Source} callback of
+     * the running replay that waits for the returned {@code Mono} therefore never finishes, and neither does one that
+     * waits for a catch-up that replays, since that catch-up waits for the running replay to end.
      */
     public Mono<Boolean> catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
@@ -694,7 +700,16 @@ public final class ReactiveHandover<T, K> {
         // fold, and since the marker makes a restart skip the replay, the unfolded events were lost with no error.
         Mono<Void> replayFolded = alreadyDone.flatMap(done -> {
             if (done) {
-                return Mono.empty();
+                // Waits for a replay already holding live delivery back, so this call does not report the handover
+                // live while acceptIfLive(..) still refuses. It waits only for the hold in place now, since this call
+                // makes no promise about a replay that starts after it. The failure check is the one a replay waiting
+                // for its turn makes, so a replay that failed while this call waited is not followed by going live.
+                return awaitLiveDeliveryResumed().then(Mono.defer(() -> {
+                    Throwable failed = terminalError.get();
+                    return failed == null || failed == failureBeforeWaiting
+                            ? Mono.<Void>empty()
+                            : Mono.<Void>error(catchUpFailed(failed));
+                }));
             }
             // Deferred, so the hold is installed once the turn is taken rather than when this pipeline is put together.
             return awaitReplayTurn(holdsReplayTurn).then(Mono.defer(() -> {
@@ -1056,6 +1071,18 @@ public final class ReactiveHandover<T, K> {
             }
             return liveIdle.asMono();
         }
+    }
+
+    // Completes once the hold on live delivery in place right now is released, or at once when there is none. A hold
+    // is released on every path out of the replay that took it, completed, stopped or failed.
+    private Mono<Void> awaitLiveDeliveryResumed() {
+        return Mono.defer(() -> {
+            Sinks.Empty<Void> paused;
+            synchronized (liveGate) {
+                paused = livePaused;
+            }
+            return paused == null ? Mono.<Void>empty() : paused.asMono();
+        });
     }
 
     private boolean liveDeliveryPaused() {

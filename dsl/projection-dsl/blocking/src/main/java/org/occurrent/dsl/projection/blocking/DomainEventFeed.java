@@ -452,6 +452,11 @@ public final class DomainEventFeed<E> {
      * {@code id}, draining whatever live events it already buffered. Use this over {@link #catchUp(String)} when this
      * feed's events are not in the local event store, so there is nothing to replay. No completion marker is written,
      * so a later {@link #catchUp(String)} on the same projection still replays the full history.
+     * <p>
+     * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection returns only
+     * once the replay has ended, so {@link #acceptCloudEvent(CloudEvent)} returns {@link RoutingOutcome#DELIVERED}
+     * for a matching event after that, unless another replay has started since. When the replay fails, this throws an
+     * {@link IllegalStateException}. An interrupt ends the wait early and stays on the thread.
      *
      * @throws IllegalArgumentException if no projection with that id is registered on this feed
      */

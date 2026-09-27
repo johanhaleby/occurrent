@@ -1580,7 +1580,8 @@ class ReactiveHandoverTest {
 
     // A catch-up with nothing to replay runs while another catch-up is replaying, which is what a feed's goLive()
     // racing its catchUp() does. It must not let the live payloads through, since the replay it would release them
-    // into can still discard what a view buffered from them.
+    // into can still discard what a view buffered from them. Nor does it complete before that replay ends, since
+    // acceptIfLive(..) refuses until then.
     @Test
     void a_catch_up_with_nothing_to_replay_does_not_release_a_running_replays_hold_on_live_delivery() throws Exception {
         List<String> log = new CopyOnWriteArrayList<>();
@@ -1606,14 +1607,92 @@ class ReactiveHandoverTest {
         Mono<Boolean> replaying = handover.catchUp(source(List.of("R1"), false));
         assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
 
-        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        CompletableFuture<Boolean> nothingToReplay = handover.catchUp(source(List.of(), true)).toFuture();
         Mono.delay(Duration.ofMillis(300)).block();
 
+        assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
         assertThat(log).containsExactly("R1");
         releaseReplay.countDown();
         StepVerifier.create(replaying).expectNext(true).verifyComplete();
+        assertThat(nothingToReplay.get(5, TimeUnit.SECONDS)).isTrue();
         assertThat(liveAcks.get(0).get(5, TimeUnit.SECONDS)).isTrue();
         assertThat(log).containsExactly("R1", "L1");
+    }
+
+    // A feed's goLive() called while its first catchUp() replays. Reporting live before that replay ends left
+    // acceptIfLive(..) refusing after the caller was told the feed is live.
+    @Test
+    void a_catch_up_with_nothing_to_replay_reports_live_only_once_the_running_replay_has_ended() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(
+                holdingAt("R1", log, replayReached, releaseReplay, null), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        try {
+            Mono<Boolean> replaying = handover.catchUp(source(List.of("R1"), false));
+            assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+            CompletableFuture<Boolean> nothingToReplay = handover.catchUp(source(List.of(), true)).toFuture();
+            Mono.delay(Duration.ofMillis(300)).block();
+
+            assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
+            releaseReplay.countDown();
+            StepVerifier.create(replaying).expectNext(true).verifyComplete();
+            assertThat(nothingToReplay.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(handover.acceptIfLive("L1").block(Duration.ofSeconds(5))).isTrue();
+            assertThat(log).containsExactly("R1", "L1");
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    // When the replay it waited for fails, the handover refuses everything, so the catch-up waiting for it errors with
+    // that failure rather than reporting a handover that is live.
+    @Test
+    void a_catch_up_with_nothing_to_replay_fails_when_the_running_replay_it_waited_for_fails() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        IllegalStateException foldFailure = new IllegalStateException("fold boom");
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(
+                holdingAt("R1", log, replayReached, releaseReplay, foldFailure), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        try {
+            Mono<Boolean> replaying = handover.catchUp(source(List.of("R1"), false));
+            assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+            CompletableFuture<Boolean> nothingToReplay = handover.catchUp(source(List.of(), true)).toFuture();
+            Mono.delay(Duration.ofMillis(300)).block();
+
+            assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
+            releaseReplay.countDown();
+            StepVerifier.create(replaying).verifyErrorMessage("fold boom");
+            assertThatThrownBy(() -> nothingToReplay.get(5, TimeUnit.SECONDS)).cause()
+                    .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                    .hasCauseReference(foldFailure);
+            assertThat(handover.refusesPermanently()).isTrue();
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    // Records every payload it folds, and holds the fold of the given payload until released, failing it afterwards
+    // when given a failure.
+    private static Function<String, Mono<Void>> holdingAt(String held, List<String> log, CountDownLatch reached, CountDownLatch release,
+                                                          RuntimeException failure) {
+        return payload -> Mono.fromRunnable(() -> {
+            if (payload.equals(held)) {
+                reached.countDown();
+                try {
+                    release.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                if (failure != null) {
+                    throw failure;
+                }
+            }
+            log.add(payload);
+        });
     }
 
     // The payloads a replay holds back stay held until the whole catch-up has succeeded. A marker write that fails

@@ -133,6 +133,12 @@ did. Only the catch-up that held the live payloads back lets them through again,
 replay releases nothing. While the replay runs, `acceptIfLive` refuses on both engines, so a caller that can redeliver is told
 to try again.
 
+A `goLive()` running next to a replay waits for that replay to end, and fails when the replay fails. Once it reports the
+handover live, `acceptIfLive` accepts unless another replay has started since. On the blocking engine a `goLive()`
+called by the view while it applies one of that replay's payloads returns at once, since the replay cannot end before
+the call returns. On the reactive engine a view that waits for the returned `Mono` while it applies a replayed payload
+never finishes, the same as one that waits for a `catchUp()` that replays.
+
 A replay that fails ends differently on the two engines, because they acknowledge at different moments. The blocking
 engine has already reported each buffered payload handled, so it delivers them before it records the failure. The
 reactive engine has not acknowledged the payloads it holds back, and the failure fails their acknowledgements, so it
