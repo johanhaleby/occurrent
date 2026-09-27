@@ -17,6 +17,8 @@
 
 package org.occurrent.springboot.reactor;
 
+import org.occurrent.subscription.DcbStartAt;
+import org.occurrent.subscription.StartAt;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.scheduler.Scheduler;
@@ -26,19 +28,36 @@ import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Supplier;
 
-// Runs the subscribe call of an event-store registration. A subscription model may block inside subscribe, and
-// ReactorDurableSubscriptionModel does, reading the stored position for a DEFAULT start with block(). A bean built after
-// startup is built on whichever thread asked for it, and on a Reactor non-blocking thread that block() throws. There
-// the call runs on boundedElastic instead and the bean is returned without waiting for it. A failure then has no
-// caller left to reach, so it is logged and the registration's claims are released. On any other thread the call
-// runs where it is, and a failure fails the bean as before.
+// Runs the subscribe call of a registration for a bean built after startup. A subscription model may block inside
+// subscribe, and ReactorDurableSubscriptionModel does, so on a Reactor non-blocking thread that block() throws.
+//
+// Where the subscription starts decides what happens there. A start that is the same whenever the subscribe runs,
+// BEGINNING or an explicit position, is subscribed on the scheduler after the bean is returned, and retried until it
+// succeeds, so nothing is skipped however late it gets there. A start that depends on when it runs, NOW or DEFAULT,
+// is subscribed where it is, as on any other thread. Subscribing that one later would skip whatever the caller writes
+// between getting the bean and the subscribe, so a model that blocks fails the bean instead, with a message saying
+// how to register it.
 final class LateSubscriber {
     private static final Logger log = LoggerFactory.getLogger(LateSubscriber.class);
     // The same bound ProjectionAnnotationRegistrar.close() waits for its background catch-ups.
     private static final Duration CLOSE_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration FIRST_RETRY_DELAY = Duration.ofMillis(100);
+    private static final Duration MAX_RETRY_DELAY = Duration.ofSeconds(30);
+
+    // The subscribe call of one registration. attempt can run again after it failed, so it has to pick up where the
+    // failed one stopped.
+    @FunctionalInterface
+    interface SubscribeCall {
+        void subscribe(Supplier<String> registration, boolean startIsFixed, Runnable attempt);
+    }
+
+    static final SubscribeCall INLINE = (registration, startIsFixed, attempt) -> attempt.run();
 
     private final Scheduler scheduler;
+    private final Duration closeTimeout;
+    private final Duration firstRetryDelay;
     // A subscribe running on the scheduler holds the read lock and close() takes the write lock, so once close()
     // returns no subscribe is running and none starts afterwards. Every one that ran finished before the subscription
     // model shut down, and the model stops it along with the others when it does.
@@ -46,55 +65,109 @@ final class LateSubscriber {
     private volatile boolean closed;
 
     LateSubscriber() {
-        this(Schedulers.boundedElastic());
+        this(Schedulers.boundedElastic(), CLOSE_TIMEOUT, FIRST_RETRY_DELAY);
     }
 
-    // For a test that decides when a subscribe moved off the caller's thread runs.
-    LateSubscriber(Scheduler scheduler) {
+    // For a test that decides when a subscribe moved off the caller's thread runs, and how long close() waits.
+    LateSubscriber(Scheduler scheduler, Duration closeTimeout, Duration firstRetryDelay) {
         this.scheduler = scheduler;
+        this.closeTimeout = closeTimeout;
+        this.firstRetryDelay = firstRetryDelay;
     }
 
-    void subscribe(String registration, Runnable subscribe, Runnable releaseOnFailure) {
+    static boolean startIsFixed(StartAt startAt) {
+        return !startAt.isNow() && !startAt.isDefault();
+    }
+
+    static boolean startIsFixed(DcbStartAt startAt) {
+        return startIsFixed(startAt.toStartAt());
+    }
+
+    // releaseOnGiveUp gives back what the registration claimed, once a subscribe moved to the scheduler stops trying.
+    // A failure thrown to the caller is the caller's to release.
+    SubscribeCall call(Runnable releaseOnGiveUp) {
+        return (registration, startIsFixed, attempt) -> subscribe(registration, startIsFixed, attempt, releaseOnGiveUp);
+    }
+
+    private void subscribe(Supplier<String> registration, boolean startIsFixed, Runnable attempt, Runnable releaseOnGiveUp) {
         if (!Schedulers.isInNonBlockingThread()) {
-            subscribe.run();
+            attempt.run();
             return;
         }
         String callerThread = Thread.currentThread().getName();
-        scheduler.schedule(() -> subscribeUnlessClosed(registration, callerThread, subscribe, releaseOnFailure));
+        if (!startIsFixed) {
+            try {
+                attempt.run();
+            } catch (RuntimeException e) {
+                if (refusedToBlock(e)) {
+                    throw new IllegalStateException(("%s starts from wherever the event feed has reached when it subscribes (startAt = NOW or DEFAULT), and its subscription model blocks while subscribing, "
+                            + "which Reactor does not allow on the non-blocking thread %s that is building its bean. Subscribing it later on another thread would skip whatever is written between the "
+                            + "bean being returned and that subscribe. Build the bean on a thread that may block, for example with Mono.fromCallable(...).subscribeOn(Schedulers.boundedElastic()), "
+                            + "or start it at the beginning or at an explicit position, which does not depend on when it subscribes.").formatted(registration.get(), callerThread), e);
+                }
+                throw e;
+            }
+            return;
+        }
+        if (closed) {
+            throw new IllegalStateException("Cannot subscribe %s, since the application context is closing.".formatted(registration.get()));
+        }
+        scheduler.schedule(() -> attempt(registration, callerThread, attempt, releaseOnGiveUp, 1, firstRetryDelay));
     }
 
-    private void subscribeUnlessClosed(String registration, String callerThread, Runnable subscribe, Runnable releaseOnFailure) {
+    private void attempt(Supplier<String> registration, String callerThread, Runnable attempt, Runnable releaseOnGiveUp, int attemptNumber, Duration retryDelay) {
         lock.readLock().lock();
         try {
             if (closed) {
-                log.debug("Did not subscribe {}, since the application context started closing first.", registration);
+                log.warn("Did not subscribe {}, since the application context started closing first. Its start position does not depend on when it subscribes, so it skips nothing when the application next registers it.", registration.get());
+                releaseOnGiveUp.run();
                 return;
             }
-            subscribe.run();
+            attempt.run();
+            return;
         } catch (RuntimeException | Error e) {
-            log.error("Could not subscribe {}. Its bean was built on the Reactor non-blocking thread {}, so the subscribe ran "
-                    + "afterwards on {} and the failure had no caller to reach. It receives no events.", registration, callerThread,
-                    Thread.currentThread().getName(), e);
-            releaseOnFailure.run();
+            log.error("Could not subscribe {} on attempt {}, trying again in {} ms. Its bean was built on the Reactor non-blocking thread {}, so the subscribe runs on {} with no caller to throw to, "
+                    + "and it receives no events until an attempt succeeds.", registration.get(), attemptNumber, retryDelay.toMillis(), callerThread, Thread.currentThread().getName(), e);
         } finally {
             lock.readLock().unlock();
         }
+        Duration doubled = retryDelay.multipliedBy(2);
+        Duration nextDelay = doubled.compareTo(MAX_RETRY_DELAY) > 0 ? MAX_RETRY_DELAY : doubled;
+        try {
+            scheduler.schedule(() -> attempt(registration, callerThread, attempt, releaseOnGiveUp, attemptNumber + 1, nextDelay), retryDelay.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (RuntimeException e) {
+            log.error("Gave up subscribing {}, since the scheduler refused the next attempt. It receives no events.", registration.get(), e);
+            releaseOnGiveUp.run();
+        }
+    }
+
+    // Reactor's own refusal of block() on a non-blocking thread. It has no type of its own, so it is recognised by its message.
+    private static boolean refusedToBlock(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof IllegalStateException && t.getMessage() != null && t.getMessage().contains("blocking, which is not supported in thread")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Called once the application context starts closing, before any bean is destroyed. The subscription model shuts
     // down while beans are destroyed, and a subscribe reaching it after that could leave a subscription running.
-    // It waits at most CLOSE_TIMEOUT, so a subscribe stuck reading its position cannot hold the shutdown open. One
-    // still running after that can finish after the model shut down, and then it is up to the model to refuse it.
+    // closed is set first, so a subscribe that has not started yet never starts. It waits at most closeTimeout for one
+    // that is running, so a subscribe stuck reading its position cannot hold the shutdown open. One still running
+    // after that can finish after the model shut down, and then it is up to the model to refuse it.
     void close() {
+        closed = true;
         boolean locked = false;
         try {
-            locked = lock.writeLock().tryLock(CLOSE_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
+            locked = lock.writeLock().tryLock(closeTimeout.toNanos(), TimeUnit.NANOSECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        closed = true;
         if (locked) {
             lock.writeLock().unlock();
+        } else {
+            log.warn("Stopped waiting for a late subscribe after {} ms while the application context closes. If it finishes after the subscription model has shut down, it is up to the model to refuse it.", closeTimeout.toMillis());
         }
     }
 }

@@ -27,16 +27,19 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
+import org.occurrent.subscription.StartAt;
 import org.springframework.context.ApplicationContext;
 
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -58,7 +61,7 @@ class SubscriptionAnnotationRegistrarTest {
         Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
         when(context.getBean(CloudEventConverter.class)).thenReturn(new NoopCloudEventConverter());
         when(context.getBean(Subscriptions.class)).thenReturn(subscriptions);
-        SubscriptionAnnotationRegistrar registrar = new SubscriptionAnnotationRegistrar(context, mock(StartPositionSupport.class));
+        SubscriptionAnnotationRegistrar registrar = new SubscriptionAnnotationRegistrar(context, startPositionSupport());
 
         TwoStartPositionsSubscriber bean = new TwoStartPositionsSubscriber();
         List<Method> validFirst = List.of(
@@ -67,7 +70,7 @@ class SubscriptionAnnotationRegistrarTest {
         Set<Method> reservedHandlers = ConcurrentHashMap.newKeySet();
         Set<String> claimedIds = ConcurrentHashMap.newKeySet();
 
-        assertThatThrownBy(() -> registrar.registerSubscriptions(bean, validFirst, () -> bean, false, Runnable::run,
+        assertThatThrownBy(() -> registrar.registerSubscriptions(bean, validFirst, () -> bean, false, release -> LateSubscriber.INLINE,
                 reservedHandlers::add,
                 id -> {
                     if (!claimedIds.add(id)) {
@@ -81,6 +84,52 @@ class SubscriptionAnnotationRegistrarTest {
         verify(subscriptions, never()).subscribe(any(String.class), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
         assertThat(reservedHandlers).isEmpty();
         assertThat(claimedIds).isEmpty();
+    }
+
+    // The subscribe call can fail before any handler subscribes, a scheduler refusing the task for example, and every
+    // handler and id the bean claimed is given back then too.
+    @Test
+    @SuppressWarnings("unchecked")
+    void a_subscribe_call_that_fails_before_any_handler_subscribes_gives_back_every_handler_and_id() throws Exception {
+        ApplicationContext context = mock(ApplicationContext.class);
+        Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
+        when(context.getBean(CloudEventConverter.class)).thenReturn(new NoopCloudEventConverter());
+        when(context.getBean(Subscriptions.class)).thenReturn(subscriptions);
+        SubscriptionAnnotationRegistrar registrar = new SubscriptionAnnotationRegistrar(context, startPositionSupport());
+
+        TwoValidSubscriber bean = new TwoValidSubscriber();
+        List<Method> methods = List.of(
+                TwoValidSubscriber.class.getDeclaredMethod("first", TestEvent.class),
+                TwoValidSubscriber.class.getDeclaredMethod("second", TestEvent.class));
+        Set<Method> reservedHandlers = ConcurrentHashMap.newKeySet();
+        Set<String> claimedIds = ConcurrentHashMap.newKeySet();
+
+        assertThatThrownBy(() -> registrar.registerSubscriptions(bean, methods, () -> bean, false,
+                release -> (registration, startIsFixed, attempt) -> {
+                    throw new RejectedExecutionException("the scheduler is disposed");
+                },
+                reservedHandlers::add, claimedIds::add, reservedHandlers::remove, claimedIds::remove))
+                .isInstanceOf(RejectedExecutionException.class);
+
+        verify(subscriptions, never()).subscribe(any(String.class), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
+        assertThat(reservedHandlers).isEmpty();
+        assertThat(claimedIds).isEmpty();
+    }
+
+    private static StartPositionSupport startPositionSupport() {
+        StartPositionSupport startPositionSupport = mock(StartPositionSupport.class);
+        when(startPositionSupport.generateAgnosticStartAt(any(), any(), anyLong(), any())).thenReturn(StartAt.subscriptionModelDefault());
+        return startPositionSupport;
+    }
+
+    static class TwoValidSubscriber {
+        @Subscription(id = "first-of-two")
+        void first(TestEvent event) {
+        }
+
+        @Subscription(id = "second-of-two")
+        void second(TestEvent event) {
+        }
     }
 
     static class TwoStartPositionsSubscriber {

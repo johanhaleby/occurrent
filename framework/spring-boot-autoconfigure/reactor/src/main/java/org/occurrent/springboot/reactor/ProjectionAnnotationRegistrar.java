@@ -193,11 +193,11 @@ class ProjectionAnnotationRegistrar {
     // Reactor non-blocking thread, and by then the projection is subscribed, so waiting there could fail the bean with
     // its projection still running. Not waiting is also what WAIT_UNTIL_STARTED means once the application is up.
     //
-    // subscribeCall runs an event-store projection's subscribe. The subscription model can block inside it, so on a
-    // Reactor non-blocking thread it runs later on another thread (see LateSubscriber). A push projection's model
-    // does not block there, so it subscribes in place.
+    // subscribeCall runs an event-store projection's subscribe. The subscription model can block inside it, so for a
+    // late bean on a Reactor non-blocking thread it can run later on another thread (see LateSubscriber). The push
+    // subscription models in this repository do not block in subscribe, so a push projection subscribes in place.
     <E, S, ID> void processProjectionAnnotation(Object bean, Method method, org.occurrent.annotation.Projection annotation, boolean mayBlock,
-                                                Consumer<Runnable> subscribeCall) {
+                                                LateSubscriber.SubscribeCall subscribeCall) {
         String id = annotation.id();
         if (method.getParameterCount() != 0) {
             throw new IllegalArgumentException("@Projection factory method %s#%s must take no parameters and return a Projection or DcbProjection.".formatted(bean.getClass().getName(), method.getName()));
@@ -259,7 +259,7 @@ class ProjectionAnnotationRegistrar {
             warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution, capability));
             Object store = resolveStore(annotation, id);
             boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
-            subscribeCall.accept(() -> {
+            subscribeCall.subscribe(() -> "@Projection '%s'".formatted(id), LateSubscriber.startIsFixed(startAt), () -> {
                 var subscription = projectDcb(runner, id, annotation, dcbProjection, store, startAt, recordingResolution);
                 if (waitUntilStarted) {
                     subscription.waitUntilStarted().block();
@@ -293,7 +293,7 @@ class ProjectionAnnotationRegistrar {
                 warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution, subscribable));
                 Object store = resolveStore(annotation, id);
                 boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
-                subscribeCall.accept(() -> {
+                subscribeCall.subscribe(() -> "@Projection '%s'".formatted(id), LateSubscriber.startIsFixed(startAt), () -> {
                     var subscription = projectAgnosticOrStream(runner, id, annotation, projection, store, startAt, recordingResolution);
                     if (waitUntilStarted) {
                         subscription.waitUntilStarted().block();

@@ -52,7 +52,6 @@ import java.lang.reflect.Type;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.BiFunction;
-import java.util.function.Consumer;
 
 import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWaitUntilStarted;
 import static org.occurrent.springboot.common.SubscriptionAnnotations.subscriptionsStartOnTheirOwn;
@@ -80,11 +79,11 @@ class SnapshotAnnotationRegistrar {
     // mayBlock is false for a bean built after startup, on whichever thread asked for it. block() can throw on a
     // Reactor non-blocking thread, and only once the subscription is running, so a late snapshot never waits.
     //
-    // subscribeCall runs an asynchronous snapshot's subscribe. The subscription model can block inside it, so on a
-    // Reactor non-blocking thread it runs later on another thread (see LateSubscriber).
+    // subscribeCall runs an asynchronous snapshot's subscribe. The subscription model can block inside it, so for a
+    // late bean on a Reactor non-blocking thread it can run later on another thread (see LateSubscriber).
     @SuppressWarnings("unchecked")
     <E, S> void processSnapshotAnnotation(Object bean, Method method, org.occurrent.annotation.Snapshot annotation, boolean mayBlock,
-                                          Consumer<Runnable> subscribeCall) {
+                                          LateSubscriber.SubscribeCall subscribeCall) {
         String id = annotation.id();
         if (method.getParameterCount() != 0) {
             throw new IllegalArgumentException("@Snapshot factory method %s#%s must take no parameters and return a SnapshotView.".formatted(bean.getClass().getName(), method.getName()));
@@ -176,7 +175,7 @@ class SnapshotAnnotationRegistrar {
         startPositionSupport.applyStartupWorkarounds();
         if (stream) {
             StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
-            subscribeCall.accept(() -> {
+            subscribeCall.subscribe(() -> "@Snapshot '%s'".formatted(id), LateSubscriber.startIsFixed(startAt), () -> {
                 var result = streamSubscriptions.subscribe(id, filter(eventFilter), startAt, consumer);
                 if (waitUntilStarted) {
                     result.waitUntilStarted().block();
@@ -184,7 +183,7 @@ class SnapshotAnnotationRegistrar {
             });
         } else {
             Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
-            subscribeCall.accept(() -> {
+            subscribeCall.subscribe(() -> "@Snapshot '%s'".formatted(id), LateSubscriber.startIsFixed(startAt), () -> {
                 var result = subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, consumer);
                 if (waitUntilStarted) {
                     result.waitUntilStarted().block();
@@ -201,7 +200,7 @@ class SnapshotAnnotationRegistrar {
     private <E, S> void processDcbSnapshot(String id, org.occurrent.annotation.Snapshot annotation, boolean synchronous,
                                            CloudEventConverter<E> converter, DcbSnapshotView<S, E> dcbSnapshotView,
                                            ReactiveSnapshotStore<S> store, int everyNEvents, boolean mayBlock,
-                                           Consumer<Runnable> subscribeCall) {
+                                           LateSubscriber.SubscribeCall subscribeCall) {
         if (synchronous) {
             throw new IllegalArgumentException("@Snapshot '%s' returns a DcbSnapshotView with mode = SYNCHRONOUS, which is not supported. Use the default asynchronous mode for a DCB snapshot, or maintain a synchronous DCB snapshot through the DSL.".formatted(id));
         }
@@ -237,7 +236,7 @@ class SnapshotAnnotationRegistrar {
                 });
             });
         };
-        subscribeCall.accept(() -> {
+        subscribeCall.subscribe(() -> "@Snapshot '%s'".formatted(id), LateSubscriber.startIsFixed(startAt), () -> {
             var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, consumer);
             if (waitUntilStarted) {
                 subscription.waitUntilStarted().block();

@@ -45,13 +45,16 @@ import reactor.core.publisher.Mono;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -199,11 +202,13 @@ class SubscriptionAnnotationRegistrar {
     // ADR 127 both describe. It also matches what WAIT_UNTIL_STARTED means, which is finishing before the
     // application is up, and the application is already up by the time a lazily built bean is asked for.
     //
-    // subscribeCall runs the subscribes once every handler has resolved. It runs them in place, unless the bean is
-    // being built on a Reactor non-blocking thread, where a subscription model that blocks inside subscribe would
-    // throw, and then it runs them later on another thread. The releases below happen on whichever thread that is.
+    // subscribeCall is handed the release for the handlers not subscribed yet, and runs the subscribes once every
+    // handler has resolved. For a bean built after startup on a Reactor non-blocking thread it can run them later on
+    // another thread, and again after a failure, so a run starts at the first handler not subscribed yet (see
+    // LateSubscriber). The handlers only go there when every one of them starts at a position that does not depend on
+    // when it subscribes.
     void registerSubscriptions(Object bean, List<Method> methods, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
-                               Consumer<Runnable> subscribeCall, Predicate<Method> reserveHandler, Consumer<String> claimId,
+                               Function<Runnable, LateSubscriber.SubscribeCall> subscribeCall, Predicate<Method> reserveHandler, Consumer<String> claimId,
                                Consumer<Method> releaseHandler, Consumer<String> releaseId) {
         // Tracked apart, because a call can hold a handler reservation without holding the id. claimId throws when
         // the id belongs to another registration, and at that moment this call has reserved the handler and
@@ -219,19 +224,31 @@ class SubscriptionAnnotationRegistrar {
             reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
             throw e;
         }
-        subscribeCall.accept(() -> {
-            for (ResolvedRegistration registration : resolved) {
-                try {
-                    registration.subscribe().run();
-                } catch (RuntimeException | Error e) {
-                    claimedIds.forEach(h -> releaseId.accept(h.id()));
-                    reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
-                    throw e;
+        Runnable release = () -> {
+            claimedIds.forEach(h -> releaseId.accept(h.id()));
+            reservedHandlers.forEach(h -> releaseHandler.accept(h.method()));
+        };
+        Deque<ResolvedRegistration> pending = new ArrayDeque<>(resolved);
+        boolean startIsFixed = resolved.stream().allMatch(registration -> registration.subscribe().startIsFixed());
+        try {
+            subscribeCall.apply(release).subscribe(() -> describe(pending.peek()), startIsFixed, () -> {
+                while (!pending.isEmpty()) {
+                    ResolvedRegistration registration = pending.peek();
+                    registration.subscribe().call().run();
+                    pending.poll();
+                    claimedIds.remove(registration.claim());
+                    reservedHandlers.remove(registration.claim());
                 }
-                claimedIds.remove(registration.claim());
-                reservedHandlers.remove(registration.claim());
-            }
-        });
+            });
+        } catch (RuntimeException | Error e) {
+            release.run();
+            throw e;
+        }
+    }
+
+    private static String describe(ResolvedRegistration registration) {
+        Method method = registration.claim().method();
+        return "the handler '%s' on %s#%s".formatted(registration.claim().id(), method.getDeclaringClass().getName(), method.getName());
     }
 
     // Every handler on the bean is claimed and resolved into what it subscribes with before any of them
@@ -270,7 +287,7 @@ class SubscriptionAnnotationRegistrar {
             reservedHandlers.add(reserved);
             claimId.accept(id);
             claimedIds.add(reserved);
-            Runnable subscribe;
+            Subscribe subscribe;
             if (streamSubscription != null) {
                 subscribe = resolveSubscribeAnnotation(bean, method, handlerTarget, mayBlockForReplay, StreamSubscriptionDefinition.from(streamSubscription));
             } else if (subscription != null) {
@@ -287,13 +304,16 @@ class SubscriptionAnnotationRegistrar {
     private record PendingRegistration(Method method, String id) {
     }
 
-    private record ResolvedRegistration(PendingRegistration claim, Runnable subscribe) {
+    private record ResolvedRegistration(PendingRegistration claim, Subscribe subscribe) {
+    }
+
+    private record Subscribe(Runnable call, boolean startIsFixed) {
     }
 
     // Each resolve method checks and computes everything the handler subscribes with and returns only the subscribe
     // call, which is all that runs once every handler on the bean has resolved.
     @SuppressWarnings("unchecked")
-    private <E> Runnable resolveSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, boolean mayBlockForReplay, StreamSubscriptionDefinition subscription) {
+    private <E> Subscribe resolveSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, boolean mayBlockForReplay, StreamSubscriptionDefinition subscription) {
         String id = subscription.id();
         HandlerInvocation invocation = resolveHandlerInvocation(bean, handlerTarget, method);
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, subscription.eventTypes(), subscription.annotationName(), applicationContext.getBean(CloudEventConverter.class));
@@ -308,18 +328,18 @@ class SubscriptionAnnotationRegistrar {
 
         boolean shouldWaitUntilStarted = mayBlockForReplay && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(subscription.startAt() == StartPosition.BEGINNING_OF_TIME && streamHistoryReplaySupported, subscription.startupMode());
 
-        return () -> {
+        return new Subscribe(() -> {
             StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
             startPositionSupport.applyStartupWorkarounds();
             var result = streamSubscriptions.subscribe(id, filter(filter), startAt, consumer);
             if (shouldWaitUntilStarted) {
                 result.waitUntilStarted().block();
             }
-        };
+        }, LateSubscriber.startIsFixed(startAt));
     }
 
     @SuppressWarnings("unchecked")
-    private <E> Runnable resolveAgnosticSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, boolean mayBlockForReplay, Subscription annotation) {
+    private <E> Subscribe resolveAgnosticSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, boolean mayBlockForReplay, Subscription annotation) {
         String id = annotation.id();
         HandlerInvocation invocation = resolveHandlerInvocation(bean, handlerTarget, method);
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@Subscription", applicationContext.getBean(CloudEventConverter.class));
@@ -341,18 +361,18 @@ class SubscriptionAnnotationRegistrar {
         StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), startAtGlobalPosition, annotation.resumeBehavior());
         boolean shouldWaitUntilStarted = mayBlockForReplay && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
 
-        return () -> {
+        return new Subscribe(() -> {
             Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
             startPositionSupport.applyStartupWorkarounds();
             var result = subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(filter), startAt, consumer);
             if (shouldWaitUntilStarted) {
                 result.waitUntilStarted().block();
             }
-        };
+        }, LateSubscriber.startIsFixed(startAt));
     }
 
     @SuppressWarnings("unchecked")
-    private <E> Runnable resolveSynchronousSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, SynchronousSubscription annotation) {
+    private <E> Subscribe resolveSynchronousSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, SynchronousSubscription annotation) {
         String id = annotation.id();
         HandlerInvocation invocation = resolveHandlerInvocation(bean, handlerTarget, method);
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@SynchronousSubscription", applicationContext.getBean(CloudEventConverter.class));
@@ -362,16 +382,16 @@ class SubscriptionAnnotationRegistrar {
         Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
                 invokeMono(invocation, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
 
-        return () -> {
+        return new Subscribe(() -> {
             Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentReactorBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
             // The synchronous subscription model has no start position or background subscription, so there is no
             // start position to resolve and nothing to wait for.
             synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(filter), StartAt.subscriptionModelDefault(), consumer);
-        };
+        }, false);
     }
 
     @SuppressWarnings("unchecked")
-    private <E> Runnable resolveDcbSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, boolean mayBlockForReplay, DcbSubscription annotation) {
+    private <E> Subscribe resolveDcbSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, boolean mayBlockForReplay, DcbSubscription annotation) {
         String id = annotation.id();
         HandlerInvocation invocation = resolveHandlerInvocation(bean, handlerTarget, method);
         final DcbCriteria criteria;
@@ -409,14 +429,14 @@ class SubscriptionAnnotationRegistrar {
         boolean replaysHistory = startAtDcbPosition >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
         boolean shouldWaitUntilStarted = mayBlockForReplay && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
 
-        return () -> {
+        return new Subscribe(() -> {
             DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
             startPositionSupport.applyStartupWorkarounds();
             var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, consumer);
             if (shouldWaitUntilStarted) {
                 subscription.waitUntilStarted().block();
             }
-        };
+        }, LateSubscriber.startIsFixed(startAt));
     }
 
     // Invokes the annotated method for a delivered event. The method is expected to return a Mono<Void> (a null or

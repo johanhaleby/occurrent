@@ -378,8 +378,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             // is a new instance here, and a factory free to return a different implementation would otherwise have
             // this register a method whose id went through no duplicate check and no refusal.
             subscriptionRegistrar.registerSubscriptions(bean, staged.getValue(), handlerTargets.apply(beanName, bean), mayBlockForReplay,
-                    subscribe -> lateSubscriber.subscribe("the handlers on bean '%s'".formatted(beanName), subscribe, () -> {
-                    }),
+                    release -> subscribeCall(mayBlock, release),
                     method -> markRegistered(beanName, method),
                     this::claimSubscriptionId,
                     method -> registeredHandlers.remove(handlerKey(beanName, method)),
@@ -395,7 +394,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 registerDescriptor(beanName, method, projection.id(),
                         "Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(projection.id(), method.getDeclaringClass().getName(), method.getName()),
                         release -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply(beanName), method, projection, mayBlock,
-                                subscribe -> lateSubscriber.subscribe("@Projection '%s'".formatted(projection.id()), subscribe, release)));
+                                subscribeCall(mayBlock, release)));
             }
         }
         // Catch up each domain-push feed once, after all its projections are registered.
@@ -408,7 +407,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 registerDescriptor(beanName, method, snapshot.id(),
                         "Duplicate subscription/projection/snapshot id '%s' (used by @Snapshot on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(snapshot.id(), method.getDeclaringClass().getName(), method.getName()),
                         release -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply(beanName), method, snapshot, mayBlock,
-                                subscribe -> lateSubscriber.subscribe("@Snapshot '%s'".formatted(snapshot.id()), subscribe, release)));
+                                subscribeCall(mayBlock, release)));
             }
         }
         for (String beanName : beansToBuild) {
@@ -532,6 +531,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (projectionRegistrar != null) {
             projectionRegistrar.close();
         }
+    }
+
+    // A startup registration subscribes in place, so a subscribe that fails there fails the refresh as it always has.
+    private LateSubscriber.SubscribeCall subscribeCall(boolean mayBlock, Runnable release) {
+        return mayBlock ? LateSubscriber.INLINE : lateSubscriber.call(release);
     }
 
     // Not destroy(), which runs after the subscription model has already shut down, since this post processor was

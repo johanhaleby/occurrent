@@ -68,9 +68,9 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
-import org.springframework.context.annotation.Scope;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -91,13 +91,18 @@ import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 /**
  * A bean built after startup registers its annotations on whichever thread asks for it. Asked for from a Reactor
  * parallel thread, a WebFlux handler or a {@code Schedulers.parallel()} task for example, the registration must not
  * call {@code block()}, which throws there, so the bean resolves and its projection, snapshot or subscription receives
- * events. That includes the {@code block()} that {@code ReactorDurableSubscriptionModel} calls inside {@code subscribe}.
+ * events. {@code ReactorDurableSubscriptionModel} calls {@code block()} inside {@code subscribe} itself, so there a
+ * registration that starts at the beginning subscribes on another thread, and one with a {@code DEFAULT} start fails
+ * the bean with a message saying how to register it.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -230,25 +235,26 @@ class LateRegistrationOnANonBlockingThreadTest {
         });
     }
 
-    // ReactorDurableSubscriptionModel, the model the reactive MongoDB starter registers, reads the stored position with
-    // block() inside subscribe for a DEFAULT start, so the subscribe itself cannot run on the thread that built the bean.
+    // ReactorDurableSubscriptionModel, the model the reactive MongoDB starter registers, calls block() inside subscribe.
+    // A start that does not depend on when the subscribe runs lets the subscribe run on another thread after the bean
+    // is returned.
     @Test
-    void a_lazy_event_store_projection_on_the_durable_model_resolved_on_a_parallel_thread_folds_the_events_it_is_delivered() {
-        runner.withUserConfiguration(DurableModelConfiguration.class, LazyEventStoreProjectionConfiguration.class).run(context -> {
+    void a_lazy_projection_starting_at_the_beginning_on_the_durable_model_resolved_on_a_parallel_thread_folds_the_events_it_is_delivered() {
+        runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, LazyBeginningProjectionConfiguration.class).run(context -> {
             assertThat(context).hasNotFailed();
 
-            assertThat(resolvedOnAParallelThread(context, "eventStoreProjectionHolder")).isInstanceOf(EventStoreProjectionHolder.class);
+            assertThat(resolvedOnAParallelThread(context, "beginningProjectionHolder")).isInstanceOf(BeginningProjectionHolder.class);
             RecordingDelegate delegate = delegate(context);
-            awaitUntil(() -> delegate.isSubscribed("late-event-store-projection"));
-            delegate.deliver("late-event-store-projection", cloudEvent("1", "stream", 1));
+            awaitUntil(() -> delegate.isSubscribed("late-beginning-projection"));
+            delegate.deliver("late-beginning-projection", cloudEvent("1", "stream", 1));
 
             assertThat(readModel(context).get("k")).isEqualTo(1);
         });
     }
 
     @Test
-    void a_lazy_subscription_on_the_durable_model_resolved_on_a_parallel_thread_handles_the_events_it_is_delivered() {
-        runner.withUserConfiguration(DurableModelConfiguration.class, LazySubscriptionConfiguration.class).run(context -> {
+    void a_lazy_subscription_starting_at_the_beginning_on_the_durable_model_resolved_on_a_parallel_thread_handles_the_events_it_is_delivered() {
+        runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, LazySubscriptionConfiguration.class).run(context -> {
             assertThat(context).hasNotFailed();
 
             assertThat(resolvedOnAParallelThread(context, "subscriptionHolder")).isInstanceOf(SubscriptionHolder.class);
@@ -262,17 +268,71 @@ class LateRegistrationOnANonBlockingThreadTest {
 
     @Test
     void a_lazy_snapshot_on_the_durable_model_resolved_on_a_parallel_thread_saves_a_snapshot_for_the_event_it_is_delivered() {
-        runner.withUserConfiguration(DurableModelConfiguration.class, SnapshotStoreConfiguration.class, LazyDefaultStartSnapshotConfiguration.class).run(context -> {
+        runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, SnapshotStoreConfiguration.class, LazyBeginningSnapshotConfiguration.class).run(context -> {
             assertThat(context).hasNotFailed();
 
-            assertThat(resolvedOnAParallelThread(context, "defaultStartSnapshotHolder")).isInstanceOf(DefaultStartSnapshotHolder.class);
+            assertThat(resolvedOnAParallelThread(context, "beginningSnapshotHolder")).isInstanceOf(BeginningSnapshotHolder.class);
             RecordingDelegate delegate = delegate(context);
-            awaitUntil(() -> delegate.isSubscribed("late-default-start-snapshot"));
-            delegate.deliver("late-default-start-snapshot", cloudEvent("1", "stream", 1));
+            awaitUntil(() -> delegate.isSubscribed("late-beginning-snapshot"));
+            delegate.deliver("late-beginning-snapshot", cloudEvent("1", "stream", 1));
 
             @SuppressWarnings("unchecked")
             ReactiveSnapshotStore<Integer> store = context.getBean(ReactiveSnapshotStore.class);
             assertThat(store.findLatest("stream").map(org.occurrent.dsl.snapshot.Snapshot::state).block(Duration.ofSeconds(5))).isEqualTo(1);
+        });
+    }
+
+    // A DEFAULT start is wherever the feed has reached when the subscribe runs. Subscribing on another thread after the
+    // bean is returned would skip what the caller writes in between, so the bean fails, and built where blocking is
+    // allowed it registers.
+    @Test
+    void a_lazy_projection_with_a_default_start_on_the_durable_model_is_refused_on_a_parallel_thread_and_registers_when_built_off_it() {
+        runner.withUserConfiguration(DurableModelConfiguration.class, LazyEventStoreProjectionConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            RecordingDelegate delegate = delegate(context);
+
+            assertThat(failureResolvingOnAParallelThread(context, "eventStoreProjectionHolder"))
+                    .hasStackTraceContaining("@Projection 'late-event-store-projection' starts from wherever the event feed has reached when it subscribes")
+                    .hasStackTraceContaining("Mono.fromCallable(...).subscribeOn(Schedulers.boundedElastic())");
+            assertThat(delegate.isSubscribed("late-event-store-projection")).isFalse();
+
+            context.getBean("eventStoreProjectionHolder");
+
+            assertThat(delegate.isSubscribed("late-event-store-projection")).isTrue();
+        });
+    }
+
+    // Also shows the handler and id the refused bean claimed are given back, since building it again registers.
+    @Test
+    void a_lazy_subscription_with_a_default_start_on_the_durable_model_is_refused_on_a_parallel_thread_and_registers_when_built_off_it() {
+        runner.withUserConfiguration(DurableModelConfiguration.class, LazyDefaultStartSubscriptionConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            RecordingDelegate delegate = delegate(context);
+
+            assertThat(failureResolvingOnAParallelThread(context, "defaultStartSubscriptionHolder"))
+                    .hasStackTraceContaining("the handler 'late-default-start-subscription' on " + DefaultStartSubscriptionHolder.class.getName() + "#on starts from wherever the event feed has reached");
+            assertThat(delegate.isSubscribed("late-default-start-subscription")).isFalse();
+
+            context.getBean("defaultStartSubscriptionHolder");
+
+            assertThat(delegate.isSubscribed("late-default-start-subscription")).isTrue();
+        });
+    }
+
+    // A subscribe on another thread has no caller to fail, so one the model refuses is tried again until it is
+    // accepted. Its start does not depend on when it subscribes, so the retries skip nothing.
+    @Test
+    void a_late_subscribe_the_subscription_model_refuses_is_tried_again_until_it_is_accepted() {
+        runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, LazyBeginningProjectionConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            RecordingDelegate delegate = delegate(context);
+            delegate.refuseNextSubscribes(2);
+
+            resolvedOnAParallelThread(context, "beginningProjectionHolder");
+            awaitUntil(() -> delegate.isSubscribed("late-beginning-projection"));
+
+            assertThat(delegate.refusals).hasValue(2);
+            assertThat(delegate.isSubscribed("late-beginning-projection")).describedAs("subscribed after two refusals").isTrue();
         });
     }
 
@@ -281,14 +341,14 @@ class LateRegistrationOnANonBlockingThreadTest {
     // model that had already shut down, and nothing would ever stop that subscription.
     @Test
     void closing_the_context_waits_for_a_late_subscribe_so_the_subscription_model_stops_it() {
-        runner.withUserConfiguration(DurableModelConfiguration.class, LazyEventStoreProjectionConfiguration.class).run(context -> {
+        runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, LazyBeginningProjectionConfiguration.class).run(context -> {
             assertThat(context).hasNotFailed();
             ParkingCheckpointStorage storage = context.getBean(ParkingCheckpointStorage.class);
             CountDownLatch release = new CountDownLatch(1);
             storage.parkReadsUntil(release);
             RecordingDelegate delegate = delegate(context);
 
-            resolvedOnAParallelThread(context, "eventStoreProjectionHolder");
+            resolvedOnAParallelThread(context, "beginningProjectionHolder");
             assertThat(storage.parked.await(5, TimeUnit.SECONDS)).describedAs("the subscribe reached the position read").isTrue();
 
             Thread closing = Thread.ofVirtual().start(context::close);
@@ -301,28 +361,35 @@ class LateRegistrationOnANonBlockingThreadTest {
         });
     }
 
-    // A subscribe that fails after the bean was returned gives back the id and the handler, the same as one that fails
-    // while the bean is being built, so the next instance of a prototype registers.
+    // A child context's close reaches the parent's listeners too, and must not stop the parent's late subscribes.
     @Test
-    void a_prototype_whose_late_subscribe_failed_registers_when_it_is_built_again() {
-        runner.withUserConfiguration(DurableModelConfiguration.class, PrototypeEventStoreProjectionConfiguration.class).run(context -> {
+    void a_child_context_closing_leaves_late_subscribes_in_its_parent_working() {
+        runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, LazyBeginningProjectionConfiguration.class).run(context -> {
             assertThat(context).hasNotFailed();
+            AnnotationConfigApplicationContext child = new AnnotationConfigApplicationContext();
+            child.setParent(context);
+            child.refresh();
+            child.close();
+
+            assertThat(resolvedOnAParallelThread(context, "beginningProjectionHolder")).isInstanceOf(BeginningProjectionHolder.class);
             RecordingDelegate delegate = delegate(context);
-            delegate.refuseNextSubscribes(1);
-
-            resolvedOnAParallelThread(context, "prototypeProjectionHolder");
-            awaitUntil(() -> delegate.refusals.get() == 1);
-            assertThat(delegate.refusals).hasValue(1);
-
-            // The release runs just after the refusal, on the thread that ran the subscribe, so a build in between
-            // still finds the handler taken and registers nothing. Building again until one registers covers that.
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-            while (!delegate.isSubscribed("late-prototype-projection") && System.nanoTime() < deadline) {
-                resolvedOnAParallelThread(context, "prototypeProjectionHolder");
-                Thread.sleep(50);
-            }
-            assertThat(delegate.isSubscribed("late-prototype-projection")).isTrue();
+            awaitUntil(() -> delegate.isSubscribed("late-beginning-projection"));
+            assertThat(delegate.isSubscribed("late-beginning-projection")).isTrue();
         });
+    }
+
+    // Registration at startup subscribes in place whatever thread refreshes the context, so a subscribe that cannot
+    // run there fails the refresh rather than only being logged.
+    @Test
+    void a_context_refreshed_on_a_parallel_thread_fails_when_a_startup_subscribe_cannot_run_there() {
+        AtomicReference<Throwable> startupFailure = new AtomicReference<>();
+        Mono.fromRunnable(() -> runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, EagerBeginningProjectionConfiguration.class)
+                        .run(context -> startupFailure.set(context.getStartupFailure())))
+                .subscribeOn(Schedulers.parallel())
+                .block(Duration.ofSeconds(10));
+
+        assertThat(startupFailure.get()).describedAs("the startup failure").isNotNull()
+                .hasStackTraceContaining("blocking, which is not supported in thread parallel-");
     }
 
     // Nothing waits for a subscribe moved off a non-blocking thread, so one the scheduler has not run yet when the
@@ -330,18 +397,72 @@ class LateRegistrationOnANonBlockingThreadTest {
     @Test
     void a_late_subscribe_that_has_not_run_when_the_context_closes_never_runs() {
         List<Runnable> queued = new CopyOnWriteArrayList<>();
-        LateSubscriber subscriber = new LateSubscriber(Schedulers.fromExecutor(queued::add));
+        LateSubscriber subscriber = new LateSubscriber(Schedulers.fromExecutor(queued::add), Duration.ofSeconds(5), Duration.ofMillis(100));
         AtomicBoolean subscribed = new AtomicBoolean(false);
-        Mono.fromRunnable(() -> subscriber.subscribe("a test registration", () -> subscribed.set(true), () -> {
-                }))
-                .subscribeOn(Schedulers.parallel())
-                .block(Duration.ofSeconds(5));
+        onAParallelThread(() -> subscriber.call(() -> {
+        }).subscribe(() -> "a test registration", true, () -> subscribed.set(true)));
         assertThat(queued).hasSize(1);
 
         subscriber.close();
         queued.forEach(Runnable::run);
 
         assertThat(subscribed).isFalse();
+    }
+
+    // A subscribe still being tried again keeps what it claimed. Once the context closes it stops and gives it back.
+    @Test
+    void a_late_subscribe_still_failing_when_the_context_closes_gives_back_what_it_claimed() throws InterruptedException {
+        LateSubscriber subscriber = new LateSubscriber(Schedulers.boundedElastic(), Duration.ofSeconds(5), Duration.ofMillis(10));
+        AtomicInteger attempts = new AtomicInteger();
+        CountDownLatch released = new CountDownLatch(1);
+        onAParallelThread(() -> subscriber.call(released::countDown).subscribe(() -> "a test registration", true, () -> {
+            attempts.incrementAndGet();
+            throw new IllegalStateException("refused");
+        }));
+        awaitUntil(() -> attempts.get() >= 2);
+        assertThat(released.getCount()).describedAs("released while it was still being tried").isOne();
+
+        subscriber.close();
+
+        assertThat(released.await(5, TimeUnit.SECONDS)).describedAs("released once the context closed").isTrue();
+    }
+
+    // A subscribe stuck reading its position must not hold the shutdown open for longer than the close timeout.
+    @Test
+    void closing_stops_waiting_for_a_late_subscribe_that_outlasts_the_close_timeout() throws InterruptedException {
+        LateSubscriber subscriber = new LateSubscriber(Schedulers.boundedElastic(), Duration.ofMillis(200), Duration.ofMillis(100));
+        CountDownLatch running = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        onAParallelThread(() -> subscriber.call(() -> {
+        }).subscribe(() -> "a test registration", true, () -> {
+            running.countDown();
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+        assertThat(running.await(5, TimeUnit.SECONDS)).describedAs("the subscribe is running").isTrue();
+        try {
+            Thread closing = Thread.ofVirtual().start(subscriber::close);
+
+            assertThat(closing.join(Duration.ofSeconds(2))).describedAs("close() returned while the subscribe was still running").isTrue();
+        } finally {
+            release.countDown();
+        }
+    }
+
+    // A bean first built once the context has started closing, during a graceful shutdown for example, fails rather
+    // than being returned with a subscription that never starts.
+    @Test
+    void a_late_subscribe_asked_for_after_the_context_started_closing_is_refused() {
+        LateSubscriber subscriber = new LateSubscriber(Schedulers.boundedElastic(), Duration.ofSeconds(5), Duration.ofMillis(100));
+        subscriber.close();
+
+        assertThatThrownBy(() -> onAParallelThread(() -> subscriber.call(() -> {
+        }).subscribe(() -> "a test registration", true, () -> {
+        })))
+                .hasMessage("Cannot subscribe a test registration, since the application context is closing.");
     }
 
     // Asserts the bean was not built at startup and the thread really is one Reactor refuses to block on, so a pass
@@ -360,6 +481,24 @@ class LateRegistrationOnANonBlockingThreadTest {
                 .doesNotThrowAnyException();
         assertThat(nonBlocking).describedAs("the bean was built on a non-blocking thread").isTrue();
         return bean.get();
+    }
+
+    private static Throwable failureResolvingOnAParallelThread(ConfigurableApplicationContext context, String beanName) {
+        assertThat(context.getBeanFactory().containsSingleton(beanName)).describedAs("%s is still unbuilt after startup", beanName).isFalse();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Mono.fromCallable(() -> context.getBean(beanName))
+                .subscribeOn(Schedulers.parallel())
+                .onErrorResume(e -> {
+                    failure.set(e);
+                    return Mono.empty();
+                })
+                .block(Duration.ofSeconds(10));
+        assertThat(failure.get()).describedAs("the failure resolving %s on a Reactor parallel thread", beanName).isNotNull();
+        return failure.get();
+    }
+
+    private static void onAParallelThread(Runnable runnable) {
+        Mono.fromRunnable(runnable).subscribeOn(Schedulers.parallel()).block(Duration.ofSeconds(5));
     }
 
     private static void awaitUntil(java.util.function.BooleanSupplier condition) throws InterruptedException {
@@ -761,11 +900,42 @@ class LateRegistrationOnANonBlockingThreadTest {
         ReactiveSnapshotStore<Integer> reactiveSnapshotStore() {
             return ReactiveSnapshotStore.inMemory();
         }
+    }
 
-        // Only read for a redelivery or a gap, and the single event delivered here is neither.
+    // An event store that writes a position is what lets a registration start at BEGINNING. Nothing reads from it
+    // here, since the recording model replays nothing, and a snapshot only reads it for a redelivery or a gap.
+    @Configuration(proxyBeanMethods = false)
+    static class PositionWritingEventStoreConfiguration {
         @Bean
         EventStore eventStore() {
-            return mock(EventStore.class);
+            EventStore eventStore = mock(EventStore.class, withSettings().extraInterfaces(PositionOrderedReader.class));
+            when(((PositionOrderedReader) eventStore).writesPosition()).thenReturn(true);
+            return eventStore;
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class LazyBeginningProjectionConfiguration {
+        @Lazy
+        @Bean
+        Marker beginningProjectionHolder() {
+            return new BeginningProjectionHolder();
+        }
+    }
+
+    // Built at startup, unlike every other holder here.
+    @Configuration(proxyBeanMethods = false)
+    static class EagerBeginningProjectionConfiguration {
+        @Bean
+        Marker beginningProjectionHolder() {
+            return new BeginningProjectionHolder();
+        }
+    }
+
+    static class BeginningProjectionHolder implements Marker {
+        @Projection(id = "late-beginning-projection", startAt = StartPosition.BEGINNING)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return countProjection("k");
         }
     }
 
@@ -929,7 +1099,7 @@ class LateRegistrationOnANonBlockingThreadTest {
             this.handled = handled;
         }
 
-        @org.occurrent.annotation.Subscription(id = "late-subscription")
+        @org.occurrent.annotation.Subscription(id = "late-subscription", startAt = StartPosition.BEGINNING)
         Mono<Void> on(TestEvent event) {
             handled.add(event.id());
             return Mono.empty();
@@ -937,35 +1107,35 @@ class LateRegistrationOnANonBlockingThreadTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    static class LazyDefaultStartSnapshotConfiguration {
+    static class LazyDefaultStartSubscriptionConfiguration {
         @Lazy
         @Bean
-        Marker defaultStartSnapshotHolder() {
-            return new DefaultStartSnapshotHolder();
+        Marker defaultStartSubscriptionHolder() {
+            return new DefaultStartSubscriptionHolder();
         }
     }
 
-    static class DefaultStartSnapshotHolder implements Marker {
-        // startAt = DEFAULT is the start the durable model reads a stored position for.
-        @Snapshot(id = "late-default-start-snapshot", startAt = StartPosition.DEFAULT)
-        SnapshotView<Integer, TestEvent> snapshot() {
-            return countSnapshot();
+    static class DefaultStartSubscriptionHolder implements Marker {
+        @org.occurrent.annotation.Subscription(id = "late-default-start-subscription")
+        Mono<Void> on(TestEvent event) {
+            return Mono.empty();
         }
     }
 
     @Configuration(proxyBeanMethods = false)
-    static class PrototypeEventStoreProjectionConfiguration {
-        @Scope("prototype")
+    static class LazyBeginningSnapshotConfiguration {
+        @Lazy
         @Bean
-        Marker prototypeProjectionHolder() {
-            return new PrototypeProjectionHolder();
+        Marker beginningSnapshotHolder() {
+            return new BeginningSnapshotHolder();
         }
     }
 
-    static class PrototypeProjectionHolder implements Marker {
-        @Projection(id = "late-prototype-projection")
-        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
-            return countProjection("k");
+    static class BeginningSnapshotHolder implements Marker {
+        // BEGINNING is the default start of a snapshot.
+        @Snapshot(id = "late-beginning-snapshot")
+        SnapshotView<Integer, TestEvent> snapshot() {
+            return countSnapshot();
         }
     }
 

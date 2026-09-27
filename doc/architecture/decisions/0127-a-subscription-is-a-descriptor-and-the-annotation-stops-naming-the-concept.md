@@ -342,20 +342,29 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > either, so there this decision covers all six annotations that stack has. A bean built after startup is built on
 > whichever thread asked for it. Inside a WebFlux handler or a `Schedulers.parallel()` task that is a Reactor
 > non-blocking thread, where `block()` can throw. The projection had already subscribed by then, so waiting for its
-> replay failed the bean with the projection still running. A push projection's catch-up now starts there the way
+> replay failed the bean with the projection still running. A late push projection's catch-up now starts the way
 > `startupMode = BACKGROUND` starts it, and a failure is recorded in `PushCatchupStatus` rather than thrown. The
 > blocking stack still waits, since it is allowed to block whichever thread asked for the bean.
 >
 > The subscribe can block as well. `ReactorDurableSubscriptionModel`, which the reactive MongoDB starter registers,
-> reads the stored position with `block()` inside `subscribe` for a `DEFAULT` start. On a non-blocking thread a late
-> `@Subscription`, `@Snapshot` or event store `@Projection` therefore subscribes on `Schedulers.boundedElastic()`
-> after the bean is returned. A failure there is logged and gives back the id, since the caller already holds the
-> bean and nothing is left to throw to. A push projection's model does not block in `subscribe`, so it subscribes in
-> place. When the context starts closing, a subscribe that has not run yet never runs, and one that is running is
-> waited for, up to 5 seconds, so the subscription model stops it along with the rest when it shuts down. A new
-> subscription with no stored position starts from where the feed has reached when the subscribe runs, which is a
-> little after the bean was built. That widens the #979 window further, and a subscription resuming from a stored
-> position is unaffected.
+> reads the stored position with `block()` inside `subscribe`, so what a late `@Subscription`, `@Snapshot` or event
+> store `@Projection` does on a non-blocking thread depends on where it starts.
+>
+> One that starts at the beginning or at an explicit position receives the same events whenever it subscribes, so
+> it subscribes on `Schedulers.boundedElastic()` after the bean is returned. A failed attempt is logged at ERROR and
+> tried again, the delay doubling from 100 ms up to 30 seconds, until one succeeds or the context starts closing. Its
+> ids stay claimed while it tries.
+>
+> One that starts at `NOW` or `DEFAULT` starts from wherever the event feed has reached when the subscribe runs.
+> Subscribing it later would skip whatever the caller writes between getting the bean and that subscribe, so it
+> subscribes on the calling thread. `ReactorDurableSubscriptionModel` blocks for `DEFAULT`, and then the bean fails to
+> build with a message saying to build it on a thread that may block or to start it at the beginning or at an explicit
+> position.
+>
+> The push subscription models in this repository do not block in `subscribe`, so a push projection subscribes in
+> place. When the context starts closing, a subscribe that has not run yet never runs and gives back its ids. One that
+> is running is waited for, up to 5 seconds, so the subscription model stops it along with the rest when it shuts
+> down.
 
 **Moving there inherits how the existing descriptor annotations invoke a factory, including one hazard they already
 have.** `OccurrentBlockingAnnotationBeanPostProcessor` resolves the bean from the context and `invokeFactory` calls the
