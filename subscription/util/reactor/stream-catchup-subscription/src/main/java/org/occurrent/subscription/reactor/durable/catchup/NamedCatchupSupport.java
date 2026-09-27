@@ -247,7 +247,8 @@ final class NamedCatchupSupport {
             throw new SubscriptionModelShutdownException();
         }
         synchronized (state) {
-            if (!stopped) {
+            // A shutdown() since the check above may have cancelled the state.
+            if (!stopped && !state.cancelled.get()) {
                 state.launcher.run();
             }
             // else parked: start(..) launches the replay once the model runs again.
