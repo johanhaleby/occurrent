@@ -30,14 +30,14 @@ import java.util.function.Consumer;
  * <p>
  * This is the CloudEvent-level capability that {@code PushSubscriptionModel} provides. It is a separate interface so a
  * listener (or wiring) can depend on "a thing I push cloud events into" rather than a concrete model, and so a model
- * may choose to be pushable without every subscription model being one. Extends {@link Consumer} so a
- * {@code Pushable} is usable wherever a {@code Consumer<CloudEvent>} is expected.
+ * may choose to be pushable without every subscription model being one. It extends {@link Consumer}, but only the
+ * listener of an {@code InMemoryEventStore} may feed it.
  */
 @NullMarked
 public interface Pushable extends Consumer<CloudEvent>, SubscriptionModelCapability {
 
     /**
-     * Push a single event to the target, dispatching it to every matching registered handler.
+     * Push a single event to the target.
      */
     @Override
     void accept(CloudEvent cloudEvent);

@@ -26,10 +26,9 @@ import reactor.core.publisher.Mono;
  * <strong>pushed into</strong> from outside, rather than one that reads them from the event store itself. There is no
  * reactive in-memory event store, so a listener on the blocking {@code InMemoryEventStore} hands the events of each
  * write to {@link #accept(Iterable)} and waits for the returned {@link Mono}, which does nothing until something
- * subscribes and completes once the target's handlers have processed the events. Write from a thread that may block,
- * as {@code PushSubscriptionModel} describes. A RabbitMQ or Kafka listener calls
- * {@code PushSubscriptionModel.acceptRedeliverable(CloudEvent)} instead, which this interface does not declare, and
- * acknowledges the message only when the outcome it completes with allows it.
+ * subscribes. Write from a thread that may block, as {@code PushSubscriptionModel} describes. A RabbitMQ or Kafka
+ * listener calls {@code PushSubscriptionModel.acceptRedeliverable(CloudEvent)} instead, which this interface does not
+ * declare, and acknowledges the message only when the outcome it completes with allows it.
  * <p>
  * This is the CloudEvent-level capability that the reactor {@code PushSubscriptionModel} provides, kept separate so a
  * listener can depend on the capability rather than a concrete model.
@@ -38,7 +37,8 @@ import reactor.core.publisher.Mono;
 public interface Pushable extends SubscriptionModelCapability {
 
     /**
-     * Push a single event to the target. The returned {@link Mono} completes once every matching handler has completed.
+     * Push a single event to the target. The returned {@link Mono} does not complete before every handler the event
+     * reaches has completed.
      */
     Mono<Void> accept(CloudEvent cloudEvent);
 

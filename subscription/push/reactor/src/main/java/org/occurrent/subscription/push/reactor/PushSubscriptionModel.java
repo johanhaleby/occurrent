@@ -54,10 +54,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@code new InMemoryEventStore(model::accept)} compiles but delivers nothing. The store calls that listener on the
  * thread that wrote, once it has kept the events, so write from a thread that may block. On a Reactor non-blocking
  * thread, such as a WebFlux event loop, {@code block()} throws, and the write call fails although the store holds the
- * events. With a {@link CatchupThenPushSubscriptionModel} in front, a write during its replay waits until the replay
- * has finished, and a handler that writes an event the subscription's filter accepts hangs in that write. During the
- * replay the write waits for the replay, which waits for that handler. Once live, that model hands the subscription's
- * events to the handler one at a time, so the new event waits behind the one the handler is still processing.
+ * events. Occurrent ships no reactive {@code PositionOrderedReader} over the in-memory event store for a
+ * {@link CatchupThenPushSubscriptionModel} in front to replay.
  * <p>
  * This model keeps no record of what it has delivered and holds nothing back, so an event it did not hand to the
  * handler when the event arrived, whatever the reason, is never handed over later. A crash before the handler has run
@@ -142,7 +140,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * propagates directly, see {@link PushObserver}.
      *
      * @param cloudEvent The event received from the external source.
-     * @return A {@link Mono} that completes when the handler has completed.
+     * @return A {@link Mono} that does not complete before every handler the event reaches has completed.
      */
     public Mono<Void> accept(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
@@ -225,7 +223,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * stops the batch the way a handler's would, see {@link PushObserver}.
      *
      * @param cloudEvents The events received from the external source.
-     * @return A {@link Mono} that completes when every event has been dispatched.
+     * @return A {@link Mono} that does not complete before every event has been routed.
      */
     public Mono<Void> accept(Iterable<CloudEvent> cloudEvents) {
         Objects.requireNonNull(cloudEvents, "cloudEvents cannot be null");

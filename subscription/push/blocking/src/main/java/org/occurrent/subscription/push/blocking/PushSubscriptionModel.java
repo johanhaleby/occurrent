@@ -45,7 +45,7 @@ import java.util.function.Consumer;
  * {@link #acceptRedeliverable(CloudEvent)}. Only the listener of an {@code InMemoryEventStore} should hand its
  * events to {@link #accept(Iterable)} instead. Both route each event to the
  * handler if its {@link SubscriptionFilter} matches, on the calling thread. A handler exception propagates to the
- * caller, so the listener can decide whether to acknowledge or redeliver.
+ * caller.
  * <p>
  * Feeding this model from an event store's write path, through {@link #accept(Iterable)}, is supported only for the
  * in-memory event store. This model keeps no record of what it has delivered and holds nothing back, so an event it
@@ -151,7 +151,8 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * still replaying, say, is refused instead: reported {@link RoutingOutcome#DEFERRED} rather than buffered, and
      * never delivered by this call. Call this instead of {@link #accept(CloudEvent)} from a broker listener that
      * can redeliver the same event later, never from a write path that cannot, since a write-path event this call
-     * refuses is lost rather than protected, the same reason {@link #accept(CloudEvent)} itself never refuses. The
+     * refuses is lost rather than protected, which is why {@link #accept(CloudEvent)} buffers such an event instead,
+     * unless the buffer is full or the catch-up has been stopped. The
      * same holds for a call from inside another subscription's handler, so act on the returned outcome there. Throw on
      * anything but {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}, say, so the outer handler
      * fails instead of returning as if the event had been handled. Calling {@link #accept(CloudEvent)} there instead

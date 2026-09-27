@@ -64,7 +64,8 @@ import java.util.stream.Stream;
  *   <li><strong>Catch-up</strong> is Occurrent's job and runs once per subscription id. On subscribe this model
  *       registers on the live feed first and buffers, replays the store {@code position}-ordered up to the head at read
  *       time via {@link PositionOrderedReader}, then drains the buffer and goes live. An event that commits during the
- *       replay is delivered either by the replay or by the buffered feed, and the overlap is de-duplicated by the
+ *       replay while the buffer has room is delivered either by the replay or by the buffered feed, and a full buffer
+ *       refuses it. The overlap is de-duplicated by the
  *       CloudEvent id and source together (not by a position watermark: Occurrent positions can commit late and have permanent gaps, so a watermark would
  *       drop a late-committing low-position event, see ADR 62). Because buffering starts before the head is read, no
  *       reconcile pass is needed.</li>
@@ -357,17 +358,16 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * only once the catch-up has reached live, {@code false} while replaying or buffering ahead of its own drain, and
      * {@code false} forever after a catch-up failure.
      * <p>
-     * A CloudEvent-level broker bridge that feeds the live {@link PushSubscriptionModel} this model wraps is safe to
-     * acknowledge from {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} alone, with no call to this method
-     * at all: {@link PushSubscriptionModel#acceptRedeliverable(io.cloudevents.CloudEvent)} already refuses, rather
-     * than buffers, a message this catch-up would only have buffered, reported
-     * {@link org.occurrent.subscription.RoutingOutcome#DEFERRED} so the bridge redelivers it instead of acknowledging.
-     * This method exists only for a bridge that wants to pace itself, skipping a fetch it can predict would come
-     * back {@code DEFERRED} rather than pulling the message off the broker and immediately handing it back. An
-     * optional throughput optimization, never a correctness dependency: a bridge that never calls this still
-     * acknowledges only on genuine delivery, just after a few more refuse-and-redeliver round trips than one that
-     * does. {@code false} for a {@code subscriptionId} this model never subscribed, or already cancelled, the safe
-     * answer for an id nothing here is tracking.
+     * A CloudEvent-level broker bridge that feeds the live {@link PushSubscriptionModel} this model wraps through
+     * {@link PushSubscriptionModel#acceptRedeliverable(io.cloudevents.CloudEvent)} needs no call to this method to
+     * decide whether to acknowledge. That call already refuses, rather than buffers, a message this catch-up would
+     * only have buffered, reported {@link org.occurrent.subscription.RoutingOutcome#DEFERRED} so the bridge
+     * redelivers it instead of acknowledging. This method exists only for a bridge that wants to pace itself,
+     * skipping a fetch it can predict would come back {@code DEFERRED} rather than pulling the message off the broker
+     * and immediately handing it back. It is an optional throughput optimization, never a correctness dependency,
+     * since a bridge that never calls this acknowledges the same messages, just after a few more refuse-and-redeliver
+     * round trips than one that does. {@code false} for a {@code subscriptionId} this model never subscribed, or
+     * already cancelled, the safe answer for an id nothing here is tracking.
      *
      * @param subscriptionId The subscription to ask about.
      */

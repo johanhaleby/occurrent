@@ -1073,15 +1073,21 @@ run. The in-memory event store loses the event in that crash too, which is why i
 What to use instead depends on where the events come from:
 
 - A RabbitMQ or Kafka listener calls `acceptRedeliverable(CloudEvent)` and acknowledges the message only when the
-  outcome is `DELIVERED` or `FILTERED`. `RabbitMqCloudEventBridge` and `KafkaCloudEventBridge` already do that.
+  outcome is `DELIVERED` or `FILTERED`. `RabbitMqCloudEventBridge` and `KafkaCloudEventBridge` already call it.
+  Under `DeliveryFailurePolicy.PARK` they also acknowledge a failed message, once its republish to the parking
+  destination is confirmed.
 - An HTTP endpoint whose caller retries a failed request calls `acceptRedeliverable(CloudEvent)` too, and answers
-  with an error for any other outcome, so the caller sends the event again.
+  with an error for any outcome other than `DELIVERED` or `FILTERED`, so the caller sends the event again.
 - A listener on the write path of a durable event store, such as MongoDB, is replaced by a durable subscription,
   which records the position it has handled and resumes from it after a restart. Forwarding the events to a broker
   whose listener calls `acceptRedeliverable(CloudEvent)` works as well.
 - A Spring application event is delivered once, in memory, so it cannot deliver an event again after a crash either.
   If the application publishes it for an event a durable event store has already committed, subscribe to that store
   with a durable subscription instead.
+
+Two sources have no supported replacement, an HTTP endpoint whose caller does not retry and a Spring
+application event with no durable event store behind it. Neither can deliver an event again after a crash, so
+Occurrent supports no way to feed a push model from either.
 
 An `InMemoryEventStore` listener needs no change on the blocking stack. On the reactor stack the listener has to
 subscribe to the `Mono` that `accept(..)` returns and wait for it, `events -> pushModel.accept(events).block()` for
