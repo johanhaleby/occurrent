@@ -51,8 +51,8 @@ import java.util.function.Consumer;
  * in-memory event store. This model keeps no record of what it has delivered and holds nothing back, so an event it
  * did not hand to the handler when the event arrived, whatever the reason, is never handed over later. A crash before
  * the handler has run loses the event from the in-memory event store too, so after a crash the store never holds an
- * event the subscription missed. Without a crash, something that reads the store, such as a durable subscription or a
- * catch-up replay, can still deliver it. With a durable event store, such as MongoDB, the subscription never sees an
+ * event the subscription missed. Without a crash the event stays in the store, where a catch-up replay that runs later
+ * can still read it. With a durable event store, such as MongoDB, the subscription never sees an
  * event when the application crashes after the write has committed but before the handler has run. Use a durable
  * subscription there, or forward the events to a broker whose listener calls {@link #acceptRedeliverable(CloudEvent)}.
  * The amendment to ADR 133 records why.

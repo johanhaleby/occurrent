@@ -848,8 +848,8 @@ to resolve on its own, and it is safe to redeliver arbitrarily many times.
 `BlockingHandover` gains `acceptIfLive(T)` beside the existing `accept(T)`/`acceptReportingDelivery(T)`. Where those
 buffer a payload offered while not live, `acceptIfLive` refuses it outright, reporting `false` without ever
 touching the buffer. `PushSubscriptionModel.accept(..)` is unchanged and keeps buffering. An in-memory store listener
-calls it through `accept(Iterable<CloudEvent>)`, and a write-path event has nowhere else to come from, so refusing it
-would lose it rather than protect it. A new `PushSubscriptionModel.acceptRedeliverable(CloudEvent)`
+calls it through `accept(Iterable<CloudEvent>)` after the store has kept the event, so refusing would only make the
+write call throw, without protecting anything. A new `PushSubscriptionModel.acceptRedeliverable(CloudEvent)`
 is for a caller that can redeliver, a broker bridge, and routes to `acceptIfLive` instead. It refuses rather than
 buffers, returns `DEFERRED`, and lets the caller ask again. It returns every outcome routing decides, a refusal made
 before dispatch included, and throws only for a filter or handler failure, so a bridge decides on the returned value
@@ -1418,19 +1418,19 @@ caught, passes with and without it.
 `PushSubscriptionModel` keeps no record of which events its subscription has handled. Fed through `accept(..)` from
 the write path of a durable event store, such as MongoDB, it never sees an event when the
 application crashes after the write has committed but before the handler has run, since nothing hands the event over
-again after the restart. The catch-up model in front adds two more ways to lose one. The reactor model records its
-catch-up-complete marker before it applies the events it buffered during the replay, and a second instance sharing the
-same marker storage can record the marker first, so the next start skips the replay. See
+again after the restart. A catch-up model in front can lose one in other ways too. The reactor model, for example,
+records its catch-up-complete marker before it applies the events it buffered during the replay, and a second instance
+sharing the same marker storage can record the marker first, so the next start skips the replay. See
 [#1140](https://github.com/johanhaleby/occurrent/issues/1140).
 
 `InMemoryEventStore` is the only event store in Occurrent with a listener on its write path. That listener takes a
 `List<CloudEvent>`, so `new InMemoryEventStore(pushModel::accept)` calls `accept(Iterable<CloudEvent>)`. A crash empties
 that store too, so after a crash it never holds an event the subscription missed. Without a crash the push model keeps
 no record of what it delivered, and on its own it holds nothing back, so an event it did not hand to the handler when
-the event arrived, whatever the reason, is never handed over later. A catch-up model in front buffers the events that
-arrive during its replay and hands them over once the replay has finished. Something that reads the store, such as a
-durable subscription or a catch-up replay, can still deliver an event the push model did not hand over, and that holds
-whether or not the store is durable.
+the event arrived, whatever the reason, is never handed over later. A catch-up model in front can hold back an event
+that arrives during its replay and hand it over after the replay. Without a crash an event the push model did not hand
+over stays in the in-memory event store, where a blocking catch-up replay that runs later can still read it. Nothing in
+Occurrent runs a durable subscription over the in-memory event store.
 
 There is no reactive in-memory event store. The reactor push model can be fed from the blocking `InMemoryEventStore`
 only by a listener that subscribes to the `Mono` from `accept(..)` and waits for it, since that `Mono` does nothing
@@ -1443,5 +1443,10 @@ So Occurrent narrows what it supports instead of changing the engine. Feeding `a
 supported only for the in-memory event store. A durable event store uses a durable subscription, which records the
 position it has handled and resumes from it, or forwards its events to a broker whose listener calls
 `acceptRedeliverable(CloudEvent)`. The reactor marker order and the shared marker storage only lose an event in a setup
-that is no longer supported, so neither changes. This replaces the contract the unreleased 0.34.0 javadoc stated
-before, that the write-path feed was supported and could lose an event on a crash.
+that is no longer supported, so neither changes.
+
+This narrows a released contract. Up to 0.33.0 the javadoc of both push models named a Spring application event among
+the sources that feed `accept(..)`, and called the write path one where the event is already durably stored, with an
+`InMemoryEventStore` listener only as an example on the blocking side. The unreleased 0.34.0 javadoc then said such a
+feed was supported and could lose an event on a crash. The upgrade guide for 0.34.0 tells a caller on 0.33.0 what to
+use instead.

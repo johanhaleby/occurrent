@@ -55,17 +55,17 @@ import java.util.concurrent.atomic.AtomicReference;
  * thread that wrote, once it has kept the events, so write from a thread that may block. On a Reactor non-blocking
  * thread, such as a WebFlux event loop, {@code block()} throws, and the write call fails although the store holds the
  * events. With a {@link CatchupThenPushSubscriptionModel} in front, a write during its replay waits until the replay
- * has finished, and a write from inside one of its handlers can hang, because that model hands a subscription's live
- * events to its handler one at a time.
+ * has finished, and a handler that writes an event the subscription's filter accepts hangs in that write. During the
+ * replay the write waits for the replay, which waits for that handler. Once live, that model hands the subscription's
+ * events to the handler one at a time, so the new event waits behind the one the handler is still processing.
  * <p>
  * This model keeps no record of what it has delivered and holds nothing back, so an event it did not hand to the
  * handler when the event arrived, whatever the reason, is never handed over later. A crash before the handler has run
  * loses the event from the in-memory event store too, so after a crash the store never holds an event the subscription
- * missed. Without a crash, something that reads the store, such as a durable subscription or a catch-up replay, can
- * still deliver it. With a durable event store, such as MongoDB, the subscription never sees an event when the
- * application crashes after the write has committed but before the handler has run. Use a durable subscription there,
- * or forward the events to a broker whose listener calls {@link #acceptRedeliverable(CloudEvent)}. The amendment to
- * ADR 133 records why.
+ * missed. Without a crash the event stays in the store, where a later read of the store can still find it. With a
+ * durable event store, such as MongoDB, the subscription never sees an event when the application crashes after the
+ * write has committed but before the handler has run. Use a durable subscription there, or forward the events to a
+ * broker whose listener calls {@link #acceptRedeliverable(CloudEvent)}. The amendment to ADR 133 records why.
  * <p>
  * Fed from a broker, call {@link #acceptRedeliverable(CloudEvent)} and acknowledge the message only when its
  * {@link Mono} completes with {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}. That method says
