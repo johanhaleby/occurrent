@@ -116,7 +116,7 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
     public static final int DEFAULT_HANDOVER_CACHE_SIZE = 100_000;
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
-    private final NamedCatchupSupport namedSubscriptions;
+    final NamedCatchupSupport namedSubscriptions;
     private final PositionOrderedReader positionOrderedReader;
     private final @Nullable Filter defaultFilter;
     private final long windowSize;

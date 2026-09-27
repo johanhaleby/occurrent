@@ -84,7 +84,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
     public static final int DEFAULT_HANDOVER_CACHE_SIZE = 100_000;
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
-    private final NamedCatchupSupport namedSubscriptions;
+    final NamedCatchupSupport namedSubscriptions;
     private final DcbEventStore dcbEventStore;
     private final @Nullable DcbCriteria defaultCriteria;
     private final long windowSize;
