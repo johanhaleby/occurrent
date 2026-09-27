@@ -1796,6 +1796,133 @@ class ReactiveHandoverTest {
         assertThat(log).containsExactly("R1", "L1");
     }
 
+    // R2 waits for the live fold before it replays, so a live fold that blocks on a catch-up with nothing to replay
+    // would wait for R2's hold while R2 waits for the fold. The catch-up answers without waiting instead.
+    @Test
+    void a_catch_up_with_nothing_to_replay_a_live_fold_blocks_on_while_a_replay_starts_answers_without_waiting() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingL1 = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("L1")) {
+                foldingL1.countDown();
+                awaitLatchQuietly(releaseL1);
+                answers.add(self.get().catchUp(source(List.of(), true)).block(Duration.ofSeconds(5)));
+            }
+            log.add(payload);
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        try {
+            assertThatALiveFoldGoesLiveWhileAReplayStarts(handover, foldingL1, releaseL1);
+
+            assertThat(answers).containsExactly(true);
+            assertThat(log).containsExactly("L1", "R2");
+        } finally {
+            releaseL1.countDown();
+        }
+    }
+
+    // The fold switches threads before it asks, so only the returned Mono being part of the fold's own tells the
+    // handover where the call came from.
+    @Test
+    void a_catch_up_with_nothing_to_replay_composed_into_a_live_fold_while_a_replay_starts_answers_without_waiting() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingL1 = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> {
+            Mono<Void> folded = Mono.fromRunnable(() -> log.add(payload));
+            if (!payload.equals("L1")) {
+                return folded;
+            }
+            return Mono.fromRunnable(() -> {
+                        foldingL1.countDown();
+                        awaitLatchQuietly(releaseL1);
+                    })
+                    .then(Mono.delay(Duration.ofMillis(1)))
+                    .then(Mono.defer(() -> self.get().catchUp(source(List.of(), true))))
+                    .doOnNext(answers::add)
+                    .then(folded);
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        try {
+            assertThatALiveFoldGoesLiveWhileAReplayStarts(handover, foldingL1, releaseL1);
+
+            assertThat(answers).containsExactly(true);
+            assertThat(log).containsExactly("L1", "R2");
+        } finally {
+            releaseL1.countDown();
+        }
+    }
+
+    // Holds L1's fold until R2 has put its hold on live delivery in place and waits for that fold, then lets the fold
+    // go on, and checks that L1 and R2 both finish.
+    private static void assertThatALiveFoldGoesLiveWhileAReplayStarts(ReactiveHandover<String, String> handover, CountDownLatch foldingL1,
+                                                                      CountDownLatch releaseL1) throws Exception {
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        // Subscribed on another thread, since the live fold runs on the thread that offers the payload.
+        CompletableFuture<Boolean> l1 = handover.acceptIfLive("L1").subscribeOn(Schedulers.boundedElastic()).toFuture();
+        assertThat(foldingL1.await(5, TimeUnit.SECONDS)).isTrue();
+        CountDownLatch r2Holding = new CountDownLatch(1);
+        FakeSource r2 = source(List.of("R2"), false);
+        // Runs once the marker read reached the replay, which then takes the free turn and puts its hold in place on
+        // the same thread.
+        r2.onCaughtUpChecked = r2Holding::countDown;
+        CompletableFuture<Boolean> secondReplay = handover.catchUp(r2).toFuture();
+        assertThat(r2Holding.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(r2.replayCallCount).as("R2 waits for L1's fold").isZero();
+
+        releaseL1.countDown();
+
+        assertThat(l1.get(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(secondReplay.get(10, TimeUnit.SECONDS)).isTrue();
+    }
+
+    // replayStarted() runs once the replay holds live delivery back, so a catch-up with nothing to replay it blocks on
+    // would wait for that hold while the replay waits for replayStarted() to return.
+    @Test
+    void a_catch_up_with_nothing_to_replay_replay_started_blocks_on_answers_without_waiting() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> log.add(payload)),
+                payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        FakeSource replaying = source(List.of("R1"), false);
+        replaying.onReplayStarted = () -> answers.add(handover.catchUp(source(List.of(), true)).block(Duration.ofSeconds(5)));
+
+        StepVerifier.create(handover.catchUp(replaying)).expectNext(true).expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(answers).containsExactly(true);
+        assertThat(handover.acceptIfLive("L1").block(Duration.ofSeconds(5))).isTrue();
+        assertThat(log).containsExactly("R1", "L1");
+    }
+
+    // replayAbandoned() runs before a stopped replay gives back its hold on live delivery, and this engine swallows
+    // what it throws, so the answer it got is the only trace of a call that waited.
+    @Test
+    void a_catch_up_with_nothing_to_replay_replay_abandoned_blocks_on_answers_without_waiting() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Object> answers = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> log.add(payload)),
+                payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        FakeSource replaying = source(List.of("R1"), false);
+        replaying.stopAfter(0);
+        replaying.onReplayAbandoned = () -> {
+            try {
+                answers.add(handover.catchUp(source(List.of(), true)).block(Duration.ofSeconds(5)));
+            } catch (RuntimeException e) {
+                answers.add(e);
+            }
+        };
+
+        StepVerifier.create(handover.catchUp(replaying)).expectNext(false).expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(answers).containsExactly(true);
+        assertThat(log).isEmpty();
+    }
+
     // The first catch-up already failed, so the failure recorded before the call is not the one the call waited for.
     // The catch-up with nothing to replay still errors with the failure of the replay it waited for.
     @Test

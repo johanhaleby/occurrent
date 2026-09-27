@@ -136,11 +136,18 @@ to try again.
 A `goLive()` running next to a replay waits for that replay to end, and fails when the replay fails. Once it has
 waited, `acceptIfLive` accepts unless another replay has started since.
 
-A `goLive()` the view makes while it applies one of that replay's payloads returns `true` at once on both engines,
-since the replay cannot end before the view's call does. `acceptIfLive` goes on refusing until the replay ends. The
-reactive engine recognizes the call when the view blocks on the returned `Mono` on the thread the engine called the view
-on, or returns that `Mono` as part of its own. A view that hands the call to another thread and waits for it
-never finishes on either engine, the same as one that waits for a `catchUp()` that replays.
+A `goLive()` the view makes from code the engine is running returns `true` at once on both engines, since the replay or
+the hold on live delivery it would wait for cannot end before the view's call does. That code is a fold, live or
+replayed, the report that the replay already delivered a payload, and the replay callbacks `replayStarted()`,
+`replayCompleted()` and `replayAbandoned()`. A live fold counts because a replay that starts waits for it before
+replaying. `acceptIfLive` goes on refusing until the replay ends.
+
+The engines recognize the call in different ways, so what is left uncovered differs. The blocking engine counts these
+calls per thread, so a view that hands the call to another thread and waits for it never finishes. The reactive engine
+recognizes a call the view blocks on, on the thread the engine called the view on, and a `Mono` the view returns as part
+of its own, whichever thread that runs on. So only a view that blocks on the call from a thread it switched to never
+finishes. On both engines a view that waits for a `catchUp()` that replays never finishes, since that catch-up cannot
+start its replay before the view's code returns.
 
 A replay that fails ends differently on the two engines, because they acknowledge at different moments. The blocking
 engine has already reported each buffered payload handled, so it delivers them before it records the failure. The
