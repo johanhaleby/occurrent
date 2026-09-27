@@ -79,7 +79,7 @@ import java.util.stream.Stream;
  *             {@link org.occurrent.subscription.RoutingOutcome#REFUSED} for every event, and the listener stops.
  *             Delivery is at-least-once, so applying the same event twice
  *             must leave the projection as applying it once would, the same contract as the change-stream path.</li>
- *         <li>Fed from an event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)}, which is
+ *         <li>Fed from an event store's write path through {@link PushSubscriptionModel#accept(Iterable)}, which is
  *             supported only for the in-memory event store, nothing records which live events the subscription has
  *             handled. A crash before the handler has run loses the event from the in-memory event store too, so
  *             after a crash the store never holds an event the subscription missed. With a durable event store,

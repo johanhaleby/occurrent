@@ -70,8 +70,10 @@ import java.util.function.Supplier;
  * live feed is the job of whatever feeds the {@link PushSubscriptionModel}. Only stream and capability-agnostic
  * subscription filters can be replayed.
  * <p>
- * Feeding it from an event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)} is supported
- * only for the in-memory event store. Nothing records which live events the subscription has handled, and a crash
+ * Feeding it from an event store's write path through {@link PushSubscriptionModel#accept(Iterable)} is supported
+ * only for the in-memory event store, by a listener on the blocking {@code InMemoryEventStore} that waits for the
+ * returned {@link Mono}, as {@link PushSubscriptionModel} describes. Nothing records which live events the
+ * subscription has handled, and a crash
  * before the handler has run loses the event from the in-memory event store too, so after a crash the store never
  * holds an event the subscription missed. With a durable event store, such as MongoDB, use a durable subscription,
  * or a broker as described below. The amendment to ADR 133 records why.

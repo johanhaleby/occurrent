@@ -49,7 +49,7 @@ import org.occurrent.subscription.RoutingOutcome;
  * evaluation and this call can change which outcome is reported.
  * <p>
  * <strong>A broker bridge feeding this model from outside the process, rather than the in-memory event store's
- * write path {@link PushSubscriptionModel#accept(CloudEvent)} serves, should call
+ * write path that {@code accept(..)} serves, should call
  * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} instead.</strong> When this model is wrapped in a
  * {@link CatchupThenPushSubscriptionModel} that has not reached live yet,
  * {@code acceptRedeliverable(...)} refuses such an event outright rather than buffering it, reported

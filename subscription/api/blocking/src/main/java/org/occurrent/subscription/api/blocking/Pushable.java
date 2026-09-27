@@ -23,8 +23,8 @@ import java.util.function.Consumer;
 
 /**
  * A subscription target that events are <strong>pushed into</strong> from outside, rather than one that reads them from
- * the event store itself. The listener of an {@code InMemoryEventStore} hands each written {@link CloudEvent} to
- * {@link #accept(CloudEvent)}, which dispatches it to the target's registered handlers on the calling thread. A
+ * the event store itself. The listener of an {@code InMemoryEventStore} hands the events of each write to
+ * {@link #accept(Iterable)}, which dispatches each one to the target's registered handlers on the calling thread. A
  * RabbitMQ or Kafka listener calls {@code PushSubscriptionModel.acceptRedeliverable(CloudEvent)} instead, which this
  * interface does not declare, and acknowledges the message only when the outcome it returns allows it.
  * <p>

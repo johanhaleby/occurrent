@@ -1413,24 +1413,31 @@ happens. One more gives `close()` a `closeTimeout` of 300 years, which the build
 nanosecond deadline `close()` computes first, so the `finally` has to start at the top of the method. Each fails on that assertion without the `finally`. A `RuntimeException` from a release, which was always
 caught, passes with and without it.
 
-## Amendment (2026-09-26): only the in-memory event store may feed `accept(CloudEvent)` from its write path
+## Amendment (2026-09-26): only the in-memory event store may feed `accept(..)` from its write path
 
-`PushSubscriptionModel` keeps no record of which events its subscription has handled. Fed through
-`accept(CloudEvent)` from the write path of a durable event store, such as MongoDB, it never sees an event when the
+`PushSubscriptionModel` keeps no record of which events its subscription has handled. Fed through `accept(..)` from
+the write path of a durable event store, such as MongoDB, it never sees an event when the
 application crashes after the write has committed but before the handler has run, since nothing hands the event over
 again after the restart. The catch-up model in front adds two more ways to lose one. The reactor model records its
 catch-up-complete marker before it applies the events it buffered during the replay, and a second instance sharing the
 same marker storage can record the marker first, so the next start skips the replay. See
 [#1140](https://github.com/johanhaleby/occurrent/issues/1140).
 
-`InMemoryEventStore` is the only event store in Occurrent with a listener on its write path that can feed
-`accept(CloudEvent)`, and a crash empties that store too, so after a crash it never holds an event the subscription
-missed. Without a crash it can still hold one. That happens for an event written before anything subscribed, while the
-model was stopped or the subscription paused, and for one whose handler failed. None of those depends on whether the
-store is durable. The RabbitMQ and Kafka bridges call `acceptRedeliverable(CloudEvent)`, and no Spring Boot starter
-configures a push model fed from a write path.
+`InMemoryEventStore` is the only event store in Occurrent with a listener on its write path. That listener takes a
+`List<CloudEvent>`, so `new InMemoryEventStore(pushModel::accept)` calls `accept(Iterable<CloudEvent>)`. A crash empties
+that store too, so after a crash it never holds an event the subscription missed. Without a crash the push model keeps
+no record of what it delivered and holds nothing back, so an event it did not hand to the handler when the event
+arrived, whatever the reason, is never handed over later. Something that reads the store, such as a durable
+subscription or a catch-up replay, can still deliver it, and that holds whether or not the store is durable.
 
-So Occurrent narrows what it supports instead of changing the engine. Feeding `accept(CloudEvent)` from a write path is
+There is no reactive in-memory event store. The reactor push model can be fed from the blocking `InMemoryEventStore`
+only by a listener that subscribes to the `Mono` from `accept(..)` and waits for it, since that `Mono` does nothing
+until something subscribes. `new InMemoryEventStore(reactorPushModel::accept)` compiles but delivers nothing.
+
+The RabbitMQ and Kafka bridges call `acceptRedeliverable(CloudEvent)`, and no Spring Boot starter configures a push
+model fed from a write path.
+
+So Occurrent narrows what it supports instead of changing the engine. Feeding `accept(..)` from a write path is
 supported only for the in-memory event store. A durable event store uses a durable subscription, which records the
 position it has handled and resumes from it, or forwards its events to a broker whose listener calls
 `acceptRedeliverable(CloudEvent)`. The reactor marker order and the shared marker storage only lose an event in a setup
