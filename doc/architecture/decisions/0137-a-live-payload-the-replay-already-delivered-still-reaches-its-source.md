@@ -133,6 +133,33 @@ did. Only the catch-up that held the live payloads back lets them through again,
 replay releases nothing. While the replay runs, `acceptIfLive` refuses on both engines, so a caller that can redeliver is told
 to try again.
 
+A `goLive()` running next to a replay waits for that replay to end. It fails when a catch-up on the same handover failed
+while it waited, that replay or another one, for example one whose marker lookup threw. The cause is a catch-up failure
+recorded while it waited, and a `goLive()` refusing this way is not recorded as a failure itself. Once it has waited,
+`acceptIfLive` accepts unless another replay has started since.
+
+A `goLive()` the view makes from code the engine is running returns `true` without waiting for a replay on both engines,
+since the replay or the hold on live delivery it would wait for cannot end before the view's call does. That code is a
+fold, live or replayed, the report that the replay already delivered a payload, and the replay callbacks
+`replayStarted()`, `replayCompleted()` and `replayAbandoned()`. A live fold counts because a replay that starts waits
+for it before replaying. Code that runs once `acceptIfLive` has completed, such as a `goLive()` chained after it,
+belongs to the caller rather than the view, even on the thread the fold ran on, so it gets the answer a `goLive()` from
+any other code gets.
+
+While a replay that starts waits for a live fold, `acceptIfLive` on the reactive engine refuses, and goes on refusing
+until the replay ends. The blocking engine stops live delivery before that wait, but only counts the replay as running
+once the wait ends. A `goLive()` in between takes the handover live, from the live fold or from any other thread, so
+`acceptIfLive` accepts until the replay starts. The replay waits for those deliveries too, so they reach the view before
+it replays.
+
+The engines recognize the call in different ways, so what is left uncovered differs. The blocking engine counts these
+calls per thread, so during a replay, a call the view hands to another thread waits for that replay, which cannot end
+while the view waits for the call. The reactive engine recognizes a call the view blocks on, on the thread the engine
+called the view on, and a `Mono` the view returns as part of its own, whichever thread that runs on. There, only a view
+that blocks on the call from a thread it switched to, while a replay holds live delivery back, waits for a replay that
+cannot end while the view blocks. On both engines a view that waits for a `catchUp()` that replays waits for a replay
+that cannot start before the view's code returns.
+
 A replay that fails ends differently on the two engines, because they acknowledge at different moments. The blocking
 engine has already reported each buffered payload handled, so it delivers them before it records the failure. The
 reactive engine has not acknowledged the payloads it holds back, and the failure fails their acknowledgements, so it

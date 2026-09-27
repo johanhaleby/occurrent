@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Thirteen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
+Fourteen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -45,9 +45,12 @@ thread that later starts the catch-up waits until another thread runs the catch-
 `stopCatchUp()` or interrupts it. On the reactor stack its `Mono` now errors for an event fed while the feed is
 stopped. Read
 [section 12](#12-a-projection-feeds-accept-waits-until-the-event-is-applied-and-fails-when-it-is-not).
-Finally, feeding a push model's `accept(..)` is supported only from the in-memory event store's write path, where
+Then feeding a push model's `accept(..)` is supported only from the in-memory event store's write path, where
 0.33.0 also named a broker listener, a Spring application event and an HTTP endpoint. Read
 [section 13](#13-only-the-in-memory-event-stores-write-path-may-feed-a-push-models-accept).
+Finally, a projection feed's `goLive()` called while a catch-up of the same projection is replaying now waits for
+that replay to end, where 0.33.0 did not wait, and fails when a catch-up of that projection failed meanwhile. Read
+[section 14](#14-a-projection-feeds-golive-waits-for-a-running-catch-up).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1100,3 +1103,40 @@ example, on a thread that may block.
 
 There is no recipe for this change. Where a listener's events come from is not something a rewrite of the source can
 see.
+
+## 14. A projection feed's `goLive()` waits for a running catch-up
+
+This covers `CatchupProjectionFeed.goLive()` and `DomainEventFeed.goLive(id)` on both stacks. In 0.33.0 a `goLive()`
+called while a catch-up of the same projection was still replaying returned without waiting for that replay, and on
+the reactor stack its `Mono` completed without waiting. Now it returns, or its `Mono` completes, only once that replay
+has ended.
+
+It can now also fail because of a catch-up. When a catch-up of the same projection failed while it waited, that
+replay or another one, the blocking feeds throw an `IllegalStateException` and the reactor feeds' `Mono` errors with
+one. Its cause is a catch-up failure recorded while it waited.
+
+A call the view makes while the feed is calling it, from the code that applies an event to the view or from a
+callback such as `replayStarted()`, still returns without waiting for the replay, since that replay cannot end before
+the call does.
+
+You are affected in these cases:
+
+- Startup code that runs `catchUp()`, `catchUp(id)` or `catchUpAll()` on a background thread and calls `goLive()` while
+  it replays now waits for that replay.
+- Code that calls `goLive()` next to a catch-up and does not expect it to throw can now see the catch-up's failure.
+- On the blocking stack, a view that hands a `goLive()` call to another thread during a replay and waits for it there
+  waits for a replay that cannot end while the view waits. On the reactor stack the same holds for a view that blocks
+  on the `Mono` from a thread it switched to while a replay holds live delivery back.
+
+What to do:
+
+- A catch-up takes the feed live when its replay completes. A `goLive()` called while it replays also takes the feed
+  live when that replay is stopped, so keep the `goLive()` if you rely on that. If the thread calling it must not
+  wait for the replay, call `goLive()` on a thread that can, or call it after `stopCatchUp()`.
+- Call `goLive()` from the view's own thread rather than from one it hands the call to.
+- Treat the `IllegalStateException` like a failed catch-up, and build a new feed.
+- On the blocking stack an interrupt ends the wait early, and `goLive()` returns with the interrupt still set on the
+  thread.
+
+There is no recipe for this change. Which thread calls `goLive()`, and whether a catch-up runs next to it, are runtime
+behavior that a rewrite of the source cannot see.
