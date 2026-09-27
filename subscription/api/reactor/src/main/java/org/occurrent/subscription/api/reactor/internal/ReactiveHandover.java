@@ -21,6 +21,8 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.HandoverMessages;
+import org.reactivestreams.Subscription;
+import reactor.core.CoreSubscriber;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoSink;
@@ -28,6 +30,7 @@ import reactor.core.publisher.Sinks;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.scheduler.Schedulers;
+import reactor.util.context.Context;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -284,6 +287,16 @@ public final class ReactiveHandover<T, K> {
     // delivered, not just whether the ack completed without error, see acceptReportingDelivery(..).
     private final Set<LiveAck> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
+    // Replaced on every failed catch-up, not only the first, so a call waiting for a replay can tell a catch-up failed
+    // while it waited on a handover that had already failed before. A catch-up refusing because another one failed does
+    // not replace it, so a later waiter gets that failure rather than the refusal wrapping it.
+    private final AtomicReference<@Nullable RecordedFailure> latestFailure = new AtomicReference<>();
+    // Set while the current thread runs a fold or a Source callback of this handover. A catch-up called there answers
+    // without waiting, since the replay or the pause it would wait for is waiting for that code.
+    private final ThreadLocal<Boolean> runningOwnCode = new ThreadLocal<>();
+    // Written into the context of this handover's pipeline, so a catch-up composed into a fold or a Source callback
+    // finds it on whichever thread that runs.
+    private final Object insideOwnPipeline = new Object();
     private static final Logger log = LoggerFactory.getLogger(ReactiveHandover.class);
     // Long enough that a producer holding the serialization claim finishes its own offer and releases it, short
     // enough that a caller's accept does not wait on it for long. Waiting happens on a scheduler, not on the
@@ -659,9 +672,26 @@ public final class ReactiveHandover<T, K> {
      * which matters on a handover that is already live, a feed's {@code catchUp()} after its {@code goLive()}. They are
      * delivered when it ends, whether it completes or is stopped, since a view that buffers during a replay throws that
      * buffer away on a stop.
+     * <p>
+     * A catch-up with nothing to replay that arrives while a replay holds the live payloads back completes only once
+     * that replay ends, so when it emits {@code true}, {@link #acceptIfLive(Object)} accepts unless a replay started
+     * after this call. When a catch-up on this handover failed while it waited, it errors instead, with a catch-up
+     * failure recorded while it waited as the cause. Its own refusal is not recorded as a failure.
+     * <p>
+     * A catch-up with nothing to replay called from code this handover is running emits {@code true} without waiting,
+     * since the replay or the hold on live delivery it would wait for cannot end before that code returns. That code
+     * is a fold, live or replayed, {@link Source#alreadyDeliveredByReplay(Object)}, {@link Source#replayStarted()},
+     * {@link Source#replayCompleted()} and {@link Source#replayAbandoned()}. This handover recognizes the call when that
+     * code blocks on the result on the thread this handover called it on, or returns the {@code Mono} as part of its
+     * own. While a replay holds live delivery back, {@link #acceptIfLive(Object)} goes on refusing until that replay
+     * ends. While a replay holds live delivery back, code that blocks on the result from a thread it switched to waits
+     * for that replay, which cannot end while the code blocks. Code that waits for a catch-up that replays waits for a
+     * replay that cannot start before the code returns.
      */
     public Mono<Boolean> catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
+        // Read on the calling thread, which is the fold's or callback's own for one that blocks on this call.
+        boolean calledFromOwnCode = runningOwnCode.get() != null;
         // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying again
         // rather than only by building a new one.
         stopped = false;
@@ -687,6 +717,10 @@ public final class ReactiveHandover<T, K> {
         // Read when this catch-up starts, so the check after the turn asks whether a catch-up failed while this one
         // waited rather than whether the handover had already failed when the caller asked for this one.
         Throwable failureBeforeWaiting = terminalError.get();
+        RecordedFailure latestFailureBeforeWaiting = latestFailure.get();
+        // Set when this catch-up refuses because another one failed, so the error handler below does not record that
+        // refusal as a failure of its own.
+        AtomicBoolean refusedForAnotherFailure = new AtomicBoolean();
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
@@ -694,7 +728,18 @@ public final class ReactiveHandover<T, K> {
         // fold, and since the marker makes a restart skip the replay, the unfolded events were lost with no error.
         Mono<Void> replayFolded = alreadyDone.flatMap(done -> {
             if (done) {
-                return Mono.empty();
+                // Waits for a replay already holding live delivery back, so this call does not report the handover
+                // live while acceptIfLive(..) still refuses. It waits only for the hold in place now, since this call
+                // makes no promise about a replay that starts after it. It errors when a catch-up failed while it
+                // waited, including on a handover that had already failed before this call.
+                return awaitLiveDeliveryResumed().then(Mono.defer(() -> {
+                    RecordedFailure failed = latestFailure.get();
+                    if (failed == null || failed == latestFailureBeforeWaiting) {
+                        return Mono.<Void>empty();
+                    }
+                    refusedForAnotherFailure.set(true);
+                    return Mono.<Void>error(catchUpFailed(failed.cause()));
+                }));
             }
             // Deferred, so the hold is installed once the turn is taken rather than when this pipeline is put together.
             return awaitReplayTurn(holdsReplayTurn).then(Mono.defer(() -> {
@@ -703,9 +748,11 @@ public final class ReactiveHandover<T, K> {
                 // told to stop using. A caller that asks for a catch-up on a handover that had already failed still
                 // gets one, which is what it asked for.
                 Throwable failed = terminalError.get();
-                return failed == null || failed == failureBeforeWaiting
-                        ? pauseLiveDelivery(pause)
-                        : Mono.<Void>error(catchUpFailed(failed));
+                if (failed == null || failed == failureBeforeWaiting) {
+                    return pauseLiveDelivery(pause);
+                }
+                refusedForAnotherFailure.set(true);
+                return Mono.<Void>error(catchUpFailed(failed));
             })).then(Mono.defer(() -> {
                 // Cleared again here, not only when this call was made, because the catch-up it waited for can have
                 // stopped in between. The payloads arriving during this replay belong in its buffer, and a handover
@@ -719,7 +766,7 @@ public final class ReactiveHandover<T, K> {
                 // Every key belongs to the source a suppression reports to, so a new replay starts from none.
                 replayedIds.clear();
                 replaySource.set(source);
-                source.replayStarted();
+                runAsOwnCode(source::replayStarted);
                 replayOpen.set(true);
                 return source.replay().map(this::replayedItem)
                         // Checked inside the concatMap function rather than upstream of it. An upstream takeWhile would
@@ -730,7 +777,7 @@ public final class ReactiveHandover<T, K> {
                         .then()
                         // Ordered before the marker and before the live buffer drain, so anything a replay-aware view
                         // buffered is durable before either runs.
-                        .then(Mono.defer(source::replayCompleted))
+                        .then(subscribedAsOwnCode(Mono.defer(source::replayCompleted)))
                         .doOnSuccess(ignored -> replayOpen.set(false));
             }));
         });
@@ -787,6 +834,9 @@ public final class ReactiveHandover<T, K> {
                     deliversLive.set(true);
                     return liveSink.asFlux().concatMap(this::deliver);
                 }))
+                // Covers the live folds as well as the replay, so a catch-up composed into either answers without
+                // waiting for the replay or the pause that is waiting for it.
+                .contextWrite(Context.of(insideOwnPipeline, Boolean.TRUE))
                 // This engine subscribes its own pipeline rather than handing it back, so without a scheduler the
                 // replay would run on whoever called catchUp, which is the Spring refresh thread for an annotated
                 // projection. boundedElastic because the replay folds through blocking bridges.
@@ -845,6 +895,9 @@ public final class ReactiveHandover<T, K> {
                     // The first failure is the one that matters, so a later call refusing because of it does not take
                     // its place and hide the cause.
                     terminalError.compareAndSet(null, error);
+                    if (!refusedForAnotherFailure.get()) {
+                        latestFailure.set(new RecordedFailure(error));
+                    }
                     abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
                     // Logged only when the signal cannot carry the failure, which is the live phase, where
                     // catchupDone has already emitted and nothing else tells anyone. Logging unconditionally would
@@ -863,7 +916,11 @@ public final class ReactiveHandover<T, K> {
                     releaseReplayTurn(holdsReplayTurn);
                 });
 
-        return catchupDone.asMono();
+        // A call from a fold or a Source callback of this handover answers without waiting, since the replay or the
+        // pause it would wait for cannot end before that code does. The pipeline above still goes live once they end.
+        return Mono.deferContextual(context -> calledFromOwnCode || context.hasKey(insideOwnPipeline)
+                ? alreadyDone.flatMap(done -> done ? Mono.just(true) : catchupDone.asMono())
+                : catchupDone.asMono());
     }
 
     // Claims every acknowledgement nothing has answered yet, so none of those payloads is delivered later. Each one
@@ -901,7 +958,7 @@ public final class ReactiveHandover<T, K> {
             replayedIds.clear();
             replaySource.set(null);
             try {
-                source.replayAbandoned();
+                runAsOwnCode(source::replayAbandoned);
             } catch (Throwable ignored) {
                 // Throwable rather than RuntimeException and Error, because a view written in Kotlin can throw a
                 // checked exception without declaring it. One that got past here left the rest of the failure
@@ -1058,6 +1115,18 @@ public final class ReactiveHandover<T, K> {
         }
     }
 
+    // Completes once the hold on live delivery in place right now is released, or at once when there is none. A hold
+    // is released on every path out of the replay that took it, completed, stopped or failed.
+    private Mono<Void> awaitLiveDeliveryResumed() {
+        return Mono.defer(() -> {
+            Sinks.Empty<Void> paused;
+            synchronized (liveGate) {
+                paused = livePaused;
+            }
+            return paused == null ? Mono.<Void>empty() : paused.asMono();
+        });
+    }
+
     private boolean liveDeliveryPaused() {
         synchronized (liveGate) {
             return livePaused != null;
@@ -1104,7 +1173,7 @@ public final class ReactiveHandover<T, K> {
             if (replayedIds.contains(item.dedupKey())) {
                 // Applied by the replay already, so delivering it again would apply it twice. The source is told
                 // instead, and the acknowledgement waits for that call rather than running ahead of it (ADR 137).
-                return Mono.defer(item.alreadyDeliveredByReplay())
+                return subscribedAsOwnCode(Mono.defer(item.alreadyDeliveredByReplay()))
                         .doOnSuccess(v -> ack.success(Outcome.APPLIED))
                         .onErrorResume(error -> {
                             ack.error(error);
@@ -1113,7 +1182,7 @@ public final class ReactiveHandover<T, K> {
             }
             // Mono.defer so a synchronous throw from the fold becomes an onError signal onErrorResume can catch, rather
             // than aborting the whole pipeline.
-            return Mono.defer(item.deliver())
+            return subscribedAsOwnCode(Mono.defer(item.deliver()))
                     .doOnSuccess(v -> {
                         deliveredIds.add(item.dedupKey());
                         ack.success(Outcome.APPLIED);
@@ -1124,7 +1193,68 @@ public final class ReactiveHandover<T, K> {
                     });
         }
         // Replay payload: an error here propagates and fails the catch-up.
-        return Mono.defer(item.deliver()).doOnSuccess(v -> replayedIds.add(item.dedupKey()));
+        return subscribedAsOwnCode(Mono.defer(item.deliver())).doOnSuccess(v -> replayedIds.add(item.dedupKey()));
+    }
+
+    // Marks the thread only while it subscribes the fold or callback, so a later task on the same pooled thread is not
+    // taken for code of this handover. The mark is lifted while a completion or error goes downstream, since a fold
+    // that completes on the thread that subscribed it would otherwise leave the thread marked while code that is not
+    // this handover's handles that signal, such as what a caller of acceptIfLive(..) runs next.
+    private Mono<Void> subscribedAsOwnCode(Mono<Void> code) {
+        return Mono.from(subscriber -> runAsOwnCode(() -> code.subscribe(new CoreSubscriber<Void>() {
+            @Override
+            public Context currentContext() {
+                return subscriber instanceof CoreSubscriber<?> downstream ? downstream.currentContext() : Context.empty();
+            }
+
+            @Override
+            public void onSubscribe(Subscription subscription) {
+                subscriber.onSubscribe(subscription);
+            }
+
+            @Override
+            public void onNext(Void value) {
+                runOutsideOwnCode(() -> subscriber.onNext(value));
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                runOutsideOwnCode(() -> subscriber.onError(error));
+            }
+
+            @Override
+            public void onComplete() {
+                runOutsideOwnCode(subscriber::onComplete);
+            }
+        })));
+    }
+
+    private void runOutsideOwnCode(Runnable code) {
+        Boolean outer = runningOwnCode.get();
+        runningOwnCode.remove();
+        try {
+            code.run();
+        } finally {
+            if (outer != null) {
+                runningOwnCode.set(outer);
+            }
+        }
+    }
+
+    private void runAsOwnCode(Runnable code) {
+        Boolean outer = runningOwnCode.get();
+        runningOwnCode.set(Boolean.TRUE);
+        try {
+            code.run();
+        } finally {
+            if (outer == null) {
+                runningOwnCode.remove();
+            }
+        }
+    }
+
+    // A new instance per failure, so two failures of the same exception can still be told apart.
+    private record RecordedFailure(Throwable cause) {
     }
 
     private Item<K> replayedItem(T replayed) {

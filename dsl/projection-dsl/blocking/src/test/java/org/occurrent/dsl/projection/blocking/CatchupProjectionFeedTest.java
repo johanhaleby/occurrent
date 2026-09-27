@@ -530,6 +530,67 @@ class CatchupProjectionFeedTest {
         }
     }
 
+    // goLive() returning while catchUp() still replayed left the feed refusing live events after the caller was told
+    // it is live.
+    @Test
+    void goLive_while_the_catch_up_replays_returns_only_once_that_replay_has_ended() throws Exception {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", holdingTheReplayAt("1", folded, replaying, releaseReplay, null),
+                Filter.all(), store, converter, Counted::eventId, null);
+        Thread catchingUp = new Thread(feed::catchUp, "catch-up");
+        catchingUp.start();
+        try {
+            awaitLatch(replaying);
+            FutureTask<Void> wentLive = goLiveWaitingForTheReplay(feed::goLive);
+
+            assertThat(wentLive).as("goLive() while the replay is held").isNotDone();
+            releaseReplay.countDown();
+            wentLive.get(5, TimeUnit.SECONDS);
+            assertThat(feed.acceptIfLive(EventMetadata.empty(), new Counted("live"))).isTrue();
+            assertThat(folded).containsExactly("1", "live");
+        } finally {
+            releaseReplay.countDown();
+            catchingUp.join(5_000);
+        }
+    }
+
+    @Test
+    void goLive_while_the_catch_up_replays_throws_when_that_replay_fails() throws Exception {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        IllegalStateException foldFailure = new IllegalStateException("fold failed");
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", holdingTheReplayAt("1", folded, replaying, releaseReplay, foldFailure),
+                Filter.all(), store, converter, Counted::eventId, null);
+        Thread catchingUp = new Thread(() -> catchThrowable(feed::catchUp), "catch-up");
+        catchingUp.start();
+        try {
+            awaitLatch(replaying);
+            FutureTask<Void> wentLive = goLiveWaitingForTheReplay(feed::goLive);
+
+            assertThat(wentLive).as("goLive() while the replay is held").isNotDone();
+            releaseReplay.countDown();
+            assertThat(catchThrowable(() -> wentLive.get(5, TimeUnit.SECONDS))).as("what goLive() threw once the replay failed")
+                    .isInstanceOf(ExecutionException.class)
+                    .cause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage(HandoverMessages.catchUpFailed("projection feed"))
+                    .hasCauseReference(foldFailure);
+            assertThat(feed.refusesPermanently()).isTrue();
+        } finally {
+            releaseReplay.countDown();
+            catchingUp.join(5_000);
+        }
+    }
+
     @Test
     void stopping_a_feed_whose_catch_up_never_started_makes_a_waiting_accept_throw() {
         InMemoryEventStore store = new InMemoryEventStore();
@@ -800,20 +861,29 @@ class CatchupProjectionFeedTest {
     // its own thread, already waiting in the buffer when this returns
     // A waiting accept(..) parks in Object.wait()
     private static FutureTask<Void> feedWaitingForTheCatchUp(Runnable accept) {
-        FutureTask<Void> feeding = new FutureTask<>(accept, null);
-        Thread thread = new Thread(feeding, "live-delivery");
+        return startedAndWaiting(accept, "live-delivery", "accept(..)");
+    }
+
+    // A goLive() waiting for the replay parks in Object.wait() too
+    private static FutureTask<Void> goLiveWaitingForTheReplay(Runnable goLive) {
+        return startedAndWaiting(goLive, "go-live", "goLive()");
+    }
+
+    private static FutureTask<Void> startedAndWaiting(Runnable call, String threadName, String what) {
+        FutureTask<Void> calling = new FutureTask<>(call, null);
+        Thread thread = new Thread(calling, threadName);
         thread.start();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (thread.getState() != Thread.State.WAITING) {
             if (!thread.isAlive()) {
-                fail("accept(..) ended without waiting for the catch-up");
+                fail(what + " ended without waiting");
             }
             if (System.nanoTime() > deadline) {
-                fail("accept(..) did not start waiting within 5 seconds, it is " + thread.getState());
+                fail(what + " did not start waiting within 5 seconds, it is " + thread.getState());
             }
             Thread.onSpinWait();
         }
-        return feeding;
+        return calling;
     }
 
     private static Projection<Integer, Counted, String> skippingEveryEvent() {

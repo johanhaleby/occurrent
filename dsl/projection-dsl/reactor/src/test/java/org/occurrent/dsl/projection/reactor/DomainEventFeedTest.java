@@ -36,6 +36,7 @@ import org.occurrent.subscription.UnreadableLiveFilterException;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
@@ -45,7 +46,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -466,6 +469,107 @@ class DomainEventFeedTest {
         RoutingOutcome retriedDelivery = feed.acceptCloudEvent(event).block();
         assertThat(retriedDelivery).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(repo.get("counter")).as("applied once, not twice").isEqualTo(1);
+    }
+
+    // goLive(id) completing while catchUp(id) still replayed left acceptCloudEvent(..) returning DEFERRED after the
+    // caller was told the projection is live.
+    @Test
+    void go_live_while_the_catch_up_replays_completes_only_once_that_replay_has_ended() throws Exception {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1"), converter, Counted::eventId);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        feed.register("counter", event -> Mono.fromRunnable(() -> {
+            if (event.eventId().equals("1")) {
+                replaying.countDown();
+                awaitUninterruptibly(releaseReplay);
+            }
+            folded.add(event.eventId());
+        }), Filter.all());
+        try {
+            CompletableFuture<Void> catchUp = feed.catchUp("counter").toFuture();
+            awaitUninterruptibly(replaying);
+
+            CompletableFuture<Void> wentLive = goLiveWaitingForTheReplay(feed, "counter");
+
+            assertThat(wentLive).as("goLive(id) while the replay is held").isNotDone();
+            releaseReplay.countDown();
+            catchUp.get(5, TimeUnit.SECONDS);
+            wentLive.get(5, TimeUnit.SECONDS);
+            assertThat(feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live"))).block(Duration.ofSeconds(5)))
+                    .isEqualTo(RoutingOutcome.DELIVERED);
+            assertThat(folded).containsExactly("1", "live");
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    // The fold of L1 completes on the thread that offered L1, so the caller's goLive(id) chained after accepting L1
+    // runs there. It is still the caller's code rather than the feed's, so it waits for the catch-up that started
+    // during that fold.
+    @Test
+    void go_live_chained_after_accepting_an_event_waits_for_the_catch_up_that_started_while_that_event_was_folded() throws Exception {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("R"), converter, Counted::eventId);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingL1 = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        feed.register("counter", event -> Mono.fromRunnable(() -> {
+            if (event.eventId().equals("L1")) {
+                foldingL1.countDown();
+                awaitUninterruptibly(releaseL1);
+            }
+            folded.add(event.eventId());
+        }), Filter.all());
+        try {
+            feed.goLive("counter").block(Duration.ofSeconds(5));
+            CompletableFuture<RoutingOutcome> l2 = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("L1")))
+                    .then(feed.goLive("counter"))
+                    .then(feed.acceptCloudEvent(converter.toCloudEvent(new Counted("L2"))))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .toFuture();
+            assertThat(foldingL1.await(5, TimeUnit.SECONDS)).isTrue();
+            CompletableFuture<Void> catchUp = subscribedFromItsTask(feed.catchUp("counter"), "catchUp(id) holds live delivery back");
+
+            releaseL1.countDown();
+
+            catchUp.get(5, TimeUnit.SECONDS);
+            assertThat(l2.get(5, TimeUnit.SECONDS)).as("L2 after the chained goLive(id)").isEqualTo(RoutingOutcome.DELIVERED);
+            assertThat(folded).containsExactly("L1", "R", "L2");
+        } finally {
+            releaseL1.countDown();
+        }
+    }
+
+    // goLive(id) subscribes its wait from the one task it schedules, and the marker read ahead of that wait is
+    // synchronous, so once that task has run the call is waiting, or has completed, which the caller then catches
+    private static CompletableFuture<Void> goLiveWaitingForTheReplay(DomainEventFeed<Counted> feed, String id) {
+        return subscribedFromItsTask(feed.goLive(id), "goLive(id) subscribed its wait");
+    }
+
+    // catchUp(id) and goLive(id) each schedule one task, and what they do before waiting on anything runs in it, so
+    // once that task has run a catch-up holds live delivery back and a goLive(id) waits for the replay
+    private static CompletableFuture<Void> subscribedFromItsTask(Mono<Void> call, String what) {
+        CountDownLatch subscribed = new CountDownLatch(1);
+        String hook = "subscribedFromItsTask";
+        Schedulers.onScheduleHook(hook, task -> () -> {
+            try {
+                task.run();
+            } finally {
+                subscribed.countDown();
+            }
+        });
+        try {
+            CompletableFuture<Void> result = call.toFuture();
+            assertThat(subscribed.await(5, TimeUnit.SECONDS)).as(what).isTrue();
+            return result;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        } finally {
+            Schedulers.resetOnScheduleHook(hook);
+        }
     }
 
     @Test

@@ -18,6 +18,7 @@ package org.occurrent.subscription.api.blocking.internal;
 
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.HandoverMessages;
@@ -33,9 +34,11 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.*;
@@ -1877,15 +1880,476 @@ class BlockingHandoverTest {
         };
         Thread replay = new Thread(() -> handover.catchUp(source(List.of("R1", "R2"), false)), "replay");
 
-        replay.start();
-        awaitLatch(foldingR1);
-        handover.acceptReportingDelivery("L1");
-        assertThatThrownBy(() -> handover.catchUp(failingLookup)).isInstanceOf(IllegalStateException.class);
-        handover.catchUp(source(List.of(), true));
-        releaseR1.countDown();
-        replay.join(5_000);
+        FutureTask<Boolean> nothingToReplay = new FutureTask<>(() -> handover.catchUp(source(List.of(), true)));
+        Thread waiting = new Thread(nothingToReplay, "nothing to replay");
 
-        assertThat(log).as("the buffered payload waited for the running replay").containsExactly("R1", "R2", "L1");
+        try {
+            replay.start();
+            awaitLatch(foldingR1);
+            handover.acceptReportingDelivery("L1");
+            assertThatThrownBy(() -> handover.catchUp(failingLookup)).isInstanceOf(IllegalStateException.class);
+            waiting.start();
+            awaitWaiting(waiting);
+            assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
+            releaseR1.countDown();
+            replay.join(5_000);
+
+            assertThat(nothingToReplay.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(log).as("the buffered payload waited for the running replay").containsExactly("R1", "R2", "L1");
+        } finally {
+            releaseR1.countDown();
+            waiting.join(5_000);
+        }
+    }
+
+    // A feed's goLive() called while its first catchUp() replays. Returning true before that replay ended left
+    // acceptIfLive(..) refusing after the caller was told the handover is live.
+    @Test
+    void a_catch_up_with_nothing_to_replay_returns_only_once_the_running_replay_has_ended() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = holdingAt("R1", log, foldingR1, releaseR1, null);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Boolean> replaying = executor.submit(() -> handover.catchUp(source(List.of("R1"), false)));
+            awaitLatch(foldingR1);
+
+            FutureTask<Boolean> nothingToReplay = new FutureTask<>(() -> handover.catchUp(source(List.of(), true)));
+            Thread waiting = new Thread(nothingToReplay, "nothing to replay");
+            waiting.start();
+            awaitWaiting(waiting);
+
+            assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
+            releaseR1.countDown();
+            assertThat(replaying.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(nothingToReplay.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(handover.acceptIfLive("L1")).isTrue();
+            assertThat(log).containsExactly("R1", "L1");
+        } finally {
+            releaseR1.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    // When the replay it waited for fails, the handover refuses everything, so the catch-up waiting for it throws that
+    // failure rather than returning true for a handover that is not live.
+    @Test
+    void a_catch_up_with_nothing_to_replay_throws_when_the_running_replay_it_waited_for_fails() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        IllegalStateException foldFailure = new IllegalStateException("fold boom");
+        BlockingHandover<String, String> handover = holdingAt("R1", log, foldingR1, releaseR1, foldFailure);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Boolean> replaying = executor.submit(() -> handover.catchUp(source(List.of("R1"), false)));
+            awaitLatch(foldingR1);
+
+            FutureTask<Boolean> nothingToReplay = new FutureTask<>(() -> handover.catchUp(source(List.of(), true)));
+            Thread waiting = new Thread(nothingToReplay, "nothing to replay");
+            waiting.start();
+            awaitWaiting(waiting);
+
+            assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
+            releaseR1.countDown();
+            assertThatThrownBy(() -> replaying.get(5, TimeUnit.SECONDS)).hasCauseReference(foldFailure);
+            assertThatThrownBy(() -> nothingToReplay.get(5, TimeUnit.SECONDS)).cause()
+                    .isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
+                    .hasCauseReference(foldFailure);
+            assertThat(handover.refusesPermanently()).isTrue();
+        } finally {
+            releaseR1.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    // The first catch-up already failed, so the failure recorded before the call is not the one the call waited for.
+    // The catch-up with nothing to replay still throws the failure of the replay it waited for.
+    @Test
+    void a_catch_up_with_nothing_to_replay_throws_when_the_replay_it_waited_for_fails_on_a_handover_that_had_already_failed() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        IllegalStateException firstFailure = new IllegalStateException("first boom");
+        IllegalStateException secondFailure = new IllegalStateException("second boom");
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("R0")) {
+                throw firstFailure;
+            }
+            if (payload.equals("R1")) {
+                foldingR1.countDown();
+                awaitLatch(releaseR1);
+                throw secondFailure;
+            }
+            log.add(payload);
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            assertThatThrownBy(() -> handover.catchUp(source(List.of("R0"), false))).isSameAs(firstFailure);
+            Future<Boolean> replaying = executor.submit(() -> handover.catchUp(source(List.of("R1"), false)));
+            awaitLatch(foldingR1);
+
+            FutureTask<Boolean> nothingToReplay = new FutureTask<>(() -> handover.catchUp(source(List.of(), true)));
+            Thread waiting = new Thread(nothingToReplay, "nothing to replay");
+            waiting.start();
+            awaitWaiting(waiting);
+
+            assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
+            releaseR1.countDown();
+            assertThatThrownBy(() -> replaying.get(5, TimeUnit.SECONDS)).hasCauseReference(secondFailure);
+            assertThatThrownBy(() -> nothingToReplay.get(5, TimeUnit.SECONDS)).cause()
+                    .isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
+                    .hasCauseReference(secondFailure);
+        } finally {
+            releaseR1.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    // Each waiter refuses because the replay failed, and neither refusal is a failure of that replay, so the waiter that
+    // reads the failure after the other one has refused still gets the replay's own failure, wrapped once. Which waiter
+    // takes the lock first is up to the JVM, and only some orders read the failure after the other waiter refused, so
+    // this repeats.
+    @RepeatedTest(100)
+    void two_catch_ups_with_nothing_to_replay_waiting_for_a_replay_that_fails_each_throw_that_replays_failure() throws Exception {
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        IllegalStateException failure = new IllegalStateException("boom");
+        BlockingHandover<String, String> handover = holdingAt("R1", new CopyOnWriteArrayList<>(), foldingR1, releaseR1, failure);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        List<Thread> waiters = new ArrayList<>();
+        try {
+            Future<Boolean> replaying = executor.submit(() -> handover.catchUp(source(List.of("R1"), false)));
+            awaitLatch(foldingR1);
+            List<FutureTask<Boolean>> nothingToReplay = List.of(new FutureTask<>(() -> handover.catchUp(source(List.of(), true))),
+                    new FutureTask<>(() -> handover.catchUp(source(List.of(), true))));
+            for (FutureTask<Boolean> waiter : nothingToReplay) {
+                Thread waiting = new Thread(waiter, "nothing to replay " + waiters.size());
+                waiters.add(waiting);
+                waiting.start();
+                awaitWaiting(waiting);
+            }
+
+            releaseR1.countDown();
+
+            assertThatThrownBy(() -> replaying.get(5, TimeUnit.SECONDS)).hasCauseReference(failure);
+            for (FutureTask<Boolean> waiter : nothingToReplay) {
+                assertThatThrownBy(() -> waiter.get(5, TimeUnit.SECONDS)).cause()
+                        .isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
+                        .hasCauseReference(failure);
+            }
+        } finally {
+            releaseR1.countDown();
+            waiters.forEach(Thread::interrupt);
+            executor.shutdownNow();
+        }
+    }
+
+    // Interrupting the wait is how a caller gives up on a replay that never ends.
+    @Test
+    void an_interrupted_catch_up_with_nothing_to_replay_returns_false_and_keeps_the_interrupt() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = holdingAt("R1", log, foldingR1, releaseR1, null);
+        AtomicReference<Boolean> answer = new AtomicReference<>();
+        AtomicBoolean interruptKept = new AtomicBoolean();
+        Thread replay = new Thread(() -> handover.catchUp(source(List.of("R1"), false)), "replay");
+        Thread nothingToReplay = new Thread(() -> {
+            answer.set(handover.catchUp(source(List.of(), true)));
+            interruptKept.set(Thread.currentThread().isInterrupted());
+        }, "nothing to replay");
+        try {
+            replay.start();
+            awaitLatch(foldingR1);
+            nothingToReplay.start();
+            awaitWaiting(nothingToReplay);
+
+            nothingToReplay.interrupt();
+            nothingToReplay.join(5_000);
+
+            assertThat(answer.get()).isFalse();
+            assertThat(interruptKept.get()).isTrue();
+        } finally {
+            releaseR1.countDown();
+            replay.join(5_000);
+        }
+    }
+
+    // The interrupted call set the running replay to go live before it waited, and that stays set when it gives up,
+    // so R1 still takes the handover live when it is stopped.
+    @Test
+    void a_replay_stopped_after_an_interrupted_catch_up_with_nothing_to_replay_still_goes_live() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = holdingAt("R1", log, foldingR1, releaseR1, null);
+        FakeSource stoppedAfterR1 = source(List.of("R1", "R2"), false);
+        stoppedAfterR1.stopAfter(1);
+        AtomicReference<Boolean> replayAnswer = new AtomicReference<>();
+        AtomicReference<Boolean> answer = new AtomicReference<>();
+        Thread replay = new Thread(() -> replayAnswer.set(handover.catchUp(stoppedAfterR1)), "replay");
+        Thread nothingToReplay = new Thread(() -> answer.set(handover.catchUp(source(List.of(), true))), "nothing to replay");
+        try {
+            replay.start();
+            awaitLatch(foldingR1);
+            nothingToReplay.start();
+            awaitWaiting(nothingToReplay);
+            nothingToReplay.interrupt();
+            nothingToReplay.join(5_000);
+            assertThat(answer.get()).isFalse();
+
+            releaseR1.countDown();
+            replay.join(5_000);
+
+            assertThat(replayAnswer.get()).as("R1 was stopped before R2").isFalse();
+            assertThat(handover.acceptIfLive("L1")).isTrue();
+            assertThat(log).containsExactly("R1", "L1");
+        } finally {
+            releaseR1.countDown();
+            replay.join(5_000);
+        }
+    }
+
+    // A catch-up with nothing to replay waits for R1, which holds the turn when it is called, and not for R2 taking
+    // the turn after it. Whichever of that call and R2 wakes first when R1 ends, the call returns while R2 is still
+    // replaying and acceptIfLive(..) still refuses.
+    @Test
+    void a_catch_up_with_nothing_to_replay_does_not_wait_for_a_replay_that_takes_the_turn_after_the_one_it_waited_for() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        CountDownLatch foldingR2 = new CountDownLatch(1);
+        CountDownLatch releaseR2 = new CountDownLatch(1);
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("R1")) {
+                foldingR1.countDown();
+                awaitLatch(releaseR1);
+            } else if (payload.equals("R2")) {
+                foldingR2.countDown();
+                awaitLatch(releaseR2);
+            }
+            log.add(payload);
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        FutureTask<Boolean> firstReplay = new FutureTask<>(() -> handover.catchUp(source(List.of("R1"), false)));
+        FutureTask<Boolean> secondReplay = new FutureTask<>(() -> handover.catchUp(source(List.of("R2"), false)));
+        FutureTask<Boolean> nothingToReplay = new FutureTask<>(() -> handover.catchUp(source(List.of(), true)));
+        Thread first = new Thread(firstReplay, "first replay");
+        Thread second = new Thread(secondReplay, "second replay");
+        Thread waiting = new Thread(nothingToReplay, "nothing to replay");
+        try {
+            first.start();
+            awaitLatch(foldingR1);
+            second.start();
+            awaitWaiting(second);
+            waiting.start();
+            awaitWaiting(waiting);
+
+            releaseR1.countDown();
+
+            assertThat(firstReplay.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(nothingToReplay.get(5, TimeUnit.SECONDS)).isTrue();
+            awaitLatch(foldingR2);
+            assertThat(handover.acceptIfLive("L1")).as("while R2 is replaying").isFalse();
+            releaseR2.countDown();
+            assertThat(secondReplay.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(handover.acceptIfLive("L2")).isTrue();
+            assertThat(log).containsExactly("R1", "R2", "L2");
+        } finally {
+            releaseR1.countDown();
+            releaseR2.countDown();
+            first.join(5_000);
+            second.join(5_000);
+            waiting.join(5_000);
+        }
+    }
+
+    // A catch-up with nothing to replay called from inside the running replay's own fold would wait for a fold that
+    // cannot end until it returns, so it returns without waiting. This is the one case where it reports live early.
+    @Test
+    void a_catch_up_with_nothing_to_replay_from_inside_the_running_replays_fold_returns_without_waiting() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                answers.add(self.get().catchUp(source(List.of(), true)));
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        self.set(handover);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> replaying = executor.submit(() -> handover.catchUp(source(List.of("R1"), false)));
+
+            assertThat(replaying.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(answers).containsExactly(true);
+            assertThat(handover.acceptIfLive("L1")).isTrue();
+            assertThat(log).containsExactly("R1", "L1");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // A catch-up with nothing to replay called from a replay callback would wait for the replay that is calling it, so
+    // it returns without waiting, and that replay goes live once it ends.
+    @Test
+    void a_catch_up_with_nothing_to_replay_from_replay_started_returns_without_waiting() throws Exception {
+        FakeSource replayed = source(List.of("R1"), false);
+        assertThatACatchUpFromTheReplayReturnsWithoutWaiting(replayed, goLive -> replayed.onReplayStarted = goLive, true, "R1", "L1");
+    }
+
+    @Test
+    void a_catch_up_with_nothing_to_replay_from_replay_completed_returns_without_waiting() throws Exception {
+        FakeSource replayed = source(List.of("R1"), false);
+        assertThatACatchUpFromTheReplayReturnsWithoutWaiting(replayed, goLive -> replayed.onReplayCompleted = goLive, true, "R1", "L1");
+    }
+
+    // The replay is stopped before its first fold, and goes live when it ends because the call from its callback asked
+    // it to.
+    @Test
+    void a_catch_up_with_nothing_to_replay_from_replay_abandoned_returns_without_waiting() throws Exception {
+        FakeSource replayed = source(List.of("R1"), false);
+        replayed.stopAfter(0);
+        assertThatACatchUpFromTheReplayReturnsWithoutWaiting(replayed, goLive -> replayed.onReplayAbandoned = goLive, false, "L1");
+    }
+
+    private static void assertThatACatchUpFromTheReplayReturnsWithoutWaiting(FakeSource replayed, Consumer<Runnable> calling,
+                                                                            boolean replayReturns, String... folded) throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        calling.accept(() -> answers.add(handover.catchUp(source(List.of(), true))));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> replaying = executor.submit(() -> handover.catchUp(replayed));
+
+            assertThat(replaying).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(replayReturns);
+            assertThat(answers).containsExactly(true);
+            assertThat(handover.acceptIfLive("L1")).isTrue();
+            assertThat(log).containsExactly(folded);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // A replay that starts waits for the live fold that is running, but it has already stopped live delivery and is
+    // not running yet, so the fold's catch-up goes live the way one from any other thread would at that point.
+    // acceptIfLive(..) accepts until the replay starts, and the replay goes live again once it ends.
+    @Test
+    void a_catch_up_with_nothing_to_replay_from_a_live_fold_a_starting_replay_waits_for_takes_the_handover_live() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingL1 = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        ExecutorService otherThread = Executors.newSingleThreadExecutor();
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                foldingL1.countDown();
+                awaitLatch(releaseL1);
+                answers.add(self.get().catchUp(source(List.of(), true)));
+                try {
+                    answers.add(otherThread.submit(() -> self.get().acceptIfLive("L2")).get(5, TimeUnit.SECONDS));
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        self.set(handover);
+        handover.catchUp(source(List.of(), true));
+        FutureTask<Boolean> folding = new FutureTask<>(() -> handover.acceptIfLive("L1"));
+        FutureTask<Boolean> replaying = new FutureTask<>(() -> handover.catchUp(source(List.of("R"), false)));
+        Thread live = new Thread(folding, "live-delivery");
+        Thread replay = new Thread(replaying, "replay");
+        try {
+            live.start();
+            awaitLatch(foldingL1);
+            replay.start();
+            awaitWaiting(replay);
+
+            releaseL1.countDown();
+
+            assertThat(folding).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(replaying).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(answers).as("what the fold's catch-up and the acceptIfLive(..) after it returned").containsExactly(true, true);
+            assertThat(log).containsExactly("L1", "L2", "R");
+            assertThat(handover.acceptIfLive("L3")).isTrue();
+        } finally {
+            releaseL1.countDown();
+            live.interrupt();
+            replay.interrupt();
+            otherThread.shutdownNow();
+        }
+    }
+
+    // The same from Source.alreadyDeliveredByReplay(..), which a starting replay waits for the way it waits for a live
+    // fold.
+    @Test
+    void a_catch_up_with_nothing_to_replay_from_already_delivered_by_replay_a_starting_replay_waits_for_takes_the_handover_live() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        CountDownLatch reportingR1 = new CountDownLatch(1);
+        CountDownLatch releaseReport = new CountDownLatch(1);
+        ExecutorService otherThread = Executors.newSingleThreadExecutor();
+        FakeSource replayed = source(List.of("R1"), false);
+        replayed.onAlreadyDeliveredByReplay = () -> {
+            reportingR1.countDown();
+            awaitLatch(releaseReport);
+            answers.add(handover.catchUp(source(List.of(), true)));
+            try {
+                answers.add(otherThread.submit(() -> handover.acceptIfLive("L2")).get(5, TimeUnit.SECONDS));
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        };
+        handover.catchUp(replayed);
+        FutureTask<Boolean> reporting = new FutureTask<>(() -> handover.acceptIfLive("R1"));
+        FutureTask<Boolean> replaying = new FutureTask<>(() -> handover.catchUp(source(List.of("R2"), false)));
+        Thread live = new Thread(reporting, "live-delivery");
+        Thread replay = new Thread(replaying, "replay");
+        try {
+            live.start();
+            awaitLatch(reportingR1);
+            replay.start();
+            awaitWaiting(replay);
+
+            releaseReport.countDown();
+
+            assertThat(reporting).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(replaying).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(answers).as("what the callback's catch-up and the acceptIfLive(..) after it returned").containsExactly(true, true);
+            assertThat(log).containsExactly("R1", "L2", "R2");
+            assertThat(handover.acceptIfLive("L1")).isTrue();
+        } finally {
+            releaseReport.countDown();
+            live.interrupt();
+            replay.interrupt();
+            otherThread.shutdownNow();
+        }
+    }
+
+    // Records every payload it folds, and holds the fold of the given payload until released, throwing afterwards
+    // when given a failure.
+    private static BlockingHandover<String, String> holdingAt(String held, List<String> log, CountDownLatch reached, CountDownLatch release,
+                                                              RuntimeException failure) {
+        return BlockingHandover.create(payload -> {
+            if (payload.equals(held)) {
+                reached.countDown();
+                try {
+                    release.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                if (failure != null) {
+                    throw failure;
+                }
+            }
+            log.add(payload);
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
     }
 
     /**
