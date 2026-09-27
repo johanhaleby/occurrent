@@ -220,14 +220,13 @@ position an event already holds. An event collection renamed without its `_posit
 Every writer stores the counter as an int32 or an int64 at or above zero, and a counter that is anything else keeps
 the store refusing too.
 
-No command in this runbook puts the counter below any position a consumer may have recorded. A DCB read returns the
-counter as `lastSequencePosition`, so a consumer may have recorded any value the stores have read from the counter,
-including positions no event holds because the append that reserved them failed. Were the counter lowered below such
-a value, the next appends would take positions that consumer has already read past, and it would never see their
-events.
+No command in this runbook puts the counter below any value the stores have read from it. A DCB read returns the
+counter as `lastSequencePosition`, so a consumer may have recorded any such value, including positions no event holds
+because the append that reserved them failed. Were the counter lowered below such a value, the next appends would
+take positions that consumer has already read past, and it would never see their events.
 
 Turn a double or `Decimal128` counter into an int64, find the highest position an event holds, and raise the counter
-to at least that:
+to at least `<n>`:
 
 ```javascript
 db.events_position.updateOne({ _id: "dcb", position: { $type: ["double", "decimal"] } }, [{ $set: { position: { $toLong: { $ceil: { $max: ["$position", { $toDouble: "$position" }] } } } } }])
@@ -237,17 +236,24 @@ db.events_position.updateOne({ _id: "dcb" }, { $max: { position: NumberLong("<n>
 
 The first update changes only a double or `Decimal128` counter. The stores read a `Decimal128` through a double,
 which above 2^53 can give a different number, so the update keeps the higher of the stored value and the one the
-stores read, rounding a fraction up, or fails and changes nothing. `<n>` is the highest of the position the `find`
-returns, every position a consumer recorded and the value in any old copy of the counter document, such as the one a
-rename left behind, or `0` when there is none of these. A value above what is needed only skips some positions, which
-every store already allows. `upsert` creates the counter document when there is none, and `$max` never lowers the
-counter. Each update changes one document atomically, so both are safe while the application runs. Keep the quotes in
-`NumberLong("<n>")`. mongosh stores a bare number outside the int32 range as a double, which the stores refuse, and
-JavaScript rounds an unquoted number above 2^53 before `NumberLong` sees it.
+stores read, rounding a fraction up, or fails and changes nothing.
+
+`<n>` is at least every value the stores may have read from the counter. That covers the highest position the `find`
+returns, every position a consumer recorded, and the value of the counter and of any old copy of it, such as the one
+a rename left behind, taking for one that is not an int32 or an int64 the value the first update gives for it. `0` is
+enough when there is none of these. The first update fails only on a counter the stores read as 0 or less, which any
+`<n>` covers, or as the largest int64. The only `<n>` for that counter is the largest int64 itself, so this store
+cannot take appends again and cannot be repaired in place.
+
+A value above what is needed only skips some positions, which every store already allows. `upsert` creates the
+counter document when there is none, and `$max` never lowers the counter. Each update changes one document
+atomically, so both are safe while the application runs. Keep the quotes in `NumberLong("<n>")`. mongosh stores a
+bare number outside the int32 range as a double, which the stores refuse, and JavaScript rounds an unquoted number
+above 2^53 before `NumberLong` sees it.
 
 If the counter is still not a whole number the store accepts after that, which its next startup still refuses, stop
 every application that writes to the store and replace it with `$set: { position: NumberLong("<n>") }` in place of
-`$max`, where `<n>` is at least the highest stored position and at least every position a consumer recorded.
+`$max`, with the same `<n>`.
 
 `PositionBackfill.seedCounter()` from `occurrent-eventstore-mongodb-position-backfill` runs the same `$max` with
 `upsert`, to the number of events plus its `counterSeedSlack`, 10,000 by default, and fails on a counter document
