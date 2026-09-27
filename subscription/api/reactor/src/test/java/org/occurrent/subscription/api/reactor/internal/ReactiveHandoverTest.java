@@ -1796,6 +1796,37 @@ class ReactiveHandoverTest {
         assertThat(log).containsExactly("R1", "L1");
     }
 
+    // The first catch-up already failed, so the failure recorded before the call is not the one the call waited for.
+    // The catch-up with nothing to replay still errors with the failure of the replay it waited for.
+    @Test
+    void a_catch_up_with_nothing_to_replay_fails_when_the_replay_it_waited_for_fails_on_a_handover_that_had_already_failed() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        IllegalStateException firstFailure = new IllegalStateException("first boom");
+        IllegalStateException secondFailure = new IllegalStateException("second boom");
+        Function<String, Mono<Void>> heldAtR1 = holdingAt("R1", log, replayReached, releaseReplay, secondFailure);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(
+                payload -> payload.equals("R0") ? Mono.error(firstFailure) : heldAtR1.apply(payload),
+                payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        try {
+            StepVerifier.create(handover.catchUp(source(List.of("R0"), false))).verifyErrorMessage("first boom");
+            Mono<Boolean> replaying = handover.catchUp(source(List.of("R1"), false));
+            assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+            CompletableFuture<Boolean> nothingToReplay = waitingBehindTheRunningReplay(handover);
+
+            assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
+            releaseReplay.countDown();
+            StepVerifier.create(replaying).verifyErrorMessage("second boom");
+            assertThatThrownBy(() -> nothingToReplay.get(5, TimeUnit.SECONDS)).cause()
+                    .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                    .hasCauseReference(secondFailure);
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
     // Starts a catch-up with nothing to replay and returns once it waits for the replay holding live delivery back.
     // Its source is told the marker was read only after the wait was subscribed, on the same thread.
     private static CompletableFuture<Boolean> waitingBehindTheRunningReplay(ReactiveHandover<String, String> handover) throws InterruptedException {

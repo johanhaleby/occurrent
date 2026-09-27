@@ -1962,6 +1962,49 @@ class BlockingHandoverTest {
         }
     }
 
+    // The first catch-up already failed, so the failure recorded before the call is not the one the call waited for.
+    // The catch-up with nothing to replay still throws the failure of the replay it waited for.
+    @Test
+    void a_catch_up_with_nothing_to_replay_throws_when_the_replay_it_waited_for_fails_on_a_handover_that_had_already_failed() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        IllegalStateException firstFailure = new IllegalStateException("first boom");
+        IllegalStateException secondFailure = new IllegalStateException("second boom");
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("R0")) {
+                throw firstFailure;
+            }
+            if (payload.equals("R1")) {
+                foldingR1.countDown();
+                awaitLatch(releaseR1);
+                throw secondFailure;
+            }
+            log.add(payload);
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            assertThatThrownBy(() -> handover.catchUp(source(List.of("R0"), false))).isSameAs(firstFailure);
+            Future<Boolean> replaying = executor.submit(() -> handover.catchUp(source(List.of("R1"), false)));
+            awaitLatch(foldingR1);
+
+            FutureTask<Boolean> nothingToReplay = new FutureTask<>(() -> handover.catchUp(source(List.of(), true)));
+            Thread waiting = new Thread(nothingToReplay, "nothing to replay");
+            waiting.start();
+            awaitWaiting(waiting);
+
+            assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
+            releaseR1.countDown();
+            assertThatThrownBy(() -> replaying.get(5, TimeUnit.SECONDS)).hasCauseReference(secondFailure);
+            assertThatThrownBy(() -> nothingToReplay.get(5, TimeUnit.SECONDS)).cause()
+                    .isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
+                    .hasCauseReference(secondFailure);
+        } finally {
+            releaseR1.countDown();
+            executor.shutdownNow();
+        }
+    }
+
     // Interrupting the wait is how a caller gives up on a replay that never ends.
     @Test
     void an_interrupted_catch_up_with_nothing_to_replay_returns_false_and_keeps_the_interrupt() throws Exception {

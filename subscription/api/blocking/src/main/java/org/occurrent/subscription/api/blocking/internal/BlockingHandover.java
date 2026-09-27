@@ -271,6 +271,9 @@ public final class BlockingHandover<T, K> {
     // overlap and the first to finish would otherwise release a replay while the second is still delivering.
     private int liveTransitionsRunning = 0;
     private @Nullable Throwable catchUpFailure = null;
+    // Replaced on every failed catch-up, not only the first, so a call waiting for a replay can tell that replay
+    // failed on a handover that had already failed before.
+    private @Nullable RecordedFailure latestFailure = null;
     // The source whose replay filled replayedIds, so a live payload that replay already delivered can reach it, since
     // accept(..) is handed no source of its own. Written when a replay starts rather than by every catchUp(Source), so
     // a catch-up that replays nothing leaves it in place, and cleared with replayedIds when a replay is abandoned.
@@ -616,12 +619,12 @@ public final class BlockingHandover<T, K> {
                         liveWhenReplayStops = true;
                         // Waits for that replay's catch-up to return or throw, so this call does not report the
                         // handover live while acceptIfLive(..) still refuses.
-                        Throwable failureBeforeWaiting = catchUpFailure;
+                        RecordedFailure failureBeforeWaiting = latestFailure;
                         if (!awaitRunningReplayUnderLock()) {
                             return false;
                         }
-                        if (catchUpFailure != failureBeforeWaiting) {
-                            failedWhileWaiting = catchUpFailure;
+                        if (latestFailure != null && latestFailure != failureBeforeWaiting) {
+                            failedWhileWaiting = latestFailure.cause();
                         }
                     }
                     if (failedWhileWaiting == null) {
@@ -822,6 +825,7 @@ public final class BlockingHandover<T, K> {
                 if (catchUpFailure == null) {
                     catchUpFailure = e;
                 }
+                latestFailure = new RecordedFailure(e);
                 if (holdsReplayTurn) {
                     replayRunning = false;
                 }
@@ -1119,6 +1123,10 @@ public final class BlockingHandover<T, K> {
                 lock.notifyAll();
             }
         }
+    }
+
+    // A new instance per failure, so two failures of the same exception can still be told apart.
+    private record RecordedFailure(Throwable cause) {
     }
 
     private void enterOwnCall() {

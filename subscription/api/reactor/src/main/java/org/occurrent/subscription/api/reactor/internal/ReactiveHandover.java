@@ -285,6 +285,9 @@ public final class ReactiveHandover<T, K> {
     // delivered, not just whether the ack completed without error, see acceptReportingDelivery(..).
     private final Set<LiveAck> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
+    // Replaced on every failed catch-up, not only the first, so a call waiting for a replay can tell that replay
+    // failed on a handover that had already failed before.
+    private final AtomicReference<@Nullable RecordedFailure> latestFailure = new AtomicReference<>();
     // Set while the current thread subscribes one of this handover's replay folds, which is when a fold that blocks
     // runs, so a catch-up that fold blocks on does not wait for the replay the fold holds up.
     private final ThreadLocal<Boolean> subscribingReplayFold = new ThreadLocal<>();
@@ -707,6 +710,7 @@ public final class ReactiveHandover<T, K> {
         // Read when this catch-up starts, so the check after the turn asks whether a catch-up failed while this one
         // waited rather than whether the handover had already failed when the caller asked for this one.
         Throwable failureBeforeWaiting = terminalError.get();
+        RecordedFailure latestFailureBeforeWaiting = latestFailure.get();
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
@@ -716,13 +720,13 @@ public final class ReactiveHandover<T, K> {
             if (done) {
                 // Waits for a replay already holding live delivery back, so this call does not report the handover
                 // live while acceptIfLive(..) still refuses. It waits only for the hold in place now, since this call
-                // makes no promise about a replay that starts after it. The failure check is the one a replay waiting
-                // for its turn makes, so a replay that failed while this call waited is not followed by going live.
+                // makes no promise about a replay that starts after it. It errors when a catch-up failed while it
+                // waited, including on a handover that had already failed before this call.
                 return awaitLiveDeliveryResumed().then(Mono.defer(() -> {
-                    Throwable failed = terminalError.get();
-                    return failed == null || failed == failureBeforeWaiting
+                    RecordedFailure failed = latestFailure.get();
+                    return failed == null || failed == latestFailureBeforeWaiting
                             ? Mono.<Void>empty()
-                            : Mono.<Void>error(catchUpFailed(failed));
+                            : Mono.<Void>error(catchUpFailed(failed.cause()));
                 }));
             }
             // Deferred, so the hold is installed once the turn is taken rather than when this pipeline is put together.
@@ -875,6 +879,7 @@ public final class ReactiveHandover<T, K> {
                     // The first failure is the one that matters, so a later call refusing because of it does not take
                     // its place and hide the cause.
                     terminalError.compareAndSet(null, error);
+                    latestFailure.set(new RecordedFailure(error));
                     abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
                     // Logged only when the signal cannot carry the failure, which is the live phase, where
                     // catchupDone has already emitted and nothing else tells anyone. Logging unconditionally would
@@ -1187,6 +1192,10 @@ public final class ReactiveHandover<T, K> {
                 }
             }
         });
+    }
+
+    // A new instance per failure, so two failures of the same exception can still be told apart.
+    private record RecordedFailure(Throwable cause) {
     }
 
     private Item<K> replayedItem(T replayed) {
