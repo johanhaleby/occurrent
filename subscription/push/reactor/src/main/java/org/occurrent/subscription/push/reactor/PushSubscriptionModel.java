@@ -42,14 +42,18 @@ import java.util.concurrent.atomic.AtomicReference;
  * It exists so a projection can be driven from any transport that already forwards Occurrent cloud events, such as a
  * RabbitMQ or Kafka listener, a Spring application event, or an HTTP endpoint. The application registers handlers
  * through the projection DSL. A broker listener hands each received event to {@link #acceptRedeliverable(CloudEvent)},
- * and a write path, an event store listener say, hands it to {@link #accept(CloudEvent)}. Both route it to the handler
- * if its {@link SubscriptionFilter} matches, and a handler error propagates through the returned {@link Mono}.
+ * and the listener of an {@code InMemoryEventStore} hands it to {@link #accept(CloudEvent)}. Both route it to the
+ * handler if its {@link SubscriptionFilter} matches, and a handler error propagates through the returned {@link Mono}.
  * <p>
- * Fed from the event store's write path, this model keeps no record of which events the subscription has handled. When
- * the application crashes after a write has committed but before the handler has run, this subscription never sees
- * that event. Use a durable subscription if that is not acceptable. Fed from a broker, call
- * {@link #acceptRedeliverable(CloudEvent)} and acknowledge the message only when its {@link Mono} completes with
- * {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}. That method says what each of the other
+ * Feeding this model from an event store's write path, through {@link #accept(CloudEvent)}, is supported only for the
+ * in-memory event store. This model keeps no record of which events the subscription has handled, and a crash before
+ * the handler has run loses the event from the in-memory event store too, so the subscription never misses an event
+ * the store still has. With a durable event store, such as MongoDB, the subscription never sees an event when the
+ * application crashes after the write has committed but before the handler has run. Use a durable subscription there, or forward the events to a broker whose listener calls
+ * {@link #acceptRedeliverable(CloudEvent)}.
+ * <p>
+ * Fed from a broker, call {@link #acceptRedeliverable(CloudEvent)} and acknowledge the message only when its
+ * {@link Mono} completes with {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}. That method says what each of the other
  * outcomes asks for, {@link RoutingOutcome#REFUSED} being the one that means stop consuming.
  * <p>
  * <strong>One model feeds one subscription</strong>, and a second {@code subscribe} is refused. The acknowledgement is
@@ -109,8 +113,9 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * normally.</strong> A listener that acknowledges on completion therefore acknowledges an event nothing consumed,
      * so a broker listener calls {@link #acceptRedeliverable(CloudEvent)} instead, which reports
      * {@link RoutingOutcome#UNAVAILABLE} for that event. This
-     * method cannot refuse the event on your behalf, because it is also fed from the write path, where the event is
-     * already durably stored and refusing would fail the write instead of protecting anything. See ADR 104. A configured
+     * method cannot refuse the event on your behalf, because it is also fed from the in-memory event store's write
+     * path, as an {@code InMemoryEventStore} listener, where the event is already stored and refusing would fail the
+     * write instead of protecting anything. See ADR 104. A configured
      * {@link PushObserver} is told the event's {@link RoutingOutcome}, and that is where to get visibility into it
      * instead. It is not told at all when the filter or the matched action fails in a way this model does not
      * catch, which {@link PushObserver} names. Told about the event even when a subscription's filter itself throws

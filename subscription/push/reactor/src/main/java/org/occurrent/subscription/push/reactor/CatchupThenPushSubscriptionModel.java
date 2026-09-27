@@ -70,15 +70,11 @@ import java.util.function.Supplier;
  * live feed is the job of whatever feeds the {@link PushSubscriptionModel}. Only stream and capability-agnostic
  * subscription filters can be replayed.
  * <p>
- * Fed from the event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)}, nothing records
- * which live events the subscription has handled. When the application crashes after a write has committed but before
- * the handler has run, and the catch-up-complete marker has been recorded, this subscription never sees that event,
- * since a restart skips the replay once the marker exists. A crash before the marker is recorded, during the replay
- * say, is the exception. The next start replays the whole history, that event included, and so does every start
- * with no {@link CheckpointStorage} to record a marker in. The marker is recorded
- * before the events buffered during the replay are applied, so a crash between the two loses those events too. The
- * exception holds only while no other instance sharing the same marker storage records the marker first, since the
- * next start then skips the replay. Use a durable subscription if losing an event is not acceptable.
+ * Feeding it from an event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)} is supported
+ * only for the in-memory event store. Nothing records which live events the subscription has handled, and a crash
+ * before the handler has run loses the event from the in-memory event store too, so the subscription never misses an
+ * event the store still has. With a durable event store, such as MongoDB, use a durable subscription, or a broker as
+ * described below.
  * <p>
  * Fed from a broker, call {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} and acknowledge the message
  * only when its {@link Mono} completes with {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or

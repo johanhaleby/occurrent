@@ -845,8 +845,8 @@ to resolve on its own, and it is safe to redeliver arbitrarily many times.
 
 `BlockingHandover` gains `acceptIfLive(T)` beside the existing `accept(T)`/`acceptReportingDelivery(T)`. Where those
 buffer a payload offered while not live, `acceptIfLive` refuses it outright, reporting `false` without ever
-touching the buffer. `PushSubscriptionModel.accept(CloudEvent)`, the write path an in-memory store listener or
-another in-process caller uses, is unchanged and keeps buffering, since a write-path event has nowhere else to come
+touching the buffer. `PushSubscriptionModel.accept(CloudEvent)`, the write path an in-memory store listener uses,
+is unchanged and keeps buffering, since a write-path event has nowhere else to come
 from and refusing it would lose it rather than protect it. A new `PushSubscriptionModel.acceptRedeliverable(CloudEvent)`
 is for a caller that can redeliver, a broker bridge, and routes to `acceptIfLive` instead. It refuses rather than
 buffers, returns `DEFERRED`, and lets the caller ask again. It returns every outcome routing decides, a refusal made
@@ -1410,3 +1410,24 @@ first tick and asserts the consumer still starts. Both release-helper tests have
 happens. One more gives `close()` a `closeTimeout` of 300 years, which the builder accepts and which overflows the
 nanosecond deadline `close()` computes first, so the `finally` has to start at the top of the method. Each fails on that assertion without the `finally`. A `RuntimeException` from a release, which was always
 caught, passes with and without it.
+
+## Amendment (2026-09-26): only the in-memory event store may feed `accept(CloudEvent)` from its write path
+
+`PushSubscriptionModel` keeps no record of which events its subscription has handled. Fed through
+`accept(CloudEvent)` from the write path of a durable event store, such as MongoDB, it never sees an event when the
+application crashes after the write has committed but before the handler has run, since nothing hands the event over
+again after the restart. The catch-up model in front
+adds two more ways to lose one. The reactor model records its catch-up-complete marker before it applies the events it
+buffered during the replay, and a second instance sharing the same marker storage can record the marker first, so the
+next start skips the replay. See [#1140](https://github.com/johanhaleby/occurrent/issues/1140).
+
+`InMemoryEventStore` is the only event store in Occurrent with a listener on its write path that can feed
+`accept(CloudEvent)`, and a crash empties that store too, so the subscription never misses an event the store still has. The RabbitMQ and Kafka bridges
+call `acceptRedeliverable(CloudEvent)`, and no Spring Boot starter configures a push model fed from a write path.
+
+So Occurrent narrows what it supports instead of changing the engine. Feeding `accept(CloudEvent)` from a write path is
+supported only for the in-memory event store. A durable event store uses a durable subscription, which records the
+position it has handled and resumes from it, or forwards its events to a broker whose listener calls
+`acceptRedeliverable(CloudEvent)`. The reactor marker order and the shared marker storage only lose an event in a setup
+that is no longer supported, so neither changes. This replaces the contract the unreleased 0.34.0 javadoc stated
+before, that the write-path feed was supported and could lose an event on a crash.

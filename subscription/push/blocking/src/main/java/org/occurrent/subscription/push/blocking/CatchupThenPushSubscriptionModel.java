@@ -79,17 +79,11 @@ import java.util.stream.Stream;
  *             {@link org.occurrent.subscription.RoutingOutcome#REFUSED} for every event, and the listener stops.
  *             Delivery is at-least-once, so applying the same event twice
  *             must leave the projection as applying it once would, the same contract as the change-stream path.</li>
- *         <li>Fed from the event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)}, nothing
- *             records which live events the subscription has handled. When the application crashes after a write
- *             has committed but before the handler has run, and the catch-up-complete marker below has been written,
- *             this subscription never sees that event, since the next start skips the replay. With no
- *             {@link CheckpointStorage} to write a marker in, every start replays the whole history, that event
- *             included. A crash during the replay is the other
- *             exception. {@code accept(...)} buffers an event arriving then and returns before it is applied, and the
- *             marker is written only after the buffered events are applied, so the next start replays that event too.
- *             That holds only while no other instance sharing the same marker storage writes the marker first, since
- *             the next start then skips the replay. Use a durable subscription if losing an event is not
- *             acceptable.</li>
+ *         <li>Fed from an event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)}, which is
+ *             supported only for the in-memory event store, nothing records which live events the subscription has
+ *             handled. A crash before the handler has run loses the event from the in-memory event store too, so
+ *             the subscription never misses an event the store still has. With a durable event store, such as
+ *             MongoDB, use a durable subscription, or a broker as described above.</li>
  *       </ul></li>
  *   <li>A one-shot <strong>catch-up-complete marker</strong> (an optional {@link CheckpointStorage}) records that the
  *       replay finished, so a restart skips it and lets the broker resume. The stored value marks completion, it is not
