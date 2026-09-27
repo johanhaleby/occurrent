@@ -77,6 +77,7 @@ import java.util.function.UnaryOperator;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
@@ -115,6 +116,8 @@ class UpdateEventRepairTest {
 
     private MongoClient mongoClient;
     private MongoDatabase database;
+    private MongoTemplate mongoTemplate;
+    private MongoTransactionManager transactionManager;
     private SpringMongoEventStore eventStore;
 
     @BeforeEach
@@ -124,15 +127,9 @@ class UpdateEventRepairTest {
         mongoClient = MongoClients.create(connectionString);
         database = mongoClient.getDatabase(databaseName);
 
-        MongoTemplate mongoTemplate = new MongoTemplate(mongoClient, databaseName);
-        MongoTransactionManager transactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, databaseName));
-        EventStoreConfig config = new EventStoreConfig.Builder()
-                .eventStoreCollectionName(EVENT_COLLECTION)
-                .transactionConfig(transactionManager)
-                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
-                .eventStoreCapabilities(STREAM, DCB)
-                .build();
-        eventStore = new SpringMongoEventStore(mongoTemplate, config);
+        mongoTemplate = new MongoTemplate(mongoClient, databaseName);
+        transactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, databaseName));
+        eventStore = newEventStore(false);
     }
 
     @AfterEach
@@ -381,6 +378,48 @@ class UpdateEventRepairTest {
                         .isNull(),
                 () -> assertThat(result.maxRepairedPosition()).isNull()
         );
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_starts_once_the_repair_has_run() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        long positionOfB = ((Number) requireNonNull(storedDocument("b").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        // a lost its position along with its tag array. b is what step 5 of the runbook produces, a position set by
+        // hand as a number and a tag array still missing. Neither has a string position.
+        damageTheWayUpdateEventUsedTo("a", original -> taggedEvent("a", "Renamed", "name:1"));
+        damageTheWayUpdateEventUsedTo("b", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, positionOfB)));
+
+        assertThatThrownBy(() -> newEventStore(true))
+                .as("both events are missing from the conflict query, so a store told to require repaired events must refuse")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+
+        newRepair().run();
+
+        assertThatNoException()
+                .as("the store and the repair must agree on what is damaged, so a collection the repair fixed has to start")
+                .isThrownBy(() -> newEventStore(true));
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_still_refuses_an_event_the_repair_reports_as_unreadable() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        events().updateOne(new Document("id", "a"),
+                new Document("$unset", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, ""))
+                        .append("$set", new Document(DcbCloudEvents.TAGS, 42)));
+
+        assertThat(newRepair().run().unrecoverableEvents())
+                .singleElement()
+                .extracting(UnrecoverableEvent::reason)
+                .isEqualTo(UnrecoverableEvent.Reason.UNREADABLE);
+
+        assertThatThrownBy(() -> newEventStore(true))
+                .as("the event is still missing from the conflict query, and the refusal must say how to get past it")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("step 5")
+                .hasMessageContaining("turn off requireRepairedEvents");
     }
 
     @Test
@@ -1000,6 +1039,17 @@ class UpdateEventRepairTest {
         assertThat(position == null || position instanceof String)
                 .as("the pre-901 write-back must leave position as a string or drop it, but it was %s", position)
                 .isTrue();
+    }
+
+    private SpringMongoEventStore newEventStore(boolean requireRepairedEvents) {
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .eventStoreCollectionName(EVENT_COLLECTION)
+                .transactionConfig(transactionManager)
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM, DCB)
+                .requireRepairedEvents(requireRepairedEvents)
+                .build();
+        return new SpringMongoEventStore(mongoTemplate, config);
     }
 
     private UpdateEventRepair newRepair() {

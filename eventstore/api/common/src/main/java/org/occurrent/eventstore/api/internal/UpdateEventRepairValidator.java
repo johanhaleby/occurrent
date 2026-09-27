@@ -47,7 +47,7 @@ public final class UpdateEventRepairValidator {
 
     /**
      * Create the {@link IllegalStateException} to throw when {@code requireRepairedEvents(true)} is set and the event
-     * collection holds events with a string {@code position}.
+     * collection holds an event the update-event repair tool would repair.
      *
      * @param eventStoreCollectionName the name of the event collection that contains damaged events
      * @return the exception to throw
@@ -55,15 +55,18 @@ public final class UpdateEventRepairValidator {
     public static IllegalStateException damagedEventsExist(String eventStoreCollectionName) {
         return new IllegalStateException(problem(eventStoreCollectionName)
                 + " This store is configured to require repaired events, so it will not start. Run the repair"
-                + " described in " + RUNBOOK + ", or turn off requireRepairedEvents to start with the damage still"
-                + " in place.");
+                + " described in " + RUNBOOK + ". An event the repair reports as unrecoverable keeps this store from"
+                + " starting while its position is still a string or its tag index is still missing, until you fix it"
+                + " by hand as step 5 of the runbook describes. The two queries in its step 6 find every such event."
+                + " To start with the damage still in place, turn off requireRepairedEvents.");
     }
 
     private static String problem(String eventStoreCollectionName) {
         return "The event collection '" + eventStoreCollectionName + "' contains events that Occurrent's own"
-                + " updateEvent damaged in version 0.33.0 or earlier. Their position is stored as a string instead of"
-                + " a number, and events written by a DCB append also lost their tag index. DCB reads, position"
-                + " ordered reads and position based catch-up all skip such an event, and a conditional append can"
-                + " miss a conflict against it, with no error anywhere.";
+                + " updateEvent damaged in version 0.33.0 or earlier. Such an event has its position stored as a"
+                + " string instead of a number, or it was written by a DCB append and lost its tag index, and"
+                + " sometimes its position as well. DCB reads skip such an event, position ordered reads and position"
+                + " based catch-up skip it unless it still has a numeric position, and a conditional append can miss"
+                + " a conflict against it, with no error anywhere.";
     }
 }

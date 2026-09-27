@@ -27,7 +27,6 @@ import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.Sorts;
 import com.mongodb.client.model.Updates;
-import org.bson.BsonType;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
@@ -37,6 +36,7 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
+import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,8 +50,6 @@ import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
 import static com.mongodb.client.model.Filters.exists;
 import static com.mongodb.client.model.Filters.gt;
-import static com.mongodb.client.model.Filters.or;
-import static com.mongodb.client.model.Filters.type;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toCollection;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.POSITION;
@@ -169,7 +167,7 @@ public final class UpdateEventRepair {
      * @return how many events the repair would touch, and separately how many have DCB tags and no position at all.
      */
     public UpdateEventRepairReport report() {
-        long needingRepair = withRetry(() -> eventCollection.countDocuments(damagedEventFilter()));
+        long needingRepair = withRetry(() -> eventCollection.countDocuments(UpdateEventDamage.damagedEvent()));
         long lostPosition = withRetry(() -> eventCollection.countDocuments(lostPositionFilter()));
         log.info("Repair report for collection '{}': {} events need repair. Separately, {} events have a position that cannot be restored.",
                 eventStoreCollectionName, needingRepair, lostPosition);
@@ -208,7 +206,7 @@ public final class UpdateEventRepair {
 
         while (true) {
             Object resumeAfter = lastProcessedId;
-            List<Document> batch = withRetry(() -> eventCollection.find(and(damagedEventFilter(), afterFilter(resumeAfter)))
+            List<Document> batch = withRetry(() -> eventCollection.find(and(UpdateEventDamage.damagedEvent(), afterFilter(resumeAfter)))
                     .sort(Sorts.ascending(ID))
                     .limit(options.batchSize())
                     // Only the four fields a repair decision is made from. A stored event carries its data payload,
@@ -350,19 +348,6 @@ public final class UpdateEventRepair {
      */
     private static Bson lostPositionFilter() {
         return and(exists(DcbCloudEvents.TAGS), exists(POSITION, false));
-    }
-
-    /**
-     * An event is damaged when its {@code position} is a string, which is what the old write-back's coercion left
-     * behind, or when it carries the {@code dcbtags} extension without the indexed array derived from it. The two are
-     * separate because one update can produce either alone. An event with no DCB tags only ever loses its position,
-     * and a second update of an already repaired event would restore neither on its own.
-     */
-    private static Bson damagedEventFilter() {
-        return or(
-                type(POSITION, BsonType.STRING),
-                and(exists(DcbCloudEvents.TAGS), exists(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, false))
-        );
     }
 
     /**

@@ -21,7 +21,6 @@ import com.mongodb.client.*;
 import com.mongodb.client.model.*;
 import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
-import org.bson.BsonType;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
@@ -41,6 +40,7 @@ import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
+import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
@@ -926,15 +926,15 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     // Warns, or fails when requireRepairedEvents is set, when the collection holds events that updateEvent damaged
-    // before 0.34.0, which stored position as a string. Those events are missing from every position query and from
-    // the conflict query behind a conditional append. A string position sits in its own type range in the position
-    // index, so where that index exists this reads no keys at all on a store that was never damaged. A store that
-    // writes no position has no such index, so requireRepairedEvents pays a collection scan there.
+    // before 0.34.0. Those events are missing from the conflict query behind a conditional append, and from every
+    // position query unless only their tag index is gone. The warning looks for a string position only, which reads
+    // no index keys on a store that was never damaged. requireRepairedEvents looks for everything the repair tool
+    // repairs, so a store refusing to start and the tool always agree, at the cost of a collection scan.
     private static void warnOrFailOnEventsDamagedByUpdateEvent(MongoCollection<Document> eventCollection, boolean requireRepairedEvents) {
+        Bson damaged = requireRepairedEvents ? UpdateEventDamage.damagedEvent() : UpdateEventDamage.positionStoredAsString();
         // Whether one exists, not what is in it. Without the projection this pulls a whole stored event, payload and
-        // all, into the startup path of an affected store. The Spring twins ask through exists() and never do.
-        Document firstDamagedEvent = eventCollection.find(Filters.type(OccurrentCloudEventExtension.POSITION, BsonType.STRING))
-                .limit(1).projection(Projections.include(ID)).first();
+        // all, into the startup path of an affected store.
+        Document firstDamagedEvent = eventCollection.find(damaged).limit(1).projection(Projections.include(ID)).first();
         if (firstDamagedEvent == null) {
             return;
         }

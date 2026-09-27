@@ -21,9 +21,11 @@ import com.mongodb.MongoException;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
+import com.mongodb.client.model.Projections;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.v1.CloudEventV1;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.NullUnmarked;
 import org.jspecify.annotations.Nullable;
@@ -42,6 +44,7 @@ import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
+import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
@@ -58,7 +61,6 @@ import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.schema.JsonSchemaObject;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.transaction.support.TransactionCallback;
@@ -976,18 +978,20 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     /**
      * Warns, or fails when {@code requireRepairedEvents} is set, when the collection holds events that
-     * {@code updateEvent} damaged before 0.34.0, which stored position as a string. Those events are missing from
-     * every position query and from the conflict query behind a conditional append. A string position sits in its own
-     * type range in the position index, so where that index exists this reads no keys at all on a store that was
-     * never damaged. A store that writes no position has no such index, so {@code requireRepairedEvents} pays a
-     * collection scan there.
+     * {@code updateEvent} damaged before 0.34.0. Those events are missing from the conflict query behind a conditional
+     * append, and from every position query unless only their tag index is gone. The warning looks for a string
+     * position only, which reads no index keys on a store that was never damaged. {@code requireRepairedEvents} looks
+     * for everything the repair tool repairs, so a store refusing to start and the tool always agree, at the cost of a
+     * collection scan.
      */
     private static void warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, MongoTemplate mongoTemplate, boolean requireRepairedEvents) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
             return;
         }
-        Query damagedQuery = new Query(where(OccurrentCloudEventExtension.POSITION).type(JsonSchemaObject.Type.STRING));
-        if (!mongoTemplate.exists(damagedQuery, eventStoreCollectionName)) {
+        Bson damaged = requireRepairedEvents ? UpdateEventDamage.damagedEvent() : UpdateEventDamage.positionStoredAsString();
+        Boolean hasDamagedEvents = mongoTemplate.execute(eventStoreCollectionName, collection ->
+                collection.find(damaged).limit(1).projection(Projections.include(ID)).first() != null);
+        if (!Boolean.TRUE.equals(hasDamagedEvents)) {
             return;
         }
         if (requireRepairedEvents) {

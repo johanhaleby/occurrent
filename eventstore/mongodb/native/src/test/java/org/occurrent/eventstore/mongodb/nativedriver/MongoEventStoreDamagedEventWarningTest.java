@@ -35,6 +35,9 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -70,6 +73,7 @@ class MongoEventStoreDamagedEventWarningTest {
 
     private static final URI SOURCE = URI.create("urn:test");
     private static final String EVENT_COLLECTION = "events";
+    private static final Tag TAG = Tag.parse("name:1");
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
@@ -160,6 +164,45 @@ class MongoEventStoreDamagedEventWarningTest {
 
         assertThatNoException()
                 .as("the same setting must let a repaired store start, otherwise it refuses on the setting rather than on the damage")
+                .isThrownBy(this::newStoreRequiringRepairedEvents);
+    }
+
+    @Test
+    void a_store_told_to_require_repaired_events_refuses_a_dcb_event_that_lost_its_tag_index_and_its_position() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        // What the old write-back left when an update function returned a DCB event built from scratch. No string
+        // position is involved, so only a check that looks at the tag index can see it.
+        loseTheTagIndex();
+        dropPositionFromTheOldestEvent();
+
+        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                .as("a DCB event without its tag index is missing from the conflict query whatever its position is")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+
+        rebuildTheTagIndex();
+
+        assertThatNoException()
+                .as("the repair rebuilds the tag index and cannot restore the lost position, and that collection must start")
+                .isThrownBy(this::newStoreRequiringRepairedEvents);
+    }
+
+    @Test
+    void a_store_told_to_require_repaired_events_refuses_a_dcb_event_that_lost_its_tag_index_but_has_a_numeric_position() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        // An operator who sets a POSITION_ALREADY_TAKEN event's position by hand produces this, until the second
+        // repair run rebuilds its tag index.
+        loseTheTagIndex();
+
+        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                .as("a numeric position does not make a DCB event without its tag index visible to the conflict query")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+
+        rebuildTheTagIndex();
+
+        assertThatNoException()
+                .as("the same event with its tag index rebuilt is repaired, and that collection must start")
                 .isThrownBy(this::newStoreRequiringRepairedEvents);
     }
 
@@ -258,6 +301,17 @@ class MongoEventStoreDamagedEventWarningTest {
                 new Document(OccurrentCloudEventExtension.POSITION, new Document("$type", "long"))).first());
         events.updateOne(new Document("_id", withNumericPosition.get("_id")),
                 new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
+    }
+
+    // A DCB event that updateEvent rewrote kept its dcbtags extension and lost the dcbTags index derived from it.
+    private void loseTheTagIndex() {
+        MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
+        events.updateOne(new Document(), new Document("$set", new Document(DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(List.of(TAG)))));
+    }
+
+    private void rebuildTheTagIndex() {
+        MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
+        events.updateOne(new Document(), new Document("$set", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, List.of(TAG.canonical()))));
     }
 
     private void makePositionAString() {

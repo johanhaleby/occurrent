@@ -22,6 +22,7 @@ import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
+import com.mongodb.client.model.Projections;
 import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
@@ -43,6 +44,7 @@ import org.occurrent.eventstore.api.reactor.*;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
+import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
@@ -62,7 +64,6 @@ import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.ReactiveBulkOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.schema.JsonSchemaObject;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.transaction.reactive.TransactionalOperator;
@@ -829,13 +830,14 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     // Warns, or errors when requireRepairedEvents is set, when the collection holds events that updateEvent damaged
-    // before 0.34.0, which stored position as a string. Those events are missing from every position query and from
-    // the conflict query behind a conditional append. A string position sits in its own type range in the position
-    // index, so where that index exists this reads no keys at all on a store that was never damaged. A store that
-    // writes no position has no such index, so requireRepairedEvents pays a collection scan there.
+    // before 0.34.0. Those events are missing from the conflict query behind a conditional append, and from every
+    // position query unless only their tag index is gone. The warning looks for a string position only, which reads
+    // no index keys on a store that was never damaged. requireRepairedEvents looks for everything the repair tool
+    // repairs, so a store refusing to start and the tool always agree, at the cost of a collection scan.
     private Mono<Void> warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
-        Query damagedQuery = new Query(where(OccurrentCloudEventExtension.POSITION).type(JsonSchemaObject.Type.STRING));
-        return mongoTemplate.exists(damagedQuery, eventStoreCollectionName).flatMap(hasDamagedEvents -> {
+        Bson damaged = requireRepairedEvents ? UpdateEventDamage.damagedEvent() : UpdateEventDamage.positionStoredAsString();
+        return mongoTemplate.execute(eventStoreCollectionName, collection ->
+                collection.find(damaged).limit(1).projection(Projections.include(ID)).first()).hasElements().flatMap(hasDamagedEvents -> {
             if (!hasDamagedEvents) {
                 return Mono.<Void>empty();
             }
