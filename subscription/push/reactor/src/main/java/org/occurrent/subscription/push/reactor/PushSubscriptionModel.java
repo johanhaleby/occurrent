@@ -51,7 +51,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * in-memory event store. Occurrent has no reactive in-memory event store, so that means a listener on the blocking
  * {@code InMemoryEventStore} that subscribes to the returned {@link Mono} and waits for it, such as
  * {@code events -> model.accept(events).block()}. The {@link Mono} does nothing until something subscribes, so
- * {@code new InMemoryEventStore(model::accept)} compiles but delivers nothing.
+ * {@code new InMemoryEventStore(model::accept)} compiles but delivers nothing. The store calls that listener on the
+ * thread that wrote, once it has kept the events, so write from a thread that may block. On a Reactor non-blocking
+ * thread, such as a WebFlux event loop, {@code block()} throws, and the write call fails although the store holds the
+ * events. With a {@link CatchupThenPushSubscriptionModel} in front, a write during its replay waits until the replay
+ * has finished, and a write from inside one of its handlers can hang, because that model hands a subscription's live
+ * events to its handler one at a time.
  * <p>
  * This model keeps no record of what it has delivered and holds nothing back, so an event it did not hand to the
  * handler when the event arrived, whatever the reason, is never handed over later. A crash before the handler has run

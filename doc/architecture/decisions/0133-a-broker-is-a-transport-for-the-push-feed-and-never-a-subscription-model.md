@@ -847,9 +847,9 @@ to resolve on its own, and it is safe to redeliver arbitrarily many times.
 
 `BlockingHandover` gains `acceptIfLive(T)` beside the existing `accept(T)`/`acceptReportingDelivery(T)`. Where those
 buffer a payload offered while not live, `acceptIfLive` refuses it outright, reporting `false` without ever
-touching the buffer. `PushSubscriptionModel.accept(CloudEvent)`, the write path an in-memory store listener uses,
-is unchanged and keeps buffering, since a write-path event has nowhere else to come
-from and refusing it would lose it rather than protect it. A new `PushSubscriptionModel.acceptRedeliverable(CloudEvent)`
+touching the buffer. `PushSubscriptionModel.accept(..)` is unchanged and keeps buffering. An in-memory store listener
+calls it through `accept(Iterable<CloudEvent>)`, and a write-path event has nowhere else to come from, so refusing it
+would lose it rather than protect it. A new `PushSubscriptionModel.acceptRedeliverable(CloudEvent)`
 is for a caller that can redeliver, a broker bridge, and routes to `acceptIfLive` instead. It refuses rather than
 buffers, returns `DEFERRED`, and lets the caller ask again. It returns every outcome routing decides, a refusal made
 before dispatch included, and throws only for a filter or handler failure, so a bridge decides on the returned value
@@ -1426,9 +1426,11 @@ same marker storage can record the marker first, so the next start skips the rep
 `InMemoryEventStore` is the only event store in Occurrent with a listener on its write path. That listener takes a
 `List<CloudEvent>`, so `new InMemoryEventStore(pushModel::accept)` calls `accept(Iterable<CloudEvent>)`. A crash empties
 that store too, so after a crash it never holds an event the subscription missed. Without a crash the push model keeps
-no record of what it delivered and holds nothing back, so an event it did not hand to the handler when the event
-arrived, whatever the reason, is never handed over later. Something that reads the store, such as a durable
-subscription or a catch-up replay, can still deliver it, and that holds whether or not the store is durable.
+no record of what it delivered, and on its own it holds nothing back, so an event it did not hand to the handler when
+the event arrived, whatever the reason, is never handed over later. A catch-up model in front buffers the events that
+arrive during its replay and hands them over once the replay has finished. Something that reads the store, such as a
+durable subscription or a catch-up replay, can still deliver an event the push model did not hand over, and that holds
+whether or not the store is durable.
 
 There is no reactive in-memory event store. The reactor push model can be fed from the blocking `InMemoryEventStore`
 only by a listener that subscribes to the `Mono` from `accept(..)` and waits for it, since that `Mono` does nothing

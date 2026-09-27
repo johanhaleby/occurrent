@@ -72,11 +72,12 @@ import java.util.function.Supplier;
  * <p>
  * Feeding it from an event store's write path through {@link PushSubscriptionModel#accept(Iterable)} is supported
  * only for the in-memory event store, by a listener on the blocking {@code InMemoryEventStore} that waits for the
- * returned {@link Mono}, as {@link PushSubscriptionModel} describes. Nothing records which live events the
- * subscription has handled, and a crash
- * before the handler has run loses the event from the in-memory event store too, so after a crash the store never
- * holds an event the subscription missed. With a durable event store, such as MongoDB, use a durable subscription,
- * or a broker as described below. The amendment to ADR 133 records why.
+ * returned {@link Mono}, as {@link PushSubscriptionModel} describes. A write during the replay waits until the replay
+ * has finished, and a write from inside one of this model's handlers can hang, because this model hands a
+ * subscription's live events to its handler one at a time. Nothing records which live events the subscription has
+ * handled, and a crash before the handler has run loses the event from the in-memory event store too, so after a
+ * crash the store never holds an event the subscription missed. With a durable event store, such as MongoDB, use a
+ * durable subscription, or a broker as described below. The amendment to ADR 133 records why.
  * <p>
  * Fed from a broker, call {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} and acknowledge the message
  * only when its {@link Mono} completes with {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or
