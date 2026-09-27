@@ -452,6 +452,15 @@ public final class DomainEventFeed<E> {
      * {@code id}, draining whatever live events it already buffered. Use this over {@link #catchUp(String)} when this
      * feed's events are not in the local event store, so there is nothing to replay. No completion marker is written,
      * so a later {@link #catchUp(String)} on the same projection still replays the full history.
+     * <p>
+     * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection returns only
+     * once the replay has ended, so {@link #acceptCloudEvent(CloudEvent)} returns {@link RoutingOutcome#DELIVERED} for
+     * a matching event after that, unless another replay has started since. When a catch-up of that projection failed
+     * while it waited, this throws an {@link IllegalStateException} whose cause is a catch-up failure recorded while it
+     * waited. An interrupt ends the wait early and stays on the thread. A call the view makes while this feed is
+     * calling it, from its fold or from a callback such as {@code replayStarted()}, returns without waiting for the
+     * replay, since that replay cannot end before the call returns. During a replay, a call the view hands to another
+     * thread waits for that replay, which cannot end while the view waits for the call.
      *
      * @throws IllegalArgumentException if no projection with that id is registered on this feed
      */

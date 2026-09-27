@@ -263,6 +263,80 @@ class CatchupProjectionFeedTest {
         }
     }
 
+    // goLive() completing while catchUp() still replayed left the feed refusing live events after the caller was told
+    // it is live.
+    @Test
+    void goLive_while_the_catch_up_replays_completes_only_once_that_replay_has_ended() throws Exception {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", holdingTheReplayAt("1", folded, replaying, releaseReplay, null),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        try {
+            CompletableFuture<Void> catchUp = Mono.defer(feed::catchUp).subscribeOn(Schedulers.boundedElastic()).toFuture();
+            awaitLatch(replaying);
+
+            CompletableFuture<Void> wentLive = goLiveWaitingForTheReplay(feed);
+
+            assertThat(wentLive).as("goLive() while the replay is held").isNotDone();
+            releaseReplay.countDown();
+            catchUp.get(5, TimeUnit.SECONDS);
+            wentLive.get(5, TimeUnit.SECONDS);
+            assertThat(feed.acceptIfLive(EventMetadata.empty(), new Counted("live")).block(ofSeconds(5))).isTrue();
+            assertThat(folded).containsExactly("1", "live");
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    @Test
+    void goLive_while_the_catch_up_replays_errors_when_that_replay_fails() throws Exception {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        IllegalStateException foldFailure = new IllegalStateException("fold failed");
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", holdingTheReplayAt("1", folded, replaying, releaseReplay, foldFailure),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        try {
+            CompletableFuture<Void> catchUp = Mono.defer(feed::catchUp).subscribeOn(Schedulers.boundedElastic()).toFuture();
+            awaitLatch(replaying);
+
+            CompletableFuture<Void> wentLive = goLiveWaitingForTheReplay(feed);
+
+            assertThat(wentLive).as("goLive() while the replay is held").isNotDone();
+            releaseReplay.countDown();
+            assertThatThrownBy(() -> catchUp.get(5, TimeUnit.SECONDS)).hasCause(foldFailure);
+            assertThatThrownBy(() -> wentLive.get(5, TimeUnit.SECONDS)).as("what goLive() errored with once the replay failed")
+                    .cause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage(HandoverMessages.catchUpFailed("projection feed"))
+                    .hasCauseReference(foldFailure);
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    // goLive() subscribes its wait from the one task it schedules, and the marker read ahead of that wait is
+    // synchronous, so once that task has run the call is waiting, or has completed, which the caller then catches
+    private static CompletableFuture<Void> goLiveWaitingForTheReplay(CatchupProjectionFeed<Counted> feed) {
+        CountDownLatch subscribed = new CountDownLatch(1);
+        String hook = "goLiveWaitingForTheReplay";
+        Schedulers.onScheduleHook(hook, task -> () -> {
+            try {
+                task.run();
+            } finally {
+                subscribed.countDown();
+            }
+        });
+        try {
+            CompletableFuture<Void> wentLive = feed.goLive().toFuture();
+            awaitLatch(subscribed);
+            return wentLive;
+        } finally {
+            Schedulers.resetOnScheduleHook(hook);
+        }
+    }
+
     // Records every event it folds, and holds the replay at the given event until released
     private static Function<Counted, Mono<Void>> holdingTheReplayAt(String held, List<String> folded, CountDownLatch reached,
                                                                     CountDownLatch release, RuntimeException failure) {
