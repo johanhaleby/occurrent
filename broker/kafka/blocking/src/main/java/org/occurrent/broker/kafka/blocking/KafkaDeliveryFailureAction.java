@@ -38,6 +38,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.Objects.requireNonNull;
 
@@ -100,6 +101,7 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
     private final @Nullable Producer<String, byte[]> parkingProducer;
     private final @Nullable KafkaDestination parkingDestination;
     private final Logger log;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     private KafkaDeliveryFailureAction(DeliveryFailurePolicy policy, @Nullable Producer<String, byte[]> parkingProducer,
                                         @Nullable KafkaDestination parkingDestination, Logger log) {
@@ -244,11 +246,12 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
 
     /**
      * Closes the parking producer this action built, if {@link DeliveryFailurePolicy#PARK} was configured. Best
-     * effort during teardown, a failure closing it is logged rather than thrown.
+     * effort during teardown, a failure closing it is logged rather than thrown. Does nothing after the first call,
+     * since both a bridge's loop thread and its {@code close()} call this.
      */
     @Override
     public void close() {
-        if (parkingProducer != null) {
+        if (parkingProducer != null && closed.compareAndSet(false, true)) {
             try {
                 parkingProducer.close(Duration.ofSeconds(30));
             } catch (RuntimeException e) {
