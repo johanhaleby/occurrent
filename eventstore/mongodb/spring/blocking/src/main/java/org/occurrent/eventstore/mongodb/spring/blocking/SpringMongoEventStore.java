@@ -980,8 +980,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * Warns, or fails when {@code requireRepairedEvents} is set, when the collection holds events whose position or
      * tag index is wrong. The warning looks for a string position only, what {@code updateEvent} wrote before 0.34.0,
      * which reads no index keys on a store that was never damaged. {@code requireRepairedEvents} refuses every event
-     * whose position is not a positive integer, or is above the counter when there is a counter document, and every
-     * DCB event whose tag index does not hold the tags its {@code dcbtags} lists, at the cost of a collection scan.
+     * whose position is not a positive integer, every event whose tag fields are not what an append writes, a counter
+     * the store cannot read exactly and a position above the counter, a missing one counting as zero, at the cost of a
+     * collection scan.
      */
     private static void warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, String positionCollectionName, MongoTemplate mongoTemplate, boolean requireRepairedEvents) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
@@ -990,7 +991,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         Bson damaged = requireRepairedEvents ? UpdateEventDamage.wrongPositionOrTagIndex() : UpdateEventDamage.positionStoredAsString();
         Boolean hasDamagedEvents = mongoTemplate.execute(eventStoreCollectionName, collection ->
                 collection.find(damaged).limit(1).projection(Projections.include(ID)).first() != null);
-        if (!Boolean.TRUE.equals(hasDamagedEvents) && !(requireRepairedEvents && positionAboveCounter(eventStoreCollectionName, positionCollectionName, mongoTemplate))) {
+        if (!Boolean.TRUE.equals(hasDamagedEvents) && !(requireRepairedEvents && wrongCounter(eventStoreCollectionName, positionCollectionName, mongoTemplate))) {
             return;
         }
         if (requireRepairedEvents) {
@@ -1001,9 +1002,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     /**
      * Reads the highest position before the counter, which is what keeps an append in flight from looking like a
-     * position above it. {@link UpdateEventDamage#positionAboveCounter(Document, Document)} says why.
+     * position above it. {@link UpdateEventDamage#wrongCounter(Document, Document)} says why.
      */
-    private static boolean positionAboveCounter(String eventStoreCollectionName, String positionCollectionName, MongoTemplate mongoTemplate) {
+    private static boolean wrongCounter(String eventStoreCollectionName, String positionCollectionName, MongoTemplate mongoTemplate) {
         Document highestPositioned = mongoTemplate.execute(eventStoreCollectionName, collection ->
                 collection.find(UpdateEventDamage.positionIsANumber())
                         .sort(com.mongodb.client.model.Sorts.descending(OccurrentCloudEventExtension.POSITION))
@@ -1011,7 +1012,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                         .projection(Projections.include(OccurrentCloudEventExtension.POSITION))
                         .first());
         Document counter = mongoTemplate.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, positionCollectionName);
-        return UpdateEventDamage.positionAboveCounter(highestPositioned, counter);
+        return UpdateEventDamage.wrongCounter(highestPositioned, counter);
     }
 
     private void requireStreamCapability() {

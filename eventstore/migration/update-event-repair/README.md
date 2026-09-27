@@ -88,6 +88,13 @@ Run one instance at a time. Two concurrent runs share one checkpoint document, a
 while the other is still going, so a later resume would start from the wrong place. If you run this as a Kubernetes
 Job, make sure a retry cannot overlap the run it is retrying.
 
+A MongoDB error that a later attempt can get past without anyone changing anything is retried, with a backoff from
+100 ms up to 2 seconds and no limit on attempts, and every retry is logged at WARN with the error. That is an error
+the driver labels `RetryableWriteError` or `TransientTransactionError`, a network error, a timeout waiting for a
+server, and a server that is not primary or is recovering. Any other error ends the run at once, a user without the
+privileges the run needs for instance, and running it again resumes from the checkpoint. Pass a `RetryStrategy` to
+the four-argument constructor to change how those errors are retried.
+
 `report()` writes nothing, but it is not cheap. Finding an event whose tag array does not hold its tags cannot use an index, so
 both `report()` and `run()` read the whole collection. On a large store, run them during a quiet period.
 
@@ -112,9 +119,12 @@ none of the original's extensions, so no position was stored. The tool will not 
   `POSITION_NOT_A_NUMBER`. The tag array is still rebuilt, except next to an array position, since MongoDB refuses to
   index two arrays in one document under the `dcbTags` and `position` index. A run after the position is fixed
   rebuilds it.
-- **A `dcbtags` that is not a readable string.** Another type, an explicit null, or a value that does not decode to a
-  tag set. Nothing Occurrent writes produces any of them, so it points at a document edited outside the library.
-  Reported as `UNREADABLE`. The position is still restored, since it does not depend on the tags.
+- **A `dcbtags` that is not a readable string, or a tag array without one.** Another type, an explicit null, a value
+  that does not decode to a tag set, such as one with an empty line, or a `dcbTags` array on an event with no
+  `dcbtags` field. Nothing Occurrent writes produces any of them, so it points at a document edited outside the
+  library. Reported as `UNREADABLE`. For a tag array without `dcbtags` the tool writes neither tag field, since
+  nothing says whether the array is stray or `dcbtags` was lost. The position is still restored, since it does not
+  depend on the tags.
 - **A `position` holding zero or a negative whole number,** as a string or as a number. No store assigns one. Positions
   start above zero and every position query reads `position > 0`, so writing such a value back would count as a
   repair and leave the event just as invisible. Only an update function that forged the position, or a slip in a
@@ -123,8 +133,10 @@ none of the original's extensions, so no position was stored. The tool will not 
 - **A `position` string above the store's position counter.** The counter is the highest position the store ever
   handed out, and DCB reads and reads in position order stop at that same counter, so they skip a value above it as
   they skip one at or below zero, and a later append reaching that number would collide with it. Only an update function that forged
-  the position produces this. Reported as `POSITION_ABOVE_COUNTER`. The tag array is still rebuilt. A store with no
-  counter document has no ceiling to compare against, so nothing is reported on that ground.
+  the position produces this. Reported as `POSITION_ABOVE_COUNTER`. The tag array is still rebuilt. Without a counter
+  document, or with a counter the stores cannot read exactly, the tool has no ceiling to compare against and reports
+  nothing on that ground. A store with `requireRepairedEvents(true)` refuses to start over such a counter, and step 5
+  of the runbook says how to restore it.
 
 `eventsWithLostPosition()` on the result is separate from all of these. It is asked of the collection when the run
 finishes rather than tallied as the run goes, so it still counts an event whose tag array an earlier run rebuilt.

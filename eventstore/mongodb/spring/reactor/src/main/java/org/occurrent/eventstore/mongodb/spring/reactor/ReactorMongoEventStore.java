@@ -832,13 +832,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // Warns, or errors when requireRepairedEvents is set, when the collection holds events whose position or tag
     // index is wrong. The warning looks for a string position only, what updateEvent wrote before 0.34.0, which reads no
     // index keys on a store that was never damaged. requireRepairedEvents refuses every event whose position is not a
-    // positive integer, or is above the counter when there is a counter document, and every DCB event whose tag
-    // index does not hold the tags its dcbtags lists, at the cost of a collection scan.
+    // positive integer, every event whose tag fields are not what an append writes, a counter the store cannot read
+    // exactly and a position above the counter, a missing one counting as zero, at the cost of a collection scan.
     private Mono<Void> warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
         Bson damaged = requireRepairedEvents ? UpdateEventDamage.wrongPositionOrTagIndex() : UpdateEventDamage.positionStoredAsString();
         return mongoTemplate.execute(eventStoreCollectionName, collection ->
                         collection.find(damaged).limit(1).projection(Projections.include(ID)).first()).hasElements()
-                .flatMap(hasDamagedEvents -> hasDamagedEvents || !requireRepairedEvents ? Mono.just(hasDamagedEvents) : positionAboveCounter(eventStoreCollectionName, mongoTemplate))
+                .flatMap(hasDamagedEvents -> hasDamagedEvents || !requireRepairedEvents ? Mono.just(hasDamagedEvents) : wrongCounter(eventStoreCollectionName, mongoTemplate))
                 .flatMap(hasDamagedEvents -> {
             if (!hasDamagedEvents) {
                 return Mono.<Void>empty();
@@ -852,8 +852,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     // Reads the highest position before the counter, which is what keeps an append in flight from looking like a
-    // position above it. UpdateEventDamage.positionAboveCounter says why.
-    private Mono<Boolean> positionAboveCounter(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
+    // position above it. UpdateEventDamage.wrongCounter says why.
+    private Mono<Boolean> wrongCounter(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
         return mongoTemplate.execute(eventStoreCollectionName, collection ->
                         collection.find(UpdateEventDamage.positionIsANumber())
                                 .sort(com.mongodb.client.model.Sorts.descending(OccurrentCloudEventExtension.POSITION))
@@ -866,7 +866,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 .flatMap(highestPositioned -> mongoTemplate.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName)
                         .map(Optional::of)
                         .defaultIfEmpty(Optional.empty())
-                        .map(counter -> UpdateEventDamage.positionAboveCounter(highestPositioned.orElse(null), counter.orElse(null))));
+                        .map(counter -> UpdateEventDamage.wrongCounter(highestPositioned.orElse(null), counter.orElse(null))));
     }
 
     private static Mono<String> createIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate, Bson index, IndexOptions indexOptions) {

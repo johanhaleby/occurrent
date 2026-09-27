@@ -928,14 +928,14 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // Warns, or fails when requireRepairedEvents is set, when the collection holds events whose position or tag index
     // is wrong. The warning looks for a string position only, what updateEvent wrote before 0.34.0, which reads no index
     // keys on a store that was never damaged. requireRepairedEvents refuses every event whose position is not a
-    // positive integer, or is above the counter when there is a counter document, and every DCB event whose tag
-    // index does not hold the tags its dcbtags lists, at the cost of a collection scan.
+    // positive integer, every event whose tag fields are not what an append writes, a counter the store cannot read
+    // exactly and a position above the counter, a missing one counting as zero, at the cost of a collection scan.
     private static void warnOrFailOnEventsDamagedByUpdateEvent(MongoCollection<Document> eventCollection, MongoCollection<Document> positionCollection, boolean requireRepairedEvents) {
         Bson damaged = requireRepairedEvents ? UpdateEventDamage.wrongPositionOrTagIndex() : UpdateEventDamage.positionStoredAsString();
         // Whether one exists, not what is in it. Without the projection this pulls a whole stored event, payload and
         // all, into the startup path of an affected store.
         Document firstDamagedEvent = eventCollection.find(damaged).limit(1).projection(Projections.include(ID)).first();
-        if (firstDamagedEvent == null && !(requireRepairedEvents && positionAboveCounter(eventCollection, positionCollection))) {
+        if (firstDamagedEvent == null && !(requireRepairedEvents && wrongCounter(eventCollection, positionCollection))) {
             return;
         }
         String collectionName = eventCollection.getNamespace().getCollectionName();
@@ -946,15 +946,15 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     // The highest position is read before the counter, which is what keeps an append in flight from looking like a
-    // position above it. UpdateEventDamage.positionAboveCounter says why.
-    private static boolean positionAboveCounter(MongoCollection<Document> eventCollection, MongoCollection<Document> positionCollection) {
+    // position above it. UpdateEventDamage.wrongCounter says why.
+    private static boolean wrongCounter(MongoCollection<Document> eventCollection, MongoCollection<Document> positionCollection) {
         Document highestPositioned = eventCollection.find(UpdateEventDamage.positionIsANumber())
                 .sort(descending(OccurrentCloudEventExtension.POSITION))
                 .limit(1)
                 .projection(Projections.include(OccurrentCloudEventExtension.POSITION))
                 .first();
         Document counter = positionCollection.find(eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID)).first();
-        return UpdateEventDamage.positionAboveCounter(highestPositioned, counter);
+        return UpdateEventDamage.wrongCounter(highestPositioned, counter);
     }
 
     private static boolean collectionExists(MongoDatabase mongoDatabase, String collectionName) {

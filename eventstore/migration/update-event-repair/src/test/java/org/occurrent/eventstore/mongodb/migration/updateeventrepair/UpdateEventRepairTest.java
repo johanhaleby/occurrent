@@ -19,7 +19,11 @@ package org.occurrent.eventstore.mongodb.migration.updateeventrepair;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoException;
+import com.mongodb.MongoNodeIsRecoveringException;
+import com.mongodb.MongoNotPrimaryException;
 import com.mongodb.MongoSocketReadException;
+import com.mongodb.MongoTimeoutException;
 import com.mongodb.ServerAddress;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
@@ -27,6 +31,9 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.BsonDocument;
+import org.bson.BsonInt32;
+import org.bson.BsonString;
 import org.bson.Document;
 import org.bson.types.Decimal128;
 import org.jspecify.annotations.Nullable;
@@ -70,6 +77,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.net.URI;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -86,6 +94,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -730,7 +739,7 @@ class UpdateEventRepairTest {
         } else {
             assertAll(
                     () -> assertThatThrownBy(() -> newEventStore(true))
-                            .as("a dcbtags that does not decode to a tag set gives the repair nothing to rebuild the index from")
+                            .as("a dcbtags that does not decode to a tag set, or a tag index with no dcbtags, gives the repair nothing to rebuild the fields from")
                             .isInstanceOf(IllegalStateException.class)
                             .hasMessageContaining("updateEvent damaged"),
                     () -> assertThat(result.unrecoverableEvents())
@@ -1392,6 +1401,89 @@ class UpdateEventRepairTest {
 
     private UpdateEventRepair newRepair() {
         return new UpdateEventRepair(database, EVENT_COLLECTION, UpdateEventRepairOptions.defaults());
+    }
+
+    @Test
+    void an_error_no_later_attempt_can_get_past_fails_the_run_at_once() {
+        // What a MongoDB user with only the read role gets from its first command. alwaysOn, so a retry that does
+        // not tell this apart from an outage spins on it for as long as the timeout lets it.
+        mongoClient.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand")
+                .append("mode", "alwaysOn")
+                .append("data", new Document("failCommands", List.of("find")).append("errorCode", 13)));
+        try {
+            assertThatThrownBy(() -> assertTimeoutPreemptively(Duration.ofSeconds(10), () -> newRepair().run()))
+                    .as("Unauthorized comes back on every attempt until someone grants the privilege, so the run has to fail with it rather than retry it")
+                    .isInstanceOf(MongoCommandException.class)
+                    .extracting(e -> ((MongoCommandException) e).getErrorCode())
+                    .isEqualTo(13);
+        } finally {
+            mongoClient.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", "off"));
+        }
+    }
+
+    @Test
+    void an_error_a_later_attempt_can_succeed_on_is_retried() {
+        AtomicInteger counts = new AtomicInteger();
+        MongoDatabase firstCountLosesItsConnection = databaseWithEvents(realEvents -> (proxy, method, args) -> {
+            if (method.getName().equals("countDocuments") && counts.incrementAndGet() == 1) {
+                throw new MongoSocketReadException("Simulated loss of a connection", new ServerAddress());
+            }
+            return invoke(method, realEvents, args);
+        });
+
+        UpdateEventRepairReport report = new UpdateEventRepair(firstCountLosesItsConnection, EVENT_COLLECTION, UpdateEventRepairOptions.defaults()).report();
+
+        assertAll(
+                () -> assertThat(report.eventsNeedingRepair()).isZero(),
+                () -> assertThat(counts)
+                        .as("a lost connection is an outage a later attempt gets past, so the count that met it has to run again")
+                        .hasValue(3)
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("errorsAndWhetherALaterAttemptCanSucceed")
+    void the_repair_retries_only_an_error_a_later_attempt_can_succeed_on(String description, Throwable error, boolean retried) {
+        assertThat(UpdateEventRepair.retryable(error)).isEqualTo(retried);
+    }
+
+    static Stream<Arguments> errorsAndWhetherALaterAttemptCanSucceed() {
+        MongoException labelledRetryableWrite = new MongoException(1, "labelled by the server");
+        labelledRetryableWrite.addLabel("RetryableWriteError");
+        MongoException labelledTransient = new MongoException(1, "labelled by the server");
+        labelledTransient.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+        return Stream.of(
+                Arguments.of("a lost connection", new MongoSocketReadException("lost", new ServerAddress()), true),
+                Arguments.of("no server to select", new MongoTimeoutException("no server"), true),
+                Arguments.of("a server that is no longer primary", new MongoNotPrimaryException(commandError(10107, "NotWritablePrimary"), new ServerAddress()), true),
+                Arguments.of("a server that is recovering", new MongoNodeIsRecoveringException(commandError(91, "ShutdownInProgress"), new ServerAddress()), true),
+                Arguments.of("an error labelled RetryableWriteError", labelledRetryableWrite, true),
+                Arguments.of("an error labelled TransientTransactionError", labelledTransient, true),
+                Arguments.of("Unauthorized", new MongoCommandException(commandError(13, "Unauthorized"), new ServerAddress()), false),
+                Arguments.of("an unlabelled BadValue", new MongoCommandException(commandError(2, "BadValue"), new ServerAddress()), false),
+                Arguments.of("an error outside the driver", new IllegalStateException("not MongoDB"), false)
+        );
+    }
+
+    private static BsonDocument commandError(int code, String codeName) {
+        return new BsonDocument("ok", new BsonInt32(0))
+                .append("code", new BsonInt32(code))
+                .append("codeName", new BsonString(codeName))
+                .append("errmsg", new BsonString(codeName));
+    }
+
+    @SuppressWarnings("unchecked")
+    private MongoDatabase databaseWithEvents(java.util.function.Function<MongoCollection<Document>, java.lang.reflect.InvocationHandler> events) {
+        MongoCollection<Document> wrapped = (MongoCollection<Document>) Proxy.newProxyInstance(
+                MongoCollection.class.getClassLoader(),
+                new Class<?>[]{MongoCollection.class},
+                events.apply(events()));
+        return (MongoDatabase) Proxy.newProxyInstance(
+                MongoDatabase.class.getClassLoader(),
+                new Class<?>[]{MongoDatabase.class},
+                (proxy, method, args) -> method.getName().equals("getCollection") && EVENT_COLLECTION.equals(args[0])
+                        ? wrapped
+                        : invoke(method, database, args));
     }
 
     /**

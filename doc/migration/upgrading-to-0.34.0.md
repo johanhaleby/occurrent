@@ -901,10 +901,12 @@ there unless you turn on the setting below.
 
 If you would rather that store refused to start than kept accepting conditional appends against a damaged event, set
 `EventStoreConfig.Builder.requireRepairedEvents(true)`. It refuses while any event's position is not a positive
-integer, or is above the store's position counter when there is a counter document, or any DCB event's `dcbTags`
-array does not hold the tags its `dcbtags` lists. That takes in the query above, a DCB event whose position was
-dropped, a position set by hand above the counter or at or below zero, a `null`, `NaN` or array position, and a tag
-array that is missing or names other tags. The checks in step 6 of the [repair runbook](../runbooks/update-event-repair.md)
+integer or is above the store's position counter, while any DCB event's `dcbtags` has an empty line or whitespace
+around a tag or its `dcbTags` array does not hold the tags `dcbtags` lists, while an event without `dcbtags` has a
+`dcbTags` field, and while the counter is not a whole number the store reads exactly. A missing counter document
+counts as zero, since every read takes it to be zero. That takes in the query above, a DCB event whose position was
+dropped, a position set by hand above the counter or at or below zero, a `null`, `NaN` or array position, a tag
+array that is missing or names other tags, and an event collection renamed without its `_position` collection. The checks in step 6 of the [repair runbook](../runbooks/update-event-repair.md)
 are the ones it runs, and a startup that finds no damage reads the whole collection. It can also keep refusing after the repair has run, over an event the repair could not fix, until
 you fix that event by hand or turn the setting off. It is off by default on all three MongoDB stores, so upgrading on its own changes
 nothing here. It also covers the third message below, the store that turns position off and would otherwise run no

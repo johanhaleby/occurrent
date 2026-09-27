@@ -306,13 +306,16 @@ public class EventStoreConfig {
         }
 
         /**
-         * When the event collection holds an event whose position or tag index no store would have written, fail
-         * construction with an {@link IllegalStateException}. That is any event whose position is not a positive
-         * integer, or is above the store's position counter when there is a counter document, and any DCB event whose
-         * {@code dcbTags} index does not hold the tags its {@code dcbtags} lists. Reads in position order skip an event
-         * with such a position, read it wrong or fail on it. DCB reads find a DCB event by its index alone, so they skip
-         * it under a tag the index lacks, and a conditional append can then miss a conflict with a DCB event they
-         * skip. Occurrent's own {@code updateEvent}
+         * When the event collection holds an event, or the position counter a value, that no store would have
+         * written, fail construction with an {@link IllegalStateException}. That is any event whose position is not a
+         * positive integer, any DCB event whose {@code dcbtags} has a line that is empty or has whitespace around it or
+         * whose {@code dcbTags} index does not hold the tags its {@code dcbtags} lists, any event with a {@code dcbTags}
+         * field and no {@code dcbtags}, a counter that is negative or not a whole number the store reads exactly, and a position
+         * above the counter, which counts as zero when the counter document is missing, as every read takes it to be.
+         * Reads in position order skip an event with such a position, read it wrong or fail on it, and with no counter
+         * they return nothing. DCB reads find a DCB event by its index alone, so they skip it under a tag the index
+         * lacks or find it under one it does not have, and a conditional append can then miss a conflict with a DCB
+         * event they skip. Occurrent's own {@code updateEvent}
          * produced such events in 0.33.0 or earlier, by storing a position as a string or by dropping a DCB event's
          * {@code dcbTags} index, its position, or both, and a position set by hand can produce one too. A non DCB event
          * with no position field at all is what {@code requireBackfilledPosition} checks instead. Off by default, and

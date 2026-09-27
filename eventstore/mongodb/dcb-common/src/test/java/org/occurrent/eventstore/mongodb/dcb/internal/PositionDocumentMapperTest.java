@@ -47,9 +47,10 @@ class PositionDocumentMapperTest {
     }
 
     @Test
-    void the_largest_long_stored_as_a_decimal_reads_back_as_the_largest_long() {
-        CloudEvent read = PositionDocumentMapper.reattachPosition(EVENT, new Decimal128(Long.MAX_VALUE));
+    void one_below_the_largest_long_stored_as_a_decimal_reads_back_as_itself() {
+        // Through a double this rounds up to 2^63, which a cast to long then clamps to the largest long
+        CloudEvent read = PositionDocumentMapper.reattachPosition(EVENT, new Decimal128(Long.MAX_VALUE - 1));
 
-        assertThat(OccurrentCloudEventExtension.getPosition(read)).isEqualTo(Long.MAX_VALUE);
+        assertThat(OccurrentCloudEventExtension.getPosition(read)).isEqualTo(Long.MAX_VALUE - 1);
     }
 }

@@ -48,6 +48,7 @@ import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.occurrent.testsupport.mongodb.StoredPositionShapes;
 import org.occurrent.testsupport.mongodb.StoredPositionShapes.Kind;
 import org.occurrent.testsupport.mongodb.StoredPositionShapes.Shape;
+import org.occurrent.testsupport.mongodb.StoredCounterShapes;
 import org.occurrent.testsupport.mongodb.StoredTagShapes;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.junit.jupiter.Container;
@@ -254,14 +255,33 @@ class MongoEventStoreDamagedEventWarningTest {
         }
     }
 
-    @Test
-    void a_store_told_to_require_repaired_events_starts_without_a_position_counter() {
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("org.occurrent.testsupport.mongodb.StoredCounterShapes#shapes")
+    void a_store_told_to_require_repaired_events_starts_only_over_a_counter_it_reads_exactly_and_no_position_above_it(StoredCounterShapes.Shape shape) {
         newEventStore().write("stream:1", List.of(event("Defined"), event("Renamed")));
-        dropTheCounter();
+        assertThat(counter()).isEqualTo(StoredPositionShapes.COUNTER);
+        StoredCounterShapes.give(mongoClient.getDatabase(databaseName).getCollection(DcbMarkerModel.positionCollectionName(EVENT_COLLECTION)),
+                DcbMarkerModel.POSITION_DOCUMENT_ID, DcbMarkerModel.COUNTER_POSITION, shape);
+
+        if (shape.starts()) {
+            assertThatNoException()
+                    .as("every store reads the counter with Number.longValue and a missing one as zero, and DCB reads and reads in position order stop at it, so only a counter that reads exactly and covers every position is one they handle")
+                    .isThrownBy(this::newStoreRequiringRepairedEvents);
+        } else {
+            assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                    .as("every store reads the counter with Number.longValue and a missing one as zero, and DCB reads and reads in position order stop at it, so only a counter that reads exactly and covers every position is one they handle")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("updateEvent damaged");
+        }
+    }
+
+    @Test
+    void a_store_told_to_require_repaired_events_starts_without_a_counter_when_no_event_has_a_position() {
+        newStoreWithoutPositionRequiringRepairedEvents().write("stream:1", List.of(event("Defined"), event("Renamed")));
 
         assertThatNoException()
-                .as("without a counter no position can be above it, so the store must not refuse over the counter it lacks")
-                .isThrownBy(this::newStoreRequiringRepairedEvents);
+                .as("a missing counter reads as zero, which is only right while no event has a position, and a store that writes none keeps it that way")
+                .isThrownBy(this::newStoreWithoutPositionRequiringRepairedEvents);
     }
 
     @Test
@@ -375,11 +395,6 @@ class MongoEventStoreDamagedEventWarningTest {
     private static Document dcbFields() {
         return new Document(DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(List.of(TAG)))
                 .append(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, List.of(TAG.canonical()));
-    }
-
-    private void dropTheCounter() {
-        mongoClient.getDatabase(databaseName).getCollection(DcbMarkerModel.positionCollectionName(EVENT_COLLECTION))
-                .deleteOne(new Document("_id", DcbMarkerModel.POSITION_DOCUMENT_ID));
     }
 
     private long counter() {

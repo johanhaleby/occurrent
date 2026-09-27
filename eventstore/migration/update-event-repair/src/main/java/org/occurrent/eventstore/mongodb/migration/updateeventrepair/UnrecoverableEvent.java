@@ -80,14 +80,16 @@ public record UnrecoverableEvent(Object eventId, Reason reason, String detail) {
          * order stop at that same counter, so writing the value back would count as a repair and they would still
          * skip the event, and a later append reaching that number would collide with it. The counter is re-read before
          * the event is reported, so a store that wrote while the repair walked cannot put an event here wrongly.
-         * A store with no counter document has no ceiling to compare against and this is not reported.
+         * A store with no counter document, or with a counter value it cannot read exactly, has no ceiling to compare
+         * against and this is not reported. requireRepairedEvents refuses such a store until the counter is restored.
          */
         POSITION_ABOVE_COUNTER,
         /**
          * The event could not be read well enough to repair it. Its {@code dcbtags} is not a string, is an explicit
-         * null, or does not decode to a tag set. Nothing Occurrent writes produces any of those, so it points at a
-         * document that was edited outside the library. A null is not the same as an absent field, which is an
-         * ordinary stream event rather than damage, and it is reported because the damaged-event filter matches it.
+         * null, or does not decode to a tag set, an empty line for instance, or it has no {@code dcbtags} field and
+         * does have a {@code dcbTags} index, and then nothing says whether the index is stray or the tags were lost. Nothing Occurrent writes produces any of those, so it points at a document that was edited outside the
+         * library. A null is not the same as an absent field, which is an ordinary stream event rather than damage
+         * when there is no index either, and it is reported because the damaged-event filter matches it.
          * The run continues past it rather than stopping, so one such event cannot hold up the repair of a whole
          * collection.
          */

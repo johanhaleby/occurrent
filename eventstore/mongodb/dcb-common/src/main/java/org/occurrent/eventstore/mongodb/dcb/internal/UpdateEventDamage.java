@@ -29,6 +29,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.IntStream;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
@@ -40,21 +41,29 @@ import static com.mongodb.client.model.Filters.type;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.POSITION;
 
 /**
- * What a stored event whose position or tag index is wrong looks like, starting with the damage {@code updateEvent}
- * did before 0.34.0. The update-event repair tool walks what {@link #damagedEvent()} matches, repairing what it can and
- * reporting the rest, and counts what {@link #positionLost()} matches as a position it cannot restore. A MongoDB event
- * store with {@code requireRepairedEvents(true)} refuses to start while anything matches
- * {@link #wrongPositionOrTagIndex()} or {@link #positionAboveCounter(Document, Document)} holds. Together those two
- * cover every event whose position is anything other than a positive integer, every DCB event whose tag index does not
- * hold exactly the tags its {@code dcbtags} lists, and, where the store has a position counter document, every
- * position above that counter. A non DCB event with no position field at all is in neither, since
- * {@code requireBackfilledPosition} is the check for that one.
+ * What a stored event or position counter looks like when a read cannot handle it the way it handles one a store
+ * wrote, starting with the damage {@code updateEvent} did before 0.34.0. The update-event repair tool walks what
+ * {@link #damagedEvent()} matches, repairing what it can and reporting the rest, and counts what
+ * {@link #positionLost()} matches as a position it cannot restore. A MongoDB event store with
+ * {@code requireRepairedEvents(true)} refuses to start while anything matches {@link #wrongPositionOrTagIndex()} or
+ * {@link #wrongCounter(Document, Document)} holds. Together those two cover every event whose position is anything
+ * other than a positive integer, every DCB event whose {@code dcbtags} and tag index fail {@link #validTags()}, every
+ * tag index on an event without {@code dcbtags}, a counter the stores cannot read exactly, and every position above
+ * the counter, where a missing counter document counts as zero, the value every store reads it as. A non DCB event with
+ * no position field at all is in neither, since {@code requireBackfilledPosition} is the check for that one.
  */
 @NullMarked
 public final class UpdateEventDamage {
 
     // What DcbCloudEvents joins the tags in a dcbtags string with
     private static final String TAG_SEPARATOR = "\n";
+
+    // Every character String.strip removes, the way Tag strips a tag, so $trim removes exactly those. Its default set
+    // differs from Java's in both directions, a no-break space for one.
+    private static final String STRIPPED_CHARACTERS = IntStream.rangeClosed(0, Character.MAX_CODE_POINT)
+            .filter(Character::isWhitespace)
+            .collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append)
+            .toString();
 
     private UpdateEventDamage() {
     }
@@ -72,19 +81,35 @@ public final class UpdateEventDamage {
 
     /**
      * An event the repair tool looks at. That is an event whose {@code position} holds a value that fails
-     * {@link #validPosition()}, a string being what the old write-back left behind, and a DCB event whose tag index
-     * fails {@link #tagIndexMatchesTags()}. The repair turns a string back into a number where it can, rebuilds a tag
-     * index from {@code dcbtags}, and reports any other position, since nothing else holds the value it lost. A
-     * {@code null} or missing position is left to {@link #positionLost()}. The two halves are separate because one
-     * update can produce either alone. No index covers the tag half, so this filter reads the whole collection when
-     * nothing matches.
+     * {@link #validPosition()}, a string being what the old write-back left behind, and an event {@link #wrongTags()}
+     * matches. The repair turns a string back into a number where it can, rebuilds {@code dcbtags} and the tag index
+     * from a {@code dcbtags} that decodes, and reports any other position or tag field, since nothing else holds the
+     * value it lost. A {@code null} or missing position is left to {@link #positionLost()}, so a DCB event whose only
+     * damage is a lost position is not in here. The two halves are separate because one update can produce either
+     * alone. No index covers the tag half, so this filter reads the whole collection when nothing matches.
      *
      * @return the filter
      */
     public static Bson damagedEvent() {
         return or(
                 and(ne(POSITION, null), expr(new Document("$not", List.of(validPosition())))),
-                and(exists(DcbCloudEvents.TAGS), expr(new Document("$not", List.of(tagIndexMatchesTags()))))
+                wrongTags()
+        );
+    }
+
+    /**
+     * An event whose tag fields are not what a store writes. That is a DCB event, one with a {@code dcbtags} field,
+     * whose fields fail {@link #validTags()}, and an event with a {@code dcbTags} field and no {@code dcbtags}. DCB
+     * reads take any event with a {@code dcbTags} field for a DCB event and find it under the tags that field holds,
+     * while {@code DcbCloudEvents.getTags} reads the tags from {@code dcbtags}, so that second kind turns up under tags
+     * it does not have.
+     *
+     * @return the filter
+     */
+    public static Bson wrongTags() {
+        return or(
+                and(exists(DcbCloudEvents.TAGS), expr(new Document("$not", List.of(validTags())))),
+                and(exists(DcbCloudEvents.TAGS, false), exists(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD))
         );
     }
 
@@ -104,7 +129,7 @@ public final class UpdateEventDamage {
      * Every event whose position or tag index is wrong, as far as a filter can tell without the position counter. That
      * is everything {@link #damagedEvent()} and {@link #positionLost()} match, and a {@code null} position on a non DCB
      * event. A non DCB event with no {@code position} field is left to {@code requireBackfilledPosition}. Whether a
-     * valid position is above the counter is what {@link #positionAboveCounter(Document, Document)} answers. No index
+     * valid position is above the counter is what {@link #wrongCounter(Document, Document)} answers. No index
      * narrows either expression, so this filter reads the whole collection when nothing matches.
      *
      * @return the filter
@@ -134,33 +159,40 @@ public final class UpdateEventDamage {
     }
 
     /**
-     * An aggregation expression that holds when a DCB event's tag index, the {@code dcbTags} array, holds the same tags
-     * as its {@code dcbtags} string lists, one per line, and none when that string is empty. That is what every store
-     * writes. DCB reads and the conflict query behind a conditional append find an event by its index alone, so an
-     * index that is missing, is not an array, or names other tags hides the event from them. Order and repeats do not
-     * change what those reads find, so they do not count here either. It is false when {@code dcbtags} is not a
-     * string. {@code $and} stops at the first false clause, so {@code $split} only ever sees a string.
+     * An aggregation expression that holds when a DCB event's {@code dcbtags} string and {@code dcbTags} index are what
+     * a store writes. {@code dcbtags} is a string, every line of it is non-empty and holds nothing
+     * {@code String.strip} would remove, the form {@code Tag} gives a tag, and the index holds the same set of tags as
+     * those lines, none when the string is empty. {@code DcbCloudEvents.decodeTags} fails on an empty line, and strips a
+     * line that DCB reads, which find an event by its index alone, match unstripped. An index that is missing, is not an
+     * array or names other tags hides the event from those reads. Order and repeats change neither, so they do not
+     * count here. {@code $and} stops at the first false clause, so {@code $split} only ever sees a string.
      * {@link #listedTags(String)} reads a {@code dcbtags} string the same way.
      *
      * @return the expression, for use inside {@code $expr}
      */
-    public static Document tagIndexMatchesTags() {
+    public static Document validTags() {
         String tags = "$" + DcbCloudEvents.TAGS;
         String index = "$" + DcbDocumentMapper.DCB_TAGS_INDEX_FIELD;
-        Document listed = new Document("$cond", List.of(
+        Document lines = new Document("$cond", List.of(
                 new Document("$eq", List.of(tags, "")),
                 List.of(),
                 new Document("$split", List.of(tags, TAG_SEPARATOR))));
+        Document lineIsATag = new Document("$and", List.of(
+                new Document("$ne", List.of("$$line", "")),
+                new Document("$eq", List.of("$$line", new Document("$trim", new Document("input", "$$line").append("chars", STRIPPED_CHARACTERS))))
+        ));
         return new Document("$and", List.of(
                 new Document("$eq", List.of(new Document("$type", tags), "string")),
                 new Document("$isArray", index),
-                new Document("$setEquals", List.of(index, listed))
+                new Document("$allElementsTrue", List.of(new Document("$map", new Document("input", lines).append("as", "line").append("in", lineIsATag)))),
+                new Document("$setEquals", List.of(index, lines))
         ));
     }
 
     /**
-     * The tags a {@code dcbtags} string lists, as {@link #tagIndexMatchesTags()} reads them. A store writes every tag
-     * in its canonical form, so for an event it wrote these are the event's tags.
+     * The tags a {@code dcbtags} string lists, as {@link #validTags()} reads them. A store writes every tag in its
+     * canonical form, so for an event it wrote these are the event's tags. For a {@code dcbtags} that decodes, they
+     * differ from the decoded tags exactly when {@link #validTags()} refuses one of its lines.
      *
      * @param encodedTags the {@code dcbtags} string
      * @return each line of {@code encodedTags} exactly as written, or none for an empty string
@@ -182,25 +214,49 @@ public final class UpdateEventDamage {
     }
 
     /**
-     * Whether the highest position in the collection is above the store's position counter. No store assigns such a
-     * value, and DCB reads and reads in position order skip it, since they stop at the counter. Ask only once
-     * {@link #wrongPositionOrTagIndex()} has found nothing, so that every position is valid. Read
-     * {@code highestPositioned} first and {@code counter} second. Every writer raises the counter before the position
-     * it reserved becomes visible, and nothing lowers it, so a counter read after the highest position is at least
-     * that position, even with appends in flight. With no counter document there is nothing to compare against, and
-     * the answer is no, as it is in the repair tool.
+     * Whether the store's position counter is one the stores cannot use. Every store reads a missing counter document
+     * as zero, so DCB reads and reads in position order, which stop at the counter, return nothing and the next append
+     * reserves a position an event already holds. A counter value {@link #counterValue(Object)} rejects is read wrongly
+     * or not at all. So this holds for a counter document with such a value, and for a highest position above the
+     * counter, zero when there is no counter document. A collection with no positioned event and no counter document is
+     * how every store starts, and passes. Ask only once {@link #wrongPositionOrTagIndex()} has found nothing, so that
+     * every position is valid. Read {@code highestPositioned} first and {@code counter} second. Every writer raises the
+     * counter before the position it reserved becomes visible, and nothing lowers it, so a counter read after the
+     * highest position is at least that position, even with appends in flight.
      *
      * @param highestPositioned the event with the highest {@code position}, or {@code null} if there is none
      * @param counter           the position counter document, or {@code null} if there is none
-     * @return {@code true} if the highest position is above the counter
+     * @return {@code true} if the counter is unreadable or below the highest position
      */
-    public static boolean positionAboveCounter(@Nullable Document highestPositioned, @Nullable Document counter) {
-        if (highestPositioned == null || counter == null) {
+    public static boolean wrongCounter(@Nullable Document highestPositioned, @Nullable Document counter) {
+        long ceiling = 0;
+        if (counter != null) {
+            Long value = counterValue(counter.get(DcbMarkerModel.COUNTER_POSITION));
+            if (value == null) {
+                return true;
+            }
+            ceiling = value;
+        }
+        if (highestPositioned == null) {
             return false;
         }
         BigDecimal highest = finiteNumber(highestPositioned.get(POSITION));
-        BigDecimal ceiling = finiteNumber(counter.get(DcbMarkerModel.COUNTER_POSITION));
-        return highest != null && ceiling != null && highest.compareTo(ceiling) > 0;
+        return highest != null && highest.compareTo(BigDecimal.valueOf(ceiling)) > 0;
+    }
+
+    /**
+     * The value a counter document's {@code position} holds if every store reads it exactly. The stores cast it to
+     * {@link Number} and call {@link Number#longValue()}, so it has to be a number that call reads as the whole number
+     * it holds, which rules out a fraction, a value beyond a {@code long} and a {@code Decimal128} above 2^53, whose
+     * {@code longValue} goes through a {@code double}. It cannot be negative either, since the next append would then
+     * reserve a position at or below zero.
+     *
+     * @param stored the stored counter value
+     * @return the counter, or {@code null} if {@code stored} is anything else
+     */
+    public static @Nullable Long counterValue(@Nullable Object stored) {
+        Long whole = wholeNumber(stored);
+        return whole != null && whole >= 0 && ((Number) stored).longValue() == whole ? whole : null;
     }
 
     /**

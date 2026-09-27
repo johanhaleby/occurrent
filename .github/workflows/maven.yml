@@ -233,7 +233,7 @@ jobs:
           - { name: subscription-mongodb-spring, paths: "subscription/mongodb/spring application" }
           - { name: eventstore-spring,           paths: "eventstore/mongodb/spring" }
           # Everything that talks to MongoDB through the driver rather than through Spring.
-          - { name: mongodb-native,              paths: "eventstore/mongodb/native subscription/mongodb/native eventstore/api eventstore/mongodb/common subscription/mongodb/common testing/mongodb" }
+          - { name: mongodb-native,              paths: "eventstore/mongodb/native subscription/mongodb/native eventstore/api eventstore/mongodb/common eventstore/mongodb/dcb-common subscription/mongodb/common testing/mongodb" }
           # Listed per module, not as the framework aggregator, because the blocking starter is the
           # single most expensive module in the build. It shares the shard with framework/annotations and
           # the framework/spring-boot-autoconfigure aggregate (common, blocking, reactor), both cheap

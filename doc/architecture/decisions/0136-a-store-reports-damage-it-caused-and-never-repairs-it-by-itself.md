@@ -7,8 +7,9 @@ Date: 2026-08-22
 Accepted. Number 0136 allocated at the rel34 plan gate for [#906](https://github.com/johanhaleby/occurrent/issues/906).
 0134 is the maximum on `main` and 0135 is taken by the concurrent unit on PR 941.
 
-Amended in place before 0.34.0 shipped, on what `requireRepairedEvents` checks. It refuses on one property of the
-`position` field, checked by a filter and a read of the position counter, rather than on a string position alone.
+Amended in place before 0.34.0 shipped, on what `requireRepairedEvents` checks. It refuses on one property of each event's
+`position` and tag fields and of the position counter, checked by a filter and a read of the counter, rather than on
+a string position alone.
 Sections 2 and 4 say why.
 
 ## Context
@@ -131,13 +132,17 @@ the store that otherwise hears nothing at all. Refusing to check there would lea
 that needs it most.
 
 `requireRepairedEvents` also checks more than the warning does, and what it checks is one property rather than a list
-of kinds of damage. It refuses while any event's position is not a positive integer, or is above the store's
-position counter when there is a counter document, or any DCB event's `dcbTags` array does not hold the tags its
-`dcbtags` lists. Reads in position order and DCB reads skip
+of kinds of damage. It refuses while any event's position is not a positive integer or is above the store's
+position counter, while any DCB event's `dcbtags` has a line that is empty or has whitespace around it or its
+`dcbTags` array does not hold the tags its `dcbtags` lists, while an event without `dcbtags` has a `dcbTags` field,
+and while the counter is not a whole number every store reads exactly. A missing counter document counts as zero,
+the value every store reads it as. Reads in position order and DCB reads skip
 an event whose position fails the first part, read it wrong, as with a fraction, which comes back cut to a whole
 number that can be another event's position, or fail on it, as with an array holding a number in range. DCB reads and
 the conflict query behind a conditional append find a DCB event by its `dcbTags` array alone, so they skip it under a
-tag the array lacks. The one exception is
+tag the array lacks. An event without `dcbtags` that has the array turns up in them under tags `getTags` says it
+does not have. With no counter document they return nothing, and the next append reserves a position an event
+already holds. The one exception is
 a non DCB event with no `position` field at all. It looks like history written before position existed, and
 `requireBackfilledPosition` is the check for it. An operator who asked to be refused while damage is left needs the
 refusal to cover what the repair could not fix and what someone set by hand, as well as what the repair would still
@@ -146,7 +151,7 @@ fix.
 The stores check the property in two parts, both in `UpdateEventDamage` in `occurrent-eventstore-mongodb-dcb-common`,
 a class the tool and all three stores call. `wrongPositionOrTagIndex()` is the part a filter can answer. It
 matches an event whose `position` field fails `validPosition()`, a DCB event whose `position` is missing or `null`,
-and a DCB event whose `dcbTags` array fails `tagIndexMatchesTags()`. `validPosition()` is an aggregation expression that says what a valid
+a DCB event whose tag fields fail `validTags()`, and an event with a `dcbTags` field and no `dcbtags`. `validPosition()` is an aggregation expression that says what a valid
 position is, a number above zero and at most `Long.MAX_VALUE` that `$trunc` does not change, instead of listing what
 is wrong. Earlier versions of this filter listed kinds of wrong value, and each list missed one. The first found no
 fault with an explicit `null`, and the next none with `NaN`, which `$lte: 0` does not match, or with an array such as
@@ -154,36 +159,49 @@ fault with an explicit `null`, and the next none with `NaN`, which `$lte: 0` doe
 array and for `null`, and `NaN` fails `$gt`, so the expression needs no list. A string position alone also misses a
 DCB event whose position was dropped, and the hand-set event section 2 describes.
 
-The tag part is a property for the same reason. `tagIndexMatchesTags()` holds when `dcbtags` is a string, `dcbTags`
-is an array, and `$setEquals` finds the same tags in the array as in the lines of `dcbtags`, none when that string is
-empty. That is what every append writes, since the stores build the array from the same tags they join into
-`dcbtags`. An earlier version of the filter asked only whether the field existed, and missed a `dcbTags` holding
+The tag part is a property for the same reason. `validTags()` holds when `dcbtags` is a string, `dcbTags` is an
+array, every line of `dcbtags` is non-empty and has nothing around it that `String.strip` removes, and `$setEquals`
+finds the same tags in the array as in those lines, none when that string is empty. That is what every append
+writes, since the stores build the array from the same stripped tags they join into `dcbtags`.
+`DcbCloudEvents.decodeTags` refuses an empty line, and DCB reads match the array as stored, so they miss a tag stored
+with whitespace around it while `getTags` reports it stripped. `$trim` gets the characters `String.strip` removes
+spelled out, since its default set differs from Java's in both directions, a no-break space for one. An event
+without `dcbtags` has to have no `dcbTags` field at all, since DCB reads take any event with that field for a DCB
+event. An earlier version of the filter asked only whether the field existed, and missed a `dcbTags` holding
 `null` or a document, an empty array for a tagged event, and an array naming other tags. `$and` stops at the first false clause, so
 `$split` only ever sees a string.
 
 The repair holds a position it reads to the same rule. `validPositionValue(...)` answers what `validPosition()`
 answers for a value already read, so a hand-set fraction, array or `NaN` that the store refuses is one the repair
-reports rather than reading as the whole number next to it. The repair walks every event whose position fails the
-rule and every DCB event whose tag array fails `tagIndexMatchesTags()`, which costs no second scan, since the tag
-half already reads the whole collection. Two events the store refuses are outside that walk. A numeric position
-above the counter needs the counter, which a filter cannot read, and a plain stream event whose `position` holds
-`null` gives the repair nothing to restore or rebuild. Step 6 of the runbook finds both.
+reports rather than reading as the whole number next to it. The repair walks every event whose `position` holds a value
+that fails the rule and every event whose tag fields fail the tag part, which costs no second scan, since the tag half
+already reads the whole collection. Three kinds of event the store refuses are outside that walk. A numeric position
+above the counter needs the counter, which a filter cannot read. A plain stream event whose `position` holds `null`
+gives the repair nothing to restore or rebuild. A DCB event whose position is gone and whose tag fields are right
+gives it nothing to rebuild either, and `positionLost()` counts it as `eventsWithLostPosition` instead. Step 6 of the
+runbook finds all three. A counter the stores cannot use is not an event, and the repair only reads it.
 
 A `POSITION_LOST` event is why the repair tool's damaged-event filter alone is not enough. The repair rebuilds its
 tag array, which stops that filter matching it, and the event is still missing from DCB reads and from the conflict
 query. A store checking only that filter started over it after a run that had just reported it.
 
-`positionAboveCounter(...)` is the other part, since a filter cannot read the counter. The store asks it only when the
+`wrongCounter(...)` is the other part, since a filter cannot read the counter. The store asks it only when the
 filter found nothing, so every position is then valid and the first document of a descending sort on `position` holds
 the highest one. Before that, an array can come first, and the comparison cannot read an array as a number, so an
 event above the counter behind it went unseen. The store reads the highest position first and the counter document
-second, and refuses if the position is the higher one. That order is what keeps an append in flight from looking like
+second. It refuses if the counter fails `counterValue(...)`, which accepts a whole number at or above zero that
+`Number.longValue()`, the call every store reads the counter with, reads exactly. That rules out a `Decimal128` above
+2^53, whose `longValue()` goes through a `double`. It refuses too if the position is the higher one, a missing
+counter document counting as zero. That order is what keeps an append in flight from looking like
 damage. Every writer raises the counter before the position it reserved is written. All three stores `$inc` it before
 they insert, the position backfill seeds it with `$max` and reserves by `$inc` before it writes, `updateEvent` keeps
 the position the event already had, and the repair writes no position above the counter it re-reads unless there is no
-counter document at all. Nothing lowers the counter. So a counter read after the highest position is at least that
-position. A store with no counter document has nothing to compare against, and it starts, as the repair tool treats
-that case too.
+counter document or its value fails `counterValue(...)`, and the store refuses both. Nothing lowers the counter. So
+a counter read after the highest position is at least that position. Every store reads a missing counter document as
+zero, so DCB reads and reads in position order return nothing and the next append reserves a position an event
+already holds. The check counts it as zero too, which refuses any positioned event and still lets a store that has
+written no position start. The repair has no ceiling in that case and reports nothing on that ground, since zero
+there means it does not know the ceiling.
 
 The price is that, with the setting on, a startup that finds no damage reads the whole collection, whether or not
 the store writes position, since no index covers the tag half or narrows the `$expr`. It does so once, when
@@ -215,7 +233,7 @@ CloudEvent extension, which is a genuine string and so came through the coercion
 `PositionDocumentMapper` and `DcbCloudEvents.decodeTags`, so a repaired event is what a running store would write,
 including an empty tag set rebuilding to an empty array rather than an array holding one empty string.
 
-It is not a general recovery, and it does not present itself as one. Five kinds of damage survive it, reported per
+It is not a general recovery, and it does not present itself as one. Six kinds of damage survive it, reported per
 event by `_id` rather than guessed at:
 
 - A position that was dropped entirely. An update function returning an event built from scratch had no position
@@ -231,8 +249,12 @@ event by `_id` rather than guessed at:
 - A `position` string above the store's position counter. The counter is the highest position the store ever handed
   out, and DCB reads and reads in position order stop at it, so a value above it is unassignable and they skip it,
   and a later append reaching that number would collide with it. The counter is re-read before the event is reported, so a store
-  written to while the repair walked cannot have an event wrongly condemned, and a store with no counter document has
-  no ceiling and is never reported on that ground.
+  written to while the repair walked cannot have an event wrongly condemned, and a store with no counter document, or
+  with a counter value the stores cannot read exactly, has no ceiling and is never reported on that ground.
+  `requireRepairedEvents` refuses such a store until the counter is restored.
+- A `dcbtags` that is not a string or does not decode to a tag set, an empty line for instance, or a `dcbTags` array
+  on an event with no `dcbtags`. Nothing Occurrent writes produces any of them. For the last, nothing says whether the
+  array is stray or `dcbtags` was lost, so the repair writes neither field.
 
 A completed run reports the events left without a position by asking the collection, not by adding up what the walk
 saw. Rebuilding a lost-position event's tag array is what stops it matching the damaged-event filter, so a run killed

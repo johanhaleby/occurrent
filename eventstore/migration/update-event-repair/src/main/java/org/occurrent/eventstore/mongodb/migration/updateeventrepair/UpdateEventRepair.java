@@ -18,6 +18,12 @@
 package org.occurrent.eventstore.mongodb.migration.updateeventrepair;
 
 import com.mongodb.ErrorCategory;
+import com.mongodb.MongoConnectionPoolClearedException;
+import com.mongodb.MongoException;
+import com.mongodb.MongoNodeIsRecoveringException;
+import com.mongodb.MongoNotPrimaryException;
+import com.mongodb.MongoSocketException;
+import com.mongodb.MongoTimeoutException;
 import com.mongodb.MongoWriteException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
@@ -131,17 +137,24 @@ public final class UpdateEventRepair {
     private final MongoCollection<Document> positionCounterCollection;
 
     /**
-     * Retries every MongoDB operation with exponential backoff from 100 ms up to 2 seconds, so a transient outage
-     * does not abandon a repair that may have hours of collection left to walk.
+     * Retries a MongoDB operation that failed with an error a later attempt can succeed on, with exponential backoff
+     * from 100 ms up to 2 seconds and no limit on attempts, so a transient outage does not abandon a repair that may
+     * have hours of collection left to walk. See {@link #UpdateEventRepair(MongoDatabase, String, UpdateEventRepairOptions, RetryStrategy)}
+     * for which errors those are.
      */
     public UpdateEventRepair(MongoDatabase database, String eventStoreCollectionName, UpdateEventRepairOptions options) {
         this(database, eventStoreCollectionName, options, defaultRetryStrategy());
     }
 
     /**
-     * @param retryStrategy How to retry a MongoDB operation that fails. A repair walks a whole collection, so a
-     *                      strategy that gives up immediately turns a momentary outage into a run an operator has
-     *                      to notice and restart.
+     * Only an error a later attempt can succeed on without anyone changing anything is retried, and each one is
+     * logged at WARN with its cause before the retry. That is an error the MongoDB driver labels
+     * {@code RetryableWriteError} or {@code TransientTransactionError}, a network error, a timeout waiting for a
+     * server, and a server that is not primary or is recovering. Any other error, a missing privilege for instance,
+     * fails the run at once, since retrying it would only repeat it.
+     *
+     * @param retryStrategy How to retry such an error. A repair walks a whole collection, so a strategy that gives up
+     *                      immediately turns a momentary outage into a run an operator has to notice and restart.
      */
     public UpdateEventRepair(MongoDatabase database, String eventStoreCollectionName, UpdateEventRepairOptions options, RetryStrategy retryStrategy) {
         requireNonNull(database, "database cannot be null");
@@ -430,9 +443,15 @@ public final class UpdateEventRepair {
         if (rawTags instanceof String tags) {
             encodedTags = tags;
         } else if (rawTags == null && !event.containsKey(DcbCloudEvents.TAGS)) {
-            // No dcbtags field at all, which is an ordinary stream event rather than damage. A document holding an
-            // explicit null falls through to the branch below, since the damaged-event filter matches it and a run
-            // that neither updated it nor said anything about it would finish clean while report() still counted it.
+            // No dcbtags field at all, which is an ordinary stream event rather than damage, unless it has a tag
+            // index. Nothing says whether that index is stray or dcbtags was lost, so neither is written. A document
+            // holding an explicit null falls through to the branch below, since the damaged-event filter matches it
+            // and a run that neither updated it nor said anything about it would finish clean while report() still
+            // counted it.
+            if (event.containsKey(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD)) {
+                unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.UNREADABLE,
+                        "no dcbtags field, while dcbTags holds " + event.get(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD)));
+            }
             encodedTags = null;
         } else {
             // The position does not depend on the tags, so carry on and repair it. Only the tag array is beyond
@@ -519,7 +538,8 @@ public final class UpdateEventRepair {
      * the counter is as unassignable as at or below zero, and DCB reads and reads in position order skip it just the
      * same, because they stop at this same counter. The counter is re-read here rather than trusted from the start of the run, so a
      * store that wrote while the repair walked cannot have an event wrongly called forged. A counter of zero means
-     * there is no counter document to compare against.
+     * there is no ceiling to compare against, which is what {@link #positionCeiling()} returns for a missing counter
+     * document or one it cannot read exactly.
      *
      * @return the position, or {@code null} if it was reported as unrecoverable instead.
      */
@@ -549,13 +569,14 @@ public final class UpdateEventRepair {
      * and reads in position order stop at this same counter, so they skip an event above it as they skip one at or
      * below zero.
      *
-     * @return the counter, or {@code 0} when there is no counter document, which is the value the stores themselves
-     * fall back to and which this treats as "no ceiling known" rather than as a ceiling of zero.
+     * @return the counter, or {@code 0} when there is no counter document or its value is one
+     * {@link UpdateEventDamage#counterValue(Object)} rejects, which this treats as "no ceiling known" rather than as a
+     * ceiling of zero. requireRepairedEvents refuses both until the counter is restored.
      */
     private long positionCeiling() {
         Document counter = withRetry(() -> positionCounterCollection.find(eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID)).first());
-        Object value = counter == null ? null : counter.get(DcbMarkerModel.COUNTER_POSITION);
-        return value instanceof Number number ? number.longValue() : 0;
+        Long value = counter == null ? null : UpdateEventDamage.counterValue(counter.get(DcbMarkerModel.COUNTER_POSITION));
+        return value == null ? 0 : value;
     }
 
     private @Nullable Document loadCheckpoint() {
@@ -623,7 +644,34 @@ public final class UpdateEventRepair {
     }
 
     private <T> T withRetry(Supplier<T> mongoOperation) {
-        return executeWithRetry(mongoOperation, __ -> true, retryStrategy).get();
+        Supplier<T> logged = () -> {
+            try {
+                return mongoOperation.get();
+            } catch (RuntimeException e) {
+                if (retryable(e)) {
+                    log.warn("A MongoDB operation in the repair of collection '{}' failed with an error a later attempt can succeed on, so it is retried unless the retry strategy has run out of attempts.",
+                            eventStoreCollectionName, e);
+                }
+                throw e;
+            }
+        };
+        return executeWithRetry(logged, UpdateEventRepair::retryable, retryStrategy).get();
+    }
+
+    // The driver's own signals for an error that a later attempt can succeed on without anyone changing anything.
+    // RetryableWriteError is the label the server and driver put on a write the retryable-writes spec may retry, and
+    // the exception types are the ones that spec, and its retryable-reads counterpart, retry on, which covers a read
+    // that no such label marks.
+    static boolean retryable(Throwable error) {
+        if (error instanceof MongoException mongoException
+                && (mongoException.hasErrorLabel("RetryableWriteError") || mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL))) {
+            return true;
+        }
+        return error instanceof MongoSocketException
+                || error instanceof MongoTimeoutException
+                || error instanceof MongoNotPrimaryException
+                || error instanceof MongoNodeIsRecoveringException
+                || error instanceof MongoConnectionPoolClearedException;
     }
 
     private static RetryStrategy defaultRetryStrategy() {
