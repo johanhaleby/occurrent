@@ -277,7 +277,8 @@ class SubscriptionAnnotationRegistrar {
     }
 
     // Each resolve method checks and computes everything the handler subscribes with and returns only the subscribe
-    // call, which is all that runs once every handler on the bean has resolved.
+    // call, which is all that runs once every handler on the bean has resolved. That includes looking up the beans it
+    // subscribes through, so a missing one fails the bean before any of its handlers subscribes.
     @SuppressWarnings("unchecked")
     private <E> Runnable resolveSubscribeAnnotation(Object bean, Method method, Supplier<Object> handlerTarget, boolean mayBlockForReplay, StreamSubscriptionDefinition subscription) {
         String id = subscription.id();
@@ -297,11 +298,10 @@ class SubscriptionAnnotationRegistrar {
 
         boolean shouldWaitUntilStarted = mayBlockForReplay && StartPositionSupport.shouldWaitUntilStarted(startPositionToUse, subscription.startupMode()) && SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext);
 
-        return () -> {
-            StreamSubscriptions<E> subscribable = applicationContext.getBean(StreamSubscriptions.class);
-            startPositionSupport.applyStartupWorkarounds();
-            subscribable.subscribe(id, filter(filter), startAt, shouldWaitUntilStarted, consumer);
-        };
+        StreamSubscriptions<E> subscribable = applicationContext.getBean(StreamSubscriptions.class);
+        startPositionSupport.applyStartupWorkarounds();
+
+        return () -> subscribable.subscribe(id, filter(filter), startAt, shouldWaitUntilStarted, consumer);
     }
 
     @SuppressWarnings("unchecked")
@@ -325,11 +325,10 @@ class SubscriptionAnnotationRegistrar {
         boolean replaysHistory = startAtGlobalPosition >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
         boolean shouldWaitUntilStarted = mayBlockForReplay && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode()) && SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext);
 
-        return () -> {
-            Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
-            startPositionSupport.applyStartupWorkarounds();
-            subscribable.subscribe(id, AgnosticSubscriptionFilter.filter(filter), startAt, shouldWaitUntilStarted, consumer);
-        };
+        Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
+        startPositionSupport.applyStartupWorkarounds();
+
+        return () -> subscribable.subscribe(id, AgnosticSubscriptionFilter.filter(filter), startAt, shouldWaitUntilStarted, consumer);
     }
 
     @SuppressWarnings("unchecked")
@@ -345,8 +344,8 @@ class SubscriptionAnnotationRegistrar {
             return Unit.INSTANCE;
         };
 
+        Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
         return () -> {
-            Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
             // The synchronous subscription model has no start position or background thread, so there is no start
             // position to resolve and nothing to wait for. Pass the default StartAt (the model ignores it) rather than
             // null to honor the Subscribable contract.
@@ -393,9 +392,10 @@ class SubscriptionAnnotationRegistrar {
         boolean replaysHistory = startAtDcbPosition >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
         boolean shouldWaitUntilStarted = mayBlockForReplay && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode()) && SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext);
 
+        DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
+        startPositionSupport.applyStartupWorkarounds();
+
         return () -> {
-            DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
-            startPositionSupport.applyStartupWorkarounds();
             var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, consumer);
             if (shouldWaitUntilStarted) {
                 subscription.waitUntilStarted();
