@@ -2288,17 +2288,23 @@ class BlockingHandoverTest {
     // The same from Source.alreadyDeliveredByReplay(..), which a starting replay waits for the way it waits for a live
     // fold.
     @Test
-    void a_catch_up_with_nothing_to_replay_from_already_delivered_by_replay_a_starting_replay_waits_for_returns_without_waiting() throws Exception {
+    void a_catch_up_with_nothing_to_replay_from_already_delivered_by_replay_a_starting_replay_waits_for_takes_the_handover_live() throws Exception {
         List<String> log = new CopyOnWriteArrayList<>();
         List<Boolean> answers = new CopyOnWriteArrayList<>();
         BlockingHandover<String, String> handover = BlockingHandover.create(log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
         CountDownLatch reportingR1 = new CountDownLatch(1);
         CountDownLatch releaseReport = new CountDownLatch(1);
+        ExecutorService otherThread = Executors.newSingleThreadExecutor();
         FakeSource replayed = source(List.of("R1"), false);
         replayed.onAlreadyDeliveredByReplay = () -> {
             reportingR1.countDown();
             awaitLatch(releaseReport);
             answers.add(handover.catchUp(source(List.of(), true)));
+            try {
+                answers.add(otherThread.submit(() -> handover.acceptIfLive("L2")).get(5, TimeUnit.SECONDS));
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
         };
         handover.catchUp(replayed);
         FutureTask<Boolean> reporting = new FutureTask<>(() -> handover.acceptIfLive("R1"));
@@ -2315,13 +2321,14 @@ class BlockingHandoverTest {
 
             assertThat(reporting).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
             assertThat(replaying).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
-            assertThat(answers).containsExactly(true);
-            assertThat(log).containsExactly("R1", "R2");
+            assertThat(answers).as("what the callback's catch-up and the acceptIfLive(..) after it returned").containsExactly(true, true);
+            assertThat(log).containsExactly("R1", "L2", "R2");
             assertThat(handover.acceptIfLive("L1")).isTrue();
         } finally {
             releaseReport.countDown();
             live.interrupt();
             replay.interrupt();
+            otherThread.shutdownNow();
         }
     }
 
