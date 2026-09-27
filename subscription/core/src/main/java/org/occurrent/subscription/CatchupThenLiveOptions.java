@@ -32,11 +32,12 @@ package org.occurrent.subscription;
  * {@code maxBufferedEvents} is a fail-loud cap, not a throttle. Reaching it means the replay is not keeping up with the
  * live feed at all, so the next live event is refused with an exception rather than the buffer growing without bound.
  * What that costs depends on what feeds the buffer. A broker listener that calls a {@code CatchupProjectionFeed}'s
- * {@code accept} does not acknowledge the message, so the broker delivers it again. A
+ * {@code accept} and does not acknowledge the message when it throws gets the message delivered again. A
  * {@code CatchupThenPushSubscriptionModel}'s buffer is fed only by {@code accept(..)}, since
  * {@code acceptRedeliverable(..)} refuses rather than buffers, and {@code accept(..)} is supported only from the
- * in-memory event store's write path. There the write call throws although the store has kept the event, and the
- * subscription can miss that event.
+ * in-memory event store's write path. There the write call throws although the store has kept the event. The push
+ * model's {@code accept(Iterable)} stops at that event, so it routes none of the write's later events either, and
+ * the subscription can miss all of them.
  *
  * @param dedupCacheSize    Recently delivered event ids retained to de-duplicate the replay-to-live overlap, per
  *                          cache, of which a handover keeps two.

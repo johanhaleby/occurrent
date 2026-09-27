@@ -217,8 +217,9 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     /**
      * Feed a batch of events to the model, routing each in iteration order, sequentially.
      * <p>
-     * Drops the batch when no subscription is registered, with the caveat {@link #accept(CloudEvent)} describes. An
-     * event whose predecessor's handler errored is neither observed nor routed, since the batch stops there. An
+     * Drops the batch when no subscription is registered, with the caveat {@link #accept(CloudEvent)} describes. The
+     * batch stops at the first event whose routing errors, because its handler or its filter failed or a
+     * {@link CatchupThenPushSubscriptionModel} in front refused it, and no later event is observed or routed. An
      * observer throwing stops nothing, apart from an {@link Error} other than an {@link AssertionError}, which
      * stops the batch the way a handler's would, see {@link PushObserver}.
      *
