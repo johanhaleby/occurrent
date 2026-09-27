@@ -19,6 +19,7 @@ package org.occurrent.subscription.reactor.durable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Mono;
@@ -49,5 +50,20 @@ class ReactorDurableSubscriptionModelShutdownTest {
         assertThatThrownBy(() -> model.subscribe("someSubscription", __ -> Mono.empty()))
                 .isExactlyInstanceOf(SubscriptionModelShutdownException.class);
         assertThat(wrapped.subscribedIds).isEmpty();
+    }
+
+    // A dynamic start position is evaluated after the subscribe's first shutdown check and before the wrapped model
+    // is asked, so shutting down from inside it runs in the same gap that a slow read of the start position opens.
+    @Test
+    void a_shutdown_while_the_start_position_is_read_refuses_the_subscribe_and_keeps_no_id() {
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel("global");
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+
+        assertThatThrownBy(() -> model.subscribe("someSubscription", null, StartAt.dynamic(() -> {
+            model.shutdown();
+            return StartAt.now();
+        }), __ -> Mono.empty()))
+                .isExactlyInstanceOf(SubscriptionModelShutdownException.class);
+        assertThat(model.subscriptionIds()).isEmpty();
     }
 }

@@ -185,6 +185,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        namedSubscriptions.requireNamedAndNotShutdown();
         DcbCriteria criteria = resolveCriteria(filter);
         Predicate<CloudEvent> livePredicate = cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria);
         SubscriptionFilter liveFilter = DcbSubscriptionFilter.filter(criteria);

@@ -132,17 +132,24 @@ final class NamedCatchupSupport {
     // fields inside the state are separate volatiles, but only the launcher writes them and it writes the generation
     // last, so a reader that saw this generation saw at least this launch's history flag.
 
+    private SubscriptionModel requireNamed() {
+        if (named == null) {
+            throw new IllegalStateException(modelClass.getSimpleName() + " can only manage named subscriptions when the model it wraps manages them itself (implements " + SubscriptionModel.class.getSimpleName() + "). The wrapped " + wrapped.getClass().getName() + " only offers the plain (cold) subscribe(filter, startAt) primitive, so use that primitive directly, or wrap a model that manages named subscriptions.");
+        }
+        return named;
+    }
+
     private void requireNotShutdown() {
         if (shutdown) {
             throw new SubscriptionModelShutdownException();
         }
     }
 
-    private SubscriptionModel requireNamed() {
-        if (named == null) {
-            throw new IllegalStateException(modelClass.getSimpleName() + " can only manage named subscriptions when the model it wraps manages them itself (implements " + SubscriptionModel.class.getSimpleName() + "). The wrapped " + wrapped.getClass().getName() + " only offers the plain (cold) subscribe(filter, startAt) primitive, so use that primitive directly, or wrap a model that manages named subscriptions.");
-        }
-        return named;
+    // What every named subscribe checks, run by the models before they evaluate a dynamic StartAt, so a subscribe
+    // this model refuses runs none of the caller's code.
+    void requireNamedAndNotShutdown() {
+        requireNamed();
+        requireNotShutdown();
     }
 
     /**
@@ -231,6 +238,13 @@ final class NamedCatchupSupport {
 
         if (catchingUp.putIfAbsent(subscriptionId, state) != null) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
+        }
+        // A shutdown() between the check at the top and the line above read the ids it cancels before this id was
+        // added. It sets the flag before that read, so now that the id is in the map either this check sees the flag
+        // or that read cancels the id, and no replay starts on a shut-down model.
+        if (shutdown) {
+            catchingUp.remove(subscriptionId, state);
+            throw new SubscriptionModelShutdownException();
         }
         synchronized (state) {
             if (!stopped) {
@@ -412,6 +426,7 @@ final class NamedCatchupSupport {
     }
 
     void shutdown() {
+        // Before the ids are read below, which the second check in subscribeWithCatchup depends on.
         shutdown = true;
         catchupListeners.clear();
         new ArrayList<>(catchingUp.keySet()).forEach(subscriptionId -> {

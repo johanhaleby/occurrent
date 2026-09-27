@@ -35,6 +35,7 @@ import reactor.test.StepVerifier;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -78,6 +79,37 @@ class ReactorStreamCatchupSubscriptionModelTest {
                 .isExactlyInstanceOf(SubscriptionModelShutdownException.class);
         assertThatThrownBy(() -> catchup.subscribe("live", StreamSubscriptionFilter.filter(Filter.all()),
                 StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> delivered.add(cloudEvent))))
+                .isExactlyInstanceOf(SubscriptionModelShutdownException.class);
+        assertThat(delivered).isEmpty();
+        assertThat(wrapped.subscribeCalls).isEmpty();
+    }
+
+    @Test
+    void subscribing_after_the_model_is_shut_down_does_not_evaluate_a_dynamic_start_position() {
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(new NamedRecordingSubscriptionModel(), new GrowingPositionOrderedReader());
+        AtomicBoolean evaluated = new AtomicBoolean(false);
+        catchup.shutdown();
+
+        assertThatThrownBy(() -> catchup.subscribe("dynamic", StreamSubscriptionFilter.filter(Filter.all()),
+                StartAt.dynamic(() -> {
+                    evaluated.set(true);
+                    return StartAt.checkpoint(GlobalCheckpoint.of(0));
+                }), __ -> Mono.empty()))
+                .isExactlyInstanceOf(SubscriptionModelShutdownException.class);
+        assertThat(evaluated).isFalse();
+    }
+
+    // The wrapped model is asked whether it already runs the id between the subscribe's first shutdown check and its
+    // claim on the id, so shutting down from there runs between the two every time.
+    @Test
+    void a_shutdown_between_the_shutdown_check_and_the_claim_on_the_id_refuses_the_subscribe_before_replaying_anything() {
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new GrowingPositionOrderedReader());
+        List<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+        wrapped.whenAskedWhetherRunning = catchup::shutdown;
+
+        assertThatThrownBy(() -> catchup.subscribe("replaying", StreamSubscriptionFilter.filter(Filter.all()),
+                StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.fromRunnable(() -> delivered.add(cloudEvent))))
                 .isExactlyInstanceOf(SubscriptionModelShutdownException.class);
         assertThat(delivered).isEmpty();
         assertThat(wrapped.subscribeCalls).isEmpty();
@@ -279,6 +311,8 @@ class ReactorStreamCatchupSubscriptionModelTest {
     private static final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
         final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
         final List<String> cancelCalls = new CopyOnWriteArrayList<>();
+        volatile Runnable whenAskedWhetherRunning = () -> {
+        };
 
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
@@ -326,6 +360,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
         @Override
         public boolean isRunning(String subscriptionId) {
+            whenAskedWhetherRunning.run();
             return false;
         }
 

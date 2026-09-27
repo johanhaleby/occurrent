@@ -234,6 +234,7 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        namedSubscriptions.requireNamedAndNotShutdown();
         Filter scoped = withCapabilityScope(resolveFilter(filter));
         Predicate<CloudEvent> matchesLocally = FilterMatcher.matcherIgnoringPayloadConditions(scoped);
         Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && matchesLocally.test(cloudEvent);

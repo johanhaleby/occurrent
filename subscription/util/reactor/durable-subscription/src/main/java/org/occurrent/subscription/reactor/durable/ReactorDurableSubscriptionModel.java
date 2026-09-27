@@ -254,6 +254,14 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 ? delegate.subscribe(subscriptionId, filter, startAt, action)
                 : delegate.subscribe(subscriptionId, filter, startAtToUse, persistingAction(subscriptionId, action));
         delegatedSubscriptionIds.add(subscriptionId);
+        // Reading the start position above can wait on the checkpoint store, so a shutdown() can run after subscribe
+        // found the flag unset. It sets the flag before it clears these ids, so after the add either this check sees
+        // the flag or that clear removes the id. The wrapped model's own shutdown, which the same call ran, decides
+        // what happens to the subscribe it received.
+        if (shutdown) {
+            delegatedSubscriptionIds.remove(subscriptionId);
+            throw new SubscriptionModelShutdownException();
+        }
         return delegated;
     }
 
@@ -640,6 +648,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public synchronized void shutdown() {
+        // Before the delegated ids are cleared, which the second check in subscribeByDelegating depends on.
         shutdown = true;
         if (delegate != null) {
             delegate.shutdown();
