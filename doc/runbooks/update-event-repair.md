@@ -189,7 +189,7 @@ handed out, so the store never assigned it. DCB reads and reads in position orde
 they skip the event, and a later append reaching that number would collide with it. Treat it the way
 you treat `POSITION_LOST`. The tag array is repaired even so. Without a counter document, or with a counter that is
 not the int32 or int64 every writer stores, the repair has no ceiling to compare against and never reports this.
-Restore the counter as described below.
+Fix the counter as described below.
 
 **`UNREADABLE`.** The tool could not read the event well enough to repair it, which means its tag fields were
 edited outside Occurrent. That is a `dcbtags` that is not a string or does not decode, an empty line for instance,
@@ -217,19 +217,16 @@ If you cannot tell what the tags were, the tool has nothing to rebuild the tag a
 **A missing or unreadable position counter keeps `requireRepairedEvents` refusing.** Every store reads a missing
 counter document as zero, so DCB reads and reads in position order return nothing and the next append reserves a
 position an event already holds. An event collection renamed without its `_position` collection is in that state.
-Every writer stores the counter as an int32 or an int64, and a counter that is anything else, or is negative, keeps
-the store refusing too. The stores cannot read a string at all. They can read a `Decimal128` above 2^53 as a
-different number, and once a double counter reaches 2^53, adding one to it can leave it where it was, so two appends
-get the same position.
+Every writer stores the counter as an int32 or an int64 at or above zero, and a counter that is anything else keeps
+the store refusing too.
 
-Never lower the counter. A DCB read returns it as `lastSequencePosition`, so a consumer may have recorded any value
-the counter has held, including positions no event holds because the append that reserved them failed. Lower the
-counter below such a value and the next appends take positions that consumer has already read past, so it never sees
-their events. None of the commands below lowers it.
+No command in this runbook puts the counter below any position a consumer may have recorded. A DCB read returns the
+counter as `lastSequencePosition`, so a consumer may have recorded any value the counter has held, including
+positions no event holds because the append that reserved them failed. Were the counter lowered below such a value,
+the next appends would take positions that consumer has already read past, and it would never see their events.
 
-If you still have the old counter document, in the collection the rename left behind or in a backup, restore it.
-Otherwise turn a double or `Decimal128` counter into an int64, find the highest position an event holds, and raise
-the counter to at least that:
+Turn a double or `Decimal128` counter into an int64, find the highest position an event holds, and raise the counter
+to at least that:
 
 ```javascript
 db.events_position.updateOne({ _id: "dcb", position: { $type: ["double", "decimal"] } }, [{ $set: { position: { $toLong: { $ceil: "$position" } } } }])
@@ -237,19 +234,18 @@ db.events.find({ $expr: { $isNumber: "$position" } }, { position: 1 }).sort({ po
 db.events_position.updateOne({ _id: "dcb" }, { $max: { position: NumberLong("<n>") } }, { upsert: true })
 ```
 
-The first update keeps the counter's value and rounds a fraction up. On a `NaN`, an infinite counter or one beyond
-the int64 range it fails without changing anything, so handle that counter as the next paragraph describes. `<n>` is the position the `find` returns, or a higher position a consumer recorded if the
-counter document was lost rather than never written. A value above what is needed only skips some positions, which
-every store already allows. `upsert` creates the counter document when there is none, and `$max` raises only a
-number below `<n>`. Each update changes one document atomically and neither lowers the counter, so both are safe
-while the application runs. Keep the quotes in `NumberLong("<n>")`. mongosh stores a bare number outside the int32
-range as a double, which the stores refuse, and an unquoted number above 2^53 is rounded by JavaScript before
-`NumberLong` sees it.
+The first update changes only a double or `Decimal128` counter, and it keeps the value and rounds a fraction up, or
+fails and changes nothing. `<n>` is the highest of the position the `find` returns and every value you know the
+counter held, whether a consumer recorded it or an old copy of the counter document holds it, such as the one a
+rename left behind. A value above what is needed only skips some positions, which every store already allows.
+`upsert` creates the counter document when there is none, and `$max` never lowers the counter. Each update changes
+one document atomically, so both are safe while the application runs. Keep the quotes in `NumberLong("<n>")`. mongosh
+stores a bare number outside the int32 range as a double, which the stores refuse, and JavaScript rounds an unquoted
+number above 2^53 before `NumberLong` sees it.
 
-`$max` does not change a counter that is neither a number nor `null`, a string, an array, an object or a boolean
-for instance, because MongoDB orders every one of them above numbers. Restore such a counter from a backup if you can. Otherwise
-stop every application that writes to the store and replace it with `$set: { position: NumberLong("<n>") }` in place
-of `$max`, where `<n>` is at least the highest stored position and at least every position a consumer recorded.
+If the counter is still not a whole number the store accepts after that, which its next startup still refuses, stop
+every application that writes to the store and replace it with `$set: { position: NumberLong("<n>") }` in place of
+`$max`, where `<n>` is at least the highest stored position and at least every position a consumer recorded.
 
 `PositionBackfill.seedCounter()` from `occurrent-eventstore-mongodb-position-backfill` runs the same `$max` with
 `upsert`, to the number of events plus its `counterSeedSlack`, 10,000 by default, and fails on a counter document

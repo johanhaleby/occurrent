@@ -51,7 +51,7 @@ public final class UpdateEventRepairValidator {
     /**
      * Create the {@link IllegalStateException} to throw when {@code requireRepairedEvents(true)} is set and the event
      * collection holds an event whose position or tag index is wrong, whether Occurrent's own {@code updateEvent}
-     * damaged it or a position was set by hand.
+     * damaged it or a position was set by hand, or when the position counter is one the stores cannot use.
      *
      * @param eventStoreCollectionName the name of the event collection that contains damaged events
      * @return the exception to throw
@@ -66,9 +66,9 @@ public final class UpdateEventRepairValidator {
                 + " This store is configured to require repaired events, so it will not start. Run the repair"
                 + " described in " + RUNBOOK + ". An event the repair reports as unrecoverable can keep this store"
                 + " from starting until you fix it by hand as step 5 of the runbook describes, and the queries in"
-                + " its step 6 find every event that still does. A position counter below the highest position, a"
-                + " missing one counting as zero, or one that is not the int32 or int64 every writer stores keeps it"
-                + " from starting too, and step 5 says how to restore it. To start with the damage still in place,"
-                + " turn off requireRepairedEvents.");
+                + " its step 6 find every event that still does. A position counter that is not an int32 or an int64 of"
+                + " 0 or more, or that is below the highest position, with a missing counter read as zero, keeps it"
+                + " from starting too, and step 5 says how to fix it. To start with the damage still in place, turn"
+                + " off requireRepairedEvents.");
     }
 }

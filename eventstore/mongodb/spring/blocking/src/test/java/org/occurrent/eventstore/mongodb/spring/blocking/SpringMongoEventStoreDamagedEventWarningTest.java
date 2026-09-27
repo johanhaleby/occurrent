@@ -273,7 +273,8 @@ class SpringMongoEventStoreDamagedEventWarningTest {
             assertThatThrownBy(this::newStoreRequiringRepairedEvents)
                     .as("every writer stores the counter as an int32 or int64, which $inc keeps exact, a missing one reads as zero, and DCB reads and reads in position order stop at it, so only such a counter covering every position is one the stores handle")
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("updateEvent damaged");
+                    .hasMessageContaining("updateEvent damaged")
+                    .hasMessageContaining("position counter that is not an int32 or an int64 of 0 or more");
         }
     }
 
@@ -292,7 +293,8 @@ class SpringMongoEventStoreDamagedEventWarningTest {
             assertThatThrownBy(() -> newEventStore(builder -> builder.withoutStreamPosition().requireRepairedEvents(true)))
                     .as("with no event positioned only the counter itself can be wrong, and a missing one reads as zero, so the store starts over no counter or an int32 or int64 at or above zero and refuses anything else")
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("updateEvent damaged");
+                    .hasMessageContaining("updateEvent damaged")
+                    .hasMessageContaining("position counter that is not an int32 or an int64 of 0 or more");
         }
     }
 

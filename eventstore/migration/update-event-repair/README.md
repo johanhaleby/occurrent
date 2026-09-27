@@ -139,7 +139,7 @@ none of the original's extensions, so no position was stored. The tool will not 
   the position produces this. Reported as `POSITION_ABOVE_COUNTER`. The tag array is still rebuilt. Without a counter
   document, or with a counter that is not the int32 or int64 every writer stores, the tool has no ceiling to compare against and reports
   nothing on that ground. A store with `requireRepairedEvents(true)` refuses to start over such a counter, and step 5
-  of the runbook says how to restore it.
+  of the runbook says how to fix it.
 
 `eventsWithLostPosition()` on the result is separate from all of these. It is asked of the collection when the run
 finishes rather than tallied as the run goes, so it still counts an event whose tag array an earlier run rebuilt.

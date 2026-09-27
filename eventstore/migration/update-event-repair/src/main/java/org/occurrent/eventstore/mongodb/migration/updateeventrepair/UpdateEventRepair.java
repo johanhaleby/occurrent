@@ -671,7 +671,7 @@ public final class UpdateEventRepair {
     // The codes the MongoDB specifications retry a read or a write on, "Retryable Error" in
     // source/retryable-reads/retryable-reads.md and "Determining Retryable Write Errors" in
     // source/retryable-writes/retryable-writes.md at github.com/mongodb/specifications, and the list
-    // CommandOperationHelper holds in driver 5.5.2. The two specifications list the same codes but for 134, which only
+    // CommandOperationHelper holds in driver 5.8.0. The two specifications list the same codes but for 134, which only
     // a read gets. A command error and a write concern error can both hold one, since MongoWriteConcernException takes
     // its code from the write concern error. A server selection timeout is not on either list, so an outage that
     // outlasts the driver's server selection timeout ends the run, and running it again resumes from the checkpoint.
