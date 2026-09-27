@@ -40,15 +40,14 @@ import org.occurrent.subscription.RoutingOutcome;
  * It is {@link RoutingOutcome#FILTERED} when that
  * same subscription evaluated the event and declined it, and {@link RoutingOutcome#UNAVAILABLE} when there was
  * no running, unpaused subscription for the event to reach at all, whether because nothing is registered, the model
- * is stopped, or the subscription is paused. A caller acknowledging an externally sourced event may acknowledge on
- * {@link RoutingOutcome#DELIVERED} once {@code accept(...)} has completed normally, and on
- * {@link RoutingOutcome#FILTERED}, where redelivering would loop forever against this same registration, since
- * the event is not this consumer's under the filter currently registered for it. It must never acknowledge on any
- * of the other four, which is why {@link RoutingOutcome}'s values are kept apart rather than collapsed back into a
- * single flag. Read that enum for what each of them asks a caller to do next, since offering the event again,
- * applying a failure policy and stopping for good are three different answers.
- * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} also returns the outcome it reports here, so a broker
- * listener needs no observer to decide. The outcome shares the same
+ * is stopped, or the subscription is paused.
+ * <p>
+ * A broker listener acknowledges on the outcome the {@link reactor.core.publisher.Mono} from
+ * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} completes with, never on what this observer is told
+ * for {@code accept(...)}, which reports {@link RoutingOutcome#DELIVERED} for an action that errored too.
+ * {@link RoutingOutcome}'s values are kept apart rather than collapsed back into a single flag. Read that enum for
+ * what each of them asks a caller to do next, since offering the event again, applying a failure policy and
+ * stopping for good are three different answers. The outcome shares the same
  * filter evaluation the actual dispatch
  * decision is made from, so the two can never disagree, and no lifecycle transition landing between the evaluation
  * and this call can change which outcome is reported.

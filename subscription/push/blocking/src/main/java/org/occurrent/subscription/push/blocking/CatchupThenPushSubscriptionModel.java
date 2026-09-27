@@ -63,8 +63,9 @@ import java.util.stream.Stream;
  * <ul>
  *   <li><strong>Catch-up</strong> is Occurrent's job and runs once per subscription id. On subscribe this model
  *       registers on the live feed first and buffers, replays the store {@code position}-ordered up to the head at read
- *       time via {@link PositionOrderedReader}, then drains the buffer and goes live. An event that commits during the
- *       replay is delivered either by the replay or by the buffered feed, and the overlap is de-duplicated by the
+ *       time via {@link PositionOrderedReader}, then drains the buffer and goes live. An event that commits during a
+ *       replay that runs to the end, while the buffer has room, is delivered either by the replay or by the buffered
+ *       feed, and a full buffer refuses it. The overlap is de-duplicated by the
  *       CloudEvent id and source together (not by a position watermark: Occurrent positions can commit late and have permanent gaps, so a watermark would
  *       drop a late-committing low-position event, see ADR 62). Because buffering starts before the head is read, no
  *       reconcile pass is needed.</li>
@@ -79,17 +80,12 @@ import java.util.stream.Stream;
  *             {@link org.occurrent.subscription.RoutingOutcome#REFUSED} for every event, and the listener stops.
  *             Delivery is at-least-once, so applying the same event twice
  *             must leave the projection as applying it once would, the same contract as the change-stream path.</li>
- *         <li>Fed from the event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)}, nothing
- *             records which live events the subscription has handled. When the application crashes after a write
- *             has committed but before the handler has run, and the catch-up-complete marker below has been written,
- *             this subscription never sees that event, since the next start skips the replay. With no
- *             {@link CheckpointStorage} to write a marker in, every start replays the whole history, that event
- *             included. A crash during the replay is the other
- *             exception. {@code accept(...)} buffers an event arriving then and returns before it is applied, and the
- *             marker is written only after the buffered events are applied, so the next start replays that event too.
- *             That holds only while no other instance sharing the same marker storage writes the marker first, since
- *             the next start then skips the replay. Use a durable subscription if losing an event is not
- *             acceptable.</li>
+ *         <li>Fed from an event store's write path through {@link PushSubscriptionModel#accept(Iterable)}, which is
+ *             supported only for the in-memory event store, nothing records which live events the subscription has
+ *             handled. A crash before the handler has run loses the event from the in-memory event store too, so
+ *             after a crash the store never holds an event the subscription missed. With a durable event store,
+ *             such as MongoDB, use a durable subscription, or a broker as described above. The amendment to ADR 133
+ *             records why.</li>
  *       </ul></li>
  *   <li>A one-shot <strong>catch-up-complete marker</strong> (an optional {@link CheckpointStorage}) records that the
  *       replay finished, so a restart skips it and lets the broker resume. The stored value marks completion, it is not
@@ -242,7 +238,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     /**
      * @param reader          Reads the projection's history in position order for the catch-up replay.
-     * @param liveFeed        The live push feed the listener drives with {@code accept(...)}.
+     * @param liveFeed        The push model this model wraps. The in-memory event store's listener feeds it through
+     *                        {@code accept(...)}, and a broker listener through
+     *                        {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}.
      * @param catchupMarker Records that the one-time catch-up finished so a restart skips it, or {@code null} to
      *                        catch up on every subscribe.
      */
@@ -362,17 +360,16 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * only once the catch-up has reached live, {@code false} while replaying or buffering ahead of its own drain, and
      * {@code false} forever after a catch-up failure.
      * <p>
-     * A CloudEvent-level broker bridge that feeds the live {@link PushSubscriptionModel} this model wraps is safe to
-     * acknowledge from {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} alone, with no call to this method
-     * at all: {@link PushSubscriptionModel#acceptRedeliverable(io.cloudevents.CloudEvent)} already refuses, rather
-     * than buffers, a message this catch-up would only have buffered, reported
-     * {@link org.occurrent.subscription.RoutingOutcome#DEFERRED} so the bridge redelivers it instead of acknowledging.
-     * This method exists only for a bridge that wants to pace itself, skipping a fetch it can predict would come
-     * back {@code DEFERRED} rather than pulling the message off the broker and immediately handing it back. An
-     * optional throughput optimization, never a correctness dependency: a bridge that never calls this still
-     * acknowledges only on genuine delivery, just after a few more refuse-and-redeliver round trips than one that
-     * does. {@code false} for a {@code subscriptionId} this model never subscribed, or already cancelled, the safe
-     * answer for an id nothing here is tracking.
+     * A CloudEvent-level broker bridge that feeds the live {@link PushSubscriptionModel} this model wraps through
+     * {@link PushSubscriptionModel#acceptRedeliverable(io.cloudevents.CloudEvent)} needs no call to this method to
+     * decide whether to acknowledge. That call already refuses, rather than buffers, a message this catch-up would
+     * only have buffered, reported {@link org.occurrent.subscription.RoutingOutcome#DEFERRED} so the bridge
+     * redelivers it instead of acknowledging. This method exists only for a bridge that wants to pace itself,
+     * skipping a fetch it can predict would come back {@code DEFERRED} rather than pulling the message off the broker
+     * and immediately handing it back. It is an optional throughput optimization, never a correctness dependency,
+     * since a bridge that never calls this acknowledges the same messages, just after a few more refuse-and-redeliver
+     * round trips than one that does. {@code false} for a {@code subscriptionId} this model never subscribed, or
+     * already cancelled, the safe answer for an id nothing here is tracking.
      *
      * @param subscriptionId The subscription to ask about.
      */
