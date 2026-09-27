@@ -1858,6 +1858,44 @@ class ReactiveHandoverTest {
         }
     }
 
+    // L1's fold completes on the thread that offered L1, so the accept caller's continuation runs there right after it.
+    // That continuation is the caller's code, not this handover's, so the catch-up it makes waits for R2 to end.
+    @Test
+    void a_catch_up_the_accept_callers_continuation_makes_after_a_live_fold_waits_for_the_replay_that_started() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingL1 = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("L1")) {
+                foldingL1.countDown();
+                awaitLatchQuietly(releaseL1);
+            }
+            log.add(payload);
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        try {
+            StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+            CompletableFuture<Boolean> continued = handover.acceptIfLive("L1")
+                    .flatMap(ignored -> handover.catchUp(source(List.of(), true)))
+                    .flatMap(ignored -> handover.acceptIfLive("L2"))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .toFuture();
+            assertThat(foldingL1.await(5, TimeUnit.SECONDS)).isTrue();
+            CountDownLatch r2Holding = new CountDownLatch(1);
+            FakeSource r2 = source(List.of("R2"), false);
+            r2.onCaughtUpChecked = r2Holding::countDown;
+            CompletableFuture<Boolean> secondReplay = handover.catchUp(r2).toFuture();
+            assertThat(r2Holding.await(5, TimeUnit.SECONDS)).isTrue();
+
+            releaseL1.countDown();
+
+            assertThat(secondReplay.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(continued.get(5, TimeUnit.SECONDS)).as("whether L2 was accepted after the caller's catch-up").isTrue();
+            assertThat(log).containsExactly("L1", "R2", "L2");
+        } finally {
+            releaseL1.countDown();
+        }
+    }
+
     // Holds L1's fold until R2 has put its hold on live delivery in place and waits for that fold, then lets the fold
     // go on, and checks that L1 and R2 both finish.
     private static void assertThatALiveFoldGoesLiveWhileAReplayStarts(ReactiveHandover<String, String> handover, CountDownLatch foldingL1,

@@ -21,6 +21,8 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.HandoverMessages;
+import org.reactivestreams.Subscription;
+import reactor.core.CoreSubscriber;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoSink;
@@ -1183,9 +1185,48 @@ public final class ReactiveHandover<T, K> {
     }
 
     // Marks the thread only while it subscribes the fold or callback, so a later task on the same pooled thread is not
-    // taken for code of this handover.
+    // taken for code of this handover. The mark is lifted while a completion or error goes downstream, since a fold
+    // that completes on the thread that subscribed it would otherwise leave the thread marked while code that is not
+    // this handover's handles that signal, such as what a caller of acceptIfLive(..) runs next.
     private Mono<Void> subscribedAsOwnCode(Mono<Void> code) {
-        return Mono.from(subscriber -> runAsOwnCode(() -> code.subscribe(subscriber)));
+        return Mono.from(subscriber -> runAsOwnCode(() -> code.subscribe(new CoreSubscriber<Void>() {
+            @Override
+            public Context currentContext() {
+                return subscriber instanceof CoreSubscriber<?> downstream ? downstream.currentContext() : Context.empty();
+            }
+
+            @Override
+            public void onSubscribe(Subscription subscription) {
+                subscriber.onSubscribe(subscription);
+            }
+
+            @Override
+            public void onNext(Void value) {
+                runOutsideOwnCode(() -> subscriber.onNext(value));
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                runOutsideOwnCode(() -> subscriber.onError(error));
+            }
+
+            @Override
+            public void onComplete() {
+                runOutsideOwnCode(subscriber::onComplete);
+            }
+        })));
+    }
+
+    private void runOutsideOwnCode(Runnable code) {
+        Boolean outer = runningOwnCode.get();
+        runningOwnCode.remove();
+        try {
+            code.run();
+        } finally {
+            if (outer != null) {
+                runningOwnCode.set(outer);
+            }
+        }
     }
 
     private void runAsOwnCode(Runnable code) {
