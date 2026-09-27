@@ -66,6 +66,8 @@ import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModelConfig;
+import org.springframework.beans.factory.BeanCreationException;
+import org.springframework.beans.factory.BeanNotOfRequiredTypeException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -690,6 +692,12 @@ class LateRegistrationOnANonBlockingThreadTest {
         assertThat(LateSubscriber.retriable(new UnsupportedOperationException("cannot serve it"))).isFalse();
         assertThat(LateSubscriber.retriable(new NullPointerException("id cannot be null"))).isFalse();
         assertThat(LateSubscriber.retriable(new NoSuchBeanDefinitionException(CheckpointStorage.class))).describedAs("a bean the context does not have").isFalse();
+        assertThat(LateSubscriber.retriable(new BeanNotOfRequiredTypeException("checkpointStorage", CheckpointStorage.class, String.class)))
+                .describedAs("a bean of another type").isFalse();
+        assertThat(LateSubscriber.retriable(new BeanCreationException("checkpointStorage", "cannot be built", new NoSuchBeanDefinitionException(String.class))))
+                .describedAs("a bean that cannot be built because one it depends on is missing").isFalse();
+        assertThat(LateSubscriber.retriable(new BeanCreationException("checkpointStorage", "cannot be built", new IllegalStateException("storage is unreachable"))))
+                .describedAs("a bean whose factory failed, which the next attempt builds again").isTrue();
         assertThat(LateSubscriber.retriable(new SubscriptionModelShutdownException())).describedAs("a model that was shut down").isFalse();
         assertThat(LateSubscriber.retriable(new AssertionError("broken"))).isFalse();
         assertThat(LateSubscriber.retriable(reactor.core.Exceptions.propagate(new AssertionError("broken")))).describedAs("an Error block() rethrew").isFalse();

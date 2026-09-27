@@ -23,6 +23,8 @@ import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.BeanNotOfRequiredTypeException;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.Exceptions;
@@ -97,21 +99,25 @@ final class LateSubscriber {
     // configuration or restarting. Every other failure is logged once and gives back what it claimed.
     // An IllegalArgumentException, which every SubscriptionRefusedException is, a duplicate id and a refused filter or
     // start among them, says the call itself is wrong, and an UnsupportedOperationException says the model cannot serve
-    // it at all. A NullPointerException and an Error fail the same call the same way again. A BeansException says the
-    // context has no bean the subscribe needs, CheckpointStorage for a dynamic start for example, or failed to build
-    // one, and a SubscriptionModelShutdownException says the model was shut down and cannot be started again. Anything
-    // else is tried again, an IllegalStateException, which says something went wrong at the time or another node holds
-    // what the call needs, and whatever a storage or its driver throws, a Spring DataAccessException or a
-    // MongoException, which this module cannot name. block() rethrows a checked exception or an Error the JVM survives
-    // wrapped in a Reactor exception, which is looked through.
+    // it at all. A NullPointerException and an Error fail the same call the same way again. A
+    // NoSuchBeanDefinitionException says the context has no bean the subscribe needs, CheckpointStorage for a dynamic
+    // start for example, and a BeanNotOfRequiredTypeException says the bean it has is of another type. Either one
+    // counts as the cause of another BeansException too, a bean that cannot be built because a bean it depends on is
+    // missing for example. A SubscriptionModelShutdownException says the model was shut down and cannot be started
+    // again. Anything else is tried again. That covers an IllegalStateException, which says something went wrong at the
+    // time or another node holds what the call needs, and any other BeansException, since Spring keeps nothing of a bean
+    // it failed to build and builds it again on the next attempt. It also covers whatever a storage or its driver
+    // throws, a Spring DataAccessException or a MongoException, which this module cannot name. block() rethrows a
+    // checked exception or an Error the JVM survives wrapped in a Reactor exception, which is looked through.
     static boolean retriable(Throwable failure) {
         Throwable unwrapped = Exceptions.unwrap(failure);
         return !(unwrapped instanceof Error
                  || unwrapped instanceof IllegalArgumentException
                  || unwrapped instanceof UnsupportedOperationException
                  || unwrapped instanceof NullPointerException
-                 || unwrapped instanceof BeansException
-                 || unwrapped instanceof SubscriptionModelShutdownException);
+                 || unwrapped instanceof SubscriptionModelShutdownException
+                 || unwrapped instanceof BeansException beans
+                    && (beans.contains(NoSuchBeanDefinitionException.class) || beans.contains(BeanNotOfRequiredTypeException.class)));
     }
 
     // releaseOnGiveUp gives back what the registration claimed, once a subscribe moved to the scheduler stops trying.
