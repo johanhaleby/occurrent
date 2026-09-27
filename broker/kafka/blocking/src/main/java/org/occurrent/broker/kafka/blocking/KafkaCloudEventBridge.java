@@ -303,7 +303,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
                     if (e instanceof InterruptException) {
                         // Cleared so the next poll() can succeed. Kafka sets the interrupt flag again when it throws
                         // this, so otherwise every later poll() throws it too and the sleep below returns at once.
-                        Thread.interrupted();
+                        clearStrayInterrupt("the next poll()");
                     }
                     if (running) {
                         log.warn("The Kafka consume loop for group \"{}\" failed this iteration. Retrying after pollTimeout.",
@@ -315,7 +315,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         } catch (Throwable e) {
             // An Error, or a checked exception thrown without being declared, gets past the catch above and ends
             // this thread. Stopping for good makes the close below leave the group, so a static member frees its
-            // partitions now instead of after session.timeout.ms. Nothing from the batch in flight was committed.
+            // partitions now instead of after session.timeout.ms. Nothing further is committed.
             // This also leaves the group when close() had already asked for an ordinary close. A restarting static
             // member then triggers one rebalance, which is intended, since the next consumer resumes from the same
             // committed offset either way.
@@ -336,7 +336,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             // InterruptException right after one non-blocking attempt to send LEAVE_GROUP, instead of waiting up
             // to closeTimeout for it to go out. A handler that sets the flag and then throws an Error gets here
             // without passing either of the other places that clear it.
-            Thread.interrupted();
+            clearStrayInterrupt("closing the consumer");
             try {
                 if (permanentlyStopped) {
                     consumer.close(CloseOptions.timeout(closeTimeout)
@@ -347,8 +347,9 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             } catch (RuntimeException e) {
                 log.warn("Failed to close the Kafka consumer cleanly during shutdown.", e);
             } finally {
-                // A permanent stop never calls close(), so nothing else closes the parking producer failureAction
-                // owns. A finally, so an Error from the Consumer close above does not skip it either.
+                // A permanent stop never calls close() itself, nothing is coming back to trigger it, so the parking
+                // producer failureAction owns would otherwise leak until some other caller happens to close this
+                // bridge. A finally, so an Error from the Consumer close above does not skip it either.
                 // KafkaDeliveryFailureAction#close() does nothing on a second call, so close() calling it again
                 // afterward, on an ordinary shutdown, is harmless.
                 failureAction.close();
@@ -477,7 +478,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             // Cleared so a handler that left this thread's interrupt flag set does not fail this batch's commit. On an
             // interrupted thread commitSync throws InterruptException, which is not retriable, right after its first
             // attempt to send the commit and without waiting to learn whether the broker applied it.
-            Thread.interrupted();
+            clearStrayInterrupt("committing this batch");
             try {
                 commitWithRetry(toCommit);
             } catch (RuntimeException e) {
@@ -531,6 +532,16 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     private Duration remainingCloseBudget() {
         long remainingNanos = closeDeadlineNanos - System.nanoTime();
         return Duration.ofNanos(Math.max(remainingNanos, 0));
+    }
+
+    // Clears the loop thread's interrupt flag, logged at debug when it was set. When a PushObserver catches an
+    // InterruptedException the flag is set again so the caller can act on it. Nothing in this loop acts on an
+    // interrupt, so the log line is the only trace left of one.
+    private void clearStrayInterrupt(String before) {
+        if (Thread.interrupted()) {
+            log.debug("Cleared an interrupt left set on the Kafka consume loop thread for group \"{}\" before {}.",
+                    consumer.groupMetadata().groupId(), before);
+        }
     }
 
     // Sleeps for duration, restoring the interrupt flag rather than propagating it, since the loop thread has
