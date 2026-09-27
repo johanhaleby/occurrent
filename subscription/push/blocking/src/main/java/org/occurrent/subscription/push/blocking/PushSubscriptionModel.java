@@ -49,8 +49,8 @@ import java.util.function.Consumer;
  * in-memory event store. This model keeps no record of which events the subscription has handled, and a crash before
  * the handler has run loses the event from the in-memory event store too, so the subscription never misses an event
  * the store still has. With a durable event store, such as MongoDB, the subscription never sees an event when the
- * application crashes after the write has committed but before the handler has run. Use a durable subscription there, or forward the events to a broker whose listener calls
- * {@link #acceptRedeliverable(CloudEvent)}.
+ * application crashes after the write has committed but before the handler has run. Use a durable subscription there,
+ * or forward the events to a broker whose listener calls {@link #acceptRedeliverable(CloudEvent)}.
  * <p>
  * Fed from a broker, call {@link #acceptRedeliverable(CloudEvent)} and acknowledge the message only when the
  * {@link RoutingOutcome} it returns is {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}.

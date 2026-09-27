@@ -49,12 +49,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * in-memory event store. This model keeps no record of which events the subscription has handled, and a crash before
  * the handler has run loses the event from the in-memory event store too, so the subscription never misses an event
  * the store still has. With a durable event store, such as MongoDB, the subscription never sees an event when the
- * application crashes after the write has committed but before the handler has run. Use a durable subscription there, or forward the events to a broker whose listener calls
- * {@link #acceptRedeliverable(CloudEvent)}.
+ * application crashes after the write has committed but before the handler has run. Use a durable subscription there,
+ * or forward the events to a broker whose listener calls {@link #acceptRedeliverable(CloudEvent)}.
  * <p>
  * Fed from a broker, call {@link #acceptRedeliverable(CloudEvent)} and acknowledge the message only when its
- * {@link Mono} completes with {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}. That method says what each of the other
- * outcomes asks for, {@link RoutingOutcome#REFUSED} being the one that means stop consuming.
+ * {@link Mono} completes with {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}. That method says
+ * what each of the other outcomes asks for, {@link RoutingOutcome#REFUSED} being the one that means stop consuming.
  * <p>
  * <strong>One model feeds one subscription</strong>, and a second {@code subscribe} is refused. The acknowledgement is
  * what forces it: this model has exactly one per received event, so several handlers on it would share the decision to
