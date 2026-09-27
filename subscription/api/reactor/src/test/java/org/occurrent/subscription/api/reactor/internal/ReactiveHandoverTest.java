@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -1937,6 +1938,69 @@ class ReactiveHandoverTest {
         assertThat(log).containsExactly("R1", "L1");
     }
 
+    // replayCompleted() runs before the replay gives back its hold on live delivery, so a catch-up with nothing to
+    // replay it blocks on would wait for a replay that is waiting for replayCompleted() to complete.
+    @Test
+    void a_catch_up_with_nothing_to_replay_replay_completed_blocks_on_answers_without_waiting() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Object> answers = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> log.add(payload)),
+                payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        FakeSource replaying = source(List.of("R1"), false);
+        replaying.onReplayCompleted = () -> answers.add(answerOrFailure(() -> handover.catchUp(source(List.of(), true)).block(Duration.ofSeconds(5))));
+
+        StepVerifier.create(handover.catchUp(replaying)).expectNext(true).expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(answers).containsExactly(true);
+        assertThat(handover.acceptIfLive("L1").block(Duration.ofSeconds(5))).isTrue();
+        assertThat(log).containsExactly("R1", "L1");
+    }
+
+    // A replay that starts waits for alreadyDeliveredByReplay(..) the way it waits for a live fold, so a catch-up with
+    // nothing to replay that call blocks on would wait for a replay that is waiting for it.
+    @Test
+    void a_catch_up_with_nothing_to_replay_already_delivered_by_replay_blocks_on_while_a_replay_starts_answers_without_waiting() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Object> answers = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> log.add(payload)),
+                payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        FakeSource replayed = source(List.of("R1"), false);
+        StepVerifier.create(handover.catchUp(replayed)).expectNext(true).expectComplete().verify(Duration.ofSeconds(10));
+        CountDownLatch reportingR1 = new CountDownLatch(1);
+        CountDownLatch releaseReport = new CountDownLatch(1);
+        replayed.onAlreadyDeliveredByReplay = () -> {
+            reportingR1.countDown();
+            awaitLatchQuietly(releaseReport);
+            answers.add(answerOrFailure(() -> handover.catchUp(source(List.of(), true)).block(Duration.ofSeconds(5))));
+        };
+        try {
+            CompletableFuture<Boolean> reporting = handover.acceptIfLive("R1").subscribeOn(Schedulers.boundedElastic()).toFuture();
+            assertThat(reportingR1.await(5, TimeUnit.SECONDS)).isTrue();
+            CountDownLatch r2Holding = new CountDownLatch(1);
+            FakeSource r2 = source(List.of("R2"), false);
+            r2.onCaughtUpChecked = r2Holding::countDown;
+            CompletableFuture<Boolean> secondReplay = handover.catchUp(r2).toFuture();
+            assertThat(r2Holding.await(5, TimeUnit.SECONDS)).isTrue();
+
+            releaseReport.countDown();
+
+            assertThat(reporting).succeedsWithin(Duration.ofSeconds(10)).isEqualTo(true);
+            assertThat(secondReplay).succeedsWithin(Duration.ofSeconds(10)).isEqualTo(true);
+            assertThat(answers).containsExactly(true);
+            assertThat(log).containsExactly("R1", "R2");
+        } finally {
+            releaseReport.countDown();
+        }
+    }
+
+    private static Object answerOrFailure(Supplier<Object> call) {
+        try {
+            return call.get();
+        } catch (RuntimeException e) {
+            return e;
+        }
+    }
+
     // replayAbandoned() runs before a stopped replay gives back its hold on live delivery, and this engine swallows
     // what it throws, so the answer it got is the only trace of a call that waited.
     @Test
@@ -2156,6 +2220,7 @@ class ReactiveHandoverTest {
         private Runnable onReplayStarted;
         private Runnable onReplayCompleted;
         private Runnable onReplayAbandoned;
+        private Runnable onAlreadyDeliveredByReplay;
         private Runnable onHistoryDone;
         private Runnable onLiveDrained;
         private Runnable onCaughtUpChecked;
@@ -2170,7 +2235,12 @@ class ReactiveHandoverTest {
 
         @Override
         public Mono<Void> alreadyDeliveredByReplay(String payload) {
-            return Mono.fromRunnable(() -> alreadyDeliveredByReplay.add(payload));
+            return Mono.fromRunnable(() -> {
+                alreadyDeliveredByReplay.add(payload);
+                if (onAlreadyDeliveredByReplay != null) {
+                    onAlreadyDeliveredByReplay.run();
+                }
+            });
         }
 
         private void stopAfter(int deliveries) {
