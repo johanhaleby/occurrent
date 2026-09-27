@@ -175,10 +175,12 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * walking each one into a refusal that would only repeat. Whatever this batch already resolved before the stop, on
  * this partition or any other, is still committed.
  * <p>
- * A handler that throws an {@link Error} other than {@link AssertionError}, or a checked exception it never
- * declared, also stops this bridge for good. Nothing from the batch it was handling is committed, the
- * {@code Consumer} leaves its group even under static membership, and the throwable is rethrown on the loop
- * thread.
+ * An {@link Error}, or a checked exception thrown without being declared, from anything the poll loop calls (a
+ * handler, a filter, a push observer, the {@code readinessSource}, the parking producer or the {@code Consumer}
+ * itself) also stops this bridge for good. The one exception is an {@link AssertionError} from a filter or a
+ * handler, which goes through the {@link DeliveryFailurePolicy} like a {@code RuntimeException}. Nothing further is
+ * committed, the {@code Consumer} leaves its group even under static membership, and the throwable is rethrown on
+ * the loop thread.
  * <p>
  * <strong>Ordering.</strong> A partitioned topic gives no global order. Two events on different partitions can be
  * processed in either order by this bridge, whatever their publish order was. Events for one stream stay in order
@@ -216,9 +218,10 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     private volatile long closeDeadlineNanos = Long.MAX_VALUE;
 
     private volatile boolean running = true;
-    // Set from the loop thread itself, inside handleRecord, on a permanently failed catch-up. Checked in
-    // shouldConsume() so this bridge never resumes fetching once it has stopped for that reason. running is also
-    // set false in the same place, which is what actually ends the loop, see the class javadoc.
+    // Set from the loop thread itself, inside handleRecord on a permanently failed catch-up, or in runLoop when an
+    // Error or an undeclared checked exception ends the loop. Checked in shouldConsume() so this bridge never
+    // resumes fetching once it has stopped, and in runLoop's finally to close with LEAVE_GROUP. running is also set
+    // false in both places, which is what actually ends the loop, see the class javadoc.
     private volatile boolean permanentlyStopped = false;
 
     private KafkaCloudEventBridge(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model,
@@ -304,14 +307,17 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
                 }
             }
         } catch (Throwable e) {
-            // An Error, or a checked exception a handler threw without declaring it, gets past the catch above and
-            // ends this thread. Stopping for good makes the close below leave the group, so a static member frees
-            // its partitions now instead of after session.timeout.ms. Nothing from the batch in flight was committed.
+            // An Error, or a checked exception thrown without being declared, gets past the catch above and ends
+            // this thread. Stopping for good makes the close below leave the group, so a static member frees its
+            // partitions now instead of after session.timeout.ms. Nothing from the batch in flight was committed.
+            // This also leaves the group when close() had already asked for an ordinary close. A restarting static
+            // member then triggers one rebalance, which is intended, since the next consumer resumes from the same
+            // committed offset either way.
             permanentlyStopped = true;
             running = false;
             log.error("The Kafka consume loop for group \"{}\" failed outside this bridge's delivery failure policy. "
-                    + "Stopping this bridge and leaving its consumer group. The record being handled is left "
-                    + "uncommitted, so the next consumer in this group receives it again.",
+                    + "Stopping this bridge and leaving its consumer group without committing anything further. The "
+                    + "next consumer in this group resumes from the last committed offset.",
                     consumer.groupMetadata().groupId(), e);
             throw e;
         } finally {
@@ -329,15 +335,13 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
                 }
             } catch (RuntimeException e) {
                 log.warn("Failed to close the Kafka consumer cleanly during shutdown.", e);
+            } finally {
+                // A permanent stop never calls close(), so nothing else closes the parking producer failureAction
+                // owns. A finally, so an Error from the Consumer close above does not skip it either.
+                // KafkaDeliveryFailureAction#close() does nothing on a second call, so close() calling it again
+                // afterward, on an ordinary shutdown, is harmless.
+                failureAction.close();
             }
-            // The permanent-stop path above (permanentlyStopped) is one ordinary way this loop exits, but it can
-            // also exit here without close() ever having run, an uncaught Error escaping the try above, most
-            // notably. Closing
-            // failureAction here too, independently of the Consumer close above, means the parking producer it
-            // owns is never left open past this thread's own teardown. KafkaDeliveryFailureAction#close()
-            // already does nothing on a second call, so close() calling it again afterward, on an ordinary
-            // shutdown, is harmless.
-            failureAction.close();
         }
     }
 

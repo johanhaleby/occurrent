@@ -114,10 +114,11 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * earliest fetched record instead of walking each one into a refusal that would only repeat. Whatever this batch
  * already resolved before the stop, on this partition or any other, is still committed.
  * <p>
- * A projection that throws an {@link Error} other than {@link AssertionError}, or a checked exception it never
- * declared, also stops this bridge for good. Nothing from the batch it was handling is committed, the
- * {@code Consumer} leaves its group even under static membership, and the throwable is rethrown on the loop
- * thread.
+ * An {@link Error}, or a checked exception thrown without being declared, from anything the poll loop calls (the
+ * feed, the projection it delivers to, the parking producer or the {@code Consumer} itself) also stops this bridge
+ * for good. The one exception is an {@link AssertionError} from the feed or its projection, which goes through the
+ * {@link DeliveryFailurePolicy} like a {@code RuntimeException}. Nothing further is committed, the {@code Consumer}
+ * leaves its group even under static membership, and the throwable is rethrown on the loop thread.
  * <p>
  * <strong>One dedicated thread owns the {@code Consumer} end to end</strong>, unlike {@code RabbitMqDomainEventBridge}'s
  * split between a scheduler thread and an AMQP callback thread. A Kafka {@code Consumer} is not thread-safe, so this
@@ -262,14 +263,17 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                 }
             }
         } catch (Throwable e) {
-            // An Error, or a checked exception a handler threw without declaring it, gets past the catch above and
-            // ends this thread. Stopping for good makes the close below leave the group, so a static member frees
-            // its partitions now instead of after session.timeout.ms. Nothing from the batch in flight was committed.
+            // An Error, or a checked exception thrown without being declared, gets past the catch above and ends
+            // this thread. Stopping for good makes the close below leave the group, so a static member frees its
+            // partitions now instead of after session.timeout.ms. Nothing from the batch in flight was committed.
+            // This also leaves the group when close() had already asked for an ordinary close. A restarting static
+            // member then triggers one rebalance, which is intended, since the next consumer resumes from the same
+            // committed offset either way.
             permanentlyStopped = true;
             running = false;
             log.error("The Kafka consume loop for group \"{}\" failed outside this bridge's delivery failure policy. "
-                    + "Stopping this bridge and leaving its consumer group. The record being handled is left "
-                    + "uncommitted, so the next consumer in this group receives it again.",
+                    + "Stopping this bridge and leaving its consumer group without committing anything further. The "
+                    + "next consumer in this group resumes from the last committed offset.",
                     consumer.groupMetadata().groupId(), e);
             throw e;
         } finally {
@@ -287,13 +291,14 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                 }
             } catch (RuntimeException e) {
                 log.warn("Failed to close the Kafka consumer cleanly during shutdown.", e);
+            } finally {
+                // A permanent stop never calls close() itself, nothing is coming back to trigger it, so the parking
+                // producer failureAction owns would otherwise leak until some other caller happens to close this
+                // bridge. A finally, so an Error from the Consumer close above does not skip it either.
+                // KafkaDeliveryFailureAction#close() already does nothing on a second call, so close() calling it
+                // again afterward, on an ordinary shutdown, is harmless.
+                failureAction.close();
             }
-            // A permanent stop never calls close() itself, nothing is coming back to trigger it, so the parking
-            // producer failureAction owns would otherwise leak until some other caller happens to close this
-            // bridge. Closed here too, independently of the Consumer close above, so one failing does not skip
-            // the other. KafkaDeliveryFailureAction#close() already does nothing on a second call, so close()
-            // calling it again afterward, on an ordinary shutdown, is harmless.
-            failureAction.close();
         }
     }
 
