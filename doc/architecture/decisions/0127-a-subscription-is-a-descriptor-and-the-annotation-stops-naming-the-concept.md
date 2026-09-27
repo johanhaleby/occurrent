@@ -368,8 +368,9 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > `NullPointerException` and an `Error` say the call itself is wrong. A `NoSuchBeanDefinitionException` says the
 > context has no bean the subscribe needs, a `BeanNotOfRequiredTypeException` says the bean it has is of another
 > type, and a `BeanIsAbstractException` says its definition is only a template. A `SubscriptionModelShutdownException` says the model was shut down and
-> can't be started again. `ReactorMongoSubscriptionModel`, `ReactorDurableSubscriptionModel` and the reactor catch-up
-> models throw it from a `subscribe` with a subscription id once they are shut down, the catch-up models before replaying any history. The
+> can't be started again. `ReactorMongoSubscriptionModel`, `ReactorDurableSubscriptionModel` and a reactor catch-up
+> model over a model that manages named subscriptions throw it from a `subscribe` with a subscription id once they are
+> shut down, the catch-up models before replaying any history. The
 > durable model throws it itself, whatever it wraps, so a late subscribe on the model the starter builds gets it
 > before anything is replayed. Both check again once the subscribe has claimed its id, so a shutdown that runs at the
 > same time either makes the subscribe throw or cancels what it claimed. Everything else is tried again, an
