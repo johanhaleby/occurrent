@@ -53,7 +53,7 @@ public class EventStoreConfig {
     // migration has run.
     private static final boolean DEFAULT_REQUIRE_BACKFILLED_POSITION = false;
     // Default to a warning rather than a hard fail on events that pre-0.34.0 updateEvent damaged, so an operator can
-    // opt into failing until the repair has run.
+    // opt into failing while any are left.
     private static final boolean DEFAULT_REQUIRE_REPAIRED_EVENTS = false;
 
     public final TransactionOptions transactionOptions;
@@ -70,8 +70,8 @@ public class EventStoreConfig {
     // When true, construction fails instead of warning if the store writes position but the event collection already
     // contains events without one.
     public final boolean requireBackfilledPosition;
-    // When true, construction fails instead of warning if the event collection holds events that pre-0.34.0
-    // updateEvent damaged.
+    // When true, construction fails instead of warning if the event collection holds events whose position or tag
+    // index is wrong, such as the ones pre-0.34.0 updateEvent damaged.
     public final boolean requireRepairedEvents;
 
     /**
@@ -300,18 +300,31 @@ public class EventStoreConfig {
         }
 
         /**
-         * When the event collection holds events that {@code updateEvent} damaged in Occurrent 0.33.0 or earlier,
-         * fail construction with an {@link IllegalStateException} instead of only logging a warning. Such an event
-         * has its position stored as a string, which makes it invisible to position-ordered reads, to DCB reads and
-         * to the conflict query behind a conditional append, so an append that should have been refused is accepted
-         * instead. Off by default. Turn it on to keep the application down until the repair described in
-         * {@code doc/runbooks/update-event-repair.md} has run.
+         * When the event collection holds an event, or the position counter a value, that no store would have
+         * written, fail construction with an {@link IllegalStateException}. That is any event whose position is not a
+         * positive integer, any DCB event whose {@code dcbtags} has a line that is empty or has whitespace around it or
+         * whose {@code dcbTags} index does not hold the tags its {@code dcbtags} lists, any event with a {@code dcbTags}
+         * field and no {@code dcbtags}, a counter that is not an int32 or int64 at or above zero, the types every writer stores, and a position
+         * above the counter, which counts as zero when the counter document is missing, as every read takes it to be.
+         * Reads in position order skip an event with such a position, read it wrong or fail on it, and with no counter
+         * they return nothing. DCB reads find a DCB event by its index alone, so they skip it under a tag the index
+         * lacks or find it under one it does not have, and a conditional append can then miss a conflict with a DCB
+         * event they skip. Occurrent's own {@code updateEvent}
+         * produced such events in 0.33.0 or earlier, by storing a position as a string or by dropping a DCB event's
+         * {@code dcbTags} index, its position, or both, and a position set by hand can produce one too. A non DCB event
+         * with no position field at all is what {@code requireBackfilledPosition} checks instead. Off by default, and
+         * then a store that writes position logs a warning about a string position and says nothing about the rest.
+         * Turn it on to keep the application down while such an event is left.
+         *
+         * <p>An event the repair described in {@code doc/runbooks/update-event-repair.md} cannot fix, such as a DCB
+         * event whose position is gone, can keep the store from starting until you fix it by hand, as step 5 of that
+         * runbook describes, or turn this off once you have accepted it. Step 6 of that runbook runs the same checks
+         * as queries. No index can compare a {@code dcbTags} index with {@code dcbtags}, so a startup that finds no
+         * damage reads the whole collection.
          *
          * <p>This applies whether or not the store writes position, since the two ways a store ends up writing none
          * are {@code withoutStreamPosition()} and position being turned off at startup over unpositioned history,
-         * and neither means the damage stopped mattering. The check reads no index keys where the position index
-         * exists, which is where the store writes position, so on a store that writes none it can cost a collection
-         * scan at startup.
+         * and neither means the damage stopped mattering.
          *
          * @return The same {@code Builder} instance.
          */

@@ -22,6 +22,7 @@ import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
+import com.mongodb.client.model.Projections;
 import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
@@ -43,6 +44,7 @@ import org.occurrent.eventstore.api.reactor.*;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
+import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
@@ -62,7 +64,6 @@ import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.ReactiveBulkOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.schema.JsonSchemaObject;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.transaction.reactive.TransactionalOperator;
@@ -828,14 +829,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         });
     }
 
-    // Warns, or errors when requireRepairedEvents is set, when the collection holds events that updateEvent damaged
-    // before 0.34.0, which stored position as a string. Those events are missing from every position query and from
-    // the conflict query behind a conditional append. A string position sits in its own type range in the position
-    // index, so where that index exists this reads no keys at all on a store that was never damaged. A store that
-    // writes no position has no such index, so requireRepairedEvents pays a collection scan there.
+    // Warns, or errors when requireRepairedEvents is set, when the collection holds events whose position or tag
+    // index is wrong. The warning looks for a string position only, what updateEvent wrote before 0.34.0, which reads no
+    // index keys on a store that was never damaged. requireRepairedEvents refuses every event whose position is not a
+    // positive integer, every event whose tag fields are not what an append writes, a counter no writer would
+    // store and a position above the counter, a missing one counting as zero, at the cost of a collection scan.
     private Mono<Void> warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
-        Query damagedQuery = new Query(where(OccurrentCloudEventExtension.POSITION).type(JsonSchemaObject.Type.STRING));
-        return mongoTemplate.exists(damagedQuery, eventStoreCollectionName).flatMap(hasDamagedEvents -> {
+        Bson damaged = requireRepairedEvents ? UpdateEventDamage.wrongPositionOrTagIndex() : UpdateEventDamage.positionStoredAsString();
+        return mongoTemplate.execute(eventStoreCollectionName, collection ->
+                        collection.find(damaged).limit(1).projection(Projections.include(ID)).first()).hasElements()
+                .flatMap(hasDamagedEvents -> hasDamagedEvents || !requireRepairedEvents ? Mono.just(hasDamagedEvents) : wrongCounter(eventStoreCollectionName, mongoTemplate))
+                .flatMap(hasDamagedEvents -> {
             if (!hasDamagedEvents) {
                 return Mono.<Void>empty();
             }
@@ -845,6 +849,24 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             LOGGER.warn(UpdateEventRepairValidator.damagedEventsMessage(eventStoreCollectionName));
             return Mono.<Void>empty();
         });
+    }
+
+    // Reads the highest position before the counter, which is what keeps an append in flight from looking like a
+    // position above it. UpdateEventDamage.wrongCounter says why.
+    private Mono<Boolean> wrongCounter(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
+        return mongoTemplate.execute(eventStoreCollectionName, collection ->
+                        collection.find(UpdateEventDamage.positionIsANumber())
+                                .sort(com.mongodb.client.model.Sorts.descending(OccurrentCloudEventExtension.POSITION))
+                                .limit(1)
+                                .projection(Projections.include(OccurrentCloudEventExtension.POSITION))
+                                .first())
+                .next()
+                .map(Optional::of)
+                .defaultIfEmpty(Optional.empty())
+                .flatMap(highestPositioned -> mongoTemplate.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName)
+                        .map(Optional::of)
+                        .defaultIfEmpty(Optional.empty())
+                        .map(counter -> UpdateEventDamage.wrongCounter(highestPositioned.orElse(null), counter.orElse(null))));
     }
 
     private static Mono<String> createIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate, Bson index, IndexOptions indexOptions) {

@@ -34,11 +34,22 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.occurrent.testsupport.mongodb.StoredPositionShapes;
+import org.occurrent.testsupport.mongodb.StoredPositionShapes.Kind;
+import org.occurrent.testsupport.mongodb.StoredPositionShapes.Shape;
+import org.occurrent.testsupport.mongodb.StoredCounterShapes;
+import org.occurrent.testsupport.mongodb.StoredTagShapes;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -70,6 +81,7 @@ class MongoEventStoreDamagedEventWarningTest {
 
     private static final URI SOURCE = URI.create("urn:test");
     private static final String EVENT_COLLECTION = "events";
+    private static final Tag TAG = Tag.parse("name:1");
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
@@ -161,6 +173,127 @@ class MongoEventStoreDamagedEventWarningTest {
         assertThatNoException()
                 .as("the same setting must let a repaired store start, otherwise it refuses on the setting rather than on the damage")
                 .isThrownBy(this::newStoreRequiringRepairedEvents);
+    }
+
+    @Test
+    void a_store_told_to_require_repaired_events_refuses_a_dcb_event_that_lost_its_position_even_once_its_tag_index_is_rebuilt() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        // What the old write-back left when an update function returned a DCB event built from scratch. No string
+        // position is involved, so only a check that looks at the tag index can see it.
+        loseTheTagIndex();
+        dropPositionFromTheOldestEvent();
+
+        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                .as("a DCB event without its tag index is missing from the conflict query whatever its position is")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+
+        // The state the repair writes for a POSITION_LOST event
+        rebuildTheTagIndex();
+
+        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                .as("a DCB event without a position is still missing from DCB reads and the conflict query, so the store must keep refusing")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+    }
+
+    @Test
+    void a_store_told_to_require_repaired_events_refuses_a_dcb_event_that_lost_its_tag_index_but_has_a_numeric_position() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        // An operator who sets a POSITION_ALREADY_TAKEN event's position by hand produces this, until the second
+        // repair run rebuilds its tag index.
+        loseTheTagIndex();
+
+        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                .as("a numeric position does not make a DCB event without its tag index visible to the conflict query")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+
+        rebuildTheTagIndex();
+
+        assertThatNoException()
+                .as("the same event with its tag index rebuilt is repaired, and that collection must start")
+                .isThrownBy(this::newStoreRequiringRepairedEvents);
+    }
+
+    @ParameterizedTest(name = "{0} on {1}")
+    @MethodSource("org.occurrent.testsupport.mongodb.StoredPositionShapes#onADcbAndAPlainEvent")
+    void a_store_told_to_require_repaired_events_starts_only_when_every_position_is_a_positive_integer_no_greater_than_the_counter(Shape shape, Kind kind) {
+        newEventStore().write("stream:1", List.of(event("Defined"), event("Renamed")));
+        assertThat(counter())
+                .as("every case assumes this counter, so that a fraction below it is refused for its fraction alone")
+                .isEqualTo(StoredPositionShapes.COUNTER);
+        StoredPositionShapes.give(mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION), shape, kind, dcbFields());
+
+        if (shape.startsOn(kind)) {
+            assertThatNoException()
+                    .as("a positive integer no greater than the counter is a position the store assigned, and a plain event without one predates position")
+                    .isThrownBy(this::newStoreRequiringRepairedEvents);
+        } else {
+            assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                    .as("anything else is not a position the store assigned, and reads skip it, read it as another value or fail on it")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("updateEvent damaged");
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("org.occurrent.testsupport.mongodb.StoredTagShapes#shapes")
+    void a_store_told_to_require_repaired_events_starts_only_when_a_dcb_events_tag_index_holds_the_tags_it_lists(StoredTagShapes.Shape shape) {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        StoredTagShapes.give(mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION), shape);
+
+        if (shape.starts()) {
+            assertThatNoException()
+                    .as("an index holding the tags dcbtags lists is what every append writes, and a plain event has neither")
+                    .isThrownBy(this::newStoreRequiringRepairedEvents);
+        } else {
+            assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                    .as("DCB reads and the conflict query find an event by its index alone, so any other index hides it from them or shows it under the wrong tags")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("updateEvent damaged");
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("org.occurrent.testsupport.mongodb.StoredCounterShapes#shapes")
+    void a_store_told_to_require_repaired_events_starts_only_over_a_counter_a_writer_stores_and_no_position_above_it(StoredCounterShapes.Shape shape) {
+        newEventStore().write("stream:1", List.of(event("Defined"), event("Renamed")));
+        assertThat(counter()).isEqualTo(StoredPositionShapes.COUNTER);
+        StoredCounterShapes.give(mongoClient.getDatabase(databaseName).getCollection(DcbMarkerModel.positionCollectionName(EVENT_COLLECTION)),
+                DcbMarkerModel.POSITION_DOCUMENT_ID, DcbMarkerModel.COUNTER_POSITION, shape);
+
+        if (shape.starts()) {
+            assertThatNoException()
+                    .as("every writer stores the counter as an int32 or int64, which $inc keeps exact, a missing one reads as zero, and DCB reads and reads in position order stop at it, so only such a counter covering every position is one the stores handle")
+                    .isThrownBy(this::newStoreRequiringRepairedEvents);
+        } else {
+            assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                    .as("every writer stores the counter as an int32 or int64, which $inc keeps exact, a missing one reads as zero, and DCB reads and reads in position order stop at it, so only such a counter covering every position is one the stores handle")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("updateEvent damaged")
+                    .hasMessageContaining("position counter that is not an int32 or an int64 of 0 or more");
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("org.occurrent.testsupport.mongodb.StoredCounterShapes#shapesOverUnpositionedEvents")
+    void a_store_told_to_require_repaired_events_over_events_without_a_position_starts_only_over_a_counter_a_writer_stores(StoredCounterShapes.Shape shape) {
+        newStoreWithoutPositionRequiringRepairedEvents().write("stream:1", List.of(event("Defined"), event("Renamed")));
+        StoredCounterShapes.give(mongoClient.getDatabase(databaseName).getCollection(DcbMarkerModel.positionCollectionName(EVENT_COLLECTION)),
+                DcbMarkerModel.POSITION_DOCUMENT_ID, DcbMarkerModel.COUNTER_POSITION, shape);
+
+        if (shape.starts()) {
+            assertThatNoException()
+                    .as("with no event positioned only the counter itself can be wrong, and a missing one reads as zero, so the store starts over no counter or an int32 or int64 at or above zero and refuses anything else")
+                    .isThrownBy(this::newStoreWithoutPositionRequiringRepairedEvents);
+        } else {
+            assertThatThrownBy(this::newStoreWithoutPositionRequiringRepairedEvents)
+                    .as("with no event positioned only the counter itself can be wrong, and a missing one reads as zero, so the store starts over no counter or an int32 or int64 at or above zero and refuses anything else")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("updateEvent damaged")
+                    .hasMessageContaining("position counter that is not an int32 or an int64 of 0 or more");
+        }
     }
 
     @Test
@@ -258,6 +391,30 @@ class MongoEventStoreDamagedEventWarningTest {
                 new Document(OccurrentCloudEventExtension.POSITION, new Document("$type", "long"))).first());
         events.updateOne(new Document("_id", withNumericPosition.get("_id")),
                 new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
+    }
+
+    // A DCB event that updateEvent rewrote kept its dcbtags extension and lost the dcbTags index derived from it.
+    private void loseTheTagIndex() {
+        MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
+        events.updateOne(new Document(), new Document("$set", new Document(DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(List.of(TAG)))));
+    }
+
+    private void rebuildTheTagIndex() {
+        MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
+        events.updateOne(new Document(), new Document("$set", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, List.of(TAG.canonical()))));
+    }
+
+    private static Document dcbFields() {
+        return new Document(DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(List.of(TAG)))
+                .append(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, List.of(TAG.canonical()));
+    }
+
+    private long counter() {
+        Document counter = requireNonNull(mongoClient.getDatabase(databaseName)
+                .getCollection(DcbMarkerModel.positionCollectionName(EVENT_COLLECTION))
+                .find(new Document("_id", DcbMarkerModel.POSITION_DOCUMENT_ID)).first());
+        // Spring increments by an int, so the counter is not always an int64
+        return ((Number) requireNonNull(counter.get(DcbMarkerModel.COUNTER_POSITION))).longValue();
     }
 
     private void makePositionAString() {

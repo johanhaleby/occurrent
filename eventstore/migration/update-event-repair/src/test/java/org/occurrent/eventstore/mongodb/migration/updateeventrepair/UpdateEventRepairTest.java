@@ -19,15 +19,27 @@ package org.occurrent.eventstore.mongodb.migration.updateeventrepair;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoCredential;
+import com.mongodb.MongoException;
+import com.mongodb.MongoNodeIsRecoveringException;
+import com.mongodb.MongoNotPrimaryException;
+import com.mongodb.MongoSecurityException;
 import com.mongodb.MongoSocketReadException;
+import com.mongodb.MongoTimeoutException;
+import com.mongodb.MongoWriteConcernException;
 import com.mongodb.ServerAddress;
+import com.mongodb.bulk.WriteConcernError;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.BsonDocument;
+import org.bson.BsonInt32;
+import org.bson.BsonString;
 import org.bson.Document;
+import org.bson.types.Decimal128;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +47,9 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
@@ -54,6 +69,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.occurrent.testsupport.mongodb.StoredTagShapes;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
@@ -65,6 +81,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.net.URI;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -73,12 +90,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
+import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -115,6 +135,8 @@ class UpdateEventRepairTest {
 
     private MongoClient mongoClient;
     private MongoDatabase database;
+    private MongoTemplate mongoTemplate;
+    private MongoTransactionManager transactionManager;
     private SpringMongoEventStore eventStore;
 
     @BeforeEach
@@ -124,15 +146,9 @@ class UpdateEventRepairTest {
         mongoClient = MongoClients.create(connectionString);
         database = mongoClient.getDatabase(databaseName);
 
-        MongoTemplate mongoTemplate = new MongoTemplate(mongoClient, databaseName);
-        MongoTransactionManager transactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, databaseName));
-        EventStoreConfig config = new EventStoreConfig.Builder()
-                .eventStoreCollectionName(EVENT_COLLECTION)
-                .transactionConfig(transactionManager)
-                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
-                .eventStoreCapabilities(STREAM, DCB)
-                .build();
-        eventStore = new SpringMongoEventStore(mongoTemplate, config);
+        mongoTemplate = new MongoTemplate(mongoClient, databaseName);
+        transactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, databaseName));
+        eventStore = newEventStore(false);
     }
 
     @AfterEach
@@ -384,6 +400,236 @@ class UpdateEventRepairTest {
     }
 
     @Test
+    void a_store_requiring_repaired_events_still_refuses_after_the_repair_over_a_lost_dcb_position_and_starts_without_that_event() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        long positionOfB = ((Number) requireNonNull(storedDocument("b").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        // a lost its position along with its tag array. b is what step 5 of the runbook produces, a position set by
+        // hand as a number and a tag array still missing. Neither has a string position.
+        damageTheWayUpdateEventUsedTo("a", original -> taggedEvent("a", "Renamed", "name:1"));
+        damageTheWayUpdateEventUsedTo("b", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, positionOfB)));
+
+        assertThatThrownBy(() -> newEventStore(true))
+                .as("both events are missing from the conflict query, so a store told to require repaired events must refuse")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.eventsWithLostPosition())
+                        .as("a lost its position, which the repair cannot restore")
+                        .isEqualTo(1L),
+                () -> assertThatThrownBy(() -> newEventStore(true))
+                        .as("the repair left a without a position, so it is still missing from DCB reads and the store must keep refusing")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("updateEvent damaged")
+        );
+
+        events().deleteOne(new Document("id", "a"));
+
+        assertThatNoException()
+                .as("with the event the repair could not fix gone, a collection the repair fixed has to start")
+                .isThrownBy(() -> newEventStore(true));
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_refuses_a_dcb_event_whose_position_is_null_before_and_after_the_repair() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, null)));
+
+        assertThatThrownBy(() -> newEventStore(true))
+                .as("a is missing from the conflict query, so a store told to require repaired events must refuse")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_LOST),
+                () -> assertThat(result.eventsWithLostPosition())
+                        .as("the run reads a null position as a lost one, so the count must too")
+                        .isEqualTo(1L),
+                () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .as("the tag array does not depend on the position, so it is rebuilt")
+                        .containsExactly("name:1"),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:1"))))
+                        .as("a DCB read still skips a, since its position is not a number")
+                        .isEmpty(),
+                () -> assertThatThrownBy(() -> newEventStore(true))
+                        .as("the repair rebuilt a's tag array and left its null position, so the store must keep refusing")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("updateEvent damaged")
+        );
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_refuses_an_event_whose_position_was_set_to_zero_by_hand() {
+        eventStore.write("stream:1", List.of(event("a", "Defined")));
+        eventStore.write("stream:1", List.of(event("b", "Renamed")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        // A wrong fix for step 5, a number but not one any store assigns
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 0L)));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.eventsRepaired())
+                        .as("zero is not a position any store assigned, so there is nothing to put back")
+                        .isZero(),
+                () -> assertThat(result.unrecoverableEvents())
+                        .as("the store refuses this event, so the repair has to name it")
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE),
+                () -> assertThatThrownBy(() -> newStreamOnlyEventStore(false))
+                        .as("an event at position zero is missing from every position read, so the store must refuse")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("updateEvent damaged")
+        );
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_refuses_an_unreadable_event_until_its_dcbtags_is_written_back() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1", "other:2")));
+        events().updateOne(new Document("id", "a"),
+                new Document("$unset", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, ""))
+                        .append("$set", new Document(DcbCloudEvents.TAGS, 42)));
+
+        assertThat(newRepair().run().unrecoverableEvents())
+                .singleElement()
+                .extracting(UnrecoverableEvent::reason)
+                .isEqualTo(UnrecoverableEvent.Reason.UNREADABLE);
+
+        assertThatThrownBy(() -> newEventStore(true))
+                .as("the event is still missing from the conflict query, and the refusal must say how to get past it")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("step 5")
+                .hasMessageContaining("turn off requireRepairedEvents");
+
+        // Step 5: the operator writes the event's tags back joined with a newline, in any order, and runs the repair again
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(DcbCloudEvents.TAGS, "other:2\nname:1")));
+        newRepair().run();
+
+        assertAll(
+                () -> assertThatNoException()
+                        .as("step 5's fix for an unreadable dcbtags must be enough for the store to start")
+                        .isThrownBy(() -> newEventStore(true)),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:1"))))
+                        .as("a DCB read on the first tag written back must find the event again")
+                        .containsExactly("a"),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("other:2"))))
+                        .as("a DCB read on the second tag written back must find the event again")
+                        .containsExactly("a")
+        );
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_keeps_refusing_a_dcb_event_whose_position_left_as_a_string_is_removed() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        damageTheWayUpdateEventUsedTo("b", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(positionOfA))));
+
+        assertThat(newRepair().run().unrecoverableEvents())
+                .singleElement()
+                .extracting(UnrecoverableEvent::reason)
+                .isEqualTo(UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN);
+        assertThatThrownBy(() -> newEventStore(true))
+                .as("deciding to live without b's position changes nothing while the string is still there")
+                .isInstanceOf(IllegalStateException.class);
+
+        // Removing the string instead of setting a position, which step 5 says does not help
+        events().updateOne(new Document("id", "b"), new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
+
+        assertThatThrownBy(() -> newEventStore(true))
+                .as("the rejected update left b's tag array unwritten too, so removing the string alone is not enough")
+                .isInstanceOf(IllegalStateException.class);
+
+        newRepair().run();
+
+        assertAll(
+                () -> assertThatThrownBy(() -> newEventStore(true))
+                        .as("b is now a POSITION_LOST event, still missing from DCB reads, so the store must keep refusing until the setting is turned off")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("updateEvent damaged"),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:2"))))
+                        .as("a DCB event without a position is still missing from DCB reads, as step 5 says")
+                        .isEmpty()
+        );
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_starts_once_a_colliding_dcb_event_gets_its_position_back() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        long positionOfB = ((Number) requireNonNull(storedDocument("b").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        damageTheWayUpdateEventUsedTo("b", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(positionOfA))));
+
+        assertThat(newRepair().run().unrecoverableEvents())
+                .singleElement()
+                .extracting(UnrecoverableEvent::reason)
+                .isEqualTo(UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN);
+
+        // Step 5: the operator sets the position their own records say b had, as a NumberLong, and runs the repair again
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, positionOfB)));
+        newRepair().run();
+
+        assertAll(
+                () -> assertThatNoException()
+                        .as("step 5's fix of setting the position back must be enough for the store to start")
+                        .isThrownBy(() -> newEventStore(true)),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:2"))))
+                        .as("with its position back and its tag array rebuilt, the event must be in DCB reads again")
+                        .containsExactly("b")
+        );
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_starts_once_a_colliding_stream_event_gets_its_position_back() {
+        eventStore.write("stream:1", List.of(event("a", "Defined")));
+        eventStore.write("stream:1", List.of(event("b", "Renamed")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        long positionOfB = ((Number) requireNonNull(storedDocument("b").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        // a is the oldest event, so a store whose position is only on by default decides from a whether to keep it
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(positionOfB))));
+
+        assertThat(newRepair().run().unrecoverableEvents())
+                .singleElement()
+                .extracting(UnrecoverableEvent::reason)
+                .isEqualTo(UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN);
+        assertThatThrownBy(() -> newStreamOnlyEventStore(false))
+                .as("a plain stream event with a string position must keep a store requiring repaired events from starting")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+
+        // Step 5: the operator sets the position their own records say a had, as a NumberLong
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, positionOfA)));
+
+        assertAll(
+                () -> assertThat(newStreamOnlyEventStore(false).writesPosition())
+                        .as("the oldest event has its position back, so a store whose position is only on by default must keep it on")
+                        .isTrue(),
+                () -> assertThatNoException()
+                        .as("step 5's fix for a plain stream event must be enough for the store to start, even requiring backfilled positions")
+                        .isThrownBy(() -> newStreamOnlyEventStore(true)),
+                () -> assertThat(eventIdsInPositionOrder())
+                        .as("a position ordered read must return the fixed event again, in position order")
+                        .containsExactly("a", "b")
+        );
+    }
+
+    @Test
     void a_numeric_position_event_whose_tag_array_cannot_be_rebuilt_does_not_widen_the_range() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
@@ -455,8 +701,8 @@ class UpdateEventRepairTest {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
         // A typo in step 5's hand fix, written as a number rather than the damaged string the tool would otherwise
-        // still treat as string-typed damage. The tag array is still there to rebuild, so this event matches the
-        // filter through it, not through its position.
+        // still treat as string-typed damage. The event matches the filter through its position and through the tag
+        // array still there to rebuild.
         events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 0L)));
 
         UpdateEventRepairResult result = newRepair().run();
@@ -473,6 +719,137 @@ class UpdateEventRepairTest {
                 () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
                         .as("the tag array does not depend on the position, so a forged position must not cost the event its tags too")
                         .containsExactly("name:1")
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("org.occurrent.testsupport.mongodb.StoredTagShapes#shapes")
+    void the_repair_rebuilds_every_tag_index_a_store_requiring_repaired_events_refuses_and_reports_the_rest(StoredTagShapes.Shape shape) {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        StoredTagShapes.give(events(), shape);
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        if (shape.startsAfterRepair()) {
+            assertAll(
+                    () -> assertThatNoException()
+                            .as("the repair and the store share one idea of a damaged tag index, so whatever the repair rebuilds the store must start over")
+                            .isThrownBy(() -> newEventStore(true)),
+                    () -> assertThat(result.eventsRepaired())
+                            .as("an event the store already starts over has nothing to repair, and every other one is repaired")
+                            .isEqualTo(shape.starts() ? 0 : 1),
+                    () -> assertThat(result.unrecoverableEvents()).isEmpty()
+            );
+        } else {
+            assertAll(
+                    () -> assertThatThrownBy(() -> newEventStore(true))
+                            .as("a dcbtags that does not decode to a tag set, or a tag index with no dcbtags, gives the repair nothing to rebuild the fields from")
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("updateEvent damaged"),
+                    () -> assertThat(result.unrecoverableEvents())
+                            .as("an event the store refuses and the repair cannot fix has to be named, or the refusal points at nothing")
+                            .singleElement()
+                            .extracting(UnrecoverableEvent::reason)
+                            .isEqualTo(UnrecoverableEvent.Reason.UNREADABLE)
+            );
+        }
+    }
+
+    @Test
+    void tags_written_back_with_whitespace_are_stored_the_way_an_append_writes_them() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1", "other:2")));
+        // Step 5 lets an operator write the tags back in any order and with whitespace around them
+        events().updateOne(new Document("id", "a"),
+                new Document("$unset", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, ""))
+                        .append("$set", new Document(DcbCloudEvents.TAGS, " other:2\nname:1 ")));
+
+        newRepair().run();
+
+        assertAll(
+                () -> assertThat(storedDocument("a").getString(DcbCloudEvents.TAGS))
+                        .as("the store compares the index with the lines of dcbtags as stored, so the whitespace has to go")
+                        .isEqualTo("name:1\nother:2"),
+                () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .containsExactly("name:1", "other:2"),
+                () -> assertThatNoException()
+                        .as("a step 5 fix the runbook allows must be enough for the store to start")
+                        .isThrownBy(() -> newEventStore(true))
+        );
+    }
+
+    static Stream<Arguments> handSetPositionsNoStoreAssigns() {
+        return Stream.of(
+                Arguments.of("the double 1.5", 1.5d, UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                Arguments.of("the decimal 1.5", Decimal128.parse("1.5"), UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                Arguments.of("a boolean", true, UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                Arguments.of("the double NaN", Double.NaN, UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                Arguments.of("the double 2^63", Math.pow(2, 63), UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                Arguments.of("negative zero", -0.0d, UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE),
+                Arguments.of("the decimal -1", new Decimal128(-1), UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE)
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("handSetPositionsNoStoreAssigns")
+    void a_hand_set_position_no_store_assigns_is_reported_rather_than_read_as_a_nearby_whole_number(String description, Object position, UnrecoverableEvent.Reason reason) {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        // A slip in step 5's hand fix, made before the second run has rebuilt the tag index
+        events().updateOne(new Document("id", "a"),
+                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, position))
+                        .append("$unset", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, "")));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .as("the store refuses this value, so the repair has to name it rather than take the whole number next to it")
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(reason),
+                () -> assertThat(result.minRepairedPosition())
+                        .as("a value no store assigned must not be reported as part of the repaired range")
+                        .isNull(),
+                () -> assertThat(result.maxRepairedPosition()).isNull(),
+                () -> assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
+                        .as("a position that cannot be used must be left exactly as it was found")
+                        .isEqualTo(position),
+                () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .as("the tag index does not depend on the position, so it must be rebuilt anyway")
+                        .containsExactly("name:1")
+        );
+    }
+
+    @Test
+    void an_array_position_is_reported_and_the_tag_array_is_rebuilt_once_the_position_is_fixed() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        // MongoDB accepts the array only because the tag array is gone, since the dcbTags and position index refuses
+        // a document holding both as arrays
+        events().updateOne(new Document("id", "a"),
+                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, List.of(1L)))
+                        .append("$unset", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, "")));
+
+        UpdateEventRepairResult firstRun = newRepair().run();
+
+        assertAll(
+                () -> assertThat(firstRun.unrecoverableEvents())
+                        .as("an array is not a position, so the repair has to name it rather than read the number inside it")
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                () -> assertThat(storedDocument("a").containsKey(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD))
+                        .as("writing the tag array next to an array position fails on every retry, so the run must not try")
+                        .isFalse()
+        );
+
+        // Step 5, the position set back by hand
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 1L)));
+        newRepair().run();
+
+        assertAll(
+                () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .as("once the position is a number the next run rebuilds the tag array")
+                        .containsExactly("name:1"),
+                () -> assertThatNoException().isThrownBy(() -> newEventStore(true))
         );
     }
 
@@ -555,8 +932,8 @@ class UpdateEventRepairTest {
     void an_event_whose_position_is_above_the_store_counter_is_reported_rather_than_written_back() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
-        // Only an update function that set position itself produces this. A read clamps its upper bound to the same
-        // counter, so a position above it is as invisible as one at or below zero.
+        // Only an update function that set position itself produces this. DCB reads and reads in position order stop
+        // at the same counter, so they skip a position above it as they skip one at or below zero.
         long ceiling = eventStore.currentPosition();
         events().updateOne(new Document("id", "a"),
                 new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(ceiling + 1000))));
@@ -920,11 +1297,11 @@ class UpdateEventRepairTest {
     void a_resumed_run_still_reports_an_unrecoverable_finding_a_killed_run_could_no_longer_be_rediscovered_by() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
-        // A typo in step 5's hand fix, the same as in a_hand_set_position_that_is_not_positive_is_reported_rather_
-        // than_included_in_the_range. The tag array is still there to rebuild, so repairEvent's write reaches the
+        // A typo in step 5's hand fix, a whole number above the counter, which the filter cannot see because it
+        // cannot read the counter. The tag array is still there to rebuild, so repairEvent's write reaches the
         // server and fixes the one thing that matched this event against the filter, while its position stays
-        // exactly as unassignable as it was.
-        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 0L)));
+        // exactly as far above the counter as it was.
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 99L)));
 
         UpdateEventRepair killedRightAfterFixingTheTagArray = new UpdateEventRepair(
                 databaseFailingTheCheckpointWriteThatFollowsAnEventRepair(), EVENT_COLLECTION,
@@ -948,7 +1325,7 @@ class UpdateEventRepairTest {
                         .as("nothing still matches the filter, so the resumed run repairs nothing itself")
                         .isZero(),
                 () -> assertThat(resumed.unrecoverableEventCount())
-                        .as("the killed run's checkpoint already counted a's unassignable position before the tag fix took it out of the filter's reach, and a kill before the post-batch write left that count there")
+                        .as("the killed run's checkpoint already counted a's position above the counter before the tag fix took it out of the filter's reach, and a kill before the post-batch write left that count there")
                         .isEqualTo(1)
         );
     }
@@ -1002,8 +1379,141 @@ class UpdateEventRepairTest {
                 .isTrue();
     }
 
+    private SpringMongoEventStore newEventStore(boolean requireRepairedEvents) {
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .eventStoreCollectionName(EVENT_COLLECTION)
+                .transactionConfig(transactionManager)
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM, DCB)
+                .requireRepairedEvents(requireRepairedEvents)
+                .build();
+        return new SpringMongoEventStore(mongoTemplate, config);
+    }
+
+    // STREAM only and no withStreamPosition(), so position is only on by default and the store decides at startup
+    private SpringMongoEventStore newStreamOnlyEventStore(boolean requireBackfilledPosition) {
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .eventStoreCollectionName(EVENT_COLLECTION)
+                .transactionConfig(transactionManager)
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM)
+                .requireRepairedEvents(true)
+                .requireBackfilledPosition(requireBackfilledPosition)
+                .build();
+        return new SpringMongoEventStore(mongoTemplate, config);
+    }
+
     private UpdateEventRepair newRepair() {
         return new UpdateEventRepair(database, EVENT_COLLECTION, UpdateEventRepairOptions.defaults());
+    }
+
+    @Test
+    void an_error_no_later_attempt_can_get_past_fails_the_run_at_once() {
+        // What a MongoDB user with only the read role gets from its first command. alwaysOn, so a retry that does
+        // not tell this apart from an outage spins on it for as long as the timeout lets it.
+        mongoClient.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand")
+                .append("mode", "alwaysOn")
+                .append("data", new Document("failCommands", List.of("find")).append("errorCode", 13)));
+        try {
+            assertThatThrownBy(() -> assertTimeoutPreemptively(Duration.ofSeconds(10), () -> newRepair().run()))
+                    .as("Unauthorized comes back on every attempt until someone grants the privilege, so the run has to fail with it rather than retry it")
+                    .isInstanceOf(MongoCommandException.class)
+                    .extracting(e -> ((MongoCommandException) e).getErrorCode())
+                    .isEqualTo(13);
+        } finally {
+            mongoClient.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", "off"));
+        }
+    }
+
+    @Test
+    void an_error_a_later_attempt_can_succeed_on_is_retried() {
+        AtomicInteger counts = new AtomicInteger();
+        MongoDatabase firstCountLosesItsConnection = databaseWithEvents(realEvents -> (proxy, method, args) -> {
+            if (method.getName().equals("countDocuments") && counts.incrementAndGet() == 1) {
+                throw new MongoSocketReadException("Simulated loss of a connection", new ServerAddress());
+            }
+            return invoke(method, realEvents, args);
+        });
+
+        UpdateEventRepairReport report = new UpdateEventRepair(firstCountLosesItsConnection, EVENT_COLLECTION, UpdateEventRepairOptions.defaults()).report();
+
+        assertAll(
+                () -> assertThat(report.eventsNeedingRepair()).isZero(),
+                () -> assertThat(counts)
+                        .as("a lost connection is an outage a later attempt gets past, so the count that met it has to run again")
+                        .hasValue(3)
+        );
+    }
+
+    @Test
+    void an_error_code_a_later_attempt_can_succeed_on_is_retried_without_a_label() {
+        // ExceededTimeLimit is on the retryable reads list, and on a read the driver raises it as a plain
+        // MongoCommandException with no label and no subtype saying so. The driver retries a read once on its own,
+        // so the failpoint outlasts that and the error reaches the repair.
+        mongoClient.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand")
+                .append("mode", new Document("times", 4))
+                .append("data", new Document("failCommands", List.of("find")).append("errorCode", 262)));
+        try {
+            assertThatNoException()
+                    .as("a code the retryable reads specification lists is one a later attempt gets past, whatever exception type it arrives in")
+                    .isThrownBy(() -> assertTimeoutPreemptively(Duration.ofSeconds(30), () -> newRepair().run()));
+        } finally {
+            mongoClient.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", "off"));
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("errorsAndWhetherALaterAttemptCanSucceed")
+    void the_repair_retries_only_an_error_a_later_attempt_can_succeed_on(String description, Throwable error, boolean retried) {
+        assertThat(UpdateEventRepair.retryable(error)).isEqualTo(retried);
+    }
+
+    static Stream<Arguments> errorsAndWhetherALaterAttemptCanSucceed() {
+        MongoException labelledRetryableWrite = new MongoException(1, "labelled by the server");
+        labelledRetryableWrite.addLabel("RetryableWriteError");
+        MongoException labelledTransient = new MongoException(1, "labelled by the server");
+        labelledTransient.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+        MongoCredential credential = MongoCredential.createScramSha256Credential("repair", "admin", "test".toCharArray());
+        return Stream.of(
+                Arguments.of("a lost connection", new MongoSocketReadException("lost", new ServerAddress()), true),
+                Arguments.of("a server that is no longer primary", new MongoNotPrimaryException(commandError(10107, "NotWritablePrimary"), new ServerAddress()), true),
+                Arguments.of("a server that is recovering", new MongoNodeIsRecoveringException(commandError(91, "ShutdownInProgress"), new ServerAddress()), true),
+                Arguments.of("an error labelled RetryableWriteError", labelledRetryableWrite, true),
+                Arguments.of("an unlabelled HostUnreachable", new MongoCommandException(commandError(6, "HostUnreachable"), new ServerAddress()), true),
+                Arguments.of("an unlabelled ExceededTimeLimit", new MongoCommandException(commandError(262, "ExceededTimeLimit"), new ServerAddress()), true),
+                Arguments.of("an unlabelled ReadConcernMajorityNotAvailableYet", new MongoCommandException(commandError(134, "ReadConcernMajorityNotAvailableYet"), new ServerAddress()), true),
+                Arguments.of("an unlabelled PrimarySteppedDown", new MongoCommandException(commandError(189, "PrimarySteppedDown"), new ServerAddress()), true),
+                Arguments.of("a write concern error ShutdownInProgress", new MongoWriteConcernException(new WriteConcernError(91, "ShutdownInProgress", "shutting down", new BsonDocument()), null, new ServerAddress()), true),
+                Arguments.of("a failure to authenticate caused by a lost connection", new MongoSecurityException(credential, "authentication failed", new MongoSocketReadException("lost", new ServerAddress())), true),
+                Arguments.of("a failure to authenticate caused by a wrong password", new MongoSecurityException(credential, "authentication failed", new MongoCommandException(commandError(18, "AuthenticationFailed"), new ServerAddress())), false),
+                Arguments.of("no server to select, which neither specification retries", new MongoTimeoutException("no server"), false),
+                Arguments.of("an error labelled TransientTransactionError, which the repair never runs in a transaction to get", labelledTransient, false),
+                Arguments.of("a write concern error UnsatisfiableWriteConcern", new MongoWriteConcernException(new WriteConcernError(100, "UnsatisfiableWriteConcern", "no", new BsonDocument()), null, new ServerAddress()), false),
+                Arguments.of("Unauthorized", new MongoCommandException(commandError(13, "Unauthorized"), new ServerAddress()), false),
+                Arguments.of("an unlabelled BadValue", new MongoCommandException(commandError(2, "BadValue"), new ServerAddress()), false),
+                Arguments.of("an error outside the driver", new IllegalStateException("not MongoDB"), false)
+        );
+    }
+
+    private static BsonDocument commandError(int code, String codeName) {
+        return new BsonDocument("ok", new BsonInt32(0))
+                .append("code", new BsonInt32(code))
+                .append("codeName", new BsonString(codeName))
+                .append("errmsg", new BsonString(codeName));
+    }
+
+    @SuppressWarnings("unchecked")
+    private MongoDatabase databaseWithEvents(java.util.function.Function<MongoCollection<Document>, java.lang.reflect.InvocationHandler> events) {
+        MongoCollection<Document> wrapped = (MongoCollection<Document>) Proxy.newProxyInstance(
+                MongoCollection.class.getClassLoader(),
+                new Class<?>[]{MongoCollection.class},
+                events.apply(events()));
+        return (MongoDatabase) Proxy.newProxyInstance(
+                MongoDatabase.class.getClassLoader(),
+                new Class<?>[]{MongoDatabase.class},
+                (proxy, method, args) -> method.getName().equals("getCollection") && EVENT_COLLECTION.equals(args[0])
+                        ? wrapped
+                        : invoke(method, database, args));
     }
 
     /**
