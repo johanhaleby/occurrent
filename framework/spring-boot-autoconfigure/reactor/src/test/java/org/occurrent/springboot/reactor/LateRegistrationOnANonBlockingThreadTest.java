@@ -56,6 +56,7 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
@@ -65,6 +66,7 @@ import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModelConfig;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ApplicationContext;
@@ -433,6 +435,37 @@ class LateRegistrationOnANonBlockingThreadTest {
         });
     }
 
+    // DcbSubscriptions is looked up while the bean is built, so a context without it fails the caller rather than a
+    // subscribe on another thread that has no caller to fail.
+    @Test
+    void a_lazy_dcb_subscription_in_a_context_without_dcb_subscriptions_fails_its_bean_on_a_parallel_thread() {
+        runner.withUserConfiguration(DurableModelConfiguration.class, LazyStartPositionsConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(failureResolvingOnAParallelThread(context, "dcbSubscriptionHolder"))
+                    .hasRootCauseInstanceOf(NoSuchBeanDefinitionException.class)
+                    .rootCause().hasMessageContaining(DcbSubscriptions.class.getName());
+        });
+    }
+
+    // A model the application shut down itself, with the context still open, cannot be started again
+    @Test
+    void a_late_subscribe_on_a_subscription_model_that_is_shut_down_is_not_tried_again() {
+        runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, LazyBeginningProjectionConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            RecordingDelegate delegate = delegate(context);
+            delegate.refuseNextSubscribes(5, id -> new SubscriptionModelShutdownException());
+
+            resolvedOnAParallelThread(context, "beginningProjectionHolder");
+            awaitUntil(() -> delegate.refusals.get() >= 1);
+            // The first retry would come after 100 ms
+            Thread.sleep(500);
+
+            assertThat(delegate.refusals).hasValue(1);
+            assertThat(delegate.isSubscribed("late-beginning-projection")).isFalse();
+        });
+    }
+
     // A refresh that fails after the startup scan destroys the post processor without a ContextClosedEvent
     @Test
     void destroying_the_post_processor_refuses_a_late_subscribe_as_closing_the_context_does() {
@@ -656,6 +689,8 @@ class LateRegistrationOnANonBlockingThreadTest {
         assertThat(LateSubscriber.retriable(new IllegalArgumentException("refused"))).isFalse();
         assertThat(LateSubscriber.retriable(new UnsupportedOperationException("cannot serve it"))).isFalse();
         assertThat(LateSubscriber.retriable(new NullPointerException("id cannot be null"))).isFalse();
+        assertThat(LateSubscriber.retriable(new NoSuchBeanDefinitionException(CheckpointStorage.class))).describedAs("a bean the context does not have").isFalse();
+        assertThat(LateSubscriber.retriable(new SubscriptionModelShutdownException())).describedAs("a model that was shut down").isFalse();
         assertThat(LateSubscriber.retriable(new AssertionError("broken"))).isFalse();
         assertThat(LateSubscriber.retriable(reactor.core.Exceptions.propagate(new AssertionError("broken")))).describedAs("an Error block() rethrew").isFalse();
     }

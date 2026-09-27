@@ -28,6 +28,7 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.*;
@@ -226,7 +227,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
             if (shutdown) {
-                throw new IllegalStateException("Cannot start subscription because the subscription model is shutdown.");
+                throw new SubscriptionModelShutdownException();
             }
             return startInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), action, null);
         }

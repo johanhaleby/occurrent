@@ -19,8 +19,10 @@ package org.occurrent.springboot.reactor;
 
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeansException;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.Exceptions;
@@ -91,20 +93,25 @@ final class LateSubscriber {
         return startIsFixed(startAt.toStartAt());
     }
 
-    // Whether a failed attempt is tried again, by what the failure says, following the split SubscriptionRefusedException
-    // documents. An IllegalArgumentException, which every SubscriptionRefusedException is, a duplicate id and a refused
-    // filter or start among them, says the call itself is wrong, and an UnsupportedOperationException says the model
-    // cannot serve it at all. Neither is tried again, and nor is a NullPointerException or an Error, since the same
-    // call fails the same way. Anything else is, an IllegalStateException, which says something went wrong at the time
-    // or another node holds what the call needs, and whatever a storage or its driver throws, a Spring
-    // DataAccessException or a MongoException, which this module cannot name. block() rethrows a checked exception or
-    // an Error the JVM survives wrapped in a Reactor exception, which is looked through.
+    // A failed attempt is tried again only when a later attempt can succeed without the application changing its
+    // configuration or restarting. Every other failure is logged once and gives back what it claimed.
+    // An IllegalArgumentException, which every SubscriptionRefusedException is, a duplicate id and a refused filter or
+    // start among them, says the call itself is wrong, and an UnsupportedOperationException says the model cannot serve
+    // it at all. A NullPointerException and an Error fail the same call the same way again. A BeansException says the
+    // context has no bean the subscribe needs, CheckpointStorage for a dynamic start for example, or failed to build
+    // one, and a SubscriptionModelShutdownException says the model was shut down and cannot be started again. Anything
+    // else is tried again, an IllegalStateException, which says something went wrong at the time or another node holds
+    // what the call needs, and whatever a storage or its driver throws, a Spring DataAccessException or a
+    // MongoException, which this module cannot name. block() rethrows a checked exception or an Error the JVM survives
+    // wrapped in a Reactor exception, which is looked through.
     static boolean retriable(Throwable failure) {
         Throwable unwrapped = Exceptions.unwrap(failure);
         return !(unwrapped instanceof Error
                  || unwrapped instanceof IllegalArgumentException
                  || unwrapped instanceof UnsupportedOperationException
-                 || unwrapped instanceof NullPointerException);
+                 || unwrapped instanceof NullPointerException
+                 || unwrapped instanceof BeansException
+                 || unwrapped instanceof SubscriptionModelShutdownException);
     }
 
     // releaseOnGiveUp gives back what the registration claimed, once a subscribe moved to the scheduler stops trying.
@@ -163,7 +170,7 @@ final class LateSubscriber {
             return;
         } catch (RuntimeException | Error e) {
             if (!retriable(e)) {
-                log.error("Could not subscribe {}, and it is not tried again, since the failure says the subscribe itself is wrong rather than that something went wrong at the time. "
+                log.error("Could not subscribe {}, and it is not tried again, since trying again fails the same way until the application changes its configuration or restarts. "
                           + "It receives no events, and what it claimed is given back, so building its bean again can register it once the cause is fixed. Its bean was built on the Reactor "
                           + "non-blocking thread {}, so the subscribe ran on {} with no caller to throw to.", late.registration.get(), late.callerThread, Thread.currentThread().getName(), e);
                 late.giveUp();

@@ -31,6 +31,7 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.*;
@@ -147,7 +148,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             throw new DuplicateSubscriptionIdException(subscriptionId);
         }
         if (shutdown) {
-            throw new IllegalStateException("Cannot start subscription because the subscription model is shutdown.");
+            throw new SubscriptionModelShutdownException();
         }
         // Validates the filter now, so an unsupported one is refused to the caller instead of failing later inside the
         // deferred change-stream pipeline, where nobody is listening and the retry above it would re-throw it forever.
