@@ -60,25 +60,28 @@ import java.util.function.Supplier;
  * backfilled before it consumes the broker.
  * <p>
  * The replay, a catch-up-complete marker step, and the live feed are composed into one ordered pipeline with
- * {@link Flux#concat}: the replay is consumed first, then the marker is recorded, then the live feed. Live events that
- * arrive during the replay are buffered in a unicast sink until the pipeline reaches them, so nothing is lost across the
- * seam, and the overlap is de-duplicated by the CloudEvent id and source together. Because the whole pipeline is serialized by {@code concatMap}, the
- * de-dup cache needs no locking.
+ * {@link Flux#concat}: the replay is consumed first, then the marker is recorded, then the live feed. A live event
+ * fed through {@code accept(..)} during the replay waits in a bounded unicast sink until the pipeline reaches it,
+ * unless the sink is full, and the overlap is de-duplicated by the CloudEvent id and source together. A replay
+ * stopped before going live drops what the sink held. Because the whole pipeline is serialized by
+ * {@code concatMap}, the de-dup cache needs no locking.
  * <p>
  * Contract (see ADR 62 and the blocking model): catch-up is Occurrent's job and runs once per subscription id, guarded
  * by an optional {@link CheckpointStorage} marker so a restart skips it. No live position is persisted, so resuming the
  * live feed is the job of whatever feeds the {@link PushSubscriptionModel}. Only stream and capability-agnostic
  * subscription filters can be replayed.
  * <p>
- * Fed from the event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)}, nothing records
- * which live events the subscription has handled. When the application crashes after a write has committed but before
- * the handler has run, and the catch-up-complete marker has been recorded, this subscription never sees that event,
- * since a restart skips the replay once the marker exists. A crash before the marker is recorded, during the replay
- * say, is the exception. The next start replays the whole history, that event included, and so does every start
- * with no {@link CheckpointStorage} to record a marker in. The marker is recorded
- * before the events buffered during the replay are applied, so a crash between the two loses those events too. The
- * exception holds only while no other instance sharing the same marker storage records the marker first, since the
- * next start then skips the replay. Use a durable subscription if losing an event is not acceptable.
+ * Feeding {@link PushSubscriptionModel#accept(Iterable)} from an event store's write path is supported only for the
+ * in-memory event store, and Occurrent ships no reactive {@link PositionOrderedReader} over that store for this model
+ * to replay. A write that reaches this model through {@code accept(..)} while its replay runs fails at once when the
+ * live sink is full, and otherwise waits until the event has been applied after the replay, or until the replay
+ * fails or is stopped. A handler that writes an event the subscription's filter accepts can hang in that write.
+ * During the replay the write waits for the replay, which waits for that handler. Once live, this model hands the
+ * subscription's events to the handler one at a time, so the new event waits behind the one the handler is still
+ * processing. Nothing records which live events the subscription has handled, and a crash before the handler has run
+ * loses the event from the in-memory event store too, so after a crash the store never holds an event the
+ * subscription missed. With a durable event store, such as MongoDB, use a durable subscription, or a broker as
+ * described below. The amendment to ADR 133 records why.
  * <p>
  * Fed from a broker, call {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} and acknowledge the message
  * only when its {@link Mono} completes with {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or

@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Twelve things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
+Thirteen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -39,12 +39,15 @@ Then a subscription handler Spring's proxy cannot invoke now fails startup inste
 and every annotation-based handler registers later, once singleton construction has finished, so a live-only
 subscription no longer sees an event a bean wrote from its own startup. Read
 [section 11](#11-a-subscription-handler-spring-cannot-invoke-now-fails-startup-and-a-live-subscription-can-miss-a-startup-write).
-Finally, a projection feed's `accept(..)` no longer reports an event it did not apply as handled. On the blocking
+Then a projection feed's `accept(..)` no longer reports an event it did not apply as handled. On the blocking
 stack it now waits during a catch-up until the event is applied and throws when it was not, so a call on the same
 thread that later starts the catch-up waits until another thread runs the catch-up, takes the feed live, calls
 `stopCatchUp()` or interrupts it. On the reactor stack its `Mono` now errors for an event fed while the feed is
 stopped. Read
 [section 12](#12-a-projection-feeds-accept-waits-until-the-event-is-applied-and-fails-when-it-is-not).
+Finally, feeding a push model's `accept(..)` is supported only from the in-memory event store's write path, where
+0.33.0 also named a broker listener, a Spring application event and an HTTP endpoint. Read
+[section 13](#13-only-the-in-memory-event-stores-write-path-may-feed-a-push-models-accept).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1060,3 +1063,45 @@ acknowledge the message when the `Mono` errors.
 
 There is no recipe for this change. Which thread calls `accept(..)` and what a listener does when it throws are
 runtime behavior that a rewrite of the source cannot see.
+
+## 13. Only the in-memory event store's write path may feed a push model's `accept(..)`
+
+Up to 0.33.0 the javadoc of both `PushSubscriptionModel` classes named a RabbitMQ or Kafka listener, a Spring
+application event and an HTTP endpoint as sources that hand events to `accept(..)`, and it called the write path one
+where the event is already durably stored. In 0.34.0 `accept(..)` is supported only for the listener of an
+`InMemoryEventStore`. Neither push model records which events a subscription has handled, so an event fed through
+`accept(..)` from a source that cannot deliver it again is lost when the application crashes before the handler has
+run. The in-memory event store loses the event in that crash too, which is why it is the one exception. See
+[#1140](https://github.com/johanhaleby/occurrent/issues/1140) and the amendment to
+[ADR 133](../architecture/decisions/0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md).
+
+What to use instead depends on where the events come from:
+
+- A RabbitMQ or Kafka listener calls `acceptRedeliverable(CloudEvent)` and acknowledges the message only when the
+  outcome is `DELIVERED` or `FILTERED`. `RabbitMqCloudEventBridge` and `KafkaCloudEventBridge` already call it.
+  Under `DeliveryFailurePolicy.PARK` they also acknowledge a failed message, once its republish to the parking
+  destination is confirmed.
+- An HTTP endpoint whose caller retries a failed request calls `acceptRedeliverable(CloudEvent)` too, and answers
+  by the outcome's `disposition()`. `ACKNOWLEDGE`, for `DELIVERED` and `FILTERED`, is a success. `HOLD`, for
+  `DEFERRED` and `UNAVAILABLE`, is an error the caller retries later, a 503 say. `FAIL`, for `NOT_DELIVERABLE`, and
+  an exception out of the call go to the endpoint's own failure policy. `STOP`, for `REFUSED`, is an error the
+  caller must not retry, because the same event gets the same answer until the subscription is cancelled and
+  subscribed again.
+- A listener on the write path of a durable event store, such as MongoDB, is replaced by a durable subscription,
+  which records the position it has handled and resumes from it after a restart. Forwarding the events to a broker
+  whose listener calls `acceptRedeliverable(CloudEvent)` works as well.
+- A Spring application event is delivered once, in memory, so it cannot deliver an event again after a crash either.
+  If the application publishes it for an event a durable event store has already committed, subscribe to that store
+  with a durable subscription instead. If the event is in an `InMemoryEventStore`, feed `accept(..)` from that
+  store's listener instead.
+
+Two sources have no supported replacement, an HTTP endpoint whose caller does not retry and a Spring
+application event for an event that no event store holds. Neither can deliver an event again after a crash, so
+Occurrent supports no way to feed a push model from either.
+
+An `InMemoryEventStore` listener needs no change on the blocking stack. On the reactor stack the listener has to
+subscribe to the `Mono` that `accept(..)` returns and wait for it, `events -> pushModel.accept(events).block()` for
+example, on a thread that may block.
+
+There is no recipe for this change. Where a listener's events come from is not something a rewrite of the source can
+see.

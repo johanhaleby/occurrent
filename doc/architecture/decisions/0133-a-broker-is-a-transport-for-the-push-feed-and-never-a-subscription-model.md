@@ -89,8 +89,10 @@ normally without delivering is an acknowledgement of an event nothing consumed. 
 A normal return is not on its own proof of delivery, and the CloudEvent bridge needs one more check because of it.
 ADR 104 made `DomainEventFeed` refuse when nothing is registered, so the domain bridge can read a normal return as
 delivery. It deliberately did not make `PushSubscriptionModel` refuse, because that model is also fed from the write
-path by `new InMemoryEventStore(pushModel::accept)`, where refusing would fail a write to protect nothing. A stopped
-model also drops live events and returns normally, which ADR 85 decided and ADR 104 kept.
+path by `new InMemoryEventStore(pushModel::accept)`. That store has already kept the event when its listener runs, so
+refusing would only make the write call throw, without protecting anything. The amendment at the end of this ADR limits
+that write path to the in-memory event store. A stopped model also drops live events and returns normally, which ADR 85
+decided and ADR 104 kept.
 
 So a CloudEvent bridge that only looked at whether `accept(...)` threw would acknowledge and lose events in three
 states, before anything is registered, while the model is stopped, and while its subscription is paused. `route`
@@ -845,9 +847,9 @@ to resolve on its own, and it is safe to redeliver arbitrarily many times.
 
 `BlockingHandover` gains `acceptIfLive(T)` beside the existing `accept(T)`/`acceptReportingDelivery(T)`. Where those
 buffer a payload offered while not live, `acceptIfLive` refuses it outright, reporting `false` without ever
-touching the buffer. `PushSubscriptionModel.accept(CloudEvent)`, the write path an in-memory store listener or
-another in-process caller uses, is unchanged and keeps buffering, since a write-path event has nowhere else to come
-from and refusing it would lose it rather than protect it. A new `PushSubscriptionModel.acceptRedeliverable(CloudEvent)`
+touching the buffer. `PushSubscriptionModel.accept(..)` is unchanged and keeps buffering. An in-memory store listener
+calls it through `accept(Iterable<CloudEvent>)` after the store has kept the event, so refusing would only make the
+write call throw, without protecting anything. A new `PushSubscriptionModel.acceptRedeliverable(CloudEvent)`
 is for a caller that can redeliver, a broker bridge, and routes to `acceptIfLive` instead. It refuses rather than
 buffers, returns `DEFERRED`, and lets the caller ask again. It returns every outcome routing decides, a refusal made
 before dispatch included, and throws only for a filter or handler failure, so a bridge decides on the returned value
@@ -1410,3 +1412,43 @@ first tick and asserts the consumer still starts. Both release-helper tests have
 happens. One more gives `close()` a `closeTimeout` of 300 years, which the builder accepts and which overflows the
 nanosecond deadline `close()` computes first, so the `finally` has to start at the top of the method. Each fails on that assertion without the `finally`. A `RuntimeException` from a release, which was always
 caught, passes with and without it.
+
+## Amendment (2026-09-26): only the in-memory event store may feed `accept(..)` from its write path
+
+`PushSubscriptionModel` keeps no record of which events its subscription has handled. Fed through `accept(..)` from
+the write path of a durable event store, such as MongoDB, it never sees an event when the
+application crashes after the write has committed but before the handler has run, since nothing hands the event over
+again after the restart. A catch-up model in front can lose one in other ways too. The reactor model, for example,
+records its catch-up-complete marker before it applies the events it buffered during the replay, and a second instance
+sharing the same marker storage can record the marker first, so the next start skips the replay. See
+[#1140](https://github.com/johanhaleby/occurrent/issues/1140).
+
+`InMemoryEventStore` is the only event store in Occurrent with a listener on its write path. That listener takes a
+`List<CloudEvent>`, so `new InMemoryEventStore(pushModel::accept)` calls `accept(Iterable<CloudEvent>)`. A crash empties
+that store too, so after a crash it never holds an event the subscription missed. Without a crash the push model keeps
+no record of what it delivered, and on its own it holds nothing back, so an event it did not hand to the handler when
+the event arrived, whatever the reason, is never handed over later. A catch-up model in front can hold back an event
+that arrives during its replay and hand it over after the replay. Without a crash an event the push model did not hand
+over stays in the in-memory event store, where a blocking catch-up replay that runs later can still read it. Nothing in
+Occurrent runs a durable subscription over the in-memory event store.
+
+There is no reactive in-memory event store. The reactor push model can be fed from the blocking `InMemoryEventStore`
+only by a listener that subscribes to the `Mono` from `accept(..)` and waits for it, since that `Mono` does nothing
+until something subscribes. `new InMemoryEventStore(reactorPushModel::accept)` compiles but delivers nothing.
+
+The RabbitMQ and Kafka bridges call `acceptRedeliverable(CloudEvent)`, and no Spring Boot starter configures a push
+model fed from a write path.
+
+So Occurrent narrows what it supports instead of changing the engine. Feeding `accept(..)` from a write path is
+supported only for the in-memory event store. A durable event store uses a durable subscription, which records the
+position it has handled and resumes from it, or forwards its events to a broker whose listener calls
+`acceptRedeliverable(CloudEvent)`. The reactor marker order and the shared marker storage only lose an event in a setup
+that is no longer supported, so neither changes.
+
+This narrows a released contract. Up to 0.33.0 the javadoc of both push models named a RabbitMQ or Kafka listener, a
+Spring application event and an HTTP endpoint as sources that feed `accept(..)`, and called the write path one where
+the event is already durably stored, with an `InMemoryEventStore` listener only as an example on the blocking side.
+The unreleased 0.34.0 javadoc then said such a feed was supported and could lose an event on a crash. The upgrade
+guide for 0.34.0 tells a caller on 0.33.0 what to use instead, and names the two sources that have no supported
+replacement, an HTTP endpoint whose caller does not retry and a Spring application event for an event that no event
+store holds.

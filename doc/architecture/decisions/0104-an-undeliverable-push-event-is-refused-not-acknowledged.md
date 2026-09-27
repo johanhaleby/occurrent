@@ -97,6 +97,15 @@ hazard ADR 85 documented for the synchronous models rather than preventing, and 
 listener at all, which is why it can refuse and the model cannot. The model's javadoc now states the caveat and points
 at `hasSubscriptions()`, which is the ask-first answer available to a broker listener.
 
+> **Amended on 2026-09-26 by the amendment of that date to
+> [ADR 133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md).** The paragraph above
+> is no longer true for a durable event store. The push model records nothing about what it has delivered, so a
+> subscription fed from a durable store's write path can miss an event when the application crashes after the write
+> has committed but before the handler has run. `accept(..)` is now supported from the write path of the in-memory
+> event store only, which is not durable and loses the event in the same crash. There refusing would still only fail
+> the write call, which is why `accept(..)` still does not refuse. A broker listener calls `acceptRedeliverable(..)`
+> and acknowledges on the outcome it returns, as ADR 133 decided.
+
 The first draft of this change did refuse on both, on a symmetry argument. The evidence killed it. Symmetry
 between two types is worth less than each type matching what it is actually wired to.
 
