@@ -67,8 +67,10 @@ import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModelConfig;
 import org.springframework.beans.factory.BeanCreationException;
+import org.springframework.beans.factory.BeanIsAbstractException;
 import org.springframework.beans.factory.BeanNotOfRequiredTypeException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
+import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ApplicationContext;
@@ -77,6 +79,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.context.annotation.Scope;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.Disposable;
@@ -488,12 +491,33 @@ class LateRegistrationOnANonBlockingThreadTest {
                 assertThat(appender.list).filteredOn(event -> event.getFormattedMessage().startsWith("Gave up subscribing")).singleElement()
                         .satisfies(event -> assertThat(event.getFormattedMessage())
                                 .containsPattern("the handler 'late-(first|second)-beginning' on .*, and after it the handler 'late-(first|second)-beginning' on the same bean")
-                                .contains("late-first-beginning", "late-second-beginning", "restart the application"));
+                                .contains("late-first-beginning", "late-second-beginning", "The next instance of a bean that is not a singleton tries to register", "restart the application"));
                 assertThat(delegate.refusals).hasValue(1);
             });
         } finally {
             logger.detachAppender(appender);
         }
+    }
+
+    // Spring builds a bean that is not a singleton once per instance, and every instance built after startup passes
+    // through the late registration, so what a give-up handed back is registered by a later instance. Resolved until
+    // it is, since the give-up hands the handlers back just after the refusal the test can see.
+    @Test
+    void a_later_instance_of_a_prototype_registers_what_a_late_subscribe_gave_up_on() {
+        runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, PrototypeTwoBeginningSubscriptionsConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            RecordingDelegate delegate = delegate(context);
+            delegate.refuseNextSubscribes(1, id -> new SubscriptionModelShutdownException());
+
+            resolvedOnAParallelThread(context, "prototypeTwoBeginningSubscriptionsHolder");
+            awaitUntil(() -> delegate.refusals.get() >= 1);
+            awaitUntil(() -> {
+                Mono.fromCallable(() -> context.getBean("prototypeTwoBeginningSubscriptionsHolder")).subscribeOn(Schedulers.parallel()).block(Duration.ofSeconds(5));
+                return delegate.isSubscribed("late-first-beginning") && delegate.isSubscribed("late-second-beginning");
+            });
+
+            assertThat(delegate.refusals).hasValue(1);
+        });
     }
 
     // A refresh that fails after the startup scan destroys the post processor without a ContextClosedEvent
@@ -726,6 +750,14 @@ class LateRegistrationOnANonBlockingThreadTest {
                 .describedAs("a bean that cannot be built because one it depends on is missing").isFalse();
         assertThat(LateSubscriber.retriable(new BeanCreationException("checkpointStorage", "cannot be built", new IllegalStateException("storage is unreachable"))))
                 .describedAs("a bean whose factory failed, which the next attempt builds again").isTrue();
+        assertThat(LateSubscriber.retriable(new BeanCreationException("checkpointStorage", "cannot be built")))
+                .describedAs("a bean that failed to build and names no cause, which the next attempt builds again").isTrue();
+        assertThat(LateSubscriber.retriable(new BeanCreationException("checkpointStorage", "cannot be built", new AssertionError("broken"))))
+                .describedAs("a bean whose factory threw an Error").isFalse();
+        assertThat(LateSubscriber.retriable(new BeanCreationException("checkpointStorage", "cannot be built",
+                new BeanCreationException("mongoClient", "cannot be built", new IllegalArgumentException("malformed connection string")))))
+                .describedAs("a bean whose dependency refused its arguments").isFalse();
+        assertThat(LateSubscriber.retriable(new BeanIsAbstractException("checkpointStorage"))).describedAs("an abstract bean definition").isFalse();
         assertThat(LateSubscriber.retriable(new SubscriptionModelShutdownException())).describedAs("a model that was shut down").isFalse();
         assertThat(LateSubscriber.retriable(new AssertionError("broken"))).isFalse();
         assertThat(LateSubscriber.retriable(reactor.core.Exceptions.propagate(new AssertionError("broken")))).describedAs("an Error block() rethrew").isFalse();
@@ -1446,6 +1478,14 @@ class LateRegistrationOnANonBlockingThreadTest {
         @Lazy
         @Bean
         Marker twoBeginningSubscriptionsHolder() {
+            return new TwoBeginningSubscriptionsHolder();
+        }
+    }
+
+    static class PrototypeTwoBeginningSubscriptionsConfiguration {
+        @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
+        @Bean
+        Marker prototypeTwoBeginningSubscriptionsHolder() {
             return new TwoBeginningSubscriptionsHolder();
         }
     }

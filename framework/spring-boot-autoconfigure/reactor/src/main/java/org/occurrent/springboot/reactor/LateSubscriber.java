@@ -23,6 +23,7 @@ import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.BeanIsAbstractException;
 import org.springframework.beans.factory.BeanNotOfRequiredTypeException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import reactor.core.Disposable;
@@ -101,23 +102,27 @@ final class LateSubscriber {
     // start among them, says the call itself is wrong, and an UnsupportedOperationException says the model cannot serve
     // it at all. A NullPointerException and an Error fail the same call the same way again. A
     // NoSuchBeanDefinitionException says the context has no bean the subscribe needs, CheckpointStorage for a dynamic
-    // start for example, and a BeanNotOfRequiredTypeException says the bean it has is of another type. Either one
-    // counts as the cause of another BeansException too, a bean that cannot be built because a bean it depends on is
-    // missing for example. A SubscriptionModelShutdownException says the model was shut down and cannot be started
-    // again. Anything else is tried again. That covers an IllegalStateException, which says something went wrong at the
-    // time or another node holds what the call needs, and any other BeansException, since Spring keeps nothing of a bean
-    // it failed to build and builds it again on the next attempt. It also covers whatever a storage or its driver
-    // throws, a Spring DataAccessException or a MongoException, which this module cannot name. block() rethrows a
-    // checked exception or an Error the JVM survives wrapped in a Reactor exception, which is looked through.
+    // start for example, a BeanNotOfRequiredTypeException says the bean it has is of another type, and a
+    // BeanIsAbstractException says its definition is only a template. A SubscriptionModelShutdownException says the
+    // model was shut down and cannot be started again. Anything else is tried again. That covers an
+    // IllegalStateException, which says something went wrong at the time or another node holds what the call needs,
+    // and whatever a storage or its driver throws, a Spring DataAccessException or a MongoException, which this module
+    // cannot name. A BeansException is judged by the failure at the bottom of its cause chain, since a bean that could
+    // not be built says why there, a missing bean it depends on or its factory throwing for example. Spring keeps
+    // nothing of a bean it failed to build and builds it again on the next attempt, so that failure decides whether the
+    // attempt can succeed. block() rethrows a checked exception or an Error the JVM survives wrapped in a Reactor
+    // exception, which is looked through.
     static boolean retriable(Throwable failure) {
         Throwable unwrapped = Exceptions.unwrap(failure);
-        return !(unwrapped instanceof Error
-                 || unwrapped instanceof IllegalArgumentException
-                 || unwrapped instanceof UnsupportedOperationException
-                 || unwrapped instanceof NullPointerException
-                 || unwrapped instanceof SubscriptionModelShutdownException
-                 || unwrapped instanceof BeansException beans
-                    && (beans.contains(NoSuchBeanDefinitionException.class) || beans.contains(BeanNotOfRequiredTypeException.class)));
+        Throwable decisive = unwrapped instanceof BeansException beans ? beans.getMostSpecificCause() : unwrapped;
+        return !(decisive instanceof Error
+                 || decisive instanceof IllegalArgumentException
+                 || decisive instanceof UnsupportedOperationException
+                 || decisive instanceof NullPointerException
+                 || decisive instanceof SubscriptionModelShutdownException
+                 || decisive instanceof NoSuchBeanDefinitionException
+                 || decisive instanceof BeanNotOfRequiredTypeException
+                 || decisive instanceof BeanIsAbstractException);
     }
 
     // releaseOnGiveUp gives back what the registration claimed, once a subscribe moved to the scheduler stops trying.
@@ -177,8 +182,9 @@ final class LateSubscriber {
         } catch (RuntimeException | Error e) {
             if (!retriable(e)) {
                 log.error("Gave up subscribing {}, since trying again fails the same way until the application changes its configuration or restarts. Nothing named here receives events, "
-                          + "and every id named here is given back. Fix the cause and restart the application. Spring does not build a singleton bean a second time, so "
-                          + "nothing registers what is named here before the restart. The bean was built on the Reactor non-blocking thread {}, so the subscribe ran on {} with no caller to throw to.",
+                          + "and every id named here is given back. Fix the cause. The next instance of a bean that is not a singleton tries to register what is named here again, and for a "
+                          + "singleton, restart the application, since Spring does not build a singleton a second time. The bean was built on the Reactor non-blocking thread {}, so the "
+                          + "subscribe ran on {} with no caller to throw to.",
                         late.registration.get(), late.callerThread, Thread.currentThread().getName(), e);
                 late.giveUp();
                 return;
