@@ -1077,16 +1077,21 @@ What to use instead depends on where the events come from:
   Under `DeliveryFailurePolicy.PARK` they also acknowledge a failed message, once its republish to the parking
   destination is confirmed.
 - An HTTP endpoint whose caller retries a failed request calls `acceptRedeliverable(CloudEvent)` too, and answers
-  with an error for any outcome other than `DELIVERED` or `FILTERED`, so the caller sends the event again.
+  by the outcome's `disposition()`. `ACKNOWLEDGE`, for `DELIVERED` and `FILTERED`, is a success. `HOLD`, for
+  `DEFERRED` and `UNAVAILABLE`, is an error the caller retries later, a 503 say. `FAIL`, for `NOT_DELIVERABLE`, and
+  an exception out of the call go to the endpoint's own failure policy. `STOP`, for `REFUSED`, is an error the
+  caller must not retry, because the same event gets the same answer until the subscription is cancelled and
+  subscribed again.
 - A listener on the write path of a durable event store, such as MongoDB, is replaced by a durable subscription,
   which records the position it has handled and resumes from it after a restart. Forwarding the events to a broker
   whose listener calls `acceptRedeliverable(CloudEvent)` works as well.
 - A Spring application event is delivered once, in memory, so it cannot deliver an event again after a crash either.
   If the application publishes it for an event a durable event store has already committed, subscribe to that store
-  with a durable subscription instead.
+  with a durable subscription instead. If the event is in an `InMemoryEventStore`, feed `accept(..)` from that
+  store's listener instead.
 
 Two sources have no supported replacement, an HTTP endpoint whose caller does not retry and a Spring
-application event with no durable event store behind it. Neither can deliver an event again after a crash, so
+application event for an event that no event store holds. Neither can deliver an event again after a crash, so
 Occurrent supports no way to feed a push model from either.
 
 An `InMemoryEventStore` listener needs no change on the blocking stack. On the reactor stack the listener has to

@@ -1450,5 +1450,5 @@ Spring application event and an HTTP endpoint as sources that feed `accept(..)`,
 the event is already durably stored, with an `InMemoryEventStore` listener only as an example on the blocking side.
 The unreleased 0.34.0 javadoc then said such a feed was supported and could lose an event on a crash. The upgrade
 guide for 0.34.0 tells a caller on 0.33.0 what to use instead, and names the two sources that have no supported
-replacement, an HTTP endpoint whose caller does not retry and a Spring application event with no durable event store
-behind it.
+replacement, an HTTP endpoint whose caller does not retry and a Spring application event for an event that no event
+store holds.

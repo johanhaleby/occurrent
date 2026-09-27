@@ -63,9 +63,9 @@ import java.util.stream.Stream;
  * <ul>
  *   <li><strong>Catch-up</strong> is Occurrent's job and runs once per subscription id. On subscribe this model
  *       registers on the live feed first and buffers, replays the store {@code position}-ordered up to the head at read
- *       time via {@link PositionOrderedReader}, then drains the buffer and goes live. An event that commits during the
- *       replay while the buffer has room is delivered either by the replay or by the buffered feed, and a full buffer
- *       refuses it. The overlap is de-duplicated by the
+ *       time via {@link PositionOrderedReader}, then drains the buffer and goes live. An event that commits during a
+ *       replay that runs to the end, while the buffer has room, is delivered either by the replay or by the buffered
+ *       feed, and a full buffer refuses it. The overlap is de-duplicated by the
  *       CloudEvent id and source together (not by a position watermark: Occurrent positions can commit late and have permanent gaps, so a watermark would
  *       drop a late-committing low-position event, see ADR 62). Because buffering starts before the head is read, no
  *       reconcile pass is needed.</li>
@@ -238,7 +238,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     /**
      * @param reader          Reads the projection's history in position order for the catch-up replay.
-     * @param liveFeed        The live push feed the listener drives with {@code accept(...)}.
+     * @param liveFeed        The push model this model wraps. The in-memory event store's listener feeds it through
+     *                        {@code accept(...)}, and a broker listener through
+     *                        {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}.
      * @param catchupMarker Records that the one-time catch-up finished so a restart skips it, or {@code null} to
      *                        catch up on every subscribe.
      */
