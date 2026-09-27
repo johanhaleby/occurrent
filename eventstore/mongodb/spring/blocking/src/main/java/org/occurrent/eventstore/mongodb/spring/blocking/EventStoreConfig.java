@@ -335,11 +335,12 @@ public class EventStoreConfig {
          * When the event collection holds events that {@code updateEvent} damaged in Occurrent 0.33.0 or earlier, fail
          * construction with an {@link IllegalStateException}. Such an event has its position stored as a string, or it
          * was written by a DCB append and lost its {@code dcbTags} index, sometimes along with its position. An event
-         * without a numeric position is missing from position-ordered reads. A DCB event that lost its {@code dcbTags}
-         * index is also missing from DCB reads and from the conflict query behind a conditional append, so an append
-         * that should have been refused is accepted instead. Off by default, and then a store that writes position logs
-         * a warning about a string position and says nothing about a lost {@code dcbTags} index. Turn it on to keep the
-         * application down until the repair described in {@code doc/runbooks/update-event-repair.md} has run.
+         * without a numeric position is missing from position-ordered reads. DCB reads and the conflict query behind a
+         * conditional append only see a DCB event that has both its {@code dcbTags} index and a numeric position, so an
+         * append that should have been refused can be accepted instead. Off by default, and then a store that writes
+         * position logs a warning about a string position and says nothing about a lost {@code dcbTags} index. Turn it
+         * on to keep the application down until the repair described in {@code doc/runbooks/update-event-repair.md} has
+         * run.
          *
          * <p>The check looks for the same events the repair looks for, so a collection the repair has fixed starts.
          * An event the repair reports as unrecoverable can keep the store from starting until you fix it by hand,

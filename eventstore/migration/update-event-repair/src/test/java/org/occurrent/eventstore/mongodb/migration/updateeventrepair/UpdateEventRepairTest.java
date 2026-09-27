@@ -405,7 +405,7 @@ class UpdateEventRepairTest {
 
     @Test
     void a_store_requiring_repaired_events_refuses_an_unreadable_event_until_its_dcbtags_is_written_back() {
-        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1", "other:2")));
         events().updateOne(new Document("id", "a"),
                 new Document("$unset", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, ""))
                         .append("$set", new Document(DcbCloudEvents.TAGS, 42)));
@@ -421,13 +421,21 @@ class UpdateEventRepairTest {
                 .hasMessageContaining("step 5")
                 .hasMessageContaining("turn off requireRepairedEvents");
 
-        // Step 5: the operator writes the event's tags back the way a DCB append stores them and runs the repair again
-        events().updateOne(new Document("id", "a"), new Document("$set", new Document(DcbCloudEvents.TAGS, "name:1")));
+        // Step 5: the operator writes the event's tags back joined with a newline, in any order, and runs the repair again
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(DcbCloudEvents.TAGS, "other:2\nname:1")));
         newRepair().run();
 
-        assertThatNoException()
-                .as("step 5's fix for an unreadable dcbtags must be enough for the store to start")
-                .isThrownBy(() -> newEventStore(true));
+        assertAll(
+                () -> assertThatNoException()
+                        .as("step 5's fix for an unreadable dcbtags must be enough for the store to start")
+                        .isThrownBy(() -> newEventStore(true)),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:1"))))
+                        .as("a DCB read on the first tag written back must find the event again")
+                        .containsExactly("a"),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("other:2"))))
+                        .as("a DCB read on the second tag written back must find the event again")
+                        .containsExactly("a")
+        );
     }
 
     @Test
@@ -446,8 +454,9 @@ class UpdateEventRepairTest {
                 .as("deciding to live without b's position changes nothing while the string is still there")
                 .isInstanceOf(IllegalStateException.class);
 
-        // Step 5: the operator accepts the loss by removing the string
-        events().updateOne(new Document("id", "b"), new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
+        // Step 5: with no record of b's position, the operator removes the string from a DCB event only
+        events().updateOne(new Document("id", "b").append(DcbCloudEvents.TAGS, new Document("$exists", true)),
+                new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
 
         assertThatThrownBy(() -> newEventStore(true))
                 .as("the rejected update left b's tag array unwritten too, so removing the string alone is not enough")
@@ -455,9 +464,83 @@ class UpdateEventRepairTest {
 
         newRepair().run();
 
-        assertThatNoException()
-                .as("step 5's fix for a position left as a string must be enough for the store to start")
-                .isThrownBy(() -> newEventStore(true));
+        assertAll(
+                () -> assertThatNoException()
+                        .as("step 5's fix for a position left as a string must be enough for the store to start")
+                        .isThrownBy(() -> newEventStore(true)),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:2"))))
+                        .as("a DCB event without a position is still missing from DCB reads, as step 5 says")
+                        .isEmpty()
+        );
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_starts_once_a_colliding_dcb_event_gets_its_position_back() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        long positionOfB = ((Number) requireNonNull(storedDocument("b").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        damageTheWayUpdateEventUsedTo("b", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(positionOfA))));
+
+        assertThat(newRepair().run().unrecoverableEvents())
+                .singleElement()
+                .extracting(UnrecoverableEvent::reason)
+                .isEqualTo(UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN);
+
+        // Step 5: the operator sets the position their own records say b had, as a NumberLong, and runs the repair again
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, positionOfB)));
+        newRepair().run();
+
+        assertAll(
+                () -> assertThatNoException()
+                        .as("step 5's fix of setting the position back must be enough for the store to start")
+                        .isThrownBy(() -> newEventStore(true)),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:2"))))
+                        .as("with its position back and its tag array rebuilt, the event must be in DCB reads again")
+                        .containsExactly("b")
+        );
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_starts_once_a_colliding_stream_event_gets_its_position_back() {
+        eventStore.write("stream:1", List.of(event("a", "Defined")));
+        eventStore.write("stream:1", List.of(event("b", "Renamed")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        long positionOfB = ((Number) requireNonNull(storedDocument("b").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        // a is the oldest event, so a store whose position is only on by default decides from a whether to keep it
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(positionOfB))));
+
+        assertThat(newRepair().run().unrecoverableEvents())
+                .singleElement()
+                .extracting(UnrecoverableEvent::reason)
+                .isEqualTo(UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN);
+        assertThatThrownBy(() -> newStreamOnlyEventStore(false))
+                .as("a plain stream event with a string position must keep a store requiring repaired events from starting")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+
+        // Step 5: the documented removal matches only a DCB event, so it must not change a plain stream event
+        long removed = events().updateOne(new Document("id", "a").append(DcbCloudEvents.TAGS, new Document("$exists", true)),
+                new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, ""))).getModifiedCount();
+        // Step 5: the operator sets the position their own records say a had, as a NumberLong
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, positionOfA)));
+
+        assertAll(
+                () -> assertThat(removed)
+                        .as("the documented removal must not match an event without dcbtags")
+                        .isZero(),
+                () -> assertThat(newStreamOnlyEventStore(false).writesPosition())
+                        .as("the oldest event has its position back, so a store whose position is only on by default must keep it on")
+                        .isTrue(),
+                () -> assertThatNoException()
+                        .as("step 5's fix for a plain stream event must be enough for the store to start, even requiring backfilled positions")
+                        .isThrownBy(() -> newStreamOnlyEventStore(true)),
+                () -> assertThat(eventIdsInPositionOrder())
+                        .as("a position ordered read must return the fixed event again, in position order")
+                        .containsExactly("a", "b")
+        );
     }
 
     @Test
@@ -1086,6 +1169,19 @@ class UpdateEventRepairTest {
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                 .eventStoreCapabilities(STREAM, DCB)
                 .requireRepairedEvents(requireRepairedEvents)
+                .build();
+        return new SpringMongoEventStore(mongoTemplate, config);
+    }
+
+    // STREAM only and no withStreamPosition(), so position is only on by default and the store decides at startup
+    private SpringMongoEventStore newStreamOnlyEventStore(boolean requireBackfilledPosition) {
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .eventStoreCollectionName(EVENT_COLLECTION)
+                .transactionConfig(transactionManager)
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM)
+                .requireRepairedEvents(true)
+                .requireBackfilledPosition(requireBackfilledPosition)
                 .build();
         return new SpringMongoEventStore(mongoTemplate, config);
     }

@@ -175,13 +175,13 @@ you treat `POSITION_LOST`. The tag array is repaired even so. If your store has 
 ceiling to compare against and this is never reported.
 
 **`UNREADABLE`.** The tool could not read the event well enough to repair it, which means its `dcbtags` was edited
-outside Occurrent. The run continues past it, so one such event does not hold up the rest. The event stays missing
-from DCB reads, and a store with `requireRepairedEvents` on refuses to start, until `dcbtags` holds the event's tags
-again. Write them back as one string, each tag exactly as the application wrote it, joined with a newline, and run
-the repair again, which rebuilds the tag array from it:
+outside Occurrent. The run continues past it, so one such event does not hold up the rest. Without its tag array
+the event is missing from DCB reads, and a store with `requireRepairedEvents` on refuses to start. The repair
+rebuilds the array once `dcbtags` holds the event's tags again, so write them back as one string, the tags joined
+with a newline in any order, and run the repair again. It sorts them and strips the whitespace around each one.
 
 ```javascript
-db.events.updateOne({ _id: <id> }, { $set: { dcbtags: "<first tag>\n<second tag>" } })
+db.events.updateOne({ _id: ObjectId("<_id>") }, { $set: { dcbtags: "<first tag>\n<second tag>" } })
 ```
 
 If you cannot tell what the tags were, the tool has nothing to rebuild the tag array from, so turn
@@ -190,13 +190,26 @@ If you cannot tell what the tags were, the tool has nothing to rebuild the tag a
 **A position that is still a string keeps `requireRepairedEvents` refusing.** That is every `POSITION_ALREADY_TAKEN`
 event, and a `POSITION_NOT_A_NUMBER`, `POSITION_NOT_POSITIVE` or `POSITION_ABOVE_COUNTER` event whose position was
 stored as a string. The first query in step 6 finds them. Deciding to live without the position changes nothing
-while the string is there. Set the position your own records say it had, or remove the string, after which the
-event is in the same state as a `POSITION_LOST` event:
+while the string is there. Set the position your own records say it had:
 
 ```javascript
-db.events.updateOne({ _id: <id> }, { $set: { position: NumberLong(<position>) } })
-db.events.updateOne({ _id: <id> }, { $unset: { position: "" } })
+db.events.updateOne({ _id: ObjectId("<_id>") }, { $set: { position: NumberLong(<position>) } })
 ```
+
+Without such a record, what you can do depends on whether the event has a `dcbtags` field. From a DCB event you can
+remove the string, after which it is in the same state as a `POSITION_LOST` event. It stays missing from DCB reads,
+a store that writes position warns about it as an un-backfilled event, `requireBackfilledPosition` refuses to start
+over it, and the position backfill would give it a position it never had. The `dcbtags` condition makes this a no-op
+on any other event:
+
+```javascript
+db.events.updateOne({ _id: ObjectId("<_id>"), dcbtags: { $exists: true } }, { $unset: { position: "" } })
+```
+
+Do not remove the position of an event without `dcbtags`. It would then look like history written before position
+existed, which is [damage this cannot find](#the-damage-this-cannot-find). If it is the oldest event, a store without
+DCB whose position is only on by default also turns position off for the whole collection at its next startup.
+Leave the string in place and turn `requireRepairedEvents` off instead.
 
 **Write down the range this run reported before you do anything else.** The finished-run log line names it,
 `Repaired positions ranged from X to Y`, or says `No position was repaired` when the run has nothing to report. A

@@ -66,7 +66,8 @@ public final class UpdateEventRepairValidator {
                 + " updateEvent damaged in version 0.33.0 or earlier. Such an event has its position stored as a"
                 + " string instead of a number, or it was written by a DCB append and lost its tag index, and"
                 + " sometimes its position as well. Position ordered reads and position based catch-up skip an event"
-                + " without a numeric position. DCB reads also skip a DCB event that lost its tag index, and a"
-                + " conditional append can miss a conflict against it. None of this raises an error.";
+                + " without a numeric position. DCB reads and conditional appends only see a DCB event that has both"
+                + " its tag index and a numeric position, so a conditional append can miss a conflict against a"
+                + " damaged one. None of this raises an error.";
     }
 }
