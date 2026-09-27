@@ -46,11 +46,11 @@ import java.util.function.Supplier;
 // subscribe, and ReactorDurableSubscriptionModel does, so on a Reactor non-blocking thread that block() throws.
 //
 // Where the subscription starts decides what happens there. A start that is the same whenever the subscribe runs,
-// BEGINNING or an explicit position, is subscribed on the scheduler after the bean is returned, and tried again after
-// a failure that can go away, so nothing is skipped however late it gets there. A start that can depend on when it
-// runs, NOW or DEFAULT, is subscribed where it is, as on any other thread. Subscribing that one later could skip
-// whatever the caller writes between getting the bean and the subscribe, so a model that blocks fails the bean
-// instead, with a message saying how to register it.
+// BEGINNING or an explicit position, is subscribed on the scheduler, and tried again after a failure that can go away,
+// so nothing is skipped however late it gets there. A start that can depend on when it runs, NOW or DEFAULT, is
+// subscribed where it is, as on any other thread. Subscribing that one later could skip whatever the caller writes
+// between getting the bean and the subscribe, so a model that blocks fails the bean instead, with a message saying how
+// to register it.
 final class LateSubscriber {
     private static final Logger log = LoggerFactory.getLogger(LateSubscriber.class);
     // The same bound ProjectionAnnotationRegistrar.close() waits for its background catch-ups.

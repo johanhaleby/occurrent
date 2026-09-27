@@ -354,7 +354,7 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > per handler, so one bean can have a handler of each kind.
 >
 > One that starts at the beginning or at an explicit position receives the same events whenever it subscribes, so it
-> subscribes on `Schedulers.boundedElastic()` after the bean is returned. A failed attempt is tried again only when a
+> subscribes on `Schedulers.boundedElastic()`. A failed attempt is tried again only when a
 > later attempt can succeed without the application changing its configuration or restarting. Then it is logged at
 > ERROR and tried again, the delay doubling from 100 ms up to 30 seconds, until one succeeds or the context starts
 > closing, and its ids stay claimed while it tries. Any other failure is logged at ERROR once and gives its ids back.
@@ -369,15 +369,14 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > context has no bean the subscribe needs, a `BeanNotOfRequiredTypeException` says the bean it has is of another
 > type, and a `BeanIsAbstractException` says its definition is only a template. A `SubscriptionModelShutdownException` says the model was shut down and
 > can't be started again. `ReactorMongoSubscriptionModel`, `ReactorDurableSubscriptionModel` and the reactor catch-up
-> models throw it from `subscribe` once they are shut down, the catch-up models before replaying any history. The
+> models throw it from a `subscribe` with a subscription id once they are shut down, the catch-up models before replaying any history. The
 > durable model throws it itself, whatever it wraps, so a late subscribe on the model the starter builds gets it
 > before anything is replayed. Both check again once the subscribe has claimed its id, so a shutdown that runs at the
 > same time either makes the subscribe throw or cancels what it claimed. Everything else is tried again, an
 > `IllegalStateException` and whatever a storage or its driver throws. So is an exception of any other type that
-> nothing expected. A `BeansException` is judged by the most specific cause in its chain under these same rules,
+> nothing expected. A `BeansException` is judged by the root cause in its chain under these same rules,
 > since a bean that can't be built says why there, and Spring keeps nothing of a bean it failed to build and builds
-> it again on the next attempt. A bean that depends on a missing bean is given up on, and one whose factory threw an
-> `IllegalStateException` is tried again. A failure that never goes
+> it again on the next attempt. A failure that never goes
 > away and is none of those types is therefore tried every 30 seconds until the context closes, with its ids claimed the whole time. A
 > storage that stays unreachable does that, and so does a subscription model of your own that throws a plain
 > `IllegalStateException` once it is shut down.

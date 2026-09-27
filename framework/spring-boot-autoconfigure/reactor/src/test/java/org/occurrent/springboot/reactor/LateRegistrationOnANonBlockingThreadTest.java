@@ -293,9 +293,8 @@ class LateRegistrationOnANonBlockingThreadTest {
         });
     }
 
-    // A DEFAULT start is wherever the feed has reached when the subscribe runs. Subscribing on another thread after the
-    // bean is returned would skip what the caller writes in between, so the bean fails, and built where blocking is
-    // allowed it registers.
+    // A DEFAULT start is wherever the feed has reached when the subscribe runs. Subscribing on another thread could skip
+    // what the caller writes after getting the bean, so the bean fails, and built where blocking is allowed it registers.
     @Test
     void a_lazy_projection_with_a_default_start_on_the_durable_model_is_refused_on_a_parallel_thread_and_registers_when_built_off_it() {
         runner.withUserConfiguration(DurableModelConfiguration.class, LazyEventStoreProjectionConfiguration.class).run(context -> {
