@@ -2056,6 +2056,36 @@ class ReactiveHandoverTest {
         }
     }
 
+    // The first waiter is refused inside the failed replay's release of live delivery, before the second one reads
+    // which failure it waited for. Its refusal is not a failure of the replay, so the second one still gets the
+    // replay's own failure, wrapped once.
+    @Test
+    void two_catch_ups_with_nothing_to_replay_waiting_for_a_replay_that_fails_each_fail_with_that_replays_failure() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        IllegalStateException failure = new IllegalStateException("boom");
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(holdingAt("R1", log, replayReached, releaseReplay, failure),
+                payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        try {
+            Mono<Boolean> replaying = handover.catchUp(source(List.of("R1"), false));
+            assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+            CompletableFuture<Boolean> first = waitingBehindTheRunningReplay(handover);
+            CompletableFuture<Boolean> second = waitingBehindTheRunningReplay(handover);
+
+            releaseReplay.countDown();
+
+            StepVerifier.create(replaying).verifyErrorMessage("boom");
+            for (CompletableFuture<Boolean> waiter : List.of(first, second)) {
+                assertThat(catchThrowable(() -> waiter.get(5, TimeUnit.SECONDS))).cause()
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasCauseReference(failure);
+            }
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
     // Starts a catch-up with nothing to replay and returns once it waits for the replay holding live delivery back.
     // Its source is told the marker was read only after the wait was subscribed, on the same thread.
     private static CompletableFuture<Boolean> waitingBehindTheRunningReplay(ReactiveHandover<String, String> handover) throws InterruptedException {

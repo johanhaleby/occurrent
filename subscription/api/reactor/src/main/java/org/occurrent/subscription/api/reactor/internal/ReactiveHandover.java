@@ -288,7 +288,8 @@ public final class ReactiveHandover<T, K> {
     private final Set<LiveAck> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
     // Replaced on every failed catch-up, not only the first, so a call waiting for a replay can tell that replay
-    // failed on a handover that had already failed before.
+    // failed on a handover that had already failed before. A catch-up refusing because another one failed does not
+    // replace it, so a later waiter gets that failure rather than the refusal wrapping it.
     private final AtomicReference<@Nullable RecordedFailure> latestFailure = new AtomicReference<>();
     // Set while the current thread runs a fold or a Source callback of this handover. A catch-up called there answers
     // without waiting, since the replay or the pause it would wait for is waiting for that code.
@@ -715,6 +716,9 @@ public final class ReactiveHandover<T, K> {
         // waited rather than whether the handover had already failed when the caller asked for this one.
         Throwable failureBeforeWaiting = terminalError.get();
         RecordedFailure latestFailureBeforeWaiting = latestFailure.get();
+        // Set when this catch-up refuses because another one failed, so the error handler below does not record that
+        // refusal as a failure of its own.
+        AtomicBoolean refusedForAnotherFailure = new AtomicBoolean();
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
@@ -728,9 +732,11 @@ public final class ReactiveHandover<T, K> {
                 // waited, including on a handover that had already failed before this call.
                 return awaitLiveDeliveryResumed().then(Mono.defer(() -> {
                     RecordedFailure failed = latestFailure.get();
-                    return failed == null || failed == latestFailureBeforeWaiting
-                            ? Mono.<Void>empty()
-                            : Mono.<Void>error(catchUpFailed(failed.cause()));
+                    if (failed == null || failed == latestFailureBeforeWaiting) {
+                        return Mono.<Void>empty();
+                    }
+                    refusedForAnotherFailure.set(true);
+                    return Mono.<Void>error(catchUpFailed(failed.cause()));
                 }));
             }
             // Deferred, so the hold is installed once the turn is taken rather than when this pipeline is put together.
@@ -740,9 +746,11 @@ public final class ReactiveHandover<T, K> {
                 // told to stop using. A caller that asks for a catch-up on a handover that had already failed still
                 // gets one, which is what it asked for.
                 Throwable failed = terminalError.get();
-                return failed == null || failed == failureBeforeWaiting
-                        ? pauseLiveDelivery(pause)
-                        : Mono.<Void>error(catchUpFailed(failed));
+                if (failed == null || failed == failureBeforeWaiting) {
+                    return pauseLiveDelivery(pause);
+                }
+                refusedForAnotherFailure.set(true);
+                return Mono.<Void>error(catchUpFailed(failed));
             })).then(Mono.defer(() -> {
                 // Cleared again here, not only when this call was made, because the catch-up it waited for can have
                 // stopped in between. The payloads arriving during this replay belong in its buffer, and a handover
@@ -885,7 +893,9 @@ public final class ReactiveHandover<T, K> {
                     // The first failure is the one that matters, so a later call refusing because of it does not take
                     // its place and hide the cause.
                     terminalError.compareAndSet(null, error);
-                    latestFailure.set(new RecordedFailure(error));
+                    if (!refusedForAnotherFailure.get()) {
+                        latestFailure.set(new RecordedFailure(error));
+                    }
                     abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
                     // Logged only when the signal cannot carry the failure, which is the live phase, where
                     // catchupDone has already emitted and nothing else tells anyone. Logging unconditionally would

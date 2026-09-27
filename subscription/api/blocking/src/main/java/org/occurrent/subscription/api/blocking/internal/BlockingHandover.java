@@ -272,7 +272,8 @@ public final class BlockingHandover<T, K> {
     private int liveTransitionsRunning = 0;
     private @Nullable Throwable catchUpFailure = null;
     // Replaced on every failed catch-up, not only the first, so a call waiting for a replay can tell that replay
-    // failed on a handover that had already failed before.
+    // failed on a handover that had already failed before. A catch-up refusing because another one failed does not
+    // replace it, so a later waiter gets that failure rather than the refusal wrapping it.
     private @Nullable RecordedFailure latestFailure = null;
     // The source whose replay filled replayedIds, so a live payload that replay already delivered can reach it, since
     // accept(..) is handed no source of its own. Written when a replay starts rather than by every catchUp(Source), so
@@ -603,6 +604,9 @@ public final class BlockingHandover<T, K> {
         boolean holdsReplayTurn = false;
         // Set once enterOwnCall() returns, so the finally below takes back only a depth this call added.
         boolean enteredOwnCall = false;
+        // Set when this call refuses because another catch-up failed, so the catch block below does not record that
+        // refusal as a failure of its own.
+        boolean refusedForAnotherFailure = false;
         try {
             enterOwnCall();
             enteredOwnCall = true;
@@ -638,6 +642,7 @@ public final class BlockingHandover<T, K> {
                     }
                 }
                 if (failedWhileWaiting != null) {
+                    refusedForAnotherFailure = true;
                     throw new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), failedWhileWaiting);
                 }
                 try {
@@ -704,6 +709,7 @@ public final class BlockingHandover<T, K> {
                 }
             }
             if (alreadyFailed != null) {
+                refusedForAnotherFailure = true;
                 throw new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), alreadyFailed);
             }
             if (interrupted) {
@@ -822,7 +828,9 @@ public final class BlockingHandover<T, K> {
                 if (catchUpFailure == null) {
                     catchUpFailure = e;
                 }
-                latestFailure = new RecordedFailure(e);
+                if (!refusedForAnotherFailure) {
+                    latestFailure = new RecordedFailure(e);
+                }
                 if (holdsReplayTurn) {
                     replayRunning = false;
                 }

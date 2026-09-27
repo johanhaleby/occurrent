@@ -18,6 +18,7 @@ package org.occurrent.subscription.api.blocking.internal;
 
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.HandoverMessages;
@@ -2002,6 +2003,45 @@ class BlockingHandoverTest {
                     .hasCauseReference(secondFailure);
         } finally {
             releaseR1.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    // Each waiter refuses because the replay failed, and neither refusal is a failure of that replay, so the waiter that
+    // reads the failure after the other one has refused still gets the replay's own failure, wrapped once. Which waiter
+    // takes the lock first is up to the JVM, and only some orders read the failure after the other waiter refused, so
+    // this repeats.
+    @RepeatedTest(100)
+    void two_catch_ups_with_nothing_to_replay_waiting_for_a_replay_that_fails_each_throw_that_replays_failure() throws Exception {
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        IllegalStateException failure = new IllegalStateException("boom");
+        BlockingHandover<String, String> handover = holdingAt("R1", new CopyOnWriteArrayList<>(), foldingR1, releaseR1, failure);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        List<Thread> waiters = new ArrayList<>();
+        try {
+            Future<Boolean> replaying = executor.submit(() -> handover.catchUp(source(List.of("R1"), false)));
+            awaitLatch(foldingR1);
+            List<FutureTask<Boolean>> nothingToReplay = List.of(new FutureTask<>(() -> handover.catchUp(source(List.of(), true))),
+                    new FutureTask<>(() -> handover.catchUp(source(List.of(), true))));
+            for (FutureTask<Boolean> waiter : nothingToReplay) {
+                Thread waiting = new Thread(waiter, "nothing to replay " + waiters.size());
+                waiters.add(waiting);
+                waiting.start();
+                awaitWaiting(waiting);
+            }
+
+            releaseR1.countDown();
+
+            assertThatThrownBy(() -> replaying.get(5, TimeUnit.SECONDS)).hasCauseReference(failure);
+            for (FutureTask<Boolean> waiter : nothingToReplay) {
+                assertThatThrownBy(() -> waiter.get(5, TimeUnit.SECONDS)).cause()
+                        .isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
+                        .hasCauseReference(failure);
+            }
+        } finally {
+            releaseR1.countDown();
+            waiters.forEach(Thread::interrupt);
             executor.shutdownNow();
         }
     }
