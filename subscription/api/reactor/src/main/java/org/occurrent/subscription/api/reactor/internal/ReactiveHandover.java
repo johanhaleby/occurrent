@@ -28,6 +28,7 @@ import reactor.core.publisher.Sinks;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.scheduler.Schedulers;
+import reactor.util.context.Context;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -284,6 +285,12 @@ public final class ReactiveHandover<T, K> {
     // delivered, not just whether the ack completed without error, see acceptReportingDelivery(..).
     private final Set<LiveAck> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
+    // Set while the current thread subscribes one of this handover's replay folds, which is when a fold that blocks
+    // runs, so a catch-up that fold blocks on does not wait for the replay the fold holds up.
+    private final ThreadLocal<Boolean> subscribingReplayFold = new ThreadLocal<>();
+    // Written into the context of this handover's replay, so a catch-up composed into a fold or replayCompleted()
+    // finds it on whichever thread that part runs.
+    private final Object insideReplay = new Object();
     private static final Logger log = LoggerFactory.getLogger(ReactiveHandover.class);
     // Long enough that a producer holding the serialization claim finishes its own offer and releases it, short
     // enough that a caller's accept does not wait on it for long. Waiting happens on a scheduler, not on the
@@ -662,12 +669,19 @@ public final class ReactiveHandover<T, K> {
      * <p>
      * A catch-up with nothing to replay that arrives while a replay holds the live payloads back completes only once
      * that replay ends, so when it emits {@code true}, {@link #acceptIfLive(Object)} accepts unless a replay started
-     * after this call. When the replay it waited for failed, it errors instead. A fold or {@link Source} callback of
-     * the running replay that waits for the returned {@code Mono} therefore never finishes, and neither does one that
-     * waits for a catch-up that replays, since that catch-up waits for the running replay to end.
+     * after this call. When the replay it waited for failed, it errors instead.
+     * <p>
+     * A call from one of the running replay's folds emits {@code true} without waiting, since the replay cannot end
+     * before that fold does, and {@link #acceptIfLive(Object)} goes on refusing until the replay ends. That covers a
+     * fold that blocks on the result on the thread this handover called it on, and a fold or
+     * {@link Source#replayCompleted()} that returns the {@code Mono} as part of its own. A fold that blocks on it from
+     * a thread it switched to never finishes, and neither does a fold that waits for a catch-up that replays, since
+     * that catch-up waits for the running replay to end.
      */
     public Mono<Boolean> catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
+        // Read on the calling thread, which is the fold's own for a fold that blocks on this call.
+        boolean calledFromReplayFold = subscribingReplayFold.get() != null;
         // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying again
         // rather than only by building a new one.
         stopped = false;
@@ -746,7 +760,8 @@ public final class ReactiveHandover<T, K> {
                         // Ordered before the marker and before the live buffer drain, so anything a replay-aware view
                         // buffered is durable before either runs.
                         .then(Mono.defer(source::replayCompleted))
-                        .doOnSuccess(ignored -> replayOpen.set(false));
+                        .doOnSuccess(ignored -> replayOpen.set(false))
+                        .contextWrite(Context.of(insideReplay, Boolean.TRUE));
             }));
         });
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : source.markCaughtUp());
@@ -878,7 +893,11 @@ public final class ReactiveHandover<T, K> {
                     releaseReplayTurn(holdsReplayTurn);
                 });
 
-        return catchupDone.asMono();
+        // A call from inside this handover's own replay answers without waiting, since that replay cannot end before
+        // the fold making the call does. The pipeline above still goes live once the replay has ended.
+        return Mono.deferContextual(context -> calledFromReplayFold || context.hasKey(insideReplay)
+                ? alreadyDone.flatMap(done -> done ? Mono.just(true) : catchupDone.asMono())
+                : catchupDone.asMono());
     }
 
     // Claims every acknowledgement nothing has answered yet, so none of those payloads is delivered later. Each one
@@ -1151,7 +1170,23 @@ public final class ReactiveHandover<T, K> {
                     });
         }
         // Replay payload: an error here propagates and fails the catch-up.
-        return Mono.defer(item.deliver()).doOnSuccess(v -> replayedIds.add(item.dedupKey()));
+        return subscribedAsReplayFold(Mono.defer(item.deliver())).doOnSuccess(v -> replayedIds.add(item.dedupKey()));
+    }
+
+    // Marks the thread only while it subscribes the fold, so a later task on the same pooled thread is not taken for
+    // part of this replay.
+    private Mono<Void> subscribedAsReplayFold(Mono<Void> fold) {
+        return Mono.from(subscriber -> {
+            Boolean outer = subscribingReplayFold.get();
+            subscribingReplayFold.set(Boolean.TRUE);
+            try {
+                fold.subscribe(subscriber);
+            } finally {
+                if (outer == null) {
+                    subscribingReplayFold.remove();
+                }
+            }
+        });
     }
 
     private Item<K> replayedItem(T replayed) {

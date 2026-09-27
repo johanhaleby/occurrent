@@ -1607,8 +1607,7 @@ class ReactiveHandoverTest {
         Mono<Boolean> replaying = handover.catchUp(source(List.of("R1"), false));
         assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
 
-        CompletableFuture<Boolean> nothingToReplay = handover.catchUp(source(List.of(), true)).toFuture();
-        Mono.delay(Duration.ofMillis(300)).block();
+        CompletableFuture<Boolean> nothingToReplay = waitingBehindTheRunningReplay(handover);
 
         assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
         assertThat(log).containsExactly("R1");
@@ -1632,8 +1631,7 @@ class ReactiveHandoverTest {
             Mono<Boolean> replaying = handover.catchUp(source(List.of("R1"), false));
             assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
 
-            CompletableFuture<Boolean> nothingToReplay = handover.catchUp(source(List.of(), true)).toFuture();
-            Mono.delay(Duration.ofMillis(300)).block();
+            CompletableFuture<Boolean> nothingToReplay = waitingBehindTheRunningReplay(handover);
 
             assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
             releaseReplay.countDown();
@@ -1660,8 +1658,7 @@ class ReactiveHandoverTest {
             Mono<Boolean> replaying = handover.catchUp(source(List.of("R1"), false));
             assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
 
-            CompletableFuture<Boolean> nothingToReplay = handover.catchUp(source(List.of(), true)).toFuture();
-            Mono.delay(Duration.ofMillis(300)).block();
+            CompletableFuture<Boolean> nothingToReplay = waitingBehindTheRunningReplay(handover);
 
             assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
             releaseReplay.countDown();
@@ -1673,6 +1670,141 @@ class ReactiveHandoverTest {
         } finally {
             releaseReplay.countDown();
         }
+    }
+
+    // The catch-up with nothing to replay found no replay holding live delivery back, and R1 took its hold before that
+    // catch-up went live. Going live releases only the hold the catch-up took itself, so R1's stays in place.
+    @Test
+    void a_catch_up_with_nothing_to_replay_leaves_a_hold_taken_after_it_checked_for_one_in_place() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        CountDownLatch historyDone = new CountDownLatch(1);
+        CountDownLatch releaseHistoryDone = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(
+                holdingAt("R1", log, replayReached, releaseReplay, null), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        FakeSource nothingToReplay = source(List.of(), true);
+        nothingToReplay.onHistoryDone = () -> {
+            historyDone.countDown();
+            try {
+                releaseHistoryDone.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        try {
+            Mono<Boolean> goingLive = handover.catchUp(nothingToReplay);
+            assertThat(historyDone.await(5, TimeUnit.SECONDS)).isTrue();
+            Mono<Boolean> replaying = handover.catchUp(source(List.of("R1"), false));
+            assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+            releaseHistoryDone.countDown();
+            StepVerifier.create(goingLive).expectNext(true).verifyComplete();
+
+            assertThat(handover.acceptIfLive("L1").block(Duration.ofSeconds(5))).as("while R1 is held").isFalse();
+            releaseReplay.countDown();
+            StepVerifier.create(replaying).expectNext(true).verifyComplete();
+            assertThat(handover.acceptIfLive("L2").block(Duration.ofSeconds(5))).isTrue();
+            assertThat(log).containsExactly("R1", "L2");
+        } finally {
+            releaseHistoryDone.countDown();
+            releaseReplay.countDown();
+        }
+    }
+
+    // A catch-up with nothing to replay waits for the hold R1 has in place when it is called, and not for R2, which
+    // takes the turn once R1 ends.
+    @Test
+    void a_catch_up_with_nothing_to_replay_does_not_wait_for_a_replay_that_takes_the_turn_after_the_one_it_waited_for() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingR1 = new CountDownLatch(1);
+        CountDownLatch releaseR1 = new CountDownLatch(1);
+        CountDownLatch foldingR2 = new CountDownLatch(1);
+        CountDownLatch releaseR2 = new CountDownLatch(1);
+        Function<String, Mono<Void>> heldAtR1 = holdingAt("R1", log, foldingR1, releaseR1, null);
+        Function<String, Mono<Void>> heldAtR2 = holdingAt("R2", log, foldingR2, releaseR2, null);
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(
+                payload -> payload.equals("R2") ? heldAtR2.apply(payload) : heldAtR1.apply(payload),
+                payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        try {
+            CompletableFuture<Boolean> firstReplay = handover.catchUp(source(List.of("R1"), false)).toFuture();
+            assertThat(foldingR1.await(5, TimeUnit.SECONDS)).isTrue();
+            CompletableFuture<Boolean> secondReplay = handover.catchUp(source(List.of("R2"), false)).toFuture();
+            CompletableFuture<Boolean> nothingToReplay = waitingBehindTheRunningReplay(handover);
+            assertThat(nothingToReplay).as("the catch-up with nothing to replay while R1 is held").isNotDone();
+
+            releaseR1.countDown();
+
+            assertThat(nothingToReplay.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(foldingR2.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(handover.acceptIfLive("L1").block(Duration.ofSeconds(5))).as("while R2 is replaying").isFalse();
+            releaseR2.countDown();
+            assertThat(firstReplay.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(secondReplay.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(handover.acceptIfLive("L2").block(Duration.ofSeconds(5))).isTrue();
+            assertThat(log).containsExactly("R1", "R2", "L2");
+        } finally {
+            releaseR1.countDown();
+            releaseR2.countDown();
+        }
+    }
+
+    // A fold that blocks on a catch-up with nothing to replay would wait for a replay that cannot end until the fold
+    // returns, so the catch-up answers without waiting, the same as on the blocking engine.
+    @Test
+    void a_catch_up_with_nothing_to_replay_the_running_replays_fold_blocks_on_answers_without_waiting() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("R1")) {
+                answers.add(self.get().catchUp(source(List.of(), true)).block(Duration.ofSeconds(5)));
+            }
+            log.add(payload);
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+
+        StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectNext(true).expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(answers).containsExactly(true);
+        assertThat(handover.acceptIfLive("L1").block(Duration.ofSeconds(5))).isTrue();
+        assertThat(log).containsExactly("R1", "L1");
+    }
+
+    // The fold switches threads before it asks, so only the returned Mono being part of the fold's own tells the
+    // handover where the call came from.
+    @Test
+    void a_catch_up_with_nothing_to_replay_composed_into_the_running_replays_fold_answers_without_waiting() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> {
+            Mono<Void> folded = Mono.fromRunnable(() -> log.add(payload));
+            if (!payload.equals("R1")) {
+                return folded;
+            }
+            return Mono.delay(Duration.ofMillis(1))
+                    .then(Mono.defer(() -> self.get().catchUp(source(List.of(), true))))
+                    .doOnNext(answers::add)
+                    .then(folded);
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+
+        StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectNext(true).expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(answers).containsExactly(true);
+        assertThat(handover.acceptIfLive("L1").block(Duration.ofSeconds(5))).isTrue();
+        assertThat(log).containsExactly("R1", "L1");
+    }
+
+    // Starts a catch-up with nothing to replay and returns once it waits for the replay holding live delivery back.
+    // Its source is told the marker was read only after the wait was subscribed, on the same thread.
+    private static CompletableFuture<Boolean> waitingBehindTheRunningReplay(ReactiveHandover<String, String> handover) throws InterruptedException {
+        CountDownLatch waiting = new CountDownLatch(1);
+        FakeSource nothingToReplay = source(List.of(), true);
+        nothingToReplay.onCaughtUpChecked = waiting::countDown;
+        CompletableFuture<Boolean> result = handover.catchUp(nothingToReplay).toFuture();
+        assertThat(waiting.await(5, TimeUnit.SECONDS)).isTrue();
+        return result;
     }
 
     // Records every payload it folds, and holds the fold of the given payload until released, failing it afterwards
@@ -1830,6 +1962,7 @@ class ReactiveHandoverTest {
         private Runnable onReplayAbandoned;
         private Runnable onHistoryDone;
         private Runnable onLiveDrained;
+        private Runnable onCaughtUpChecked;
         private int replayCallCount = 0;
         private int markCaughtUpCallCount = 0;
         private int stopAfter = Integer.MAX_VALUE;
@@ -1878,7 +2011,8 @@ class ReactiveHandoverTest {
 
         @Override
         public Mono<Boolean> isAlreadyCaughtUp() {
-            return Mono.just(alreadyCaughtUp);
+            Mono<Boolean> caughtUp = Mono.just(alreadyCaughtUp);
+            return onCaughtUpChecked == null ? caughtUp : caughtUp.doAfterTerminate(onCaughtUpChecked);
         }
 
         @Override
