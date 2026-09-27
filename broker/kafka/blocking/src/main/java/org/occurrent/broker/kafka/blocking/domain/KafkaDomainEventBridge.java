@@ -114,6 +114,11 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * earliest fetched record instead of walking each one into a refusal that would only repeat. Whatever this batch
  * already resolved before the stop, on this partition or any other, is still committed.
  * <p>
+ * A projection that throws an {@link Error} other than {@link AssertionError}, or a checked exception it never
+ * declared, also stops this bridge for good. Nothing from the batch it was handling is committed, the
+ * {@code Consumer} leaves its group even under static membership, and the throwable is rethrown on the loop
+ * thread.
+ * <p>
  * <strong>One dedicated thread owns the {@code Consumer} end to end</strong>, unlike {@code RabbitMqDomainEventBridge}'s
  * split between a scheduler thread and an AMQP callback thread. A Kafka {@code Consumer} is not thread-safe, so this
  * bridge runs one loop, on one thread, that polls, decides the coarse lifecycle gate, feeds the feed, and commits.
@@ -256,9 +261,21 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                     }
                 }
             }
+        } catch (Throwable e) {
+            // An Error, or a checked exception a handler threw without declaring it, gets past the catch above and
+            // ends this thread. Stopping for good makes the close below leave the group, so a static member frees
+            // its partitions now instead of after session.timeout.ms. Nothing from the batch in flight was committed.
+            permanentlyStopped = true;
+            running = false;
+            log.error("The Kafka consume loop for group \"{}\" failed outside this bridge's delivery failure policy. "
+                    + "Stopping this bridge and leaving its consumer group. The record being handled is left "
+                    + "uncommitted, so the next consumer in this group receives it again.",
+                    consumer.groupMetadata().groupId(), e);
+            throw e;
         } finally {
             // Only this thread ever closes the Consumer, see the class javadoc. Reached whether the loop above
-            // exits because running turned false or because of the permanent-stop break. A permanent stop forces
+            // exits because running turned false, because of the permanent-stop break, or because the catch above
+            // stopped this bridge for good. A permanent stop forces
             // LEAVE_GROUP so a static member (group.instance.id configured) still departs immediately, since
             // nothing is coming back to reclaim its assignment, unlike an ordinary close of the same bridge.
             try {

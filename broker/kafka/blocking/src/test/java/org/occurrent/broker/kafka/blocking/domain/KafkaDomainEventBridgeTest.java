@@ -22,6 +22,8 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.broker.api.blocking.DestinationResolver;
@@ -33,6 +35,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -48,6 +51,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -717,6 +721,62 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
         } finally {
             bridge.close();
         }
+    }
+
+    /**
+     * A projection throwing something the delivery failure policy does not route, an {@link Error} or a checked
+     * exception it never declared, ends the loop thread. The bridge has to leave the group on the way out, even
+     * under static membership, where an ordinary close keeps the partitions assigned until
+     * {@code session.timeout.ms} runs out.
+     */
+    @ParameterizedTest
+    @MethodSource("failuresTheDeliveryFailurePolicyDoesNotRoute")
+    void a_projection_failure_the_delivery_failure_policy_does_not_route_leaves_the_group_immediately_even_under_static_membership(
+            Throwable failure) throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, groupId,
+                ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, "instance-" + UUID.randomUUID(),
+                ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, "60000",
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false",
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        AtomicInteger attempts = new AtomicInteger();
+        feed.register("proj", event -> {
+            attempts.incrementAndGet();
+            sneakyThrow(failure);
+        }, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        KafkaDomainEventBridge<TestOrderPlaced> bridge = KafkaDomainEventBridge.builder(consumerConfig, feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build();
+        try {
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isEqualTo(1));
+
+            publish("stream-1", "id-1", "order-1");
+
+            // The loop thread rethrows the failure after leaving the group, and Awaitility would otherwise fail
+            // this wait with it before checking the member count.
+            await().atMost(Duration.ofSeconds(10)).dontCatchUncaughtExceptions().untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isZero());
+            assertThat(attempts).hasValue(1);
+            assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isNull();
+        } finally {
+            bridge.close();
+        }
+    }
+
+    static Stream<Throwable> failuresTheDeliveryFailurePolicyDoesNotRoute() {
+        return Stream.of(new Error("simulated projection error"), new IOException("simulated undeclared checked exception"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     /**
