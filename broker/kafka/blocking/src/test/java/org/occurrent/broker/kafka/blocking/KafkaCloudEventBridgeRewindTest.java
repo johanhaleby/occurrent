@@ -82,21 +82,19 @@ class KafkaCloudEventBridgeRewindTest {
      * The bug: an exception escaping the per-record loop, a failing {@code seek} most often, must rewind every
      * partition this batch touched, not only the one that failed. {@code poll()} already advanced every partition's
      * read position regardless of whether the loop ever reached it, so a partition never rewound here is silently
-     * skipped rather than redelivered. Partition 1's record here always resolves cleanly (no subscription throws,
-     * no seek call of its own in the ordinary path), so the only way it is ever seeked back to its own earliest
-     * fetched offset is through the catch-all rewind, proving the fix regardless of which partition this batch
-     * happens to process first.
+     * skipped rather than redelivered. The model delivers partition 1's record, so partition 1 never seeks in the
+     * ordinary path and its one seek back to offset 7 can only come from the catch-all rewind, whichever partition
+     * the loop visits first.
      */
     @Test
     void an_exception_escaping_the_per_record_loop_rewinds_every_partition_this_batch_touched() throws Exception {
         KafkaConsumer<String, byte[]> consumer = mockConsumer();
-        // Partition 0's record is never deliverable (no subscription registered), so handleRecord seeks it back.
-        // That seek is made to throw, simulating a rebalance taking the partition away mid-batch.
+        // The seek back for partition 0's held record throws, as a rebalance taking the partition away mid-batch would
         doThrow(new RuntimeException("simulated rebalance")).when(consumer).seek(eq(PARTITION_0), eq(5L));
 
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
-        // No subscription is registered on model, so both records report UNAVAILABLE and neither ever commits.
-        // Only partition 0 throws on its own seek, and partition 1 must still be safely rewound.
+        PushSubscriptionModel model = mock(PushSubscriptionModel.class);
+        when(model.acceptRedeliverable(any(CloudEvent.class))).thenAnswer(invocation ->
+                "id-1".equals(invocation.<CloudEvent>getArgument(0).getId()) ? RoutingOutcome.UNAVAILABLE : RoutingOutcome.DELIVERED);
         KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model);
 
         Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
@@ -213,10 +211,10 @@ class KafkaCloudEventBridgeRewindTest {
     /**
      * The bug behind #948: once a record's outcome decides a permanent stop, {@code REFUSED} here, the rest of
      * this poll must never be offered to a model that has already given up, on this partition or any other.
-     * Partition 0 resolves before partition 1's record decides the stop, so it stays committed. Partition 2 is
-     * never reached at all, proving the fix regardless of which partition the loop happens to still have left,
-     * since {@code id-2} is never offered to the model and its partition is rewound instead of left at whatever
-     * position {@code poll()} already advanced it to.
+     * The {@code LinkedHashMap} below fixes the loop's order to partitions 0, 1, 2. Partition 0 resolves before
+     * partition 1's record decides the stop, so it stays committed. Partition 2 comes after the stop, so
+     * {@code id-2} is never offered to the model and partition 2 is rewound instead of left at whatever position
+     * {@code poll()} already advanced it to.
      */
     @Test
     void a_permanent_stop_mid_batch_rewinds_every_partition_it_had_not_yet_reached() throws Exception {
