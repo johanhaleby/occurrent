@@ -454,14 +454,13 @@ public final class DomainEventFeed<E> {
      * so a later {@link #catchUp(String)} on the same projection still replays the full history.
      * <p>
      * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection returns only
-     * once the replay has ended, so {@link #acceptCloudEvent(CloudEvent)} returns {@link RoutingOutcome#DELIVERED}
-     * for a matching event after that, unless another replay has started since. When any catch-up of that projection
-     * failed while it waited, that replay or another one, this throws an {@link IllegalStateException} with that
-     * failure as the cause. Its own refusal does not count as a failure, so every call waiting at the time throws with
-     * the same cause. An interrupt ends the wait early and stays on the thread. A call the view makes while this feed
-     * is calling it, from its fold or from a callback such as {@code replayStarted()}, returns at once instead, since
-     * the replay it would wait for cannot end before that call returns. A view that hands the call to another thread
-     * and waits for it there never finishes.
+     * once the replay has ended, so {@link #acceptCloudEvent(CloudEvent)} returns {@link RoutingOutcome#DELIVERED} for
+     * a matching event after that, unless another replay has started since. When a catch-up of that projection failed
+     * while it waited, this throws an {@link IllegalStateException} whose cause is a catch-up failure recorded while it
+     * waited. An interrupt ends the wait early and stays on the thread. A call the view makes while this feed is
+     * calling it, from its fold or from a callback such as {@code replayStarted()}, returns without waiting for the
+     * replay, since that replay cannot end before the call returns. During a replay, a call the view hands to another
+     * thread waits for that replay, which cannot end while the view waits for the call.
      *
      * @throws IllegalArgumentException if no projection with that id is registered on this feed
      */

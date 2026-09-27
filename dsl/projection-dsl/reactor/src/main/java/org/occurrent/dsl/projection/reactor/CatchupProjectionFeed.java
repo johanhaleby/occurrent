@@ -306,12 +306,11 @@ public final class CatchupProjectionFeed<E> {
      * A second call, or a call after {@link #catchUp()} has finished, finds the feed already live and changes nothing.
      * A live copy of an event that catch-up applied is still de-duplicated and still recorded.
      * <p>
-     * A call while {@link #catchUp()} is still replaying completes only once that replay has ended. When any catch-up
-     * on this feed failed while it waited, that replay or another one, it errors with an {@link IllegalStateException}
-     * with that failure as the cause. Its own refusal does not count as a failure, so every call waiting at the time
-     * errors with the same cause. A call the view makes while this feed is calling it, from
-     * its fold or from a callback such as {@code replayStarted()}, completes at once instead, since the replay it would
-     * wait for cannot end before that call does.
+     * A call while {@link #catchUp()} is still replaying completes only once that replay has ended. When a catch-up on
+     * this feed failed while it waited, it errors with an {@link IllegalStateException} whose cause is a catch-up
+     * failure recorded while it waited. A call the view makes while this feed is calling it, from its fold or from a
+     * callback such as {@code replayStarted()}, completes without waiting for the replay, since that replay cannot end
+     * before the call does.
      * <p>
      * Delivery is still at-least-once here, so the view has to tolerate the same event arriving twice. The de-dup
      * cache only suppresses the overlap between a replay and the live feed, and there is no replay on this path, so

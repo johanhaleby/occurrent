@@ -572,11 +572,11 @@ public final class BlockingHandover<T, K> {
      * <p>
      * A catch-up with nothing to replay that arrives while a replay runs waits until that replay's catch-up returns or
      * throws. The running replay drains the buffer and goes live even if it is stopped, so once this returns
-     * {@code true}, {@link #acceptIfLive(Object)} accepts unless a replay started after this call. When any catch-up
-     * on this handover failed while it waited, that replay or another one, this throws instead, with that failure as
-     * the cause. Its own refusal does not count as a failure, so every call waiting at the time throws with the same
-     * cause. The one exception to the wait is a call from inside that replay's own folds, drain or {@link Source}
-     * callbacks, which returns {@code true} without waiting, because the replay cannot end before the call returns.
+     * {@code true}, {@link #acceptIfLive(Object)} accepts unless a replay started after this call. When a catch-up on
+     * this handover failed while it waited, this throws instead, with a catch-up failure recorded while it waited as
+     * the cause. Its own refusal is not recorded as a failure. The one exception to the wait is a call from inside that
+     * replay's own folds, drain or {@link Source} callbacks, which returns {@code true} without waiting, because the
+     * replay cannot end before the call returns.
      * <p>
      * A replay also waits for a catch-up that is already replaying, until that catch-up returns or throws, so two
      * replays never fold into the view at once and each drain and marker belongs to the replay before it. Calling this

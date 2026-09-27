@@ -49,7 +49,7 @@ Then feeding a push model's `accept(..)` is supported only from the in-memory ev
 0.33.0 also named a broker listener, a Spring application event and an HTTP endpoint. Read
 [section 13](#13-only-the-in-memory-event-stores-write-path-may-feed-a-push-models-accept).
 Finally, a projection feed's `goLive()` called while a catch-up of the same projection is replaying now waits for
-that replay to end, where 0.33.0 returned at once, and fails when a catch-up of that projection failed meanwhile. Read
+that replay to end, where 0.33.0 did not wait, and fails when a catch-up of that projection failed meanwhile. Read
 [section 14](#14-a-projection-feeds-golive-waits-for-a-running-catch-up).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
@@ -1107,32 +1107,34 @@ see.
 ## 14. A projection feed's `goLive()` waits for a running catch-up
 
 This covers `CatchupProjectionFeed.goLive()` and `DomainEventFeed.goLive(id)` on both stacks. In 0.33.0 a `goLive()`
-called while a catch-up of the same projection was still replaying returned at once, and on the reactor stack its
-`Mono` completed at once. Now it returns, or its `Mono` completes, only once that replay has ended.
+called while a catch-up of the same projection was still replaying returned without waiting for that replay, and on
+the reactor stack its `Mono` completed without waiting. Now it returns, or its `Mono` completes, only once that replay
+has ended.
 
-It can now also fail because of a catch-up. When any catch-up of the same projection failed while it waited, that
+It can now also fail because of a catch-up. When a catch-up of the same projection failed while it waited, that
 replay or another one, the blocking feeds throw an `IllegalStateException` and the reactor feeds' `Mono` errors with
-one, with that failure as the cause.
+one. Its cause is a catch-up failure recorded while it waited.
 
 A call the view makes while the feed is calling it, from the code that applies an event to the view or from a
-callback such as `replayStarted()`, still returns at once, since the replay it would wait for cannot end before that
-call does.
+callback such as `replayStarted()`, still returns without waiting for the replay, since that replay cannot end before
+the call does.
 
 You are affected in these cases:
 
-- Startup code that runs `catchUp()`, `catchUp(id)` or `catchUpAll()` on a background thread and calls `goLive()` next
-  to it now waits for the whole replay.
-- Code that calls `goLive()` next to a catch-up and does not expect it to throw now sees the catch-up's failure.
-- On the blocking stack, a view that hands a `goLive()` call to another thread and waits for it there never
-  finishes, because the replay that call waits for is waiting for the view. On the reactor stack the same holds for a
-  view that blocks on the `Mono` from a thread it switched to.
+- Startup code that runs `catchUp()`, `catchUp(id)` or `catchUpAll()` on a background thread and calls `goLive()` while
+  it replays now waits for that replay.
+- Code that calls `goLive()` next to a catch-up and does not expect it to throw can now see the catch-up's failure.
+- On the blocking stack, a view that hands a `goLive()` call to another thread during a replay and waits for it there
+  waits for a replay that cannot end while the view waits. On the reactor stack the same holds for a view that blocks
+  on the `Mono` from a thread it switched to while a replay holds live delivery back.
 
 What to do:
 
-- A catch-up already takes the feed live when its replay completes, so a `goLive()` next to it is not needed. Drop it,
-  or call it once the catch-up has returned.
+- A catch-up takes the feed live when its replay completes. A `goLive()` called while it replays also takes the feed
+  live when that replay is stopped, so keep the `goLive()` if you rely on that. If the thread calling it must not
+  wait for the replay, call `goLive()` on a thread that can, or call it after `stopCatchUp()`.
 - Call `goLive()` from the view's own thread rather than from one it hands the call to.
-- Treat the `IllegalStateException` like a failed catch-up. The feed refuses every event until you build a new one.
+- Treat the `IllegalStateException` like a failed catch-up, and build a new feed.
 - On the blocking stack an interrupt ends the wait early, and `goLive()` returns with the interrupt still set on the
   thread.
 

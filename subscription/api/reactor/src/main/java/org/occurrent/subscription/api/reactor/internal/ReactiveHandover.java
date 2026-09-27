@@ -675,9 +675,8 @@ public final class ReactiveHandover<T, K> {
      * <p>
      * A catch-up with nothing to replay that arrives while a replay holds the live payloads back completes only once
      * that replay ends, so when it emits {@code true}, {@link #acceptIfLive(Object)} accepts unless a replay started
-     * after this call. When any catch-up on this handover failed while it waited, that replay or another one, it errors
-     * instead, with that failure as the cause. Its own refusal does not count as a failure, so every call waiting at
-     * the time errors with the same cause.
+     * after this call. When a catch-up on this handover failed while it waited, it errors instead, with a catch-up
+     * failure recorded while it waited as the cause. Its own refusal is not recorded as a failure.
      * <p>
      * A catch-up with nothing to replay called from code this handover is running emits {@code true} without waiting,
      * since the replay or the hold on live delivery it would wait for cannot end before that code returns. That code
@@ -685,8 +684,9 @@ public final class ReactiveHandover<T, K> {
      * {@link Source#replayCompleted()} and {@link Source#replayAbandoned()}. This handover recognizes the call when that
      * code blocks on the result on the thread this handover called it on, or returns the {@code Mono} as part of its
      * own. While a replay holds live delivery back, {@link #acceptIfLive(Object)} goes on refusing until that replay
-     * ends. Code that blocks on the result from a thread it switched to never finishes, and neither does code that
-     * waits for a catch-up that replays, since that catch-up cannot start its replay before the code returns.
+     * ends. While a replay holds live delivery back, code that blocks on the result from a thread it switched to waits
+     * for that replay, which cannot end while the code blocks. Code that waits for a catch-up that replays waits for a
+     * replay that cannot start before the code returns.
      */
     public Mono<Boolean> catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");

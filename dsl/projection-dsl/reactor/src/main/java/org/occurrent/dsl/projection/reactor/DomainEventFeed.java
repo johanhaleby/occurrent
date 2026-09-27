@@ -444,14 +444,13 @@ public final class DomainEventFeed<E> {
      * The lookup happens when the returned {@link Mono} is subscribed, the same as {@link #catchUp(String)}. An id
      * that matches nothing fails the {@link Mono} with an {@link IllegalArgumentException} rather than throwing here.
      * <p>
-     * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection completes
-     * only once the replay has ended, so {@link #acceptCloudEvent(CloudEvent)} completes with
-     * {@link RoutingOutcome#DELIVERED} for a matching event after that, unless another replay has started since. When
-     * any catch-up of that projection failed while it waited, that replay or another one, the {@link Mono} errors with
-     * an {@link IllegalStateException} with that failure as the cause. Its own refusal does not count as a failure, so
-     * every call waiting at the time errors with the same cause. A call the view makes while this
-     * feed is calling it, from its fold or from a callback such as {@code replayStarted()}, completes at once instead,
-     * since the replay it would wait for cannot end before that call does.
+     * A call while {@link #catchUp(String)} or {@link #catchUpAll()} is still replaying that projection completes only
+     * once the replay has ended, so {@link #acceptCloudEvent(CloudEvent)} completes with
+     * {@link RoutingOutcome#DELIVERED} for a matching event after that, unless another replay has started since. When a
+     * catch-up of that projection failed while it waited, the {@link Mono} errors with an {@link IllegalStateException}
+     * whose cause is a catch-up failure recorded while it waited. A call the view makes while this feed is calling it,
+     * from its fold or from a callback such as {@code replayStarted()}, completes without waiting for the replay, since
+     * that replay cannot end before the call does.
      *
      * @return A {@link Mono} that completes once that projection is live.
      */
