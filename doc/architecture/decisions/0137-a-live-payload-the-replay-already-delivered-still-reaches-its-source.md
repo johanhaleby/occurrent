@@ -133,8 +133,10 @@ did. Only the catch-up that held the live payloads back lets them through again,
 replay releases nothing. While the replay runs, `acceptIfLive` refuses on both engines, so a caller that can redeliver is told
 to try again.
 
-A `goLive()` running next to a replay waits for that replay to end, and fails when the replay fails. Once it has
-waited, `acceptIfLive` accepts unless another replay has started since.
+A `goLive()` running next to a replay waits for that replay to end. It fails when any catch-up on the same handover
+failed while it waited, that replay or another one, for example one whose marker lookup threw, with that failure as the
+cause. Its own refusal does not count as a failure, so every `goLive()` waiting at the time fails with the same cause.
+Once it has waited, `acceptIfLive` accepts unless another replay has started since.
 
 A `goLive()` the view makes from code the engine is running returns `true` at once on both engines, since the replay or
 the hold on live delivery it would wait for cannot end before the view's call does. That code is a fold, live or

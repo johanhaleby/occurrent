@@ -306,8 +306,10 @@ public final class CatchupProjectionFeed<E> {
      * A second call, or a call after {@link #catchUp()} has finished, finds the feed already live and changes nothing.
      * A live copy of an event that catch-up applied is still de-duplicated and still recorded.
      * <p>
-     * A call while {@link #catchUp()} is still replaying completes only once that replay has ended, and errors with
-     * an {@link IllegalStateException} when the replay fails. A call the view makes while this feed is calling it, from
+     * A call while {@link #catchUp()} is still replaying completes only once that replay has ended. When any catch-up
+     * on this feed failed while it waited, that replay or another one, it errors with an {@link IllegalStateException}
+     * with that failure as the cause. Its own refusal does not count as a failure, so every call waiting at the time
+     * errors with the same cause. A call the view makes while this feed is calling it, from
      * its fold or from a callback such as {@code replayStarted()}, completes at once instead, since the replay it would
      * wait for cannot end before that call does.
      * <p>

@@ -271,9 +271,9 @@ public final class BlockingHandover<T, K> {
     // overlap and the first to finish would otherwise release a replay while the second is still delivering.
     private int liveTransitionsRunning = 0;
     private @Nullable Throwable catchUpFailure = null;
-    // Replaced on every failed catch-up, not only the first, so a call waiting for a replay can tell that replay
-    // failed on a handover that had already failed before. A catch-up refusing because another one failed does not
-    // replace it, so a later waiter gets that failure rather than the refusal wrapping it.
+    // Replaced on every failed catch-up, not only the first, so a call waiting for a replay can tell a catch-up failed
+    // while it waited on a handover that had already failed before. A catch-up refusing because another one failed does
+    // not replace it, so a later waiter gets that failure rather than the refusal wrapping it.
     private @Nullable RecordedFailure latestFailure = null;
     // The source whose replay filled replayedIds, so a live payload that replay already delivered can reach it, since
     // accept(..) is handed no source of its own. Written when a replay starts rather than by every catchUp(Source), so
@@ -572,10 +572,11 @@ public final class BlockingHandover<T, K> {
      * <p>
      * A catch-up with nothing to replay that arrives while a replay runs waits until that replay's catch-up returns or
      * throws. The running replay drains the buffer and goes live even if it is stopped, so once this returns
-     * {@code true}, {@link #acceptIfLive(Object)} accepts unless a replay started after this call. When the replay it
-     * waited for failed, this throws instead. The one exception is a call from inside that replay's own folds, drain or
-     * {@link Source} callbacks, which returns {@code true} without waiting, because the replay cannot end before the
-     * call returns.
+     * {@code true}, {@link #acceptIfLive(Object)} accepts unless a replay started after this call. When any catch-up
+     * on this handover failed while it waited, that replay or another one, this throws instead, with that failure as
+     * the cause. Its own refusal does not count as a failure, so every call waiting at the time throws with the same
+     * cause. The one exception to the wait is a call from inside that replay's own folds, drain or {@link Source}
+     * callbacks, which returns {@code true} without waiting, because the replay cannot end before the call returns.
      * <p>
      * A replay also waits for a catch-up that is already replaying, until that catch-up returns or throws, so two
      * replays never fold into the view at once and each drain and marker belongs to the replay before it. Calling this

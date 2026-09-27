@@ -287,9 +287,9 @@ public final class ReactiveHandover<T, K> {
     // delivered, not just whether the ack completed without error, see acceptReportingDelivery(..).
     private final Set<LiveAck> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
-    // Replaced on every failed catch-up, not only the first, so a call waiting for a replay can tell that replay
-    // failed on a handover that had already failed before. A catch-up refusing because another one failed does not
-    // replace it, so a later waiter gets that failure rather than the refusal wrapping it.
+    // Replaced on every failed catch-up, not only the first, so a call waiting for a replay can tell a catch-up failed
+    // while it waited on a handover that had already failed before. A catch-up refusing because another one failed does
+    // not replace it, so a later waiter gets that failure rather than the refusal wrapping it.
     private final AtomicReference<@Nullable RecordedFailure> latestFailure = new AtomicReference<>();
     // Set while the current thread runs a fold or a Source callback of this handover. A catch-up called there answers
     // without waiting, since the replay or the pause it would wait for is waiting for that code.
@@ -675,7 +675,9 @@ public final class ReactiveHandover<T, K> {
      * <p>
      * A catch-up with nothing to replay that arrives while a replay holds the live payloads back completes only once
      * that replay ends, so when it emits {@code true}, {@link #acceptIfLive(Object)} accepts unless a replay started
-     * after this call. When the replay it waited for failed, it errors instead.
+     * after this call. When any catch-up on this handover failed while it waited, that replay or another one, it errors
+     * instead, with that failure as the cause. Its own refusal does not count as a failure, so every call waiting at
+     * the time errors with the same cause.
      * <p>
      * A catch-up with nothing to replay called from code this handover is running emits {@code true} without waiting,
      * since the replay or the hold on live delivery it would wait for cannot end before that code returns. That code
