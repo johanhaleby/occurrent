@@ -21,7 +21,6 @@ import com.mongodb.client.*;
 import com.mongodb.client.model.*;
 import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
-import org.bson.BsonType;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
@@ -41,6 +40,7 @@ import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
+import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
@@ -154,7 +154,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // that happens are withoutStreamPosition() and the resolver turning position off over unpositioned
         // history, and an operator who asked to be refused meant both.
         if (writesPosition() || config.requireRepairedEvents) {
-            warnOrFailOnEventsDamagedByUpdateEvent(eventCollection, config.requireRepairedEvents);
+            warnOrFailOnEventsDamagedByUpdateEvent(eventCollection, dcbPositionCollection, config.requireRepairedEvents);
         }
         if (writesPosition()) {
             warnOrFailOnUnpositionedEvents(eventCollection, requireBackfilledPosition);
@@ -925,17 +925,17 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         log.warn(PositionBackfillValidator.unpositionedEventsMessage(collectionName));
     }
 
-    // Warns, or fails when requireRepairedEvents is set, when the collection holds events that updateEvent damaged
-    // before 0.34.0, which stored position as a string. Those events are missing from every position query and from
-    // the conflict query behind a conditional append. A string position sits in its own type range in the position
-    // index, so where that index exists this reads no keys at all on a store that was never damaged. A store that
-    // writes no position has no such index, so requireRepairedEvents pays a collection scan there.
-    private static void warnOrFailOnEventsDamagedByUpdateEvent(MongoCollection<Document> eventCollection, boolean requireRepairedEvents) {
+    // Warns, or fails when requireRepairedEvents is set, when the collection holds events whose position or tag index
+    // is wrong. The warning looks for a string position only, what updateEvent wrote before 0.34.0, which reads no index
+    // keys on a store that was never damaged. requireRepairedEvents refuses every event whose position is not a
+    // positive integer, every event whose tag fields are not what an append writes, a counter no writer would
+    // store and a position above the counter, a missing one counting as zero, at the cost of a collection scan.
+    private static void warnOrFailOnEventsDamagedByUpdateEvent(MongoCollection<Document> eventCollection, MongoCollection<Document> positionCollection, boolean requireRepairedEvents) {
+        Bson damaged = requireRepairedEvents ? UpdateEventDamage.wrongPositionOrTagIndex() : UpdateEventDamage.positionStoredAsString();
         // Whether one exists, not what is in it. Without the projection this pulls a whole stored event, payload and
-        // all, into the startup path of an affected store. The Spring twins ask through exists() and never do.
-        Document firstDamagedEvent = eventCollection.find(Filters.type(OccurrentCloudEventExtension.POSITION, BsonType.STRING))
-                .limit(1).projection(Projections.include(ID)).first();
-        if (firstDamagedEvent == null) {
+        // all, into the startup path of an affected store.
+        Document firstDamagedEvent = eventCollection.find(damaged).limit(1).projection(Projections.include(ID)).first();
+        if (firstDamagedEvent == null && !(requireRepairedEvents && wrongCounter(eventCollection, positionCollection))) {
             return;
         }
         String collectionName = eventCollection.getNamespace().getCollectionName();
@@ -943,6 +943,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             throw UpdateEventRepairValidator.damagedEventsExist(collectionName);
         }
         log.warn(UpdateEventRepairValidator.damagedEventsMessage(collectionName));
+    }
+
+    // The highest position is read before the counter, which is what keeps an append in flight from looking like a
+    // position above it. UpdateEventDamage.wrongCounter says why.
+    private static boolean wrongCounter(MongoCollection<Document> eventCollection, MongoCollection<Document> positionCollection) {
+        Document highestPositioned = eventCollection.find(UpdateEventDamage.positionIsANumber())
+                .sort(descending(OccurrentCloudEventExtension.POSITION))
+                .limit(1)
+                .projection(Projections.include(OccurrentCloudEventExtension.POSITION))
+                .first();
+        Document counter = positionCollection.find(eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID)).first();
+        return UpdateEventDamage.wrongCounter(highestPositioned, counter);
     }
 
     private static boolean collectionExists(MongoDatabase mongoDatabase, String collectionName) {

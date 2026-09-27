@@ -19,6 +19,7 @@ package org.occurrent.eventstore.mongodb.dcb.internal;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
+import org.bson.types.Decimal128;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
@@ -58,12 +59,25 @@ public final class PositionDocumentMapper {
         }
         CloudEventBuilder cloudEventBuilder = CloudEventBuilder.v1(cloudEvent);
         if (storedPosition instanceof Number number) {
-            cloudEventBuilder.withExtension(OccurrentCloudEventExtension.POSITION, number.longValue());
+            cloudEventBuilder.withExtension(OccurrentCloudEventExtension.POSITION, asLong(number));
         } else if (storedPosition instanceof String string) {
             cloudEventBuilder.withExtension(OccurrentCloudEventExtension.POSITION, Long.parseLong(string));
         } else {
             throw new IllegalStateException("Expected " + OccurrentCloudEventExtension.POSITION + " to be a Number or String but was " + storedPosition.getClass().getName());
         }
         return cloudEventBuilder.build();
+    }
+
+    // Decimal128.longValue goes through a double, which rounds a whole number above 2^53, so a whole number that fits
+    // in a long is read exactly and anything else as before
+    private static long asLong(Number number) {
+        if (number instanceof Decimal128 decimal) {
+            try {
+                return decimal.bigDecimalValue().longValueExact();
+            } catch (ArithmeticException e) {
+                return number.longValue();
+            }
+        }
+        return number.longValue();
     }
 }

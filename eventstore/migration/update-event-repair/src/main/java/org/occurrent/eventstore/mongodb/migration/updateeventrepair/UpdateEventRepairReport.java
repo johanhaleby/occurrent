@@ -23,8 +23,9 @@ import org.jspecify.annotations.NullMarked;
  * What {@link UpdateEventRepair#report()} found, so an operator can size the damage before deciding to repair
  * anything. Producing it writes nothing.
  *
- * @param eventsNeedingRepair  How many stored events the repair would touch. {@code 0} means no damage this tool
- *                             can detect, which is not the same as no damage. An update that dropped both
+ * @param eventsNeedingRepair  How many stored events a run visits, including one it can only report as an
+ *                             {@link UnrecoverableEvent}. {@code 0} means no damage this tool can detect, which is
+ *                             not the same as no damage. An update that dropped both
  *                             {@code position} and the {@code dcbtags} extension leaves a document that matches
  *                             neither query, whether the event was a DCB append or a plain stream event, and
  *                             {@link UpdateEventRepair} describes both cases.
