@@ -64,7 +64,7 @@ import java.util.stream.Stream;
  * exception, so a caller that acknowledges on return never acknowledges a payload that is only held in memory. A
  * replay stopped on a handover that was already live drains the buffer instead, and the wait ends normally.
  * {@link #acceptReportingDelivery(Object)} does not wait, and reports a buffered payload handled before the drain
- * applies it. It is for the write path of the store the replay reads, which its javadoc covers.
+ * applies it. It is for the write path of an in-memory store the replay reads, which its javadoc covers.
  */
 @NullMarked
 public final class BlockingHandover<T, K> {
@@ -342,12 +342,9 @@ public final class BlockingHandover<T, K> {
      * Feed a live payload without waiting for the drain, reporting whether it was delivered live, buffered for the
      * drain after the replay, or already delivered by an earlier attempt, rather than dropped because this handover
      * is stopped. Unlike {@link #accept(Object)}, a buffered payload is reported {@code true} before {@code deliver}
-     * has applied it. That is only for the write path of the store the replay reads, where the payload is already
-     * stored. {@link Source#markCaughtUp()} runs only after the drain, so a crash during this handover's replay leaves
-     * its own marker unwritten and the next start replays the payload from the store. That is true only while no other
-     * instance sharing the same marker storage writes the marker first, since the next start then skips the replay
-     * and nothing applies the payload. A payload from anywhere else goes through {@link #accept(Object)}, which waits
-     * until it is applied.
+     * has applied it. That is only for the write path of an in-memory store the replay reads, where the payload is
+     * already stored and a crash empties the store as well as the buffer. A payload from anywhere else goes through
+     * {@link #accept(Object)}, which waits until it is applied.
      *
      * @return {@code false} when this handover is stopped and the payload was dropped rather than buffered or
      *         delivered, or when a concurrent delivery of the same payload is already running and this call is not
