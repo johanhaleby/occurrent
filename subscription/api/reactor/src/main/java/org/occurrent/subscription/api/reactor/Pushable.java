@@ -23,9 +23,11 @@ import reactor.core.publisher.Mono;
 
 /**
  * The reactive counterpart of the blocking {@code Pushable}: a subscription target that events are
- * <strong>pushed into</strong> from outside, rather than one that reads them from the event store itself. An external
- * source hands each received {@link CloudEvent} to {@link #accept(CloudEvent)}, whose returned {@link Mono} completes
- * once the target's handlers have processed the event, so the caller can acknowledge after processing.
+ * <strong>pushed into</strong> from outside, rather than one that reads them from the event store itself. The listener
+ * of an {@code InMemoryEventStore} hands each written {@link CloudEvent} to {@link #accept(CloudEvent)}, whose
+ * returned {@link Mono} completes once the target's handlers have processed the event. A RabbitMQ or Kafka listener
+ * calls {@code PushSubscriptionModel.acceptRedeliverable(CloudEvent)} instead, which this interface does not declare,
+ * and acknowledges the message only when the outcome it completes with allows it.
  * <p>
  * This is the CloudEvent-level capability that the reactor {@code PushSubscriptionModel} provides, kept separate so a
  * listener can depend on the capability rather than a concrete model.

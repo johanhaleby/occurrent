@@ -37,20 +37,25 @@ import java.util.function.Consumer;
 /**
  * A register-only {@link Subscribable} fed by an external push source rather than by an event-store change stream.
  * <p>
- * It exists so a projection can be driven from any transport that already forwards Occurrent cloud events, such as a
- * RabbitMQ or Kafka listener, a Spring application event, or an HTTP endpoint. The application registers handlers with
+ * It exists so a projection can be driven from any transport that already forwards Occurrent cloud events. The
+ * application registers handlers with
  * {@link #subscribe(String, SubscriptionFilter, org.occurrent.subscription.StartAt, Consumer) subscribe} (directly, or
- * through the projection DSL). A broker listener hands each received event to {@link #acceptRedeliverable(CloudEvent)},
- * and the listener of an {@code InMemoryEventStore} hands it to {@link #accept(CloudEvent)}. Both route it to the
+ * through the projection DSL). A source that can deliver the event again, such as a RabbitMQ or Kafka listener, or an
+ * HTTP endpoint whose caller retries a failed request, hands each received event to
+ * {@link #acceptRedeliverable(CloudEvent)}. Only the listener of an {@code InMemoryEventStore} should hand it to
+ * {@link #accept(CloudEvent)} instead. Both route it to the
  * handler if its {@link SubscriptionFilter} matches, on the calling thread. A handler exception propagates to the
  * caller, so the listener can decide whether to acknowledge or redeliver.
  * <p>
  * Feeding this model from an event store's write path, through {@link #accept(CloudEvent)}, is supported only for the
  * in-memory event store. This model keeps no record of which events the subscription has handled, and a crash before
- * the handler has run loses the event from the in-memory event store too, so the subscription never misses an event
- * the store still has. With a durable event store, such as MongoDB, the subscription never sees an event when the
- * application crashes after the write has committed but before the handler has run. Use a durable subscription there,
- * or forward the events to a broker whose listener calls {@link #acceptRedeliverable(CloudEvent)}.
+ * the handler has run loses the event from the in-memory event store too, so after a crash the store never holds an
+ * event the subscription missed. Without a crash it can still hold one. That happens for an event written before
+ * anything subscribed, while this model was stopped or the subscription paused, and for one whose handler failed,
+ * since the store has already kept it and nothing hands it to the handler again. With a durable event store, such as
+ * MongoDB, the subscription never sees an event when the application crashes after the write has committed but before
+ * the handler has run. Use a durable subscription there, or forward the events to a broker whose listener calls
+ * {@link #acceptRedeliverable(CloudEvent)}. The amendment to ADR 133 records why.
  * <p>
  * Fed from a broker, call {@link #acceptRedeliverable(CloudEvent)} and acknowledge the message only when the
  * {@link RoutingOutcome} it returns is {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}.
@@ -119,9 +124,12 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * <p>
      * <strong>An event fed before any subscription is registered is dropped, and this returns normally.</strong> A
      * listener that acknowledges once this returns therefore acknowledges an event nothing consumed. A broker
-     * listener calls {@link #acceptRedeliverable(CloudEvent)} instead and acknowledges on the outcome it returns. This method cannot refuse the event on your behalf, because it
-     * is also fed from the in-memory event store's write path, as an {@code InMemoryEventStore} listener, where the
-     * event is already stored and refusing would fail the write instead of protecting anything. See ADR 104. A configured {@link PushObserver} is told the event's {@link RoutingOutcome}, and that is where to get
+     * listener calls {@link #acceptRedeliverable(CloudEvent)} instead and acknowledges on the outcome it returns.
+     * This method cannot refuse the event on your behalf, because it is also fed from the in-memory event store's
+     * write path, as an {@code InMemoryEventStore} listener. The store has already kept the event by then, so refusing
+     * would only make the write call throw, without protecting anything. See ADR 104, and the amendment to ADR 133
+     * for why the in-memory event store is the only write path this covers. A configured {@link PushObserver} is told
+     * the event's {@link RoutingOutcome}, and that is where to get
      * visibility into it instead. It is not told at all when the filter or the matched action fails in a way this
      * model does not catch, which {@link PushObserver} names. Told about the event even when a
      * subscription's filter itself throws a {@link RuntimeException} or {@link AssertionError} while being evaluated

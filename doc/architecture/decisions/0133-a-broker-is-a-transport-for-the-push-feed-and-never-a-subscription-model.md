@@ -89,8 +89,10 @@ normally without delivering is an acknowledgement of an event nothing consumed. 
 A normal return is not on its own proof of delivery, and the CloudEvent bridge needs one more check because of it.
 ADR 104 made `DomainEventFeed` refuse when nothing is registered, so the domain bridge can read a normal return as
 delivery. It deliberately did not make `PushSubscriptionModel` refuse, because that model is also fed from the write
-path by `new InMemoryEventStore(pushModel::accept)`, where refusing would fail a write to protect nothing. A stopped
-model also drops live events and returns normally, which ADR 85 decided and ADR 104 kept.
+path by `new InMemoryEventStore(pushModel::accept)`. That store has already kept the event when its listener runs, so
+refusing would only make the write call throw, without protecting anything. The amendment at the end of this ADR limits
+that write path to the in-memory event store. A stopped model also drops live events and returns normally, which ADR 85
+decided and ADR 104 kept.
 
 So a CloudEvent bridge that only looked at whether `accept(...)` threw would acknowledge and lose events in three
 states, before anything is registered, while the model is stopped, and while its subscription is paused. `route`
@@ -1416,14 +1418,16 @@ caught, passes with and without it.
 `PushSubscriptionModel` keeps no record of which events its subscription has handled. Fed through
 `accept(CloudEvent)` from the write path of a durable event store, such as MongoDB, it never sees an event when the
 application crashes after the write has committed but before the handler has run, since nothing hands the event over
-again after the restart. The catch-up model in front
-adds two more ways to lose one. The reactor model records its catch-up-complete marker before it applies the events it
-buffered during the replay, and a second instance sharing the same marker storage can record the marker first, so the
-next start skips the replay. See [#1140](https://github.com/johanhaleby/occurrent/issues/1140).
+again after the restart. The catch-up model in front adds two more ways to lose one. The reactor model records its
+catch-up-complete marker before it applies the events it buffered during the replay, and a second instance sharing the
+same marker storage can record the marker first, so the next start skips the replay. See
+[#1140](https://github.com/johanhaleby/occurrent/issues/1140).
 
 `InMemoryEventStore` is the only event store in Occurrent with a listener on its write path that can feed
-`accept(CloudEvent)`, and a crash empties that store too, so the subscription never misses an event the store still has. The RabbitMQ and Kafka bridges
-call `acceptRedeliverable(CloudEvent)`, and no Spring Boot starter configures a push model fed from a write path.
+`accept(CloudEvent)`, and a crash empties that store too, so after a crash it never holds an event the subscription
+missed. Without a crash it can still hold one, written before anything subscribed, while the model was stopped or the
+subscription paused, or one whose handler failed. None of those depends on whether the store is durable. The RabbitMQ and Kafka bridges call `acceptRedeliverable(CloudEvent)`, and no Spring Boot starter configures a
+push model fed from a write path.
 
 So Occurrent narrows what it supports instead of changing the engine. Feeding `accept(CloudEvent)` from a write path is
 supported only for the in-memory event store. A durable event store uses a durable subscription, which records the

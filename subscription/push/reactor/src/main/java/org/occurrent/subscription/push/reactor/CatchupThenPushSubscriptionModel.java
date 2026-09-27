@@ -72,9 +72,9 @@ import java.util.function.Supplier;
  * <p>
  * Feeding it from an event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)} is supported
  * only for the in-memory event store. Nothing records which live events the subscription has handled, and a crash
- * before the handler has run loses the event from the in-memory event store too, so the subscription never misses an
- * event the store still has. With a durable event store, such as MongoDB, use a durable subscription, or a broker as
- * described below.
+ * before the handler has run loses the event from the in-memory event store too, so after a crash the store never
+ * holds an event the subscription missed. With a durable event store, such as MongoDB, use a durable subscription,
+ * or a broker as described below. The amendment to ADR 133 records why.
  * <p>
  * Fed from a broker, call {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} and acknowledge the message
  * only when its {@link Mono} completes with {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} or

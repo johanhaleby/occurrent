@@ -82,8 +82,9 @@ import java.util.stream.Stream;
  *         <li>Fed from an event store's write path through {@link PushSubscriptionModel#accept(CloudEvent)}, which is
  *             supported only for the in-memory event store, nothing records which live events the subscription has
  *             handled. A crash before the handler has run loses the event from the in-memory event store too, so
- *             the subscription never misses an event the store still has. With a durable event store, such as
- *             MongoDB, use a durable subscription, or a broker as described above.</li>
+ *             after a crash the store never holds an event the subscription missed. With a durable event store,
+ *             such as MongoDB, use a durable subscription, or a broker as described above. The amendment to ADR 133
+ *             records why.</li>
  *       </ul></li>
  *   <li>A one-shot <strong>catch-up-complete marker</strong> (an optional {@link CheckpointStorage}) records that the
  *       replay finished, so a restart skips it and lets the broker resume. The stored value marks completion, it is not
