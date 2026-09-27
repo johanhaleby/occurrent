@@ -276,8 +276,7 @@ class CatchupProjectionFeedTest {
             CompletableFuture<Void> catchUp = Mono.defer(feed::catchUp).subscribeOn(Schedulers.boundedElastic()).toFuture();
             awaitLatch(replaying);
 
-            CompletableFuture<Void> wentLive = feed.goLive().toFuture();
-            Mono.delay(ofMillis(300)).block();
+            CompletableFuture<Void> wentLive = goLiveWaitingForTheReplay(feed);
 
             assertThat(wentLive).as("goLive() while the replay is held").isNotDone();
             releaseReplay.countDown();
@@ -302,8 +301,7 @@ class CatchupProjectionFeedTest {
             CompletableFuture<Void> catchUp = Mono.defer(feed::catchUp).subscribeOn(Schedulers.boundedElastic()).toFuture();
             awaitLatch(replaying);
 
-            CompletableFuture<Void> wentLive = feed.goLive().toFuture();
-            Mono.delay(ofMillis(300)).block();
+            CompletableFuture<Void> wentLive = goLiveWaitingForTheReplay(feed);
 
             assertThat(wentLive).as("goLive() while the replay is held").isNotDone();
             releaseReplay.countDown();
@@ -315,6 +313,27 @@ class CatchupProjectionFeedTest {
                     .hasCauseReference(foldFailure);
         } finally {
             releaseReplay.countDown();
+        }
+    }
+
+    // goLive() subscribes its wait from the one task it schedules, and the marker read ahead of that wait is
+    // synchronous, so once that task has run the call is waiting, or has completed, which the caller then catches
+    private static CompletableFuture<Void> goLiveWaitingForTheReplay(CatchupProjectionFeed<Counted> feed) {
+        CountDownLatch subscribed = new CountDownLatch(1);
+        String hook = "goLiveWaitingForTheReplay";
+        Schedulers.onScheduleHook(hook, task -> () -> {
+            try {
+                task.run();
+            } finally {
+                subscribed.countDown();
+            }
+        });
+        try {
+            CompletableFuture<Void> wentLive = feed.goLive().toFuture();
+            awaitLatch(subscribed);
+            return wentLive;
+        } finally {
+            Schedulers.resetOnScheduleHook(hook);
         }
     }
 

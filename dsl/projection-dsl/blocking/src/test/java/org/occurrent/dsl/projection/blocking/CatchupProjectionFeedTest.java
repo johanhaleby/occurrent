@@ -546,9 +546,7 @@ class CatchupProjectionFeedTest {
         catchingUp.start();
         try {
             awaitLatch(replaying);
-            FutureTask<Void> wentLive = new FutureTask<>(feed::goLive, null);
-            new Thread(wentLive, "go-live").start();
-            Thread.sleep(300);
+            FutureTask<Void> wentLive = goLiveWaitingForTheReplay(feed::goLive);
 
             assertThat(wentLive).as("goLive() while the replay is held").isNotDone();
             releaseReplay.countDown();
@@ -576,9 +574,7 @@ class CatchupProjectionFeedTest {
         catchingUp.start();
         try {
             awaitLatch(replaying);
-            FutureTask<Void> wentLive = new FutureTask<>(feed::goLive, null);
-            new Thread(wentLive, "go-live").start();
-            Thread.sleep(300);
+            FutureTask<Void> wentLive = goLiveWaitingForTheReplay(feed::goLive);
 
             assertThat(wentLive).as("goLive() while the replay is held").isNotDone();
             releaseReplay.countDown();
@@ -865,20 +861,29 @@ class CatchupProjectionFeedTest {
     // its own thread, already waiting in the buffer when this returns
     // A waiting accept(..) parks in Object.wait()
     private static FutureTask<Void> feedWaitingForTheCatchUp(Runnable accept) {
-        FutureTask<Void> feeding = new FutureTask<>(accept, null);
-        Thread thread = new Thread(feeding, "live-delivery");
+        return startedAndWaiting(accept, "live-delivery", "accept(..)");
+    }
+
+    // A goLive() waiting for the replay parks in Object.wait() too
+    private static FutureTask<Void> goLiveWaitingForTheReplay(Runnable goLive) {
+        return startedAndWaiting(goLive, "go-live", "goLive()");
+    }
+
+    private static FutureTask<Void> startedAndWaiting(Runnable call, String threadName, String what) {
+        FutureTask<Void> calling = new FutureTask<>(call, null);
+        Thread thread = new Thread(calling, threadName);
         thread.start();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (thread.getState() != Thread.State.WAITING) {
             if (!thread.isAlive()) {
-                fail("accept(..) ended without waiting for the catch-up");
+                fail(what + " ended without waiting");
             }
             if (System.nanoTime() > deadline) {
-                fail("accept(..) did not start waiting within 5 seconds, it is " + thread.getState());
+                fail(what + " did not start waiting within 5 seconds, it is " + thread.getState());
             }
             Thread.onSpinWait();
         }
-        return feeding;
+        return calling;
     }
 
     private static Projection<Integer, Counted, String> skippingEveryEvent() {

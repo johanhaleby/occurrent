@@ -36,6 +36,7 @@ import org.occurrent.subscription.UnreadableLiveFilterException;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
@@ -490,8 +491,7 @@ class DomainEventFeedTest {
             CompletableFuture<Void> catchUp = feed.catchUp("counter").toFuture();
             awaitUninterruptibly(replaying);
 
-            CompletableFuture<Void> wentLive = feed.goLive("counter").toFuture();
-            Mono.delay(Duration.ofMillis(300)).block();
+            CompletableFuture<Void> wentLive = goLiveWaitingForTheReplay(feed, "counter");
 
             assertThat(wentLive).as("goLive(id) while the replay is held").isNotDone();
             releaseReplay.countDown();
@@ -502,6 +502,30 @@ class DomainEventFeedTest {
             assertThat(folded).containsExactly("1", "live");
         } finally {
             releaseReplay.countDown();
+        }
+    }
+
+    // goLive(id) subscribes its wait from the one task it schedules, and the marker read ahead of that wait is
+    // synchronous, so once that task has run the call is waiting, or has completed, which the caller then catches
+    private static CompletableFuture<Void> goLiveWaitingForTheReplay(DomainEventFeed<Counted> feed, String id) {
+        CountDownLatch subscribed = new CountDownLatch(1);
+        String hook = "goLiveWaitingForTheReplay";
+        Schedulers.onScheduleHook(hook, task -> () -> {
+            try {
+                task.run();
+            } finally {
+                subscribed.countDown();
+            }
+        });
+        try {
+            CompletableFuture<Void> wentLive = feed.goLive(id).toFuture();
+            assertThat(subscribed.await(5, TimeUnit.SECONDS)).as("goLive(id) subscribed its wait").isTrue();
+            return wentLive;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        } finally {
+            Schedulers.resetOnScheduleHook(hook);
         }
     }
 
