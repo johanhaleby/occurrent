@@ -16,6 +16,8 @@
 
 package org.occurrent.broker.kafka.blocking;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -37,6 +39,7 @@ import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.URI;
@@ -827,6 +830,51 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
             assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isNull();
         } finally {
             bridge.close();
+        }
+    }
+
+    /**
+     * A handler that sets the loop thread's interrupt flag, directly or by restoring it after catching an
+     * {@link InterruptedException}, makes the next {@code poll()} throw Kafka's {@code InterruptException}, which sets
+     * the flag again. Unless the bridge clears it, every later poll throws the same way and the backoff sleep returns
+     * at once, so the loop logs a failed iteration thousands of times a second.
+     */
+    @Test
+    void a_handler_that_interrupts_the_loop_thread_does_not_spin_the_poll_loop() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing());
+        List<String> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", cloudEvent -> {
+            handled.add(cloudEvent.getId());
+            if (cloudEvent.getId().equals("id-1")) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(KafkaCloudEventBridge.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publishCloudEvent(topic, "stream-1", orderPlaced("id-1"));
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(handled).contains("id-1"));
+            Thread.sleep(POLL_TIMEOUT.toMillis() * 20);
+
+            assertThat(failedIterations(appender)).isLessThan(5);
+            publishCloudEvent(topic, "stream-1", orderPlaced("id-2"));
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(2L));
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
+    private static long failedIterations(ListAppender<ILoggingEvent> appender) {
+        synchronized (appender) {
+            return appender.list.stream().filter(event -> event.getFormattedMessage().contains("failed this iteration")).count();
         }
     }
 

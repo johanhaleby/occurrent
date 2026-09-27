@@ -24,6 +24,7 @@ import org.apache.kafka.clients.consumer.CloseOptions;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.InterruptException;
 import org.apache.kafka.common.errors.RetriableException;
 import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
@@ -255,6 +256,11 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                     // pollTimeout first, since a persistent poll() failure would otherwise spin this loop as fast
                     // as the JVM allows instead of at the cadence every other path through this loop already
                     // keeps to.
+                    if (e instanceof InterruptException) {
+                        // Cleared so the next poll() can succeed. Kafka sets the interrupt flag again when it throws
+                        // this, so otherwise every later poll() throws it too and the sleep below returns at once.
+                        Thread.interrupted();
+                    }
                     if (running) {
                         log.warn("The Kafka consume loop for group \"{}\" failed this iteration. Retrying after pollTimeout.",
                                 consumer.groupMetadata().groupId(), e);
