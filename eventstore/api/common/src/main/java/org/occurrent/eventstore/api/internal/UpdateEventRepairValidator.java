@@ -39,7 +39,9 @@ public final class UpdateEventRepairValidator {
      * @return the message to log
      */
     public static String damagedEventsMessage(String eventStoreCollectionName) {
-        return problem(eventStoreCollectionName)
+        return "The event collection '" + eventStoreCollectionName + "' contains events that Occurrent's own"
+                + " updateEvent damaged in version 0.33.0 or earlier by storing their position as a string instead of"
+                + " a number. " + whatReadsDo()
                 + " Run the repair described in " + RUNBOOK + ". Upgrading alone does not fix events that are already"
                 + " stored, and until the repair runs you can set requireRepairedEvents(true) to fail startup instead"
                 + " of warning.";
@@ -47,13 +49,17 @@ public final class UpdateEventRepairValidator {
 
     /**
      * Create the {@link IllegalStateException} to throw when {@code requireRepairedEvents(true)} is set and the event
-     * collection holds an event that still looks damaged.
+     * collection holds an event whose position or tag index is wrong, whether Occurrent's own {@code updateEvent}
+     * damaged it or a position was set by hand.
      *
      * @param eventStoreCollectionName the name of the event collection that contains damaged events
      * @return the exception to throw
      */
     public static IllegalStateException damagedEventsExist(String eventStoreCollectionName) {
-        return new IllegalStateException(problem(eventStoreCollectionName)
+        return new IllegalStateException("The event collection '" + eventStoreCollectionName + "' contains events"
+                + " whose position or tag index no store would have written, such as events that Occurrent's own"
+                + " updateEvent damaged in version 0.33.0 or earlier, or events whose position was set by hand. "
+                + whatReadsDo()
                 + " This store is configured to require repaired events, so it will not start. Run the repair"
                 + " described in " + RUNBOOK + ". An event the repair reports as unrecoverable can keep this store"
                 + " from starting until you fix it by hand as step 5 of the runbook describes, and the queries in"
@@ -61,13 +67,11 @@ public final class UpdateEventRepairValidator {
                 + " requireRepairedEvents.");
     }
 
-    private static String problem(String eventStoreCollectionName) {
-        return "The event collection '" + eventStoreCollectionName + "' contains events that Occurrent's own"
-                + " updateEvent damaged in version 0.33.0 or earlier. Such an event has its position stored as a"
-                + " string instead of a number, or it was written by a DCB append and lost its tag index, its"
-                + " position, or both. Position ordered reads and position based catch-up skip an event"
-                + " without a numeric position. DCB reads and conditional appends only see a DCB event that has both"
-                + " its tag index and a numeric position, so a conditional append can miss a conflict against a"
-                + " damaged one. None of this raises an error.";
+    private static String whatReadsDo() {
+        return "Reads in position order, position based catch-up and DCB reads only return an event whose"
+                + " position is a number above zero and no greater than the store's position counter, and they read a"
+                + " position with a fraction as a whole number. DCB reads and conditional appends also need a DCB"
+                + " event's tag index, so a conditional append can miss a conflict against an event they skip. None"
+                + " of this raises an error.";
     }
 }

@@ -113,8 +113,8 @@ none of the original's extensions, so no position was stored. The tool will not 
   just as invisible. Only an update function that forged the position produces this. Reported as
   `POSITION_NOT_POSITIVE`. The tag array is still rebuilt.
 - **A `position` string above the store's position counter.** The counter is the highest position the store ever
-  handed out, and a read clamps its upper bound to that same counter, so a value above it is as invisible as one at
-  or below zero, and a later append reaching that number would collide with it. Only an update function that forged
+  handed out, and DCB reads and reads in position order stop at that same counter, so they skip a value above it as
+  they skip one at or below zero, and a later append reaching that number would collide with it. Only an update function that forged
   the position produces this. Reported as `POSITION_ABOVE_COUNTER`. The tag array is still rebuilt. A store with no
   counter document has no ceiling to compare against, so nothing is reported on that ground.
 

@@ -381,7 +381,7 @@ class UpdateEventRepairTest {
     }
 
     @Test
-    void a_store_requiring_repaired_events_starts_once_the_repair_has_run() {
+    void a_store_requiring_repaired_events_still_refuses_after_the_repair_over_a_lost_dcb_position_and_starts_without_that_event() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
         long positionOfB = ((Number) requireNonNull(storedDocument("b").get(OccurrentCloudEventExtension.POSITION))).longValue();
@@ -413,6 +413,41 @@ class UpdateEventRepairTest {
         assertThatNoException()
                 .as("with the event the repair could not fix gone, a collection the repair fixed has to start")
                 .isThrownBy(() -> newEventStore(true));
+    }
+
+    @Test
+    void a_store_requiring_repaired_events_refuses_a_dcb_event_whose_position_is_null_before_and_after_the_repair() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, null)));
+
+        assertThatThrownBy(() -> newEventStore(true))
+                .as("a is missing from the conflict query, so a store told to require repaired events must refuse")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_LOST),
+                () -> assertThat(result.eventsWithLostPosition())
+                        .as("the run reads a null position as a lost one, so the count must too")
+                        .isEqualTo(1L),
+                () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .as("the tag array does not depend on the position, so it is rebuilt")
+                        .containsExactly("name:1"),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:1"))))
+                        .as("a DCB read still skips a, since its position is not a number")
+                        .isEmpty(),
+                () -> assertThatThrownBy(() -> newEventStore(true))
+                        .as("the repair rebuilt a's tag array and left its null position, so the store must keep refusing")
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("updateEvent damaged")
+        );
     }
 
     @Test
@@ -740,8 +775,8 @@ class UpdateEventRepairTest {
     void an_event_whose_position_is_above_the_store_counter_is_reported_rather_than_written_back() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
-        // Only an update function that set position itself produces this. A read clamps its upper bound to the same
-        // counter, so a position above it is as invisible as one at or below zero.
+        // Only an update function that set position itself produces this. DCB reads and reads in position order stop
+        // at the same counter, so they skip a position above it as they skip one at or below zero.
         long ceiling = eventStore.currentPosition();
         events().updateOne(new Document("id", "a"),
                 new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(ceiling + 1000))));

@@ -459,7 +459,8 @@ public final class UpdateEventRepair {
         } else if (storedPosition == null && encodedTags != null) {
             // A DCB append always writes a position, so a DCB event without one lost it. The tag array below is still
             // worth rebuilding, and the position is reported rather than invented.
-            unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_LOST, "no position field"));
+            String detail = event.containsKey(POSITION) ? "position is null" : "no position field";
+            unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_LOST, detail));
         } else if (storedPosition instanceof Number number) {
             // This event only matched the filter through its tag array, so its position was never damaged by the
             // old write-back. A repair that follows a hand-set POSITION_ALREADY_TAKEN fix (the runbook's step 5)
@@ -488,8 +489,8 @@ public final class UpdateEventRepair {
     /**
      * A position is assignable when it is positive and at or below the store's position counter, whether it came
      * from parsing a damaged string or was read as a number from a document whose position was never damaged. Above
-     * the counter is as unassignable as at or below zero, and just as invisible, because a read clamps its upper
-     * bound to this same counter. The counter is re-read here rather than trusted from the start of the run, so a
+     * the counter is as unassignable as at or below zero, and DCB reads and reads in position order skip it just the
+     * same, because they stop at this same counter. The counter is re-read here rather than trusted from the start of the run, so a
      * store that wrote while the repair walked cannot have an event wrongly called forged. A counter of zero means
      * there is no counter document to compare against.
      *
@@ -517,8 +518,9 @@ public final class UpdateEventRepair {
     }
 
     /**
-     * The highest position the store has ever handed out, which is the ceiling on any position it assigned. Reads
-     * clamp their upper bound to this same counter, so an event above it is as invisible as one at or below zero.
+     * The highest position the store has ever handed out, which is the ceiling on any position it assigned. DCB reads
+     * and reads in position order stop at this same counter, so they skip an event above it as they skip one at or
+     * below zero.
      *
      * @return the counter, or {@code 0} when there is no counter document, which is the value the stores themselves
      * fall back to and which this treats as "no ceiling known" rather than as a ceiling of zero.

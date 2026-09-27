@@ -28,6 +28,7 @@ import com.mongodb.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -38,6 +39,7 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -209,6 +211,59 @@ class MongoEventStoreDamagedEventWarningTest {
     }
 
     @Test
+    void a_store_told_to_require_repaired_events_refuses_a_dcb_event_whose_position_is_null() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        loseTheTagIndex();
+        rebuildTheTagIndex();
+        setThePosition(null);
+
+        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                .as("a null position keeps a DCB event out of DCB reads exactly as a missing one does")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+    }
+
+    @Test
+    void a_store_told_to_require_repaired_events_refuses_an_event_whose_position_is_null() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        setThePosition(null);
+
+        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                .as("a null position is a field that holds something other than a number, which position reads skip")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+    }
+
+    @Test
+    void a_store_told_to_require_repaired_events_refuses_an_event_whose_position_has_a_fraction() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        setThePosition(1.5d);
+
+        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                .as("the store reads 1.5 back as 1, which is not the position the event is stored under")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+    }
+
+    @Test
+    void a_store_told_to_require_repaired_events_refuses_a_dcb_event_whose_position_is_above_the_counter() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        loseTheTagIndex();
+        rebuildTheTagIndex();
+
+        assertThatNoException()
+                .as("a DCB event at the counter is one the store assigned")
+                .isThrownBy(this::newStoreRequiringRepairedEvents);
+
+        setThePosition(counter() + 1);
+
+        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                .as("DCB reads and reads in position order stop at the counter, so they skip a position above it")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+    }
+
+    @Test
     void a_store_told_to_require_repaired_events_refuses_even_when_it_writes_no_position() {
         newEventStore().write("stream:1", List.of(event("Defined")));
         makePositionAString();
@@ -314,6 +369,19 @@ class MongoEventStoreDamagedEventWarningTest {
     private void rebuildTheTagIndex() {
         MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
         events.updateOne(new Document(), new Document("$set", new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, List.of(TAG.canonical()))));
+    }
+
+    private void setThePosition(@Nullable Object position) {
+        MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
+        events.updateOne(new Document(), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, position)));
+    }
+
+    private long counter() {
+        Document counter = requireNonNull(mongoClient.getDatabase(databaseName)
+                .getCollection(DcbMarkerModel.positionCollectionName(EVENT_COLLECTION))
+                .find(new Document("_id", DcbMarkerModel.POSITION_DOCUMENT_ID)).first());
+        // Spring increments by an int, so the counter is not always an int64
+        return ((Number) requireNonNull(counter.get(DcbMarkerModel.COUNTER_POSITION))).longValue();
     }
 
     private void makePositionAString() {

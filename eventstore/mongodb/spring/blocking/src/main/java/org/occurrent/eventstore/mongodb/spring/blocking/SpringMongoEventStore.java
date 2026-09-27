@@ -148,7 +148,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // that happens are withoutStreamPosition() and the resolver turning position off over unpositioned
         // history, and an operator who asked to be refused meant both.
         if (writesPosition() || config.requireRepairedEvents) {
-            warnOrFailOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate, config.requireRepairedEvents);
+            warnOrFailOnEventsDamagedByUpdateEvent(eventStoreCollectionName, dcbPositionCollectionName, mongoTemplate, config.requireRepairedEvents);
         }
         if (writesPosition()) {
             checkForUnpositionedEvents(eventStoreCollectionName, mongoTemplate, config.requireBackfilledPosition);
@@ -977,26 +977,41 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     /**
-     * Warns, or fails when {@code requireRepairedEvents} is set, when the collection holds events that
-     * {@code updateEvent} damaged before 0.34.0. Those events are missing from the conflict query behind a conditional
-     * append, and from every position query unless only their tag index is gone. The warning looks for a string
-     * position only, which reads no index keys on a store that was never damaged. {@code requireRepairedEvents} also
-     * looks for most of what the repair tool reports and cannot fix, at the cost of a collection scan.
+     * Warns, or fails when {@code requireRepairedEvents} is set, when the collection holds events whose position or
+     * tag index is wrong. The warning looks for a string position only, what {@code updateEvent} wrote before 0.34.0,
+     * which reads no index keys on a store that was never damaged. {@code requireRepairedEvents} refuses every event
+     * whose position is anything other than a positive integer no greater than the counter, and every DCB event
+     * without its tag index, at the cost of a collection scan.
      */
-    private static void warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, MongoTemplate mongoTemplate, boolean requireRepairedEvents) {
+    private static void warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, String positionCollectionName, MongoTemplate mongoTemplate, boolean requireRepairedEvents) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
             return;
         }
-        Bson damaged = requireRepairedEvents ? UpdateEventDamage.damagedOrUnrecoverable() : UpdateEventDamage.positionStoredAsString();
+        Bson damaged = requireRepairedEvents ? UpdateEventDamage.wrongPositionOrMissingTagIndex() : UpdateEventDamage.positionStoredAsString();
         Boolean hasDamagedEvents = mongoTemplate.execute(eventStoreCollectionName, collection ->
                 collection.find(damaged).limit(1).projection(Projections.include(ID)).first() != null);
-        if (!Boolean.TRUE.equals(hasDamagedEvents)) {
+        if (!Boolean.TRUE.equals(hasDamagedEvents) && !(requireRepairedEvents && positionAboveCounter(eventStoreCollectionName, positionCollectionName, mongoTemplate))) {
             return;
         }
         if (requireRepairedEvents) {
             throw UpdateEventRepairValidator.damagedEventsExist(eventStoreCollectionName);
         }
         log.warn(UpdateEventRepairValidator.damagedEventsMessage(eventStoreCollectionName));
+    }
+
+    /**
+     * Reads the highest position before the counter, which is what keeps an append in flight from looking like a
+     * position above it. {@link UpdateEventDamage#positionAboveCounter(Document, Document)} says why.
+     */
+    private static boolean positionAboveCounter(String eventStoreCollectionName, String positionCollectionName, MongoTemplate mongoTemplate) {
+        Document highestPositioned = mongoTemplate.execute(eventStoreCollectionName, collection ->
+                collection.find(UpdateEventDamage.positionIsANumber())
+                        .sort(com.mongodb.client.model.Sorts.descending(OccurrentCloudEventExtension.POSITION))
+                        .limit(1)
+                        .projection(Projections.include(OccurrentCloudEventExtension.POSITION))
+                        .first());
+        Document counter = mongoTemplate.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, positionCollectionName);
+        return UpdateEventDamage.positionAboveCounter(highestPositioned, counter);
     }
 
     private void requireStreamCapability() {

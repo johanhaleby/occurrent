@@ -7,8 +7,9 @@ Date: 2026-08-22
 Accepted. Number 0136 allocated at the rel34 plan gate for [#906](https://github.com/johanhaleby/occurrent/issues/906).
 0134 is the maximum on `main` and 0135 is taken by the concurrent unit on PR 941.
 
-Amended in place before 0.34.0 shipped, on what `requireRepairedEvents` checks. It refuses on the repair tool's own
-damaged-event filter rather than on a string position alone. Sections 2 and 4 say why.
+Amended in place before 0.34.0 shipped, on what `requireRepairedEvents` checks. It refuses on one property of the
+`position` field, checked by a filter and a read of the position counter, rather than on a string position alone.
+Sections 2 and 4 say why.
 
 ## Context
 
@@ -129,25 +130,41 @@ does not simply mirror `requireBackfilledPosition`. A store writes no position i
 the store that otherwise hears nothing at all. Refusing to check there would leave the setting silent on the store
 that needs it most.
 
-`requireRepairedEvents` also checks more than the warning does. It refuses while anything matches
-`UpdateEventDamage.damagedOrUnrecoverable()` in `occurrent-eventstore-mongodb-dcb-common`, a class the tool and all
-three stores call. That filter is the repair tool's own damaged-event filter, which adds the `dcbTags` half to the
-string position, together with a DCB event that has no position and an event whose position is a number at or below
-zero. An operator who asked to be refused while damage is left needs the refusal to cover what the repair could
-not fix as well as what it would still fix. A string position alone misses a DCB event whose position was dropped, and
-the hand-set event section 2 describes. Both are missing from the conflict query.
+`requireRepairedEvents` also checks more than the warning does, and what it checks is one property rather than a
+list of kinds of damage. It refuses while any event's position is anything other than a positive integer no greater
+than the store's position counter, or any DCB event lacks its `dcbTags` array. A read in position order returns an
+event only when its position is a number above zero and no greater than the counter, and a DCB read also needs the
+`dcbTags` array, so an event that fails either is one a read skips without an error. A read returns a position with
+a fraction cut to a whole number, which can be another event's position, so the property asks for an integer. The one exception is a non DCB event with no `position` field at all. It looks like history written before position existed,
+and `requireBackfilledPosition` is the check for it. An operator who asked to be refused while damage is left needs
+the refusal to cover what the repair could not fix and what someone set by hand, as well as what the repair would
+still fix.
 
-A `POSITION_LOST` event is why the damaged-event filter alone is not enough. The repair rebuilds its tag array,
-which stops that filter matching it, and the event is still missing from DCB reads and from the conflict query. A
-store checking only that filter started over it after a run that had just reported it.
+The stores check the property in two parts, both in `UpdateEventDamage` in `occurrent-eventstore-mongodb-dcb-common`,
+a class the tool and all three stores call. `wrongPositionOrMissingTagIndex()` is the part a filter can answer. It matches a
+`position` that exists and is not a number, a number at or below zero or with a fraction, a DCB event whose
+`position` is missing or `null`, and a DCB event without its `dcbTags` array. The first clause asks for anything
+other than a number rather than for a string. An explicit `null` is not missing, not a number and not a string, so
+the earlier filter, which looked for each of those, found no fault with a DCB event whose position was `null`, and
+neither DCB reads nor the conflict query see that event. A string position alone also misses a DCB event whose
+position was dropped, and the hand-set event section 2 describes.
 
-The filter does not find a numeric position above the store's position counter. That takes reading the counter at
-startup and ordering the read against appends in flight, in all three stores, and only a write outside Occurrent
-produces such a position. Step 5 of the runbook gives the operator a query for it instead.
+A `POSITION_LOST` event is why the repair tool's damaged-event filter alone is not enough. The repair rebuilds its
+tag array, which stops that filter matching it, and the event is still missing from DCB reads and from the conflict
+query. A store checking only that filter started over it after a run that had just reported it.
+
+`positionAboveCounter(...)` is the other part, since a filter cannot read the counter. The store reads the highest
+numeric position first, from a descending sort on the `position` index, and the counter document second, and
+refuses if the position is the higher one. That order is what keeps an append in flight from looking like damage.
+Every writer raises the counter before the position it reserved is written. All three stores `$inc` it before they
+insert, the position backfill seeds it with `$max` and reserves by `$inc` before it writes, `updateEvent` keeps the
+position the event already had, and the repair writes no position above the counter it re-reads unless there is no
+counter document at all. Nothing lowers the counter. So a counter read after the highest position is at least that position. A store with no
+counter document has nothing to compare against, and it starts, as the repair tool treats that case too.
 
 The price is that, with the setting on, a startup that finds no damage reads the whole collection, whether or not
-the store writes position, since no index covers the `dcbTags` half. Only an operator who asked for the refusal pays
-it.
+the store writes position, since no index covers the `dcbTags` half. The counter check adds two indexed reads. Only
+an operator who asked for the refusal pays either.
 
 An event the repair reports as unrecoverable can still match the filter after a run, for instance one whose position
 is still a string, one whose `dcbtags` does not decode, or a `POSITION_LOST` event. Such an event keeps the store
@@ -186,8 +203,8 @@ event by `_id` rather than guessed at:
   back as an int64 would count as a repair and leave the event exactly as invisible, which is the worse of the two
   outcomes, a silent failure reported as a success.
 - A `position` string above the store's position counter. The counter is the highest position the store ever handed
-  out, and a read clamps its upper bound to it, so a value above it is unassignable and equally invisible, and a later
-  append reaching that number would collide with it. The counter is re-read before the event is reported, so a store
+  out, and DCB reads and reads in position order stop at it, so a value above it is unassignable and they skip it,
+  and a later append reaching that number would collide with it. The counter is re-read before the event is reported, so a store
   written to while the repair walked cannot have an event wrongly condemned, and a store with no counter document has
   no ceiling and is never reported on that ground.
 
@@ -232,7 +249,7 @@ signal an affected store ever gets.
 
 Three MongoDB stores gain one indexed lookup at startup, on the path that already runs the un-backfilled events
 check. On a healthy store it reads nothing. With `requireRepairedEvents` on, the lookup reads the whole collection
-whenever it finds no damage.
+whenever it finds no damage, and the store reads its highest position and its position counter as well.
 
 An affected operator learns about the damage from a log line and runs a tool. Nobody's stored events change without
 them asking, which is the property worth having, because the damage is inert and a wrong repair is not.

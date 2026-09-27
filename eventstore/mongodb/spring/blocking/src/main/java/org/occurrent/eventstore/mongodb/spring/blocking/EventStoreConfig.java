@@ -69,8 +69,8 @@ public class EventStoreConfig {
     // When true, startup fails instead of warning if this store writes position but the event collection already
     // contains events without one.
     public final boolean requireBackfilledPosition;
-    // When true, construction fails instead of warning if the event collection holds events that pre-0.34.0
-    // updateEvent damaged.
+    // When true, construction fails instead of warning if the event collection holds events whose position or tag
+    // index is wrong, such as the ones pre-0.34.0 updateEvent damaged.
     public final boolean requireRepairedEvents;
 
     /**
@@ -332,19 +332,23 @@ public class EventStoreConfig {
         }
 
         /**
-         * When the event collection holds events that {@code updateEvent} damaged in Occurrent 0.33.0 or earlier, fail
-         * construction with an {@link IllegalStateException}. Such an event has its position stored as a string, or it
-         * was written by a DCB append and lost its {@code dcbTags} index, its position, or both. An event without a
-         * numeric position is missing from position-ordered reads. DCB reads and the conflict query behind a
-         * conditional append only see a DCB event that has both its {@code dcbTags} index and a numeric position, so an
-         * append that should have been refused can be accepted instead. Off by default, and then a store that writes
-         * position logs a warning about a string position and says nothing about a lost {@code dcbTags} index. Turn it
-         * on to keep the application down while such an event is left.
+         * When the event collection holds an event whose position or tag index no store would have written, fail
+         * construction with an {@link IllegalStateException}. That is any event whose position is anything other than a
+         * positive integer no greater than the store's position counter, and any DCB event without its {@code dcbTags}
+         * index. Reads in position order skip such a position without an error, or read one with a fraction as a whole
+         * number that can be another event's position. DCB reads also skip an event without its index, and a
+         * conditional append can then miss a conflict with a DCB event they skip. Occurrent's own {@code updateEvent}
+         * produced such events in 0.33.0 or earlier, by storing a position as a string or by dropping a DCB event's
+         * {@code dcbTags} index, its position, or both, and a position set by hand can produce one too. A non DCB event
+         * with no position field at all is what {@code requireBackfilledPosition} checks instead. Off by default, and
+         * then a store that writes position logs a warning about a string position and says nothing about the rest.
+         * Turn it on to keep the application down while such an event is left.
          *
          * <p>An event the repair described in {@code doc/runbooks/update-event-repair.md} cannot fix, such as a DCB
          * event whose position is gone, can keep the store from starting until you fix it by hand, as step 5 of that
-         * runbook describes, or turn this off once you have accepted it. No index covers a missing {@code dcbTags}
-         * index, so a startup that finds no damage reads the whole collection.
+         * runbook describes, or turn this off once you have accepted it. Step 6 of that runbook runs the same checks
+         * as queries. No index covers a missing {@code dcbTags} index, so a startup that finds no damage reads the
+         * whole collection.
          *
          * <p>This applies whether or not the store writes position, since the two ways a store ends up writing none
          * are {@code withoutStreamPosition()} and position being turned off at startup over unpositioned history,

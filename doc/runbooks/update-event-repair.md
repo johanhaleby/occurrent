@@ -64,9 +64,9 @@ default a store that writes no position runs neither query, so run both yourself
 setting below.
 
 Set `EventStoreConfig.Builder.requireRepairedEvents(true)` if you would rather the store refused to start than kept
-accepting conditional appends against a damaged event. It is off by default. It refuses while either query would
-return more than `0`, and a startup that finds no such event reads the whole collection. It can also keep refusing
-after the repair has run, over an event the repair could not fix, until you fix that event by hand or turn the setting
+accepting conditional appends against a damaged event. It is off by default. It refuses while any of the checks in
+step 6 finds an event, and those include both queries above. A startup that finds no such event reads the whole
+collection. It can also keep refusing after the repair has run, over an event the repair could not fix, until you fix that event by hand or turn the setting
 off, as step 5 describes. It applies whether or not the store writes position, so a store that turned position
 off over unpositioned history is refused too.
 
@@ -171,8 +171,8 @@ event just as invisible. Only an update function that set `position` itself prod
 value gone rather than misread. Treat it the way you treat `POSITION_LOST`. The tag array is repaired even so.
 
 **`POSITION_ABOVE_COUNTER`.** The stored position is above the store's position counter, the highest position it ever
-handed out, so the store never assigned it. A read clamps its upper bound to that same counter, so the event is as
-invisible as one at or below zero, and a later append reaching that number would collide with it. Treat it the way
+handed out, so the store never assigned it. DCB reads and reads in position order stop at that same counter, so
+they skip the event, and a later append reaching that number would collide with it. Treat it the way
 you treat `POSITION_LOST`. The tag array is repaired even so. If your store has no counter document there is no
 ceiling to compare against and this is never reported.
 
@@ -207,9 +207,9 @@ also turns position off for the whole collection at its next startup.
 
 **A position you set by hand has to be one the store could have assigned.** It has to be above zero, no other event
 may hold it, and it may not be above the store's position counter. The unique `position` index refuses a value
-another event holds, and a store with `requireRepairedEvents` on refuses to start over one at or below zero. Nothing
-refuses a value above the counter, and the repair does not look at an event again once its position is a number and
-its tag array, if it had one, is back. Check both limits after the fix:
+another event holds, and a store with `requireRepairedEvents` on refuses to start over one at or below zero or above
+the counter. Without that setting nothing else checks, since the repair does not look at an event again once its
+position is a number and its tag array, if it had one, is back. Check both limits after the fix:
 
 ```javascript
 db.events.find({ position: { $lte: 0 } })
@@ -246,19 +246,26 @@ recorded above is the only record of it.
 ### 6. [you] Verify
 
 ```javascript
-db.events.countDocuments({ position: { $type: "string" } })
+db.events.countDocuments({ position: { $exists: true, $not: { $type: "number" } } })
 db.events.countDocuments({ dcbtags: { $exists: true }, dcbTags: { $exists: false } })
-db.events.countDocuments({ dcbtags: { $exists: true }, position: { $exists: false } })
+db.events.countDocuments({ dcbtags: { $exists: true }, position: null })
 db.events.countDocuments({ position: { $lte: 0 } })
+db.events.countDocuments({ $expr: { $ne: ["$position",
+  { $cond: [{ $isNumber: "$position" }, { $trunc: "$position" }, "$position"] }] } })
+db.events.find({ position: { $type: "number" } }, { position: 1 }).sort({ position: -1 }).limit(1)
+db.events_position.findOne({ _id: "dcb" })
 ```
 
-All four should be `0`, except for the events step 5 left alone deliberately. The last two count what a repair
-cannot fix rather than what it looks for, a DCB event whose position is gone and a position no store assigns.
-Restart the application and confirm the startup warning is gone.
+The first five should be `0`, except for the events step 5 left alone deliberately. The first counts a position
+that is anything other than a number, a string or `null` included. The third counts a DCB event whose position is
+gone, whether the field is missing or holds `null`, and the fifth a position with a fraction. Run the last two in
+this order. The `find` returns the highest position, which should be no higher than the `position` field of the
+counter document the `findOne` returns. Without a counter document there is nothing to compare. Restart the
+application and confirm the startup warning is gone.
 
-A store with `requireRepairedEvents` on refuses to start while any of these queries would return more than `0`, so
-an event you left alone keeps it down if a query still counts it. Fix the event by hand as step 5 describes, or turn
-the setting off once you have decided to live with it.
+A store with `requireRepairedEvents` on runs these same checks when it starts and refuses while any of them finds an
+event, so an event you left alone keeps it down. Fix the event by hand as step 5 describes, or turn the setting off
+once you have decided to live with it.
 
 ### 7. [you] Recover consumers that read past a repaired position
 

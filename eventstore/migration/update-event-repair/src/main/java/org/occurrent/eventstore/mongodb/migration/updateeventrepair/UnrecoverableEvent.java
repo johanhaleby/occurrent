@@ -44,7 +44,7 @@ public record UnrecoverableEvent(Object eventId, Reason reason, String detail) {
     public enum Reason {
         /**
          * The event carries DCB tags, so it was written by a DCB append and had a position, but the document has no
-         * {@code position} field at all. An update function that returned a replacement event built from scratch
+         * {@code position} field, or one that holds {@code null}, which the tool reads the same way. An update function that returned a replacement event built from scratch
          * dropped it, and the number exists nowhere else. Assigning a fresh position in {@code _id} order would look
          * plausible and be wrong, because a consumer holding a checkpoint from before the damage would then disagree
          * with the store, so the tool refuses to do it.
@@ -74,9 +74,9 @@ public record UnrecoverableEvent(Object eventId, Reason reason, String detail) {
         POSITION_NOT_POSITIVE,
         /**
          * The event's {@code position} is a string holding a number above the store's position counter, which is the
-         * highest position the store has ever handed out, so no store assigned it. A read clamps its upper bound to
-         * that same counter, so writing the value back would count as a repair and leave the event exactly as
-         * invisible, and a later append reaching that number would collide with it. The counter is re-read before
+         * highest position the store has ever handed out, so no store assigned it. DCB reads and reads in position
+         * order stop at that same counter, so writing the value back would count as a repair and they would still
+         * skip the event, and a later append reaching that number would collide with it. The counter is re-read before
          * the event is reported, so a store that wrote while the repair walked cannot put an event here wrongly.
          * A store with no counter document has no ceiling to compare against and this is not reported.
          */
