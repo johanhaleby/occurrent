@@ -358,24 +358,33 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > later attempt can succeed without the application changing its configuration or restarting. Then it is logged at
 > ERROR and tried again, the delay doubling from 100 ms up to 30 seconds, until one succeeds or the context starts
 > closing, and its ids stay claimed while it tries. Any other failure is logged at ERROR once and gives its ids back.
+> A bean's subscription handlers with such a start subscribe one after the other, so the ones after the failing
+> handler give theirs back with it, and the log names them. Registering any of them again takes a restart, since
+> Spring doesn't build a singleton bean a second time.
+>
 > Which failures can go away follows the split `SubscriptionRefusedException` documents. An
 > `IllegalArgumentException`, which every refusal there is, an `UnsupportedOperationException`, a
-> `NullPointerException` and an `Error` say the call itself is wrong. A `BeansException` says the context has no bean
-> the subscribe needs, or could not build it. A `SubscriptionModelShutdownException` says the model was shut down and
-> can't be started again. `ReactorMongoSubscriptionModel` throws it from `subscribe` once it is shut down, and so does
-> `ReactorDurableSubscriptionModel` wrapping a model that is not a `SubscriptionModel`. Wrapping a `SubscriptionModel`,
-> it passes on whatever that model throws, which for the starter's `ReactorMongoSubscriptionModel` is this one.
-> Everything else is tried again, an `IllegalStateException` and whatever a storage or its driver
-> throws, and so is an exception of any other type that nothing expected. A failure that never goes away and is none
-> of those types is therefore tried every 30 seconds until the context closes, with its ids claimed the whole time. A
+> `NullPointerException` and an `Error` say the call itself is wrong. A `NoSuchBeanDefinitionException` says the
+> context has no bean the subscribe needs, and a `BeanNotOfRequiredTypeException` says the bean it has is of another
+> type. Either one counts when it is the cause of another `BeansException` as well, a bean that can't be built because
+> a bean it depends on is missing for example. A `SubscriptionModelShutdownException` says the model was shut down and
+> can't be started again. `ReactorMongoSubscriptionModel`, `ReactorDurableSubscriptionModel` and the reactor catch-up
+> models throw it from `subscribe` once they are shut down, the catch-up models before replaying any history. The
+> durable model throws it itself, whatever it wraps, so a late subscribe on the model the starter builds gets it
+> before anything is replayed. Everything else is tried again, an `IllegalStateException`, whatever a storage or its
+> driver throws, and any other `BeansException`, since Spring keeps nothing of a bean it failed to build and builds it
+> again on the next attempt. So is an exception of any other type that nothing expected. A failure that never goes
+> away and is none of those types is therefore tried every 30 seconds until the context closes, with its ids claimed the whole time. A
 > storage that stays unreachable does that, and so does a subscription model of your own that throws a plain
 > `IllegalStateException` once it is shut down.
 >
 > The beans a subscription handler subscribes through, `Subscriptions`, `StreamSubscriptions` and `DcbSubscriptions`,
 > are looked up while its bean is built, the same as for `@Projection` and `@Snapshot`, so a missing one fails the
-> bean instead of a subscribe on another thread. `CheckpointStorage` is looked up later. A start at the beginning or
+> bean instead of a subscribe on another thread. The blocking stack looks them up the same way, before any of the
+> bean's subscription handlers subscribes. `CheckpointStorage` is looked up later. A start at the beginning or
 > at an explicit position with `resumeBehavior = DEFAULT` looks it up only when the subscription model evaluates that
-> start, since a model that never does needs none, and a missing one then fails with a `BeansException`.
+> start, since a model that never does needs none, and a missing one then fails with a
+> `NoSuchBeanDefinitionException`.
 >
 > One that starts at `NOW`, or at `DEFAULT` with no position stored, starts from wherever the event feed has reached
 > when the subscribe runs. Subscribing it later would skip whatever the caller writes between getting the bean and
