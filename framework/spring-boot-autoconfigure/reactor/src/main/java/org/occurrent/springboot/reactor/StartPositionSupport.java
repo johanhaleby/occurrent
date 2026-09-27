@@ -131,6 +131,10 @@ class StartPositionSupport {
     // (SAME_AS_START_AT). SAME_AS_START_AT disables durable position storage by delegating to the parent subscription
     // model, so an in-memory read model rebuilt on every boot sees every event and keeps no checkpoint. There is no
     // reactive competing-consumer model, so only the durable layer is considered. Mirrors the DCB replayThenResume.
+    //
+    // CheckpointStorage is looked up only when the subscription model evaluates the start, so a model that never does
+    // needs none. A missing one fails that evaluation with a NoSuchBeanDefinitionException, which a late subscribe does
+    // not try again. One that fails to build is tried again or not by why it failed, as LateSubscriber.retriable says.
     StartAt replayThenResumeAgnostic(String subscriptionId, StartAt replayStart, ResumeBehavior resumeBehavior) {
         return switch (resumeBehavior) {
             case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {

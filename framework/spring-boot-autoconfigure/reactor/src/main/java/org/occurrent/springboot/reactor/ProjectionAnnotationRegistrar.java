@@ -86,7 +86,7 @@ import static org.occurrent.springboot.common.SubscriptionAnnotations.subscripti
  * Scans a bean for {@link org.occurrent.annotation.Projection} factory methods in
  * {@code afterSingletonsInstantiated} and registers each one, including PUSH and domain-push routing and
  * read-model-store resolution. Domain-push feeds are collected and caught up once, after every projection has
- * registered, via {@link #catchUpCollectedFeeds()}.
+ * registered, via {@link #catchUpCollectedFeeds(boolean)}.
  */
 class ProjectionAnnotationRegistrar {
 
@@ -189,7 +189,15 @@ class ProjectionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    <E, S, ID> void processProjectionAnnotation(Object bean, Method method, org.occurrent.annotation.Projection annotation) {
+    // mayBlock is false for a bean built after startup, on whichever thread asked for it. block() can throw on a
+    // Reactor non-blocking thread, and by then the projection is subscribed, so waiting there could fail the bean with
+    // its projection still running. Not waiting is also what WAIT_UNTIL_STARTED means once the application is up.
+    //
+    // subscribeCall runs an event-store projection's subscribe. The subscription model can block inside it, so for a
+    // late bean on a Reactor non-blocking thread it can run later on another thread (see LateSubscriber). The push
+    // subscription models in this repository do not block in subscribe, so a push projection subscribes in place.
+    <E, S, ID> void processProjectionAnnotation(Object bean, Method method, org.occurrent.annotation.Projection annotation, boolean mayBlock,
+                                                LateSubscriber.SubscribeCall subscribeCall) {
         String id = annotation.id();
         if (method.getParameterCount() != 0) {
             throw new IllegalArgumentException("@Projection factory method %s#%s must take no parameters and return a Projection or DcbProjection.".formatted(bean.getClass().getName(), method.getName()));
@@ -217,9 +225,9 @@ class ProjectionAnnotationRegistrar {
             // feeds domain events directly.
             Object feedBean = SubscriptionAnnotations.resolveFeedBean(applicationContext, "@Projection", annotation.subscriptionModel(), annotation.subscriptionModelName(), id, PushSubscriptionModel.class, DomainEventFeed.class);
             if (feedBean instanceof PushSubscriptionModel pushModel) {
-                registerPushProjection(id, converter, descriptor, synchronous, annotation, pushModel);
+                registerPushProjection(id, converter, descriptor, synchronous, annotation, pushModel, mayBlock);
             } else if (feedBean instanceof DomainEventFeed<?> domainFeed) {
-                registerDomainPushProjection(id, converter, descriptor, synchronous, annotation, domainFeed);
+                registerDomainPushProjection(id, converter, descriptor, synchronous, annotation, domainFeed, mayBlock);
             } else {
                 throw new IllegalArgumentException("@Projection '%s' with source=PUSH resolved a %s, which is neither a PushSubscriptionModel nor a DomainEventFeed.".formatted(id, feedBean.getClass().getName()));
             }
@@ -249,10 +257,14 @@ class ProjectionAnnotationRegistrar {
             SubscriptionModelCapability capability = fluxSubscriptionModel instanceof SubscriptionModelCapability c ? c : null;
             CatchupResolution recordingResolution = annotation.recordAppliedAppends() ? resolveCatchupModel(id, capability) : null;
             warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution, capability));
-            var subscription = projectDcb(runner, id, annotation, dcbProjection, resolveStore(annotation, id), startAt, recordingResolution);
-            if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
-                subscription.waitUntilStarted().block();
-            }
+            Object store = resolveStore(annotation, id);
+            boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+            subscribeCall.subscribe(() -> "@Projection '%s'".formatted(id), LateSubscriber.startIsFixed(startAt), () -> {
+                var subscription = projectDcb(runner, id, annotation, dcbProjection, store, startAt, recordingResolution);
+                if (waitUntilStarted) {
+                    subscription.waitUntilStarted().block();
+                }
+            });
         } else if (descriptor instanceof Projection<?, ?, ?> raw) {
             Projection<S, E, ID> projection = (Projection<S, E, ID>) raw;
             boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
@@ -279,10 +291,14 @@ class ProjectionAnnotationRegistrar {
                 startPositionSupport.applyStartupWorkarounds();
                 CatchupResolution recordingResolution = annotation.recordAppliedAppends() ? resolveCatchupModel(id, subscribable) : null;
                 warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution, subscribable));
-                var subscription = projectAgnosticOrStream(runner, id, annotation, projection, resolveStore(annotation, id), startAt, recordingResolution);
-                if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
-                    subscription.waitUntilStarted().block();
-                }
+                Object store = resolveStore(annotation, id);
+                boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+                subscribeCall.subscribe(() -> "@Projection '%s'".formatted(id), LateSubscriber.startIsFixed(startAt), () -> {
+                    var subscription = projectAgnosticOrStream(runner, id, annotation, projection, store, startAt, recordingResolution);
+                    if (waitUntilStarted) {
+                        subscription.waitUntilStarted().block();
+                    }
+                });
             }
         } else {
             throw new IllegalArgumentException("@Projection '%s' method %s#%s must return a Projection or DcbProjection, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor.getClass().getName()));
@@ -351,17 +367,20 @@ class ProjectionAnnotationRegistrar {
     }
 
 
-    // Catch up each domain-push feed once, after every projection is registered.
-    void catchUpCollectedFeeds() {
+    // Catch up each domain-push feed once, after every projection is registered. A caller that may not block
+    // starts every catch-up the way BACKGROUND does, including one another thread queued, since whoever polls an
+    // entry is the one that runs it.
+    void catchUpCollectedFeeds(boolean mayBlock) {
         DomainFeedCatchUp polled;
         // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
         while ((polled = domainFeedsToCatchUp.poll()) != null) {
             DomainFeedCatchUp pending = polled;
-            if (pending.waitUntilStarted()) {
+            if (mayBlock && pending.waitUntilStarted()) {
                 trackedCatchUp(pending.feed(), recordingProgress(pending.id(), pending.feed().catchUpAll())).block();
             } else {
-                // startupMode = BACKGROUND. No thread of our own here, unlike the blocking twin: subscribing without
-                // blocking is all it takes, since the handover runs the replay on boundedElastic.
+                // startupMode = BACKGROUND, or a caller that may not block. No thread of our own here, unlike the
+                // blocking twin. Subscribing without blocking is all it takes, since the handover runs the replay on
+                // boundedElastic.
                 backgroundFeeds.add(pending.feed());
                 // cache() so close() can wait on the same run rather than starting a second one.
                 Mono<Void> catchUp = recordingProgress(pending.id(), pending.feed().catchUpAll()).cache();
@@ -384,8 +403,8 @@ class ProjectionAnnotationRegistrar {
         }
     }
 
-    // Put a background catch-up failure where the application can read it. Nobody waited for the replay, which is the
-    // whole point of BACKGROUND, so the failure has to be recorded rather than thrown.
+    // Put a background catch-up failure where the application can read it. Nobody waited for the replay, because of
+    // BACKGROUND or because the caller may not block, so the failure has to be recorded rather than thrown.
     private void recordBackgroundFailure(String id, Throwable error) {
         log.error("The background catch-up of projection {} failed. It has folded no history and will receive no live "
                 + "events until the application is restarted.", id, error);
@@ -604,7 +623,7 @@ class ProjectionAnnotationRegistrar {
     // replay-then-push catch-up so a new or rebuilt projection is backfilled from the event store, unless
     // catchup = NONE, where the bare model is used directly and no event store is touched at all.
     @SuppressWarnings("unchecked")
-    private <E, S, ID> void registerPushProjection(String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, org.occurrent.annotation.Projection annotation, PushSubscriptionModel pushModel) {
+    private <E, S, ID> void registerPushProjection(String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, org.occurrent.annotation.Projection annotation, PushSubscriptionModel pushModel, boolean mayBlock) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         boolean catchesUp = annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;
         Subscribable subscribable;
@@ -656,7 +675,7 @@ class ProjectionAnnotationRegistrar {
             if (stopIfClosing(pushCatchupModel, subscribable, id)) {
                 return;
             }
-            if (SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode())) {
+            if (mayBlock && SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode())) {
                 subscription.waitUntilStarted().block();
             } else {
                 subscription.waitUntilStarted().subscribe(ignored -> {
@@ -681,7 +700,7 @@ class ProjectionAnnotationRegistrar {
     // Catches up from the event store unless catchup = NONE, where it goes live immediately instead and touches no
     // event store at all.
     @SuppressWarnings("unchecked")
-    private <E, S, ID> void registerDomainPushProjection(String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, org.occurrent.annotation.Projection annotation, DomainEventFeed<?> feedBean) {
+    private <E, S, ID> void registerDomainPushProjection(String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, org.occurrent.annotation.Projection annotation, DomainEventFeed<?> feedBean, boolean mayBlock) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         Object store = resolveStore(annotation, id);
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
@@ -724,8 +743,13 @@ class ProjectionAnnotationRegistrar {
                         SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode())));
             } else {
                 // Nothing to replay, so there is nothing to defer to catchUpCollectedFeeds(): go live right away.
-                feed.goLive(id).block();
-                withPushCatchupStatus(status -> status.recordLive(id));
+                if (mayBlock) {
+                    feed.goLive(id).block();
+                    withPushCatchupStatus(status -> status.recordLive(id));
+                } else {
+                    feed.goLive(id).subscribe(ignored -> {
+                    }, error -> recordBackgroundFailure(id, error), () -> withPushCatchupStatus(status -> status.recordLive(id)));
+                }
             }
         } else {
             // register(...) alone puts the feed into buffering mode immediately, so deferring only the catch-up would

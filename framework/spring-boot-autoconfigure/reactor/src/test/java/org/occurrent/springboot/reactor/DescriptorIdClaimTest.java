@@ -28,6 +28,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -112,12 +113,12 @@ class DescriptorIdClaimTest {
     private static void registerDescriptor(OccurrentReactiveAnnotationBeanPostProcessor coordinator, String beanName, String id, Runnable registration) {
         try {
             Method method = OccurrentReactiveAnnotationBeanPostProcessor.class.getDeclaredMethod(
-                    "registerDescriptor", String.class, Method.class, String.class, String.class, Runnable.class);
+                    "registerDescriptor", String.class, Method.class, String.class, String.class, Consumer.class);
             method.setAccessible(true);
             Method anyHandlerMethod = DescriptorIdClaimTest.class.getDeclaredMethod("canHold", Class.class, Class.class);
             method.invoke(coordinator, beanName, anyHandlerMethod, id,
                     "Duplicate subscription/projection id '%s', each id must be unique because it is the durable checkpoint key.".formatted(id),
-                    registration);
+                    (Consumer<Runnable>) release -> registration.run());
         } catch (InvocationTargetException e) {
             throw e.getCause() instanceof RuntimeException cause ? cause : new IllegalStateException(e.getCause());
         } catch (ReflectiveOperationException e) {
