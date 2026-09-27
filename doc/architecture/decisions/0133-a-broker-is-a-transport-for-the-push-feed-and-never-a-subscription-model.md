@@ -1425,9 +1425,10 @@ same marker storage can record the marker first, so the next start skips the rep
 
 `InMemoryEventStore` is the only event store in Occurrent with a listener on its write path that can feed
 `accept(CloudEvent)`, and a crash empties that store too, so after a crash it never holds an event the subscription
-missed. Without a crash it can still hold one, written before anything subscribed, while the model was stopped or the
-subscription paused, or one whose handler failed. None of those depends on whether the store is durable. The RabbitMQ and Kafka bridges call `acceptRedeliverable(CloudEvent)`, and no Spring Boot starter configures a
-push model fed from a write path.
+missed. Without a crash it can still hold one. That happens for an event written before anything subscribed, while the
+model was stopped or the subscription paused, and for one whose handler failed. None of those depends on whether the
+store is durable. The RabbitMQ and Kafka bridges call `acceptRedeliverable(CloudEvent)`, and no Spring Boot starter
+configures a push model fed from a write path.
 
 So Occurrent narrows what it supports instead of changing the engine. Feeding `accept(CloudEvent)` from a write path is
 supported only for the in-memory event store. A durable event store uses a durable subscription, which records the
