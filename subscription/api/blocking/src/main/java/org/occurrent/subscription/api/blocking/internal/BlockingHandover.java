@@ -58,11 +58,13 @@ import java.util.stream.Stream;
  * already handled reaches nothing, because that delivery did all of it
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
  * <p>
- * Note the semantic contract this engine keeps: {@link #accept(Object)} buffers a live payload and returns
- * <em>before</em> it is folded while the catch-up is running, so a caller that acknowledges after {@code accept}
- * returns may acknowledge before the fold actually runs. That is safe only because {@link Source#markCaughtUp()} is
- * called <em>after</em> the buffer is drained (see {@link #catchUp(Source)}), so a crash mid-catch-up re-runs the
- * whole replay from the source, the backstop for any live payload acknowledged but not yet folded.
+ * {@link #accept(Object)} reports a live payload handled only once {@code deliver} has applied it, or had already
+ * applied it. One fed while the handover is not live waits in the buffer, and the call waits with it until the drain
+ * applies it. A replay stopped before the handover went live, a failed catch-up or an interrupt ends the wait with an
+ * exception, so a caller that acknowledges on return never acknowledges a payload that is only held in memory. A
+ * replay stopped on a handover that was already live drains the buffer instead, and the wait ends normally.
+ * {@link #acceptReportingDelivery(Object)} does not wait, and reports a buffered payload handled before the drain
+ * applies it. It is for the write path of the store the replay reads, which its javadoc covers.
  */
 @NullMarked
 public final class BlockingHandover<T, K> {
@@ -94,10 +96,14 @@ public final class BlockingHandover<T, K> {
          * catch-up replays the whole history and the handover stays usable.
          * <p>
          * What the stop does with the live payloads depends on where the handover stood when the replay started. One
-         * that had not gone live drains nothing and does not go live, and live payloads arriving after the stop are
-         * dropped rather than buffered, the same dropped-not-deferred contract a stopped subscription model has
-         * (ADR 85). One that was already live delivers what it buffered while the replay ran and goes on delivering,
-         * see {@link BlockingHandover#catchUp}. The final, post-loop check exists because the
+         * that had not gone live drains nothing and does not go live. Every payload a caller is waiting on in
+         * {@link BlockingHandover#accept(Object)} is answered as not applied, so that call throws. Live payloads
+         * arriving after the stop are not buffered, so {@link BlockingHandover#accept(Object)} throws for them too
+         * and {@link BlockingHandover#acceptReportingDelivery(Object)} returns {@code false}. A payload
+         * {@link BlockingHandover#acceptReportingDelivery(Object)} buffered before the stop stays in the buffer for
+         * the next catch-up. One that was already live
+         * delivers what it buffered while the replay ran and goes on delivering, see
+         * {@link BlockingHandover#catchUp}. The final, post-loop check exists because the
          * per-payload one only ever runs before a fold, never after the last one: an attempt whose ownership lapses
          * while that last fold is still running would otherwise reach {@link #markCaughtUp()} for a history its
          * current owner never actually folded.
@@ -140,9 +146,8 @@ public final class BlockingHandover<T, K> {
          * about to be delivered. Called immediately before every drain, including the one for a source that was
          * already caught up and replayed nothing, which is what makes it different from {@link #replayCompleted()}.
          * <p>
-         * A buffered payload is delivered exactly once and never again, since whoever fed it here has already been
-         * told it was handled, so a source that reports its own catch-up phase has to stop calling this part of the
-         * work a replay before the drain rather than after it
+         * A buffered payload is delivered exactly once and never again, so a source that reports its own catch-up
+         * phase has to stop calling this part of the work a replay before the drain rather than after it
          * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
          * decision 6). The default does nothing.
          */
@@ -179,7 +184,12 @@ public final class BlockingHandover<T, K> {
     /**
      * Thrown by {@link #acceptReportingDelivery(Object)} and {@link #acceptIfLive(Object)} for a refusal decided
      * before any dispatch was attempted, a permanently failed catch-up, a full live buffer with nothing draining
-     * it, or a {@code dedupId} function that returned {@code null} for the payload, none of them a delivery.
+     * it, or a {@code dedupId} function that returned {@code null} for the payload, none of them a delivery. Also
+     * thrown to a caller waiting for the drain to apply its payload when the catch-up fails or when the caller is
+     * interrupted, to one that fed the payload from inside this handover's own deliveries or callbacks while it was
+     * not live, and by {@link #accept(Object)}
+     * for every payload {@link #acceptReportingDelivery(Object)} would report {@code false} for. None of those
+     * payloads was reported handled, so the caller offers it again.
      * Distinct from any other {@link IllegalStateException} either method can throw, in particular one a delivered
      * payload's own handler throws, so a caller that needs to tell those apart can catch this type specifically
      * instead of classifying every {@link IllegalStateException} alike.
@@ -215,7 +225,7 @@ public final class BlockingHandover<T, K> {
     private final String noun;
 
     private final Object lock = new Object();
-    private final Queue<T> buffer = new ArrayDeque<>();
+    private final Queue<Held<T>> buffer = new ArrayDeque<>();
     // Two caches rather than one, because the two suppressions they cause are not the same event. A key in
     // deliveredIds was delivered live, so suppressing its repeat is a plain no-op. A key in replayedIds was delivered
     // by the replay, inside the history phase, so suppressing the live copy owes the source a call to
@@ -241,6 +251,11 @@ public final class BlockingHandover<T, K> {
     // replayRunning, which ends when the drain starts, since the drain, the marker and the catch block read and write
     // the replay state this attempt set up.
     private boolean replayTurnHeld = false;
+    // How many of this handover's own deliveries and callbacks the current thread is inside, a catch-up included. A
+    // payload fed from there while the handover is not live would wait for a drain, or for a replay to start, that
+    // this same thread holds up, so it is refused instead. Per thread, since only the thread holding things up
+    // deadlocks, and removed at zero so a pooled thread keeps no entry.
+    private final ThreadLocal<Integer> callDepth = new ThreadLocal<>();
     // How many catchUp(Source) calls are running, counted from the first thing each one does. An interrupted call
     // marks the handover stopped only when it is the only one, since every other state where another call owns this
     // handover (a replay running, a replay waiting for its turn, a catch-up with nothing to replay part way through
@@ -287,40 +302,70 @@ public final class BlockingHandover<T, K> {
     }
 
     /**
-     * Feed a live payload. Buffered while the catch-up replay runs, folded directly afterwards, on the calling thread.
+     * Feed a live payload and return once {@code deliver} has applied it. Folded directly on the calling thread once
+     * the handover is live. Before that, while a catch-up replay runs or before one has started, the payload waits in
+     * the buffer and this call waits with it until the drain applies it, so a caller that acknowledges once this
+     * returns never acknowledges a payload that is only held in memory.
      * <p>
-     * A payload fed after a failed catch-up is refused rather than accepted, and stays refused: the caller
-     * acknowledges once this returns, so returning normally would acknowledge a payload nothing handled. Recovery is
-     * the caller's to choose, not this engine's (ADR 104).
+     * Throws rather than returning when the payload was not applied, because the replay was stopped before the
+     * handover went live, the catch-up failed, the calling thread was interrupted, this handover is stopped, or
+     * another delivery of the same payload was still running. Recovery is the caller's to choose, not this engine's
+     * (ADR 104), and for a broker listener it means not acknowledging, so the broker delivers the payload again. A
+     * payload fed after a failed catch-up is refused the same way, and stays refused.
+     * <p>
+     * A long replay can keep this call waiting for minutes. A Kafka consumer waiting past its
+     * {@code max.poll.interval.ms}, five minutes by default, is taken out of its group and the record is delivered
+     * again, which costs a redelivery rather than the event. Never call this from the thread that runs
+     * {@link #catchUp(Source)} before that call. It waits until another thread calls {@link #catchUp(Source)} or
+     * {@link #stopIfNotCatchingUp()}, or interrupts it.
      * <p>
      * Once live, {@code deliver} runs outside this engine's monitor (see the class javadoc), so a concurrent caller
      * gets a concurrent {@code deliver} call, not one queued behind another payload's fold.
      *
-     * @throws PreDispatchRefusalException if a prior {@link #catchUp(Source)} has failed, or if the live buffer
-     *                                overflows during the catch-up.
+     * @throws PreDispatchRefusalException if the payload was not applied for any of the reasons above, if the live
+     *                                     buffer overflows during the catch-up, or if this is called while the
+     *                                     handover is not live from inside one of its own deliveries or {@link Source}
+     *                                     callbacks, a replayed or live fold included, since the payload would wait for
+     *                                     work the calling thread itself holds up.
      */
     public void accept(T payload) {
-        acceptReportingDelivery(payload);
+        switch (offer(payload, true)) {
+            case APPLIED -> {
+            }
+            case STOPPED -> throw new PreDispatchRefusalException(this, HandoverMessages.stoppedBeforeApplied(noun));
+            case STILL_DELIVERING -> throw new PreDispatchRefusalException(this, HandoverMessages.sameEventStillDelivering(noun));
+            case PENDING, BUFFERED, REFUSED -> throw new AssertionError("A waiting offer ends applied, stopped, still delivering or thrown.");
+        }
     }
 
     /**
-     * As {@link #accept(Object)}, additionally reporting whether the payload was genuinely handled (buffered for the
-     * replay to drain, delivered live, or already delivered by an earlier attempt) rather than silently dropped
-     * because a replay that would have drained it was stopped. A caller that acknowledges an externally sourced
-     * payload (a broker message, say) needs this to tell the two apart, since {@link #accept(Object)} returns
-     * normally either way.
+     * Feed a live payload without waiting for the drain, reporting whether it was delivered live, buffered for the
+     * drain after the replay, or already delivered by an earlier attempt, rather than dropped because this handover
+     * is stopped. Unlike {@link #accept(Object)}, a buffered payload is reported {@code true} before {@code deliver}
+     * has applied it. That is only for the write path of the store the replay reads, where the payload is already
+     * stored. {@link Source#markCaughtUp()} runs only after the drain, so a crash during this handover's replay leaves
+     * its own marker unwritten and the next start replays the payload from the store. That is true only while no other
+     * instance sharing the same marker storage writes the marker first, since the next start then skips the replay
+     * and nothing applies the payload. A payload from anywhere else goes through {@link #accept(Object)}, which waits
+     * until it is applied.
      *
      * @return {@code false} when this handover is stopped and the payload was dropped rather than buffered or
      *         delivered, or when a concurrent delivery of the same payload is already running and this call is not
      *         the one deciding whether it succeeds. {@code true} otherwise, including a de-duplicated repeat of a
      *         payload an earlier attempt already delivered.
-     * @throws PreDispatchRefusalException for the same reasons {@link #accept(Object)} does.
+     * @throws PreDispatchRefusalException if a prior {@link #catchUp(Source)} has failed, or if the live buffer
+     *                                     overflows during the catch-up.
      */
     public boolean acceptReportingDelivery(T payload) {
+        Answer answer = offer(payload, false);
+        return answer == Answer.APPLIED || answer == Answer.BUFFERED;
+    }
+
+    private Answer offer(T payload, boolean waitUntilApplied) {
         Objects.requireNonNull(payload, "payload cannot be null");
         K deliverKey = null;
         Source<T> replayedBy = null;
-        boolean dropped = false;
+        Answer notHandled = null;
         synchronized (lock) {
             if (catchUpFailure != null) {
                 throw new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), catchUpFailure);
@@ -344,26 +389,57 @@ public final class BlockingHandover<T, K> {
                     // let a caller acknowledge a payload whose actual delivery has not succeeded yet, and never
                     // will if that attempt throws. Reporting it dropped is always safe to retry, since a
                     // redelivery of the same key lands on deliveredIds once the in-flight attempt actually finishes.
-                    dropped = true;
+                    notHandled = Answer.STILL_DELIVERING;
                 } else {
                     deliverKey = key;
                 }
             } else if (stopped) {
                 // Dropped rather than buffered: the replay that would have drained this buffer was stopped, so
                 // nothing is coming to fold it and buffering would just fill up and overflow.
-                dropped = true;
+                notHandled = Answer.STOPPED;
             } else if (buffer.size() >= maxBufferedEvents) {
                 throw new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents));
+            } else if (!waitUntilApplied) {
+                buffer.add(new Held<>(payload, false));
+                return Answer.BUFFERED;
+            } else if (callDepth.get() != null) {
+                throw new PreDispatchRefusalException(this, HandoverMessages.acceptedFromOwnDelivery(noun));
             } else {
-                buffer.add(payload);
+                Held<T> held = new Held<>(payload, true);
+                buffer.add(held);
+                return awaitAnswerUnderLock(held);
             }
+        }
+        if (notHandled != null) {
+            return notHandled;
         }
         if (deliverKey != null) {
             deliverOutsideLock(payload, deliverKey);
         } else if (replayedBy != null) {
             reportAlreadyDeliveredByReplay(replayedBy, payload);
         }
-        return !dropped;
+        return Answer.APPLIED;
+    }
+
+    // Assumes lock is held. Releases it while it waits, since the drain, a stop and a failure all answer under it.
+    private Answer awaitAnswerUnderLock(Held<T> held) {
+        while (held.answer == Answer.PENDING) {
+            try {
+                lock.wait();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                if (held.answer == Answer.PENDING) {
+                    // Taken out of the buffer so a caller that gives up does not leave its place taken. One the drain
+                    // already took may still be applied, and the redelivery that follows is de-duplicated.
+                    buffer.remove(held);
+                    throw new PreDispatchRefusalException(this, HandoverMessages.interruptedBeforeApplied(noun), e);
+                }
+            }
+        }
+        if (held.answer == Answer.REFUSED) {
+            throw new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), held.failure);
+        }
+        return held.answer;
     }
 
     /**
@@ -380,7 +456,8 @@ public final class BlockingHandover<T, K> {
      *         handover is not live yet, is stopped, or a concurrent delivery of the same payload is already
      *         running elsewhere. Every {@code false} is safe to retry: a redelivery lands on {@code deliveredIds}
      *         once whatever is holding it up resolves.
-     * @throws PreDispatchRefusalException for the same reasons {@link #accept(Object)} does. Checked first, before
+     * @throws PreDispatchRefusalException if a prior {@link #catchUp(Source)} has failed, or if the {@code dedupId}
+     *         function returns {@code null}. The failure is checked first, before
      *         the live check, so a payload fed after a permanently failed catch-up fails fast rather than reporting
      *         {@code false} forever for a caller to retry a catch-up that is never coming back.
      */
@@ -434,10 +511,11 @@ public final class BlockingHandover<T, K> {
      * by a later {@link #catchUp(Source)} call that itself reaches live.
      * <p>
      * The one fact this deliberately does not answer is whether a currently buffering payload is safe against a
-     * crash. It is, while an actual replay is what will drain that buffer, since nothing is recorded complete until
-     * after the drain and a crash simply replays the same history again. This method reads {@code false} for that
-     * case anyway, the same as it does before anything has started, because this handover keeps no separate record
-     * of "a replay is in flight" for it to report, only whether it is live and whether it has permanently failed.
+     * crash. It is, while an actual replay is what will drain that buffer and no other instance sharing the marker
+     * storage writes the marker first, since this handover records nothing complete until after the drain and a
+     * crash replays the same history again. This method reads {@code false} for that case anyway, the same as it does
+     * before anything has started, because this handover keeps no separate record of "a replay is in flight" for it
+     * to report, only whether it is live and whether it has permanently failed.
      * A caller that means to distinguish a store-backed buffer from one with nothing behind it needs its own signal
      * for that, this is not it.
      */
@@ -459,6 +537,23 @@ public final class BlockingHandover<T, K> {
     public boolean refusesPermanently() {
         synchronized (lock) {
             return catchUpFailure != null;
+        }
+    }
+
+    /**
+     * Stop a handover that has not gone live and has no {@link #catchUp(Source)} running, the same way a stopped
+     * replay leaves one. Every payload a caller is waiting on is answered as not applied, and later payloads are not
+     * buffered, until the next {@link #catchUp(Source)}. Without this, a caller that fed a payload before any catch-up
+     * started would wait for one that a shutting-down application never runs.
+     * <p>
+     * Does nothing to a live handover or to one with a catch-up running. A running replay is stopped through
+     * {@link Source#keepReplaying()} instead, and it answers the waiting callers itself.
+     */
+    public void stopIfNotCatchingUp() {
+        synchronized (lock) {
+            if (!live && catchUpsInProgress == 0) {
+                stopUnderLock();
+            }
         }
     }
 
@@ -496,7 +591,11 @@ public final class BlockingHandover<T, K> {
         boolean replayOpen = false;
         // Whether this call took the replay turn, so only the call that took it gives it back.
         boolean holdsReplayTurn = false;
+        // Set once enterOwnCall() returns, so the finally below takes back only a depth this call added.
+        boolean enteredOwnCall = false;
         try {
+            enterOwnCall();
+            enteredOwnCall = true;
             if (source.isAlreadyCaughtUp()) {
                 synchronized (lock) {
                     if (replayRunning) {
@@ -544,7 +643,7 @@ public final class BlockingHandover<T, K> {
                         // Only when no other catch-up is running. Stopping is this call's answer for its own caller,
                         // and while another one is going live or waiting for its turn the handover is that call's,
                         // with the payloads after this belonging in its buffer rather than dropped.
-                        stopped = true;
+                        stopUnderLock();
                     }
                 } else if (catchUpFailure != null && catchUpFailure != failureBeforeWaiting) {
                     // The catch-up this call waited for failed, which leaves the handover refusing everything and its
@@ -576,8 +675,8 @@ public final class BlockingHandover<T, K> {
             if (interrupted) {
                 if (drainAfterInterrupt) {
                     try {
-                        // Payloads taken into the buffer while live was false were reported handled, so they are
-                        // delivered here rather than being left behind a handover that is live again.
+                        // Payloads taken into the buffer while live was false were reported handled or are waited
+                        // on, so they are delivered here rather than being left behind a handover that is live again.
                         deliverBufferAndGoLive();
                     } finally {
                         synchronized (lock) {
@@ -627,7 +726,7 @@ public final class BlockingHandover<T, K> {
                     replayRunning = false;
                     goLive = liveWhenReplayStops;
                     if (!goLive) {
-                        stopped = true;
+                        stopUnderLock();
                     }
                 }
                 if (goLive) {
@@ -669,8 +768,8 @@ public final class BlockingHandover<T, K> {
                 }
             }
             if (deliverBuffer) {
-                // A payload taken into the buffer during a replay on a live handover was reported handled, so it is
-                // delivered before the failure makes this handover refuse everything that comes after.
+                // A payload taken into the buffer during a replay on a live handover was reported handled or is
+                // waited on, so it is delivered before the failure makes this handover refuse everything after it.
                 try {
                     deliverBufferAndGoLive();
                 } catch (Throwable deliveryFailure) {
@@ -692,15 +791,28 @@ public final class BlockingHandover<T, K> {
                 if (holdsReplayTurn) {
                     replayRunning = false;
                 }
+                // A failed handover refuses every payload, so one a caller is still waiting on is refused too.
+                answerAwaitedInBuffer(Answer.REFUSED, catchUpFailure);
             }
             throw e;
         } finally {
-            synchronized (lock) {
-                if (holdsReplayTurn) {
-                    replayTurnHeld = false;
+            try {
+                if (enteredOwnCall) {
+                    exitOwnCall();
                 }
-                catchUpsInProgress--;
-                lock.notifyAll();
+            } finally {
+                synchronized (lock) {
+                    if (holdsReplayTurn) {
+                        replayTurnHeld = false;
+                    }
+                    catchUpsInProgress--;
+                    // The last catch-up to return stops a handover that is neither live nor failed, so no waiting
+                    // payload goes unanswered. An interrupted catch-up that is not the last to return does not stop it.
+                    if (catchUpsInProgress == 0 && !live && catchUpFailure == null) {
+                        stopUnderLock();
+                    }
+                    lock.notifyAll();
+                }
             }
         }
     }
@@ -743,7 +855,12 @@ public final class BlockingHandover<T, K> {
 
     private void reportAlreadyDeliveredByReplay(Source<T> replayedBy, T payload) {
         try {
-            replayedBy.alreadyDeliveredByReplay(payload);
+            enterOwnCall();
+            try {
+                replayedBy.alreadyDeliveredByReplay(payload);
+            } finally {
+                exitOwnCall();
+            }
         } finally {
             synchronized (lock) {
                 replayCallbacksRunning--;
@@ -760,18 +877,25 @@ public final class BlockingHandover<T, K> {
     }
 
     private void deliverBufferAndGoLive() {
-        List<T> toDeliver;
+        List<Held<T>> toDeliver;
         List<K> keysToDeliver;
-        List<T> alreadyReplayed;
+        List<Held<T>> alreadyReplayed;
+        // Payloads whose key an earlier one in this drain, or a live delivery still running, has reserved. Answered by
+        // whether that delivery applied the key.
+        List<Held<T>> repeats;
+        List<K> repeatKeys;
         Source<T> replayedBy;
         synchronized (lock) {
             replayedBy = this.source;
             toDeliver = new ArrayList<>(buffer.size());
             keysToDeliver = new ArrayList<>(buffer.size());
             alreadyReplayed = new ArrayList<>();
-            for (T buffered : buffer) {
-                K key = dedupKey(buffered);
+            repeats = new ArrayList<>();
+            repeatKeys = new ArrayList<>();
+            for (Held<T> buffered : buffer) {
+                K key = dedupKey(buffered.payload);
                 if (deliveredIds.contains(key)) {
+                    buffered.answer(Answer.APPLIED, null);
                     continue;
                 }
                 if (replayedIds.contains(key)) {
@@ -786,6 +910,9 @@ public final class BlockingHandover<T, K> {
                 if (inFlight.add(key)) {
                     toDeliver.add(buffered);
                     keysToDeliver.add(key);
+                } else {
+                    repeats.add(buffered);
+                    repeatKeys.add(key);
                 }
             }
             // Counted before this handover goes live, so a catch-up that starts right after waits for these calls
@@ -794,13 +921,37 @@ public final class BlockingHandover<T, K> {
             buffer.clear();
             replayRunning = false;
             live = true;
+            lock.notifyAll();
         }
+        try {
+            deliverTaken(replayedBy, toDeliver, keysToDeliver, alreadyReplayed);
+        } catch (Throwable e) {
+            // The catch-up records this failure once it reaches catchUp(..), and refuses every payload from then on.
+            // A payload this drain took but did not apply is answered the same way now, since nothing delivers it
+            // later.
+            synchronized (lock) {
+                answerAll(toDeliver, Answer.REFUSED, e);
+                answerAll(alreadyReplayed, Answer.REFUSED, e);
+                answerAll(repeats, Answer.REFUSED, e);
+            }
+            throw e;
+        }
+        synchronized (lock) {
+            for (int i = 0; i < repeats.size(); i++) {
+                repeats.get(i).answer(deliveredIds.contains(repeatKeys.get(i)) ? Answer.APPLIED : Answer.STILL_DELIVERING, null);
+            }
+            lock.notifyAll();
+        }
+    }
+
+    private void deliverTaken(Source<T> replayedBy, List<Held<T>> toDeliver, List<K> keysToDeliver, List<Held<T>> alreadyReplayed) {
         // Ahead of the drained deliveries, so a payload the replay already applied is reported before any payload
         // that comes after it.
         boolean reported = false;
         try {
-            for (T replayedPayload : alreadyReplayed) {
-                replayedBy.alreadyDeliveredByReplay(replayedPayload);
+            for (Held<T> replayedPayload : alreadyReplayed) {
+                replayedBy.alreadyDeliveredByReplay(replayedPayload.payload);
+                answer(replayedPayload, Answer.APPLIED);
             }
             reported = true;
         } finally {
@@ -824,7 +975,11 @@ public final class BlockingHandover<T, K> {
         int delivered = 0;
         try {
             for (; delivered < toDeliver.size(); delivered++) {
-                deliverOutsideLock(toDeliver.get(delivered), keysToDeliver.get(delivered));
+                Held<T> buffered = toDeliver.get(delivered);
+                deliverOutsideLock(buffered.payload, keysToDeliver.get(delivered));
+                // Answered as each one is applied rather than after the whole drain, so its caller stops waiting as
+                // soon as its own payload is applied.
+                answer(buffered, Answer.APPLIED);
             }
         } finally {
             // Every key was reserved above, before any of them was delivered. A delivery that throws leaves the
@@ -834,6 +989,42 @@ public final class BlockingHandover<T, K> {
             // and the payloads are still eligible when the source offers them again.
             releaseReservations(keysToDeliver.subList(Math.min(delivered + 1, keysToDeliver.size()), keysToDeliver.size()));
         }
+    }
+
+    private void answer(Held<T> held, Answer answer) {
+        synchronized (lock) {
+            held.answer(answer, null);
+            lock.notifyAll();
+        }
+    }
+
+    // Assumes lock is held.
+    private void answerAll(List<Held<T>> held, Answer answer, @Nullable Throwable failure) {
+        for (Held<T> one : held) {
+            one.answer(answer, failure);
+        }
+        lock.notifyAll();
+    }
+
+    // Assumes lock is held. Nothing drains a stopped handover's buffer until the next catch-up, so a caller waiting
+    // there is answered now rather than held until then. A payload fed through acceptReportingDelivery(..) stays
+    // for that catch-up, since nobody waits on it and the store has it anyway.
+    private void stopUnderLock() {
+        stopped = true;
+        answerAwaitedInBuffer(Answer.STOPPED, null);
+    }
+
+    // Assumes lock is held.
+    private void answerAwaitedInBuffer(Answer answer, @Nullable Throwable failure) {
+        Iterator<Held<T>> held = buffer.iterator();
+        while (held.hasNext()) {
+            Held<T> one = held.next();
+            if (one.awaited) {
+                held.remove();
+                one.answer(answer, failure);
+            }
+        }
+        lock.notifyAll();
     }
 
     private void releaseReservations(List<K> keys) {
@@ -862,8 +1053,13 @@ public final class BlockingHandover<T, K> {
     private void deliverOutsideLock(T payload, K key) {
         boolean succeeded = false;
         try {
-            deliver.accept(payload);
-            succeeded = true;
+            enterOwnCall();
+            try {
+                deliver.accept(payload);
+                succeeded = true;
+            } finally {
+                exitOwnCall();
+            }
         } finally {
             synchronized (lock) {
                 inFlight.remove(key);
@@ -871,6 +1067,47 @@ public final class BlockingHandover<T, K> {
                     deliveredIds.add(key);
                 }
                 lock.notifyAll();
+            }
+        }
+    }
+
+    private void enterOwnCall() {
+        Integer depth = callDepth.get();
+        callDepth.set(depth == null ? 1 : depth + 1);
+    }
+
+    private void exitOwnCall() {
+        int depth = Objects.requireNonNull(callDepth.get());
+        if (depth == 1) {
+            callDepth.remove();
+        } else {
+            callDepth.set(depth - 1);
+        }
+    }
+
+    // How an offer ended. PENDING and REFUSED only ever describe a payload waiting in the buffer, and BUFFERED only
+    // one that did not wait.
+    private enum Answer {
+        PENDING, APPLIED, BUFFERED, STOPPED, STILL_DELIVERING, REFUSED
+    }
+
+    // A live payload in the buffer, and what the caller waiting on it is told. The answer is written once, under the
+    // lock, and only for a payload a caller waits on.
+    private static final class Held<T> {
+        private final T payload;
+        private final boolean awaited;
+        private Answer answer = Answer.PENDING;
+        private @Nullable Throwable failure;
+
+        private Held(T payload, boolean awaited) {
+            this.payload = payload;
+            this.awaited = awaited;
+        }
+
+        private void answer(Answer answer, @Nullable Throwable failure) {
+            if (awaited && this.answer == Answer.PENDING) {
+                this.answer = answer;
+                this.failure = failure;
             }
         }
     }

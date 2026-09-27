@@ -84,6 +84,53 @@ public final class HandoverMessages {
     }
 
     /**
+     * Refuses a live event this handover did not apply because it was stopped before it went live, whether its replay
+     * was stopped or no catch-up was left to run. Not a failure, so it says to offer the event again rather than to
+     * rebuild anything.
+     *
+     * @param noun The noun describing what did not apply the event, e.g. {@code "projection feed"}.
+     */
+    public static String stoppedBeforeApplied(String noun) {
+        return "This " + noun + " was stopped before it went live, so it did not apply the event. Do not acknowledge "
+                + "it. Offer it again and a later delivery applies it.";
+    }
+
+    /**
+     * Refuses a live event because another delivery of the same event was still running, so this call cannot tell
+     * whether it will be applied. Only the blocking engine refuses for this reason, since it delivers live events
+     * concurrently and turns away a second copy of one it is still delivering.
+     *
+     * @param noun The noun describing what the event was fed to, e.g. {@code "projection feed"}.
+     */
+    public static String sameEventStillDelivering(String noun) {
+        return "Another delivery of the same event was still running on this " + noun + ", so this call did not apply "
+                + "it. Do not acknowledge it. Offer it again and a later delivery applies it or finds it already applied.";
+    }
+
+    /**
+     * Refuses a live event whose caller was interrupted while it waited for a catch-up replay to apply the event.
+     *
+     * @param noun The noun describing what the event was waiting on, e.g. {@code "projection feed"}.
+     */
+    public static String interruptedBeforeApplied(String noun) {
+        return "Interrupted while waiting for this " + noun + " to apply the event during its catch-up, so it may not "
+                + "have been applied. Do not acknowledge it. Offer it again and a later delivery applies it.";
+    }
+
+    /**
+     * Refuses a live event fed, while the handover is not live, from inside one of its own deliveries or callbacks,
+     * such as a replayed or live fold or a source callback. Waiting would wait for a drain, or for a replay to start,
+     * that the waiting thread itself holds up.
+     *
+     * @param noun The noun describing what was fed, e.g. {@code "projection feed"}.
+     */
+    public static String acceptedFromOwnDelivery(String noun) {
+        return "A live event was fed to this " + noun + " from inside one of its own deliveries or callbacks while it "
+                + "was not live. It would wait for work this same thread holds up, so it is refused instead. Feed live "
+                + "events from another thread.";
+    }
+
+    /**
      * Rejects a null replay-to-live de-dup key. The key function is caller-supplied and declared non-null, but nothing
      * enforces that at runtime, and a null reaches {@code BoundedIdCache} as a null element for its eviction queue,
      * which throws a bare {@link NullPointerException} from inside the cache. On the live path that happens after the

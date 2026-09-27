@@ -58,11 +58,11 @@ import java.util.stream.Stream;
  * <p>
  * Contract (see ADR 62): catch-up is Occurrent's job, live-resume is the broker's (acknowledge after {@code accept}
  * returns). No live position watermark is kept, so delivery is at-least-once and the fold must be idempotent. The
- * de-dup cache and the live buffer are bounded. The buffer fails loud on overflow. The "acknowledge after processing"
- * guarantee holds for the live phase. During the catch-up window {@link #accept(Object)} buffers the event and returns
- * before it is folded, so a message may be acknowledged before it is applied. That is safe because the marker is written
- * only after the drain, so a crash mid-catch-up re-replays the whole history from the store, the backstop for any event
- * acknowledged but not yet folded.
+ * de-dup cache and the live buffer are bounded. The buffer fails loud on overflow. {@link #accept(Object)} returns only
+ * once the event has been folded, during the catch-up as well as after it. An event fed before the feed goes live waits
+ * in the buffer, and the call waits with it until the drain folds it. A catch-up stopped before the feed went live, a
+ * failed catch-up or an interrupt throws instead, so the listener never acknowledges an event that is only held in
+ * memory. A replay stopped after a {@link #goLive()} drains the buffer instead, and the call returns normally.
  * <p>
  * The catch-up-then-live coordination itself (the buffer, the de-dup cache, and the drain-then-mark ordering) is
  * delegated to {@link BlockingHandover}, shared with {@code CatchupThenPushSubscriptionModel}.
@@ -166,10 +166,25 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
-     * Feed a live domain event. Buffered while the catch-up replay runs, folded directly afterwards, on the calling
-     * thread. Call this from the broker listener, acknowledging the message only once it returns.
+     * Feed a live domain event and return once it has been folded. Call this from the broker listener, acknowledging
+     * the message only once it returns. Once the feed is live the event is folded on the calling thread. Before the
+     * feed goes live, and while a catch-up runs on a feed that already went live, the event waits in the buffer and
+     * this call waits with it until the drain after the replay folds it.
+     * <p>
+     * A long replay can keep this call waiting for minutes. A Kafka consumer waiting past its
+     * {@code max.poll.interval.ms}, five minutes by default, is taken out of its group and the record is delivered
+     * again, which costs a redelivery rather than the event. Never call this on the thread that is about to call
+     * {@link #catchUp()} or {@link #goLive()}. It waits until another thread runs the catch-up, takes the feed live,
+     * calls {@link #stopCatchUp()} or interrupts it.
      *
      * @param event The domain event received from the external source.
+     * @throws IllegalStateException if the event was not folded, because the catch-up was stopped before the feed
+     *                               went live, the catch-up failed, the waiting thread was interrupted, the live
+     *                               buffer is full, or another delivery of the same event was still running. The
+     *                               listener must not acknowledge it, and the broker delivers it again. Also thrown
+     *                               when this is called while the feed is not live from inside the feed's own
+     *                               folds or callbacks, the projection's or a view's included, since the wait could
+     *                               only end once that same thread moved on.
      */
     public void accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
@@ -182,6 +197,9 @@ public final class CatchupProjectionFeed<E> {
      * broker message carries those values (as headers, say) and your listener can read them. Otherwise call
      * {@link #accept(Object)}, which folds with no metadata.
      *
+     * <p>
+     * Waits for the catch-up and throws when the event was not folded, for the reasons {@link #accept(Object)} gives.
+     *
      * @param metadata The metadata the source has for this event.
      * @param event    The domain event received from the external source.
      */
@@ -189,15 +207,6 @@ public final class CatchupProjectionFeed<E> {
         Objects.requireNonNull(metadata, "metadata cannot be null");
         Objects.requireNonNull(event, "event cannot be null");
         handover.accept(Delivered.live(metadata, event));
-    }
-
-    // Package-private. Lets DomainEventFeed.acceptCloudEvent(CloudEvent) tell a genuinely dropped live event (this
-    // feed's replay was stopped) apart from one that was actually buffered or delivered, which
-    // BlockingHandover.accept(..) alone cannot report through its void contract.
-    boolean acceptReportingDelivery(EventMetadata metadata, E event) {
-        Objects.requireNonNull(metadata, "metadata cannot be null");
-        Objects.requireNonNull(event, "event cannot be null");
-        return handover.acceptReportingDelivery(Delivered.live(metadata, event));
     }
 
     // Package-private. Lets DomainEventFeed.acceptCloudEvent(CloudEvent) refuse rather than buffer an event it can
@@ -342,9 +351,13 @@ public final class CatchupProjectionFeed<E> {
      * again. A stop is not a failure: the feed stays usable rather than rejecting every later event.
      * <p>
      * What the stop does with the live events depends on where the feed stood when the replay started. One that had
-     * not gone live drains nothing and does not go live, and events fed after the stop are dropped rather than held.
-     * One replaying after a {@link #goLive()} delivers what it held while the replay ran and goes on delivering, since
-     * those events were accepted by a feed that was already live.
+     * not gone live drains nothing and does not go live, and {@link #accept(Object)} throws both for an event waiting
+     * on the replay and for one fed after the stop, so the broker delivers them again. One replaying after a
+     * {@link #goLive()} delivers what it held while the replay ran and goes on delivering, since those events were
+     * accepted by a feed that was already live.
+     * <p>
+     * A feed with no catch-up running that has not gone live stops the same way, so an event fed before a catch-up
+     * that a shutting-down application never starts does not wait for it.
      * <p>
      * A view that buffers during a replay discards that buffer on a stop, so after a {@link #goLive()} the live copy
      * of an event the stopped replay delivered is delivered again rather than skipped as a duplicate. A view that
@@ -352,6 +365,7 @@ public final class CatchupProjectionFeed<E> {
      */
     public void stopCatchUp() {
         stopped = true;
+        handover.stopIfNotCatchingUp();
     }
 
     // A null id would collapse every such event to one de-dup key and silently drop deliveries, so fail loud instead.
