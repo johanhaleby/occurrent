@@ -337,6 +337,14 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > through that proxy. A proxy like that, a scoped proxy for example, is not unwrapped. An interface proxy passes,
 > and a CGLIB proxy is checked only by the class it subclasses, so neither checks the objects its target source
 > hands out. Refusing them instead would break a handler on a scoped bean, which runs through that proxy today.
+>
+> **Amended on 2026-09-27.** On the reactor stack a late `@Projection` or `@Snapshot` no longer reads `startupMode`
+> either, so there this decision covers all six annotations that stack has. A bean built after startup is built on
+> whichever thread asked for it. Inside a WebFlux handler or a `Schedulers.parallel()` task that is a Reactor
+> non-blocking thread, where `block()` can throw. The projection had already subscribed by then, so waiting for its
+> replay failed the bean with the projection still running. A push projection's catch-up now starts there the way
+> `startupMode = BACKGROUND` starts it, and a failure is recorded in `PushCatchupStatus` rather than thrown. The
+> blocking stack still waits, since it is allowed to block whichever thread asked for the bean.
 
 **Moving there inherits how the existing descriptor annotations invoke a factory, including one hazard they already
 have.** `OccurrentBlockingAnnotationBeanPostProcessor` resolves the bean from the context and `invokeFactory` calls the

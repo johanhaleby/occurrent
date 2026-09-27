@@ -73,8 +73,11 @@ class SnapshotAnnotationRegistrar {
     // stored snapshot for that stream and saves the new state at the event's stream version, all composed reactively. A
     // schema-version change or a gap rebuilds by folding the range up to this event from the store. The store save is
     // best-effort at the reactive DSL level, but here a maintained failure surfaces to the durable subscription for retry.
+    //
+    // mayBlock is false for a bean built after startup, on whichever thread asked for it. block() can throw on a
+    // Reactor non-blocking thread, and only once the subscription is running, so a late snapshot never waits.
     @SuppressWarnings("unchecked")
-    <E, S> void processSnapshotAnnotation(Object bean, Method method, org.occurrent.annotation.Snapshot annotation) {
+    <E, S> void processSnapshotAnnotation(Object bean, Method method, org.occurrent.annotation.Snapshot annotation, boolean mayBlock) {
         String id = annotation.id();
         if (method.getParameterCount() != 0) {
             throw new IllegalArgumentException("@Snapshot factory method %s#%s must take no parameters and return a SnapshotView.".formatted(bean.getClass().getName(), method.getName()));
@@ -93,7 +96,7 @@ class SnapshotAnnotationRegistrar {
             throw new IllegalArgumentException("@Snapshot '%s' everyNEvents must be at least 1, but was %d.".formatted(id, everyNEvents));
         }
         if (descriptor instanceof DcbSnapshotView<?, ?> rawDcb) {
-            processDcbSnapshot(id, annotation, synchronous, converter, (DcbSnapshotView<S, E>) rawDcb, this.<S>resolveReactiveSnapshotStore(annotation, method, id), everyNEvents);
+            processDcbSnapshot(id, annotation, synchronous, converter, (DcbSnapshotView<S, E>) rawDcb, this.<S>resolveReactiveSnapshotStore(annotation, method, id), everyNEvents, mayBlock);
             return;
         }
         if (!(descriptor instanceof SnapshotView<?, ?>)) {
@@ -162,7 +165,7 @@ class SnapshotAnnotationRegistrar {
             throw new IllegalArgumentException("@Snapshot '%s' asks to replay history, but this store does not write a global position, so the reactive position-based catch-up cannot replay. Use startAt = NOW or DEFAULT.".formatted(id));
         }
         StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
-        boolean waitUntilStarted = subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+        boolean waitUntilStarted = mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
         startPositionSupport.applyStartupWorkarounds();
         if (stream) {
             StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
@@ -186,7 +189,7 @@ class SnapshotAnnotationRegistrar {
     @SuppressWarnings("unchecked")
     private <E, S> void processDcbSnapshot(String id, org.occurrent.annotation.Snapshot annotation, boolean synchronous,
                                            CloudEventConverter<E> converter, DcbSnapshotView<S, E> dcbSnapshotView,
-                                           ReactiveSnapshotStore<S> store, int everyNEvents) {
+                                           ReactiveSnapshotStore<S> store, int everyNEvents, boolean mayBlock) {
         if (synchronous) {
             throw new IllegalArgumentException("@Snapshot '%s' returns a DcbSnapshotView with mode = SYNCHRONOUS, which is not supported. Use the default asynchronous mode for a DCB snapshot, or maintain a synchronous DCB snapshot through the DSL.".formatted(id));
         }
@@ -221,7 +224,7 @@ class SnapshotAnnotationRegistrar {
             });
         });
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
-        if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
+        if (mayBlock && subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
             subscription.waitUntilStarted().block();
         }
     }

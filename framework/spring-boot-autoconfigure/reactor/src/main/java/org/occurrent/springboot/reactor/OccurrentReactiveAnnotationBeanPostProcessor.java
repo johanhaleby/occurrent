@@ -198,7 +198,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             // one's class and this bean would be scanned for methods its own class does not declare.
             ScanType userClass = new ScanType(userClassOf(bean), true);
             scan(new String[]{beanName}, name -> userClass, name -> bean,
-                    (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved, false);
+                    (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved, false, false);
         }
         return bean;
     }
@@ -228,7 +228,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         synchronized (registrationLock) {
             scanningThread = Thread.currentThread();
             String[] beanNames = applicationContext.getBeanDefinitionNames();
-            while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true)) {
+            while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true, true)) {
                 beanNames = applicationContext.getBeanDefinitionNames();
             }
             startupScanComplete = true;
@@ -277,7 +277,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             // resolve the published bean.
             scan(new String[]{beanName}, name -> userClass, name -> bean,
                     (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved,
-                    publishedBeanIsResolvable(beanFactory, beanName, singleton));
+                    true, publishedBeanIsResolvable(beanFactory, beanName, singleton));
         }
     }
 
@@ -285,7 +285,12 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // against. handlerTargets turns that object into the one a handler is invoked on, per delivery. They differ
     // only for a bean created after the startup scan, where the object is in hand but its name cannot be resolved
     // until creation finishes. Answers whether anything registered, which is what the loop above repeats on.
-    private boolean scan(String[] beanNames, Function<String, ScanType> typeResolver, Function<String, Object> beanResolver, BiFunction<String, Object, Supplier<Object>> handlerTargets, boolean mayBlockForReplay) {
+    //
+    // mayBlock is true only on the startup thread. A bean built after startup is built on whichever thread asked
+    // for it, a Reactor non-blocking one included, where block() can throw, and only after it has subscribed.
+    // mayBlockForReplay also asks whether a subscription's replay can reach the published bean, so it is never true
+    // where mayBlock is false.
+    private boolean scan(String[] beanNames, Function<String, ScanType> typeResolver, Function<String, Object> beanResolver, BiFunction<String, Object, Supplier<Object>> handlerTargets, boolean mayBlock, boolean mayBlockForReplay) {
         // A presence check, not a resolution: getBeanProvider(...).getIfAvailable() throws NoUniqueBeanDefinitionException
         // the moment two Subscribable beans exist (an application's own asynchronous model plus the register-only
         // SynchronousSubscriptionModel this starter always contributes), which starts failing every context the
@@ -382,11 +387,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (markRegistered(beanName, method)) {
                 registerDescriptor(beanName, method, projection.id(),
                         "Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(projection.id(), method.getDeclaringClass().getName(), method.getName()),
-                        () -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply(beanName), method, projection));
+                        () -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply(beanName), method, projection, mayBlock));
             }
         }
         // Catch up each domain-push feed once, after all its projections are registered.
-        projectionRegistrar.catchUpCollectedFeeds();
+        projectionRegistrar.catchUpCollectedFeeds(mayBlock);
         for (Object[] sm : snapshotMethods) {
             String beanName = (String) sm[0];
             Method method = (Method) sm[1];
@@ -394,7 +399,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (markRegistered(beanName, method)) {
                 registerDescriptor(beanName, method, snapshot.id(),
                         "Duplicate subscription/projection/snapshot id '%s' (used by @Snapshot on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(snapshot.id(), method.getDeclaringClass().getName(), method.getName()),
-                        () -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply(beanName), method, snapshot));
+                        () -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply(beanName), method, snapshot, mayBlock));
             }
         }
         for (String beanName : beansToBuild) {
