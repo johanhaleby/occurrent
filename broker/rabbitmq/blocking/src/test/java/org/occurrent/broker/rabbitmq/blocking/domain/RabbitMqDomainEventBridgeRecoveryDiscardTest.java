@@ -104,6 +104,8 @@ class RabbitMqDomainEventBridgeRecoveryDiscardTest {
             ArgumentCaptor<RecoveryListener> recoveryListener = ArgumentCaptor.forClass(RecoveryListener.class);
             verify((Recoverable) channel).addRecoveryListener(recoveryListener.capture());
             verify(channel, timeout(2000)).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+            // Mockito records the call before the stub's answer runs, so the callback is not necessarily stored yet.
+            await().atMost(Duration.ofSeconds(2)).until(() -> deliverCallback.get() != null);
 
             deliverCallback.get().handle("consumer-tag", delivery(1, "blocked"));
             assertThat(firstCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
@@ -167,6 +169,8 @@ class RabbitMqDomainEventBridgeRecoveryDiscardTest {
             ArgumentCaptor<RecoveryListener> recoveryListener = ArgumentCaptor.forClass(RecoveryListener.class);
             verify(channel).addRecoveryListener(recoveryListener.capture());
             verify(channel, timeout(2000)).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+            // Mockito records the call before the stub's answer runs, so the callback is not necessarily stored yet.
+            await().atMost(Duration.ofSeconds(2)).until(() -> deliverCallback.get() != null);
 
             deliverCallback.get().handle("consumer-tag", delivery(1, "blocked"));
             assertThat(firstCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
