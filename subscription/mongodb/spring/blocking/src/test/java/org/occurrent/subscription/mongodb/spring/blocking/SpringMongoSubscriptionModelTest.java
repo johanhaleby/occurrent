@@ -386,6 +386,62 @@ public class SpringMongoSubscriptionModelTest {
             await("state").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
         }
 
+        @Test
+        void a_subscription_paused_while_handling_its_first_event_delivers_what_was_written_while_paused_once_resumed() throws InterruptedException {
+            // Given: a handler that holds on to the first event until released, so the subscription has not finished
+            // handling anything when it is paused
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined first = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameWasChanged writtenWhilePaused = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
+            AtomicBoolean firstCall = new AtomicBoolean(true);
+            CountDownLatch handlingFirstEvent = new CountDownLatch(1);
+            CountDownLatch releaseFirstEvent = new CountDownLatch(1);
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+                if (firstCall.getAndSet(false)) {
+                    handlingFirstEvent.countDown();
+                    try {
+                        releaseFirstEvent.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                handled.add(cloudEvent);
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            mongoEventStore.write("1", 0, serialize(first));
+            assertThat(handlingFirstEvent.await(10, SECONDS)).isTrue();
+
+            // When: resumed before the handler returns, so the resume cannot start from the position recorded once
+            // the first event is handled
+            subscriptionModel.pauseSubscription(subscriptionId);
+            mongoEventStore.write("1", 1, serialize(writtenWhilePaused));
+            subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+            releaseFirstEvent.countDown();
+
+            // Then: the first event may be handed over twice, but nothing is skipped
+            await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(handled).extracting(CloudEvent::getId).contains(first.eventId(), writtenWhilePaused.eventId()));
+        }
+
+        @Test
+        void a_subscription_paused_before_handling_anything_delivers_what_was_written_while_paused_once_resumed() {
+            // Given
+            NameDefined writtenWhilePaused = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), handled::add).waitUntilStarted(Duration.ofSeconds(10));
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+            mongoEventStore.write("1", 0, serialize(writtenWhilePaused));
+            subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+
+            // Then
+            await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenWhilePaused.eventId()));
+        }
+
     }
 
     @Nested

@@ -208,14 +208,15 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
 
         // Wraps ChangeStreamRequestOptions creation in a supplier so it's recomputed on pause/resume, not just
-        // once at subscribe time. Before anything has been read the tracked position is still the original
-        // StartAt, so a subscription created with StartAt.now() and resumed before its first event starts at
-        // the resume-time present rather than replaying from the initial now().
+        // once at subscribe time. A tracked position that resolves to the present is replaced by the server's
+        // operation time here, before the request is registered, so a rebuild before the first event starts where
+        // the subscription first opened rather than at a later present that skips what was written in between.
         Supplier<ChangeStreamRequestOptions> requestOptionsSupplier = () -> {
             var subscriptionModelContext = new StartAt.SubscriptionModelContext(SpringMongoSubscriptionModel.class);
+            StartAt openingPosition = MongoCommons.resolveOpeningPosition(currentStartAt, subscriptionModelContext, this::currentOperationTime);
             // builder::resumeAt maps to the driver's startAtOperationTime here rather than to a resume token,
             // and that includes an operation stamped at exactly the given time.
-            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, currentStartAt.get(), subscriptionModelContext);
+            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, openingPosition, subscriptionModelContext);
             final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
             return maxAwaitTime == null
                     ? new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions)
@@ -306,6 +307,15 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         return new MongoOperationTimeCheckpoint(currentOperationTime);
     }
 
+    private @Nullable BsonTimestamp currentOperationTime() {
+        Document reply = mongoOperations.executeCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND);
+        BsonTimestamp operationTime = MongoCommons.operationTimeAfter(reply);
+        if (operationTime == null) {
+            log.warn(MongoCommons.noOperationTimeToPinToMessage(reply));
+        }
+        return operationTime;
+    }
+
     // Life-cycle implementation
 
     /**
@@ -336,8 +346,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * Delivery is <i>at least once</i> across a pause: an event whose handler had not finished when the subscription
      * was paused, and every event another consumer of the same subscription id handled in the meantime, is handed to
      * this handler again on resume. That is deliberate, since wasted work is the cheaper mistake, and it means
-     * handlers must be idempotent. A subscription that had not received anything yet has no position to resume from
-     * and starts at the present instead.
+     * handlers must be idempotent. A subscription paused before it had handled any event resumes from the operation
+     * time its change stream first opened at, not from the time of the resume, so the events written in between are
+     * delivered too.
      * <p>
      * That is what this call does on its own. A {@code DurableSubscriptionModel} wrapping this model calls
      * {@link #resumeSubscription(String, StartAt)} with a stored checkpoint instead whenever one exists, so a
@@ -370,20 +381,24 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private Subscription doResumeSubscription(String subscriptionId, @Nullable StartAt repositionTo) {
         logDebug("Resuming subscription for {}", subscriptionId);
         requireKnown(subscriptionId);
-        InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
+        InternalSubscription internalSubscription = pausedSubscriptions.get(subscriptionId);
         if (internalSubscription == null) {
             throw new SubscriptionAlreadyRunningException(subscriptionId);
         }
         if (repositionTo != null) {
             internalSubscription.currentStartAt().set(repositionTo);
         }
+        // Built before the subscription is removed from pausedSubscriptions, since building it can ask the server
+        // for its operation time, and a failure there must keep the subscription paused rather than unknown.
+        ChangeStreamRequest<Document> changeStreamRequest = internalSubscription.newChangeStreamRequest();
+        pausedSubscriptions.remove(subscriptionId);
 
         if (!messageListenerContainer.isRunning()) {
             logDebug("Subscription was not running, will start (subscriptionId={})", subscriptionId);
             messageListenerContainer.start();
         }
 
-        org.springframework.data.mongodb.core.messaging.Subscription newSubscription = registerNewSpringSubscription(subscriptionId, internalSubscription.newChangeStreamRequest(), null);
+        org.springframework.data.mongodb.core.messaging.Subscription newSubscription = registerNewSpringSubscription(subscriptionId, changeStreamRequest, null);
         InternalSubscription newInternalSubscription = internalSubscription.copy(newSubscription);
         runningSubscriptions.put(subscriptionId, newInternalSubscription);
         logDebug("Subscription {} resumed", subscriptionId);

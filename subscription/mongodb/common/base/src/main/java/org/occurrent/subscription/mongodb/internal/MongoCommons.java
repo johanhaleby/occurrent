@@ -34,9 +34,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
+import java.util.function.Supplier;
 
 import static java.util.Arrays.asList;
+import static java.util.Objects.requireNonNull;
 
 public class MongoCommons {
 
@@ -337,7 +340,10 @@ public class MongoCommons {
     private static final Object NOTHING = new Object();
 
     public static <T> T applyStartPosition(T t, BiFunction<T, BsonDocument, T> applyResumeToken, BiFunction<T, BsonTimestamp, T> applyOperationTime, @Nullable StartAt startAt, SubscriptionModelContext ctx) {
-        StartAt startAtValue = startAt == null ? null : startAt.get(ctx);
+        return applyResolvedStartPosition(t, applyResumeToken, applyOperationTime, startAt == null ? null : startAt.get(ctx));
+    }
+
+    private static <T> T applyResolvedStartPosition(T t, BiFunction<T, BsonDocument, T> applyResumeToken, BiFunction<T, BsonTimestamp, T> applyOperationTime, @Nullable StartAt startAtValue) {
         if (startAtValue == null || startAtValue.isNow() || startAtValue.isDefault()) {
             return t;
         }
@@ -372,6 +378,94 @@ public class MongoCommons {
             }
         }
         return withStartPositionApplied;
+    }
+
+    /**
+     * Whether a change stream opened at {@code resolved}, a start position that is already resolved, starts at the
+     * present. It does for {@code StartAt.now()}, for the model default, and for a checkpoint that holds neither a
+     * resume token nor an operation time, since
+     * {@link #applyStartPosition(Object, BiFunction, BiFunction, StartAt, SubscriptionModelContext)} opens at the
+     * present for that one too.
+     */
+    public static boolean opensAtThePresent(@Nullable StartAt resolved) {
+        return applyResolvedStartPosition(Boolean.TRUE, (present, resumeToken) -> Boolean.FALSE, (present, operationTime) -> Boolean.FALSE, resolved);
+    }
+
+    /**
+     * The command a subscription model sends to learn the server's current operation time, which it reads from the
+     * {@link #OPERATION_TIME} field of the reply. A replica set or a sharded cluster, which change streams need,
+     * includes that field in its command replies. {@code ping} needs no privilege, unlike the {@code hostInfo}
+     * command a global checkpoint is read with.
+     */
+    public static final Document CURRENT_OPERATION_TIME_COMMAND = new Document("ping", 1);
+
+    /**
+     * The operation time just after the one in {@code reply}, a reply to {@link #CURRENT_OPERATION_TIME_COMMAND}, or
+     * {@code null} when the reply has none. The reply's operation time belongs to a write made before the command
+     * ran, and {@code startAtOperationTime} includes a write made at exactly the time it is given, so opening at the
+     * reply's own time would deliver that earlier write too.
+     */
+    public static @Nullable BsonTimestamp operationTimeAfter(Document reply) {
+        return reply.get(OPERATION_TIME) instanceof BsonTimestamp ? getServerOperationTime(reply, 1) : null;
+    }
+
+    /**
+     * The position a subscription records in place of {@code tracked} once a change stream opened from it at the
+     * present, at {@code operationTime}. Opening the stream again then starts at {@code operationTime} and not at a
+     * later present. A dynamic {@code tracked} stays dynamic, so it is still evaluated on every opening, and only
+     * the answers that would have opened at the present are replaced by {@code operationTime}.
+     */
+    public static StartAt pinnedTo(StartAt tracked, BsonTimestamp operationTime) {
+        StartAt pinned = StartAt.checkpoint(new MongoOperationTimeCheckpoint(operationTime));
+        if (!tracked.isDynamic()) {
+            return pinned;
+        }
+        return StartAt.dynamic(ctx -> {
+            StartAt resolved = tracked.get(ctx);
+            return opensAtThePresent(resolved) ? pinned : resolved;
+        });
+    }
+
+    /**
+     * Resolves the position a change stream is about to open at from {@code currentStartAt}, the position a
+     * subscription records. When that resolves to the present, this asks {@code currentOperationTime} for the
+     * server's operation time, records it in {@code currentStartAt} with {@link #pinnedTo(StartAt, BsonTimestamp)},
+     * and opens the stream at that time. Because it is recorded before the stream opens, a pause and resume, or a
+     * restart, before the first event is handled starts where the subscription first opened. Without it the
+     * position resolves to the present again at that point, and the event being handled and everything written in
+     * between are never delivered.
+     * <p>
+     * The operation time is recorded only if {@code currentStartAt} still holds the position read at the start,
+     * since the checkpoint of a handled event is written from another thread and must not be overwritten. When it
+     * has changed, the position is resolved again. When {@code currentOperationTime} answers {@code null}, nothing
+     * is recorded and the stream opens at the present.
+     *
+     * @return The position to open the change stream at, never {@code null}
+     */
+    public static StartAt resolveOpeningPosition(AtomicReference<StartAt> currentStartAt, SubscriptionModelContext ctx, Supplier<@Nullable BsonTimestamp> currentOperationTime) {
+        while (true) {
+            StartAt tracked = currentStartAt.get();
+            StartAt resolved = tracked.get(ctx);
+            if (!opensAtThePresent(resolved)) {
+                return requireNonNull(resolved);
+            }
+            BsonTimestamp operationTime = currentOperationTime.get();
+            if (operationTime == null) {
+                return StartAt.now();
+            }
+            if (currentStartAt.compareAndSet(tracked, pinnedTo(tracked, operationTime))) {
+                return StartAt.checkpoint(new MongoOperationTimeCheckpoint(operationTime));
+            }
+        }
+    }
+
+    /**
+     * The warning a subscription model logs when {@code reply} has no operation time to record for a change stream
+     * that opens at the present.
+     */
+    public static String noOperationTimeToPinToMessage(Document reply) {
+        return "The reply to " + CURRENT_OPERATION_TIME_COMMAND.toJson() + " carried no " + OPERATION_TIME + ", so the change stream opens at the present without recording where. " +
+                "Until the first event is handled, a pause, resume or restart of the subscription opens at a later present and skips what was written in between. Reply was: " + reply.toJson();
     }
 
     public static Checkpoint calculateCheckpointFromMongoStreamPositionDocument(Document checkpointDocument) {

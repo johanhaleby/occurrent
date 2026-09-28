@@ -20,6 +20,7 @@ import com.mongodb.MongoCommandException;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
+import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
@@ -225,11 +226,11 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     }
 
     private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<StartAt> onDocumentRead, Sinks.@Nullable Empty<Void> startedSink) {
-        return Flux.defer(() -> {
-            SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
+        SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
+        return Mono.defer(() -> openingPosition(currentStartAt, subscriptionModelContext)).flatMapMany(openingPosition -> {
             // builder::resumeAt maps to the driver's startAtOperationTime here rather than to a resume token,
             // and that includes an operation stamped at exactly the given time.
-            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, currentStartAt.get(), subscriptionModelContext);
+            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, openingPosition, subscriptionModelContext);
             final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
             Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
             // "Started" only means the change stream Flux was subscribed to, not that the server acknowledged
@@ -257,6 +258,27 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                                 .map(Mono::just)
                                 .orElse(Mono.empty());
                     });
+        });
+    }
+
+    // Does what MongoCommons.resolveOpeningPosition does without blocking. Its javadoc says why a position that
+    // resolves to the present is recorded before the change stream opens.
+    private Mono<StartAt> openingPosition(AtomicReference<StartAt> currentStartAt, SubscriptionModelContext subscriptionModelContext) {
+        StartAt tracked = currentStartAt.get();
+        StartAt resolved = tracked.get(subscriptionModelContext);
+        if (!MongoCommons.opensAtThePresent(resolved)) {
+            return Mono.just(requireNonNull(resolved));
+        }
+        return mongo.executeCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND).flatMap(reply -> {
+            BsonTimestamp operationTime = MongoCommons.operationTimeAfter(reply);
+            if (operationTime == null) {
+                log.warn(MongoCommons.noOperationTimeToPinToMessage(reply));
+                return Mono.just(StartAt.now());
+            }
+            if (currentStartAt.compareAndSet(tracked, MongoCommons.pinnedTo(tracked, operationTime))) {
+                return Mono.just(StartAt.checkpoint(new MongoOperationTimeCheckpoint(operationTime)));
+            }
+            return Mono.defer(() -> openingPosition(currentStartAt, subscriptionModelContext));
         });
     }
 
@@ -340,8 +362,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * Delivery is <i>at least once</i> across a pause: an event whose action's {@code Mono} had not completed when
      * the subscription was paused, and every event another consumer of the same subscription id handled in the
      * meantime, is handed to this action again on resume. That is deliberate, since wasted work is the cheaper
-     * mistake, and it means actions must be idempotent. A subscription that had not received anything yet has no
-     * position to resume from and starts at the present instead.
+     * mistake, and it means actions must be idempotent. A subscription paused before it had handled any event resumes
+     * from the operation time its change stream first opened at, not from the time of the resume, so the events written
+     * in between are delivered too.
      *
      * @see #pauseSubscription(String)
      */

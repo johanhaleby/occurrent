@@ -124,6 +124,7 @@ public class ReactorMongoSubscriptionModelResilienceTest {
     @SuppressWarnings("unchecked")
     private ReactiveMongoOperations operationsThatFailOnce(RuntimeException exception) {
         ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
+        when(throwingOperations.executeCommand(any(Document.class))).thenAnswer(invocation -> realMongoOperations.executeCommand(invocation.<Document>getArgument(0)));
         when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class)))
                 .thenReturn(Flux.error(exception))
                 .thenAnswer(invocation -> realMongoOperations.changeStream("events", invocation.getArgument(1), Document.class));
@@ -139,10 +140,17 @@ public class ReactorMongoSubscriptionModelResilienceTest {
     @SuppressWarnings("unchecked")
     private ReactiveMongoOperations operationsThatFailAfterDeliveringOneEvent(RuntimeException exception) {
         ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
+        when(throwingOperations.executeCommand(any(Document.class))).thenAnswer(invocation -> realMongoOperations.executeCommand(invocation.<Document>getArgument(0)));
         when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class)))
                 .thenAnswer(invocation -> realMongoOperations.changeStream("events", invocation.getArgument(1), Document.class).take(1).concatWith(Flux.error(exception)))
                 .thenAnswer(invocation -> realMongoOperations.changeStream("events", invocation.getArgument(1), Document.class));
         return throwingOperations;
+    }
+
+    // Answers the operation time read before a change stream opens without a round trip, so a change stream that
+    // throws while it is built still throws inside subscribe().
+    private static Mono<Document> operationTimeReply() {
+        return Mono.just(new Document("ok", 1.0).append("operationTime", new BsonTimestamp(1, 1)));
     }
 
     // Wrapped in UncategorizedMongoDbException since that's how Spring Data actually translates driver exceptions,
@@ -294,6 +302,7 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             // terminal instead of retried forever, matching the only way a real failure here can actually terminate.
             UncategorizedMongoDbException historyLost = changeStreamHistoryLostException();
             ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
+            when(throwingOperations.executeCommand(any(Document.class))).thenReturn(operationTimeReply());
             when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class))).thenThrow(historyLost);
             ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING);
 
@@ -313,6 +322,7 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             // could otherwise remove an entry that was never put in yet, leaving the real, dead one behind.
             UncategorizedMongoDbException historyLost = changeStreamHistoryLostException();
             ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
+            when(throwingOperations.executeCommand(any(Document.class))).thenReturn(operationTimeReply());
             when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class))).thenThrow(historyLost);
             ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING);
             String subscriptionId = UUID.randomUUID().toString();
