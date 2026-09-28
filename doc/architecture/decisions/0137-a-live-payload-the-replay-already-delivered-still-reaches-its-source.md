@@ -160,8 +160,8 @@ that blocks on the call from a thread it switched to, while a replay holds live 
 cannot end while the view blocks. On the blocking engine a view that waits for a `catchUp()` that replays waits for a
 replay that cannot start before the view's code returns. The reactive engine answers a `catchUp()` it recognizes this
 way `true` without waiting, whether it has anything to replay or not, and its replay does not start before the view's
-code returns. There `true` means the catch-up has started, not that it has finished, and a failure of its replay makes
-the handover fail the way any failed catch-up does. A view that blocks on a `catchUp()` that replays from a thread it
+code returns. There `true` means the catch-up was asked for, not that it has run. It can still be stopped, or refused
+because another catch-up failed, and a failure of its replay makes the handover fail the way any failed catch-up does. A view that blocks on a `catchUp()` that replays from a thread it
 switched to is not recognized, so it still waits for a replay that cannot start while the view blocks.
 
 The reactive engine delivers one live payload at a time, so it cannot deliver a payload its own code feeds it before

@@ -73,7 +73,7 @@ import java.util.function.Supplier;
  * buffered live payloads are folded, because the returned {@code Mono} completes once the marker phase is done rather
  * than at the end of the live stream. It does <em>not</em> complete before the replayed payloads are folded: the marker
  * phase starts only after the replay phase has finished folding. Called from this engine's own code, it emits
- * {@code true} before the replay has started, see {@link #catchUp(Source)}. The blocking engine's
+ * {@code true} before the replay has run, see {@link #catchUp(Source)}. The blocking engine's
  * {@code BlockingHandover.catchUp} returns only <em>after</em> the buffered live
  * payloads are drained. Both are internally consistent. On either engine a live payload's {@code accept} returns, or
  * its {@link Mono} completes, only once its fold has actually run, including a payload buffered during the replay,
@@ -783,10 +783,13 @@ public final class ReactiveHandover<T, K> {
      * <p>
      * A catch-up called from code this handover is running emits {@code true} without waiting, whether it has anything
      * to replay or not, since the replay or the hold on live delivery it would wait for cannot end before that code
-     * returns. That {@code true} means the catch-up has started, not that it has finished. Its replay does not start
-     * before that code returns, and runs like any other replay, holding live payloads back until it ends. A stop of
-     * that replay is not reported to that code, and a failure of it starts this handover failing like any failed
-     * catch-up. That code is a fold, live or replayed, {@link Source#alreadyDeliveredByReplay(Object)},
+     * returns. That {@code true} means the catch-up was asked for, not that it has run. It does not start before that
+     * code returns, and it can still be stopped, or refused because another catch-up on this handover failed. Neither
+     * is reported to that code. Once it runs, it replays like any other catch-up, holding live payloads back until it
+     * ends, and a failure of it starts this handover failing like any failed catch-up. Code that calls this for a
+     * payload asks for another catch-up each time a replay delivers that payload again, and each of those catch-ups
+     * whose {@link Source#isAlreadyCaughtUp()} answers {@code false} replays again. With a source that always answers
+     * {@code false}, the replays do not end. That code is a fold, live or replayed, {@link Source#alreadyDeliveredByReplay(Object)},
      * {@link Source#replayStarted()}, {@link Source#replayCompleted()} and {@link Source#replayAbandoned()}. This handover
      * recognizes the call when that code subscribes the returned {@code Mono} on the thread this handover called it on,
      * which blocking on it does, or returns the {@code Mono} as part of its own. Every other method here that takes a
