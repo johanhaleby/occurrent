@@ -385,10 +385,12 @@ public final class CatchupProjectionFeed<E> {
      * so a partial replay is never recorded as a finished one and the next {@link #catchUp()} replays the whole
      * history again. A stop is not a failure: the feed stays usable rather than failing every later event.
      * <p>
-     * It stops every catch-up asked for before it and none asked for after it, also when the view asks for one while
-     * the replay it stops is still running. A stop that comes after the replay has read its last event is not noticed,
-     * for example one that comes while a view that buffers during a replay writes that buffer in
-     * {@code replayCompleted()}. That catch-up records the marker and the feed goes live.
+     * A replay notices a stop at the next event it hands to the view, and notices only a stop that came after its own
+     * {@link #catchUp()} call. A catch-up asked for before the stop still notices it when another {@link #catchUp()}
+     * comes after the stop, from the view or from anywhere else. A catch-up with no event left to hand to the view does
+     * not notice a stop, and finishes as if there had been none, so the feed goes live. That is one whose history is
+     * empty, one that finds the marker already written, and one whose replay has handed its last event to the view, for
+     * example while a view that buffers during a replay writes that buffer in {@code replayCompleted()}.
      * <p>
      * What a stop the replay notices does with the live events depends on where the feed stood when the replay started.
      * One that had not gone live drains nothing and does not go live, and the {@link Mono} {@link #accept(Object)}

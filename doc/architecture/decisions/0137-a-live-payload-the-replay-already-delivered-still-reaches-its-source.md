@@ -141,10 +141,10 @@ recorded while it waited, and a `goLive()` refusing this way is not recorded as 
 A `goLive()` the view makes from code the engine is running returns `true` without waiting for a replay on both engines,
 since the replay or the hold on live delivery it would wait for cannot end before the view's call does. That code is a
 fold, live or replayed, the report that the replay already delivered a payload, and the replay callbacks
-`replayStarted()`, `replayCompleted()` and `replayAbandoned()`. A live fold counts because a replay that starts waits
-for it before replaying. Code that runs once `acceptIfLive` has completed, such as a `goLive()` chained after it,
-belongs to the caller rather than the view, even on the thread the fold ran on, so it gets the answer a `goLive()` from
-any other code gets.
+`replayStarted()`, `replayCompleted()` and `replayAbandoned()`, and on the reactive engine also the source callbacks
+`historyDone()` and `liveDrained()`. A live fold counts because a replay that starts waits for it before replaying. Code
+that runs once `acceptIfLive` has completed, such as a `goLive()` chained after it, belongs to the caller rather than
+the view, even on the thread the fold ran on, so it gets the answer a `goLive()` from any other code gets.
 
 While a replay that starts waits for a live fold, `acceptIfLive` on the reactive engine refuses, and goes on refusing
 until the replay ends. The blocking engine stops live delivery before that wait, but only counts the replay as running
@@ -160,9 +160,11 @@ that blocks on the call from a thread it switched to, while a replay holds live 
 cannot end while the view blocks. On the blocking engine a view that waits for a `catchUp()` that replays waits for a
 replay that cannot start before the view's code returns. The reactive engine answers a `catchUp()` it recognizes this
 way `true` without waiting, whether it has anything to replay or not, and its replay does not start before the view's
-code returns. There `true` means the catch-up was asked for, not that it has run. It can still be stopped, or refused
-because another catch-up failed, and a failure of its replay makes the handover fail the way any failed catch-up does. A view that blocks on a `catchUp()` that replays from a thread it
-switched to is not recognized, so it still waits for a replay that cannot start while the view blocks.
+code returns. There `true` means the catch-up was asked for, not that it has run. A later replay can answer it, one that
+started after the call and has gone live by the time the catch-up's turn comes, and the catch-up then replays nothing.
+It can still be stopped, or refused because another catch-up failed, and a failure of its replay makes the handover fail
+the way any failed catch-up does. A view that blocks on a `catchUp()` that replays from a thread it switched to is not
+recognized, so it still waits for a replay that cannot start while the view blocks.
 
 The reactive engine delivers one live payload at a time, so it cannot deliver a payload its own code feeds it before
 that code returns. Until [#1148](https://github.com/johanhaleby/occurrent/issues/1148) a call waiting for that
