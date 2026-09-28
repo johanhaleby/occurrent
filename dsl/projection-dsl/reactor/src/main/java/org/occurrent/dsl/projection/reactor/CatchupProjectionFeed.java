@@ -36,6 +36,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
@@ -76,8 +77,9 @@ public final class CatchupProjectionFeed<E> {
     private final String id;
 
     private final ReactiveHandover<DeliveredEvent<E>, String> handover;
-    // Read by the replay once per event, so stopCatchUp() takes effect at the next event rather than at the end.
-    private volatile boolean stopped = false;
+    // Counts stopCatchUp() calls. Read by the replay once per event, so a stop takes effect at the next event rather
+    // than at the end.
+    private final AtomicLong stops = new AtomicLong();
 
     private CatchupProjectionFeed(String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -253,7 +255,8 @@ public final class CatchupProjectionFeed<E> {
      * Completing then means the catch-up was asked for, not that it has run. It does not start before the view's code
      * returns, and it can still be stopped by {@link #stopCatchUp()}, or refused because another catch-up on this feed
      * failed, and neither reaches the view. When its replay fails, this feed refuses every later event that does not
-     * come from the view's fold, the same as after any failed catch-up.
+     * come from the view's fold, the same as after any failed catch-up. When the view makes several such calls
+     * before the replay they asked for starts, that replay runs once for all of them.
      * <p>
      * A view that calls this for an event a replay delivers asks for another catch-up each time a replay delivers that
      * event again. Each of those catch-ups replays again unless it finds the catch-up marker written, so a feed built
@@ -263,11 +266,12 @@ public final class CatchupProjectionFeed<E> {
      *         call the view makes while this feed is calling it, once the catch-up has been asked for.
      */
     public Mono<Void> catchUp() {
-        // Cleared here rather than on subscribe, so a feed stopped once can catch up again instead of stopping
-        // instantly on the first replayed event. Deliberately NOT wrapped in Mono.defer: the handover subscribes its
-        // own pipeline as soon as this call is made, so deferring would let a re-subscription of the returned Mono
-        // start a second catch-up over the same one-subscriber live sink, which fails it permanently.
-        stopped = false;
+        // A stop before this call does not stop this catch-up, and a stop after it does, even when the view makes
+        // this call while a replay runs. Clearing a shared flag here would undo a stop the running replay has not
+        // noticed yet. Deliberately NOT wrapped in Mono.defer: the handover subscribes its own pipeline as soon as
+        // this call is made, so deferring would let a re-subscription of the returned Mono start a second catch-up
+        // over the same one-subscriber live sink, which fails it permanently.
+        long stopsWhenAsked = stops.get();
         // then() drops whether the catch-up finished or was stopped. A stop here is always one this feed's own owner
         // asked for, so it already knows.
         return handover.catchUp(new ReactiveHandover.Source<>() {
@@ -284,7 +288,7 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public boolean keepReplaying() {
-                return !stopped;
+                return stops.get() == stopsWhenAsked;
             }
 
             @Override
@@ -381,19 +385,24 @@ public final class CatchupProjectionFeed<E> {
      * so a partial replay is never recorded as a finished one and the next {@link #catchUp()} replays the whole
      * history again. A stop is not a failure: the feed stays usable rather than failing every later event.
      * <p>
-     * What the stop does with the live events depends on where the feed stood when the replay started. One that had
-     * not gone live drains nothing and does not go live, and the {@link Mono} {@link #accept(Object)} returned for
-     * each event it held errors rather than completing, the same as for an event fed after the stop, so the listener
-     * does not acknowledge it and the broker delivers it again. One replaying after a {@link #goLive()} delivers what
-     * it held while the replay ran and goes on delivering, since those events were accepted by a feed that was
-     * already live.
+     * It stops every catch-up asked for before it and none asked for after it, also when the view asks for one while
+     * the replay it stops is still running. A stop that comes after the replay has read its last event is not noticed,
+     * for example one that comes while a view that buffers during a replay writes that buffer in
+     * {@code replayCompleted()}. That catch-up records the marker and the feed goes live.
+     * <p>
+     * What a stop the replay notices does with the live events depends on where the feed stood when the replay started.
+     * One that had not gone live drains nothing and does not go live, and the {@link Mono} {@link #accept(Object)}
+     * returned for each event it held errors rather than completing, the same as for an event fed after the stop, so
+     * the listener does not acknowledge it and the broker delivers it again. One replaying after a {@link #goLive()}
+     * delivers what it held while the replay ran and goes on delivering, since those events were accepted by a feed
+     * that was already live.
      * <p>
      * A view that buffers during a replay discards that buffer on a stop, so after a {@link #goLive()} the live copy
      * of an event the stopped replay delivered is delivered again rather than skipped as a duplicate. A view that
      * wrote the event through receives it twice, which at-least-once delivery allows.
      */
     public void stopCatchUp() {
-        stopped = true;
+        stops.incrementAndGet();
     }
 
     // Package-private: lets DomainEventFeed check the id it was given and name the projection it already has.
