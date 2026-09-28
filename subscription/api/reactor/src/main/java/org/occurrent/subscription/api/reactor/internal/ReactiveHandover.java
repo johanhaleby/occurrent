@@ -327,6 +327,10 @@ public final class ReactiveHandover<T, K> {
     // Written into the context of this handover's pipeline, so a catch-up composed into a fold or a Source callback
     // finds it on whichever thread that runs.
     private final Object insideOwnPipeline = new Object();
+    // Replays numbered in the order they start, and the number of the latest one that went live, so a catch-up own
+    // code asked for before a replay started that has since gone live does not replay the same history again.
+    private final java.util.concurrent.atomic.AtomicLong replaysStarted = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong latestReplayGoneLive = new java.util.concurrent.atomic.AtomicLong();
     private static final Logger log = LoggerFactory.getLogger(ReactiveHandover.class);
     // Long enough that a producer holding the serialization claim finishes its own offer and releases it, short
     // enough that a caller's accept does not wait on it for long. Waiting happens on a scheduler, not on the
@@ -732,7 +736,7 @@ public final class ReactiveHandover<T, K> {
     private void tellDrainedSources(List<Drain<T>> exhausted) {
         for (Drain<T> drain : exhausted) {
             try {
-                drain.source().liveDrained();
+                runAsOwnCode(drain.source()::liveDrained);
             } catch (RuntimeException | Error e) {
                 log.error("The catch-up-then-live handover for this {} failed while telling a source that the live "
                         + "payloads buffered during its catch-up had been delivered. They were delivered, and the "
@@ -786,11 +790,15 @@ public final class ReactiveHandover<T, K> {
      * returns. That {@code true} means the catch-up was asked for, not that it has run. It does not start before that
      * code returns, and it can still be stopped, or refused because another catch-up on this handover failed. Neither
      * is reported to that code. Once it runs, it replays like any other catch-up, holding live payloads back until it
-     * ends, and a failure of it starts this handover failing like any failed catch-up. Code that calls this for a
+     * ends, and a failure of it starts this handover failing like any failed catch-up. It replays nothing and writes no
+     * marker when a replay that started after the call has gone live by then, since this handover takes every catch-up
+     * to replay the same history. So calls that code makes before a replay starts are all answered by that one replay
+     * once it goes live. Code that calls this for a
      * payload asks for another catch-up each time a replay delivers that payload again, and each of those catch-ups
      * whose {@link Source#isAlreadyCaughtUp()} answers {@code false} replays again. With a source that always answers
      * {@code false}, the replays do not end. That code is a fold, live or replayed, {@link Source#alreadyDeliveredByReplay(Object)},
-     * {@link Source#replayStarted()}, {@link Source#replayCompleted()} and {@link Source#replayAbandoned()}. This handover
+     * {@link Source#replayStarted()}, {@link Source#replayCompleted()}, {@link Source#replayAbandoned()},
+     * {@link Source#historyDone()} and {@link Source#liveDrained()}. This handover
      * recognizes the call when that code subscribes the returned {@code Mono} on the thread this handover called it on,
      * which blocking on it does, or returns the {@code Mono} as part of its own. Every other method here that takes a
      * payload recognizes its caller the same way. A call from that code errors while this handover is failing, the same
@@ -844,6 +852,13 @@ public final class ReactiveHandover<T, K> {
         // can still have been stored. Cleared only after the check that follows a marker write has forgotten the
         // marker again, and left set once a write succeeded.
         AtomicBoolean markerMayBeWritten = new AtomicBoolean();
+        // How many replays had started when own code asked for this catch-up, or -1 when no own code asked for it.
+        java.util.concurrent.atomic.AtomicLong askedByOwnCodeAfter = new java.util.concurrent.atomic.AtomicLong(-1);
+        // The number of this catch-up's replay, 0 while it has not started one.
+        java.util.concurrent.atomic.AtomicLong replayNumber = new java.util.concurrent.atomic.AtomicLong();
+        // Set when a replay that started after own code asked for this catch-up has gone live, so this catch-up
+        // replays nothing and writes no marker.
+        AtomicBoolean answeredByAnotherReplay = new AtomicBoolean();
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
@@ -872,11 +887,19 @@ public final class ReactiveHandover<T, K> {
                 // gets one, which is what it asked for.
                 Throwable failed = failure();
                 if (failed == null || failed == failureBeforeWaiting) {
+                    long asked = askedByOwnCodeAfter.get();
+                    if (asked >= 0 && latestReplayGoneLive.get() > asked) {
+                        answeredByAnotherReplay.set(true);
+                        return Mono.<Void>empty();
+                    }
                     return pauseLiveDelivery(pause);
                 }
                 refusedForAnotherFailure.set(true);
                 return Mono.<Void>error(refusal(failed));
             })).then(Mono.defer(() -> {
+                if (answeredByAnotherReplay.get()) {
+                    return Mono.<Void>empty();
+                }
                 // Cleared again here, not only when this call was made, because the catch-up it waited for can have
                 // stopped in between. The payloads arriving during this replay belong in its buffer, and a handover
                 // left stopped would drop them.
@@ -889,6 +912,7 @@ public final class ReactiveHandover<T, K> {
                 // Every key belongs to the source a suppression reports to, so a new replay starts from none.
                 replayedIds.clear();
                 replaySource.set(source);
+                replayNumber.set(replaysStarted.incrementAndGet());
                 runAsOwnCode(source::replayStarted);
                 replayOpen.set(true);
                 return source.replay().map(this::replayedItem)
@@ -909,7 +933,7 @@ public final class ReactiveHandover<T, K> {
         // written once the failure has started, and is forgotten again when the failure started while it was being
         // written, since the failure's own forget can have run first. A failure marks its start before it forgets.
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> {
-            if (done) {
+            if (done || answeredByAnotherReplay.get()) {
                 return Mono.<Void>empty();
             }
             Throwable before = failure();
@@ -936,7 +960,7 @@ public final class ReactiveHandover<T, K> {
                 // specifically because a source's own subscriber to it runs inline and may forget the id, and this
                 // running after that would leave state behind that nothing removes.
                 .then(Mono.fromRunnable(() -> {
-                    source.historyDone();
+                    runAsOwnCode(source::historyDone);
                     // Taken after historyDone, under the same guard admission uses, so every payload already
                     // taken in has a turn at or below the boundary and every later one is above it. Counting
                     // deliveries alone was not enough: a payload taken in after the boundary, delivered before one
@@ -953,6 +977,7 @@ public final class ReactiveHandover<T, K> {
                     // flips its own live field. A payload acceptIfLive(..) sees after this point is treated as live
                     // even while whatever buffered ahead of it during the replay is still being delivered.
                     live = true;
+                    latestReplayGoneLive.accumulateAndGet(replayNumber.get(), Math::max);
                     // Held here until the marker is written, not from the end of the replay, so a payload a handover
                     // that was already live held back is never delivered and acknowledged while a phase that can still
                     // fail is running. A failure fails its acknowledgement instead, and its caller offers it again.
@@ -967,7 +992,7 @@ public final class ReactiveHandover<T, K> {
                         nothingBuffered = drain != null && drain.remaining().get() == 0L && drains.remove(drain);
                     }
                     if (nothingBuffered) {
-                        source.liveDrained();
+                        runAsOwnCode(source::liveDrained);
                         // Otherwise the last delivery of the drain gives the turn back, since the payloads it holds
                         // were checked against this replay's keys and are reported to this replay's source.
                         releaseReplayTurn(holdsReplayTurn);
@@ -1027,10 +1052,15 @@ public final class ReactiveHandover<T, K> {
                 });
 
         // A call from a fold or a Source callback of this handover answers true without waiting, since the replay or
-        // the pause it would wait for cannot end before that code does. The pipeline above runs once that code returns.
-        return Mono.deferContextual(context -> ownCode(context)
-                ? alreadyDone.thenReturn(true)
-                : catchupDone.asMono());
+        // the pause it would wait for cannot end before that code does. The pipeline above runs once that code returns,
+        // and replays nothing when a replay that started after this call has gone live by then.
+        return Mono.deferContextual(context -> {
+            if (!ownCode(context)) {
+                return catchupDone.asMono();
+            }
+            askedByOwnCodeAfter.compareAndSet(-1, replaysStarted.get());
+            return alreadyDone.thenReturn(true);
+        });
     }
 
     // Claims every acknowledgement nothing has answered yet, so none of those payloads is delivered later. Each one
