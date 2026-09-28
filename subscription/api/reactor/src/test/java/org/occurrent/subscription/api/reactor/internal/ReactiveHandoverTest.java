@@ -2694,6 +2694,7 @@ class ReactiveHandoverTest {
         StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
 
         StepVerifier.create(handover.accept("L1")).expectComplete().verify(Duration.ofSeconds(5));
+        await().atMost(Duration.ofSeconds(5)).until(handover::refusesPermanently);
 
         StepVerifier.create(handover.accept("L2"))
                 .expectErrorSatisfies(error -> assertThat(error)
@@ -2702,7 +2703,7 @@ class ReactiveHandoverTest {
                 .verify(Duration.ofSeconds(5));
     }
 
-    // Waits until the handover has delivered what it took in and failed for good, then offers a payload from outside.
+    // Offers a payload from outside once the caller has waited for the handover to deliver what it took in and fail.
     private static void assertThatALaterPayloadIsRefusedFor(ReactiveHandover<String, String> handover, String failedPayload) {
         StepVerifier.create(handover.accept("L2"))
                 .expectErrorSatisfies(error -> assertThat(error)
