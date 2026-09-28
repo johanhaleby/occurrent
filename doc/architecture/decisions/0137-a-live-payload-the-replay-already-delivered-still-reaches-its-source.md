@@ -178,9 +178,10 @@ first tells the source whose catch-up failed and the source whose catch-up deliv
 marker, so a caller that sees a refusal and starts a new catch-up gets a replay. A forget that errors is retried 3 times, and after that
 the handover logs an error that says to delete the marker by hand before replacing the subscription or feed.
 
-While it is failing, the handover refuses every payload from any other code with that failure, and refuses a new
-catch-up. It still delivers every payload its own code fed it, before the failure or meanwhile, and a later failure
-is logged while the rest are still delivered. Once none is left, it fails for good with the first failure.
+While it is failing, the handover refuses every later payload from any other code with that failure, and refuses a
+new catch-up. It delivers every payload it has already taken in and every payload its own code feeds it meanwhile.
+A failed catch-up also answers each payload from other code still waiting with its failure and does not deliver it,
+as described further down. A later failure is logged while the rest are still delivered. Once none is left, it fails for good with the first failure.
 
 So every payload the handover answered once it was queued gets its delivery attempt before the handover fails for
 good, whatever made it fail. Once the marker is gone, the catch-up of the subscription or feed that replaces it

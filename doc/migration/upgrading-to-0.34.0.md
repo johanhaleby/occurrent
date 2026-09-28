@@ -1175,14 +1175,15 @@ A handler or fold that used the call's completion, its error or its `DELIVERED` 
 now learns only that it was queued.
 
 When applying one of these events fails, nobody is waiting for it any more. The subscription or feed then starts
-failing. It deletes its catch-up marker, refuses every event from anywhere else with that failure, applies the events
-its handler or fold fed it, before the failure or meanwhile, and then fails for good. In 0.33.0 the failure went only to
-the call, so a handler that did not wait for it lost the event, and the next event was applied.
+failing. It deletes its catch-up marker, refuses every later event from anywhere else with that failure, applies the
+events it has already taken in and those its handler or fold feeds it meanwhile, and then fails for good. In 0.33.0 the
+failure went only to the call, so a handler that did not wait for it lost the event, and the next event was applied.
 
 A failed catch-up starts the subscription or feed failing the same way, whether its replay, its marker read or its
-marker write failed, so an event its handler or fold queued before that failure is still applied. The marker is deleted
-in that case too. So when the marker read fails on a subscription that had already caught up, the next catch-up replays
-the whole history, where 0.33.0 skipped it.
+marker write failed, so an event its handler or fold queued before that failure is still applied. An event from anywhere
+else that is still waiting gets the failure instead and is not applied. The marker is deleted in that case too. So when
+the marker read fails on a subscription that had already caught up, the next catch-up replays the whole history, where
+0.33.0 skipped it.
 
 What to do:
 

@@ -197,8 +197,9 @@ public final class CatchupProjectionFeed<E> {
      * returned {@link Mono} is part of the {@link Mono} the fold returns, or is subscribed, blocking or not, on the
      * thread this feed called the fold on. The event is folded after that fold, in the order it was fed. When folding
      * it fails, this feed starts failing, and a failed catch-up starts it failing the same way. It deletes its catch-up
-     * marker, folds the events its fold fed it before the failure and meanwhile, refuses every other event, and then
-     * fails for good. Build a new feed, and once the marker is gone its catch-up replays the history. When deleting
+     * marker, refuses every later event that does not come from its fold, folds the events it has already taken in and
+     * those its fold feeds it meanwhile, and then fails for good. A failed catch-up also refuses each event from
+     * anywhere else that is still waiting, and does not fold it. Build a new feed, and once the marker is gone its catch-up replays the history. When deleting
      * the marker still fails after 3 retries, the feed logs an error naming the feed id, and the marker has to be
      * deleted by hand before building a new feed. An event that no replay can bring back is lost only when its own
      * fold failed.
