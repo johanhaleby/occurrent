@@ -1248,7 +1248,7 @@ close it.
 
 A second design review since 0.33.0 found that giving each bridge its own channel and its own acknowledgements does
 not stop one bridge from holding up another. amqp-client calls every consumer on a connection from one shared pool,
-`Math.max(1, availableProcessors)` threads in 5.33.1 unless the `ConnectionFactory` was given an executor of its own.
+`Math.max(1, availableProcessors)` threads in 5.36.0 unless the `ConnectionFactory` was given an executor of its own.
 Both bridges ran the whole delivery inside that callback, including the model or the feed, the handler and the
 acknowledgement. A handler waiting on a store that is down therefore kept one of those threads for as long as it
 waited, and with one available processor a single such handler stopped every other bridge on the same `Connection`
