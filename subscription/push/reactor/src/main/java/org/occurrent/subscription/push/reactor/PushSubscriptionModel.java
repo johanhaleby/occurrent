@@ -140,7 +140,9 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * propagates directly, see {@link PushObserver}.
      *
      * @param cloudEvent The event received from the external source.
-     * @return A {@link Mono} that does not complete before every handler the event reaches has completed.
+     * @return A {@link Mono} that does not complete before every handler the event reaches has completed, except when
+     * this is called from inside the handler of a {@link CatchupThenPushSubscriptionModel} in front, which completes it
+     * once the event is queued, as that class describes.
      */
     public Mono<Void> accept(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");

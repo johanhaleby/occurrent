@@ -48,9 +48,13 @@ stopped. Read
 Then feeding a push model's `accept(..)` is supported only from the in-memory event store's write path, where
 0.33.0 also named a broker listener, a Spring application event and an HTTP endpoint. Read
 [section 13](#13-only-the-in-memory-event-stores-write-path-may-feed-a-push-models-accept).
-Finally, a projection feed's `goLive()` called while a catch-up of the same projection is replaying now waits for
+Then a projection feed's `goLive()` called while a catch-up of the same projection is replaying now waits for
 that replay to end, where 0.33.0 did not wait, and fails when a catch-up of that projection failed meanwhile. Read
 [section 14](#14-a-projection-feeds-golive-waits-for-a-running-catch-up).
+Finally, a reactor subscription handler, or the code that applies an event to a reactor projection feed, that feeds
+an event back into its own subscription or feed no longer waits forever. Depending on the call, it is answered once
+the event is queued or refused at once. Read
+[section 15](#15-feeding-a-reactor-catch-up-from-its-own-handler-no-longer-waits-forever).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1147,4 +1151,44 @@ What to do:
   thread.
 
 There is no recipe for this change. Which thread calls `goLive()`, and whether a catch-up runs next to it, are runtime
+behavior that a rewrite of the source cannot see.
+
+## 15. Feeding a reactor catch-up from its own handler no longer waits forever
+
+This covers the reactor `CatchupThenPushSubscriptionModel`, `CatchupProjectionFeed` and `DomainEventFeed`. Up to
+0.33.0 a subscription handler that fed an event back into its own subscription waited for that event, and the event
+waited for the handler to return, so both waited forever. The same held for the code that applies an event to a
+projection feed, the `fold` you pass to `CatchupProjectionFeed.create(..)` or `DomainEventFeed.register(..)`, feeding
+the same feed. It happened live and during a replay, whether the handler blocked on the call or returned it as part of
+its `Mono`.
+
+Now it depends on the call:
+
+- `PushSubscriptionModel.accept(..)` called from the handler, which is how a handler writing to the in-memory event
+  store reaches it, completes once the event is queued. The handler gets the events it wrote in the order it wrote
+  them, once it has returned, or once the replay has ended for a write made during the replay.
+- `PushSubscriptionModel.acceptRedeliverable(..)` called from the handler completes with `NOT_DELIVERABLE`.
+- `CatchupProjectionFeed.accept(..)`, `DomainEventFeed.accept(..)` and `DomainEventFeed.acceptCloudEvent(..)` called
+  from the fold error at once with an `IllegalStateException`, and the feed does not take the event in.
+
+You are affected in these cases:
+
+- A fold that fed its own feed without waiting for the result, with `subscribe()` say, did not wait forever. 0.33.0
+  applied an event fed through `accept(..)` after the fold, and one fed through `acceptCloudEvent(..)` too once the
+  feed was live. Now the feed refuses both, and the event is lost unless you handle the error.
+- A handler that called `acceptRedeliverable(..)` on its own subscription without waiting got `DELIVERED` once the
+  event was applied live, or `DEFERRED` during the replay. Now it gets `NOT_DELIVERABLE` in both cases, and the event
+  is not applied.
+- When applying an event a handler wrote fails, the subscription now fails for good and refuses every later event,
+  since the write has already returned. In 0.33.0 a handler that wrote without waiting saw only that write fail.
+
+What to do:
+
+- Feed a projection feed from code the feed is not running, such as the listener that feeds it everything else,
+  rather than from its fold.
+- After fixing a handler whose event failed to apply, cancel the subscription and subscribe again.
+- Block on the call on the thread the handler or fold was called on, or return it as part of the `Mono` it returns.
+  A handler that blocks on the call from a thread it switched to is not recognized, and still waits forever.
+
+There is no recipe for this change. Whether a call runs inside a handler of the subscription it feeds is runtime
 behavior that a rewrite of the source cannot see.

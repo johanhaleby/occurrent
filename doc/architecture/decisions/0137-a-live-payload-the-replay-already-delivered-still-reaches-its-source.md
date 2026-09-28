@@ -160,6 +160,19 @@ that blocks on the call from a thread it switched to, while a replay holds live 
 cannot end while the view blocks. On both engines a view that waits for a `catchUp()` that replays waits for a replay
 that cannot start before the view's code returns.
 
+The reactive engine answers a live event the same code feeds it without waiting for that event either, for the same
+reason. It delivers one live event at a time, so the event cannot be applied before the code that fed it returns, and
+until [#1148](https://github.com/johanhaleby/occurrent/issues/1148) a call waiting for it waited forever, live and
+during a replay. A subscription handler that writes to the in-memory event store is the case that needs an answer,
+since the store has already kept the event. `acceptReportingDelivery`, which only that write path uses, now answers
+once the event is queued, and the event is delivered after the code that fed it, in the order it was fed. Nobody
+waits for that delivery, so when it fails the handover fails as after a failed catch-up and refuses every later event,
+rather than deliver the events behind it without it. `accept` and `acceptIfLive` promise an answer only once the event
+is applied, so they refuse the event at once and take nothing in. The engine recognizes these calls the way it
+recognizes a `goLive()`, which leaves the same gap, a view that blocks on the call from a thread it switched to. The
+blocking engine already delivers such an event on the calling thread once live, and refuses a nested `accept` before
+that.
+
 A replay that fails ends differently on the two engines, because they acknowledge at different moments. The blocking
 engine has already reported each buffered payload handled, so it delivers them before it records the failure. The
 reactive engine has not acknowledged the payloads it holds back, and the failure fails their acknowledgements, so it

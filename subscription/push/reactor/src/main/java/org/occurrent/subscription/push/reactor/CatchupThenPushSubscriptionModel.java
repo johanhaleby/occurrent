@@ -75,10 +75,18 @@ import java.util.function.Supplier;
  * in-memory event store, and Occurrent ships no reactive {@link PositionOrderedReader} over that store for this model
  * to replay. A write that reaches this model through {@code accept(..)} while its replay runs fails at once when the
  * live sink is full, and otherwise waits until the event has been applied after the replay, or until the replay
- * fails or is stopped. A handler that writes an event the subscription's filter accepts can hang in that write.
- * During the replay the write waits for the replay, which waits for that handler. Once live, this model hands the
- * subscription's events to the handler one at a time, so the new event waits behind the one the handler is still
- * processing. Nothing records which live events the subscription has handled, and a crash before the handler has run
+ * fails or is stopped. A handler that writes an event the subscription's filter accepts does not wait for it. This
+ * model hands the subscription's events to the handler one at a time, so that event cannot be applied before the
+ * handler returns. The write returns once the event is queued, and the handler gets the events it wrote in the
+ * order it wrote them, once it has returned, or once the replay has ended for a write made during the replay. When
+ * applying such an event fails, the write has already returned, so the subscription fails as after a failed catch-up
+ * and refuses every later event rather than apply the ones behind it without it. Cancel the subscription and
+ * subscribe again. The model
+ * recognizes the write when the handler blocks on it on the thread it was called on, or returns it as part of the
+ * {@link Mono} it returns. A handler that blocks on the write from a thread it switched to still waits for itself.
+ * A handler that calls {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} on the model feeding it gets
+ * {@link org.occurrent.subscription.RoutingOutcome#NOT_DELIVERABLE}, since that call waits until the event is
+ * applied. Nothing records which live events the subscription has handled, and a crash before the handler has run
  * loses the event from the in-memory event store too, so after a crash the store never holds an event the
  * subscription missed. With a durable event store, such as MongoDB, use a durable subscription, or a broker as
  * described below. The amendment to ADR 133 records why.

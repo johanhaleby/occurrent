@@ -186,7 +186,8 @@ public final class DomainEventFeed<E> {
      * Feed a live domain event to the registered projection. The returned {@link Mono} completes once the projection
      * has handled it, so the listener can acknowledge after processing. Before the projection goes live it completes
      * only once the catch-up has folded the event, and errors when it does not fold it, a stopped or failed catch-up
-     * say, see {@link CatchupProjectionFeed#accept(Object)}.
+     * say, or when it is called from inside the registered projection's fold, see
+     * {@link CatchupProjectionFeed#accept(Object)}.
      * <p>
      * The returned {@link Mono} fails with an {@link IllegalStateException} when no projection is registered. Refused
      * rather than completed empty, because the listener acknowledges on completion and the broker discards what it
@@ -263,6 +264,11 @@ public final class DomainEventFeed<E> {
      * (see {@link #goLive(String)}'s own javadoc). A {@link RoutingOutcome#DEFERRED} event there is only safe if
      * the caller's own source, the broker or listener feeding this method, actually redelivers it. Losing it there
      * is a caller-side loss, not this feed's.
+     * <p>
+     * Fails with an {@link IllegalStateException}, rather than completing with {@link RoutingOutcome#DEFERRED}, when
+     * called from inside the registered projection's fold, in the cases {@link CatchupProjectionFeed#accept(Object)}
+     * names. The event cannot be folded before that fold returns, so a redelivery from the same fold would be refused
+     * again.
      * <p>
      * Fails with an {@link IllegalStateException} when no projection is registered, for the reason
      * {@link #accept(Object)} gives, rather than completing with {@link RoutingOutcome#NOT_DELIVERABLE}. This feed,
