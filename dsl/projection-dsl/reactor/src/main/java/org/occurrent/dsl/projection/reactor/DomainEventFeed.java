@@ -393,6 +393,10 @@ public final class DomainEventFeed<E> {
      * drop it: the application asked for this projection, so running on without it is worse than not running. Fix the
      * cause and build a new feed.
      * <p>
+     * A call the projection makes while this feed is calling it completes once the catch-up has been asked for,
+     * without waiting for the replay. {@link CatchupProjectionFeed#catchUp()} says which calls those are, and what a
+     * call for an event a replay delivers again leads to.
+     * <p>
      * Named for when a feed could carry several projections. It carries one.
      */
     public Mono<Void> catchUpAll() {
@@ -425,9 +429,13 @@ public final class DomainEventFeed<E> {
      *
      * The lookup happens when the returned {@link Mono} is subscribed, so a projection registered between building
      * this {@link Mono} and subscribing to it is found. An id that matches nothing fails the {@link Mono} with an
-     * {@link IllegalArgumentException} rather than throwing here.
+     * {@link IllegalArgumentException} rather than throwing here. A call the projection makes while this feed is
+     * calling it completes once the catch-up has been asked for, without waiting for the replay.
+     * {@link CatchupProjectionFeed#catchUp()} says which calls those are, and what a call for an event a replay
+     * delivers again leads to.
      *
-     * @return A {@link Mono} that completes once that projection has caught up and gone live.
+     * @return A {@link Mono} that completes once that projection has caught up and gone live, or, for a call that
+     *         projection makes while this feed is calling it, once the catch-up has been asked for.
      */
     public Mono<Void> catchUp(String id) {
         Objects.requireNonNull(id, "id cannot be null");

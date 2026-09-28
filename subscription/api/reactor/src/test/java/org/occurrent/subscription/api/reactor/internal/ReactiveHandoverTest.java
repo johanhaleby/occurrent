@@ -46,6 +46,7 @@ import java.util.function.Supplier;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -1896,6 +1897,174 @@ class ReactiveHandoverTest {
         }
     }
 
+    // A live fold that blocks on a catch-up that replays would wait for a replay that cannot start before the fold
+    // returns, so the catch-up answers true without waiting. L2 arrives while the replay runs and is delivered after it.
+    // The fold waits a while after the answer, so a replay started alongside the fold is seen starting.
+    @Test
+    void a_catch_up_that_replays_a_live_fold_blocks_on_answers_true_and_replays_after_that_fold() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        AtomicBoolean replayStartedDuringFold = new AtomicBoolean();
+        FakeSource history = source(List.of("R1", "R2"), false);
+        history.onReplayStarted = replaying::countDown;
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("L1")) {
+                answers.add(self.get().catchUp(history).block(Duration.ofSeconds(5)));
+                replayStartedDuringFold.set(countsDownWithin(replaying, Duration.ofMillis(200)));
+            }
+            log.add(payload);
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+
+        handover.accept("L1").subscribeOn(Schedulers.boundedElastic()).toFuture().get(10, TimeUnit.SECONDS);
+
+        assertThat(answers).containsExactly(true);
+        assertThat(replayStartedDuringFold).isFalse();
+        assertThat(replaying.await(5, TimeUnit.SECONDS)).isTrue();
+        StepVerifier.create(handover.accept("L2")).expectComplete().verify(Duration.ofSeconds(5));
+        assertThat(log).containsExactly("L1", "R1", "R2", "L2");
+    }
+
+    // The fold switches threads before it asks, so only the returned Mono being part of the fold's own tells the
+    // handover where the call came from.
+    @Test
+    void a_catch_up_that_replays_composed_into_a_live_fold_answers_true_and_replays_after_that_fold() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        AtomicBoolean replayStartedDuringFold = new AtomicBoolean();
+        FakeSource history = source(List.of("R1", "R2"), false);
+        history.onReplayStarted = replaying::countDown;
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> {
+            Mono<Void> folded = Mono.fromRunnable(() -> log.add(payload));
+            if (!payload.equals("L1")) {
+                return folded;
+            }
+            return Mono.delay(Duration.ofMillis(1))
+                    .then(Mono.defer(() -> self.get().catchUp(history)))
+                    .doOnNext(answers::add)
+                    .then(Mono.fromRunnable(() -> replayStartedDuringFold.set(countsDownWithin(replaying, Duration.ofMillis(200)))))
+                    .then(folded);
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+
+        StepVerifier.create(handover.accept("L1")).expectComplete().verify(Duration.ofSeconds(5));
+
+        assertThat(answers).containsExactly(true);
+        assertThat(replayStartedDuringFold).isFalse();
+        assertThat(replaying.await(5, TimeUnit.SECONDS)).isTrue();
+        StepVerifier.create(handover.accept("L2")).expectComplete().verify(Duration.ofSeconds(5));
+        assertThat(log).containsExactly("L1", "R1", "R2", "L2");
+    }
+
+    // R1's fold blocks on a catch-up whose replay needs the turn R1's own catch-up holds until it has gone live.
+    @Test
+    void a_catch_up_that_replays_a_replayed_fold_blocks_on_answers_true_and_replays_after_the_running_catch_up() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("R1")) {
+                answers.add(self.get().catchUp(source(List.of("S1"), false)).block(Duration.ofSeconds(5)));
+            }
+            log.add(payload);
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+
+        StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectNext(true).expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(answers).containsExactly(true);
+        awaitSize(log, 2);
+        StepVerifier.create(handover.accept("L1")).expectComplete().verify(Duration.ofSeconds(5));
+        assertThat(log).containsExactly("R1", "S1", "L1");
+    }
+
+    // The fold got true before the replay ran, so nothing waits for the replay's outcome. Its failure starts the
+    // handover failing like any failed catch-up, so both markers are forgotten and a later payload is refused.
+    @Test
+    void a_catch_up_a_live_fold_got_true_from_starts_the_handover_failing_when_its_replay_fails() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        FakeSource live = source(List.of(), true);
+        FakeSource failingReplay = source(List.of("R1"), false);
+        failingReplay.replayFailure = new IllegalStateException("replay boom");
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("L1")) {
+                answers.add(self.get().catchUp(failingReplay).block(Duration.ofSeconds(5)));
+            }
+            log.add(payload);
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        StepVerifier.create(handover.catchUp(live)).expectNext(true).verifyComplete();
+
+        handover.accept("L1").subscribeOn(Schedulers.boundedElastic()).toFuture().get(10, TimeUnit.SECONDS);
+
+        assertThat(answers).containsExactly(true);
+        await().atMost(Duration.ofSeconds(5)).until(handover::refusesPermanently);
+        assertThat(failingReplay.forgetCaughtUpCallCount()).isEqualTo(1);
+        assertThat(live.forgetCaughtUpCallCount()).isEqualTo(1);
+        StepVerifier.create(handover.accept("L2"))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasRootCauseMessage("replay boom"))
+                .verify(Duration.ofSeconds(5));
+        assertThat(log).containsExactly("L1");
+    }
+
+    // The outer replay's replayStarted() blocks on a catch-up whose replay needs the turn the outer one holds until it
+    // has gone live.
+    @Test
+    void a_catch_up_that_replays_a_source_callback_blocks_on_answers_true_and_replays_after_the_running_catch_up() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> log.add(payload)),
+                payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        FakeSource outer = source(List.of("R1"), false);
+        outer.onReplayStarted = () -> answers.add(self.get().catchUp(source(List.of("S1"), false)).block(Duration.ofSeconds(5)));
+
+        StepVerifier.create(handover.catchUp(outer)).expectNext(true).expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(answers).containsExactly(true);
+        await().atMost(Duration.ofSeconds(5)).until(() -> log.size() == 2);
+        assertThat(log).containsExactly("R1", "S1");
+    }
+
+    // The fold got true before the replay ran, so a stop of that replay is not reported to it. The handover was live
+    // before, so it goes on delivering once the stopped replay has let go of live delivery.
+    @Test
+    void a_catch_up_a_live_fold_got_true_from_that_is_stopped_leaves_the_handover_live() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        FakeSource history = source(List.of("R1", "R2"), false);
+        history.stopAfter(1);
+        AtomicReference<ReactiveHandover<String, String>> self = new AtomicReference<>();
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {
+            if (payload.equals("L1")) {
+                answers.add(self.get().catchUp(history).block(Duration.ofSeconds(5)));
+            }
+            log.add(payload);
+        }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        self.set(handover);
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+
+        handover.accept("L1").subscribeOn(Schedulers.boundedElastic()).toFuture().get(10, TimeUnit.SECONDS);
+
+        assertThat(answers).containsExactly(true);
+        await().atMost(Duration.ofSeconds(5)).until(() -> history.replayAbandonedCallCount == 1);
+        StepVerifier.create(handover.accept("L2")).expectComplete().verify(Duration.ofSeconds(5));
+        assertThat(history.markCaughtUpCallCount()).isZero();
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(log).containsExactly("L1", "R1", "L2");
+    }
+
     // L1's fold asks for N1 from a timer thread, so only the Mono being part of the fold's own tells the handover
     // where the call came from. N1 is delivered after L1, and the fold does not wait for that.
     @Test
@@ -2445,6 +2614,15 @@ class ReactiveHandoverTest {
                         .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
                         .hasRootCauseMessage("fold failed for " + failedPayload))
                 .verify(Duration.ofSeconds(5));
+    }
+
+    private static boolean countsDownWithin(CountDownLatch latch, Duration timeout) {
+        try {
+            return latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     private static void awaitQuietly(CountDownLatch latch) {

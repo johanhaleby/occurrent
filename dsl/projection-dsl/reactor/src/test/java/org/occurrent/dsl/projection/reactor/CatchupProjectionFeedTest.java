@@ -662,6 +662,25 @@ class CatchupProjectionFeedTest {
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(folded).containsExactly("1", "2", "n"));
     }
 
+    // The fold of "2" returns catchUp() as part of its own Mono, and that catch-up replays "1", which cannot start
+    // before the fold returns
+    @Test
+    void catch_up_from_the_feeds_own_live_fold_completes_without_waiting_and_replays_after_that_fold() {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                feedingBackOn("2", feedRef, folded, CatchupProjectionFeed::catchUp),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        feedRef.set(feed);
+        StepVerifier.create(feed.goLive()).expectComplete().verify(ofSeconds(5));
+
+        StepVerifier.create(feed.accept(new Counted("2"))).expectComplete().verify(ofSeconds(5));
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(folded).containsExactly("2", "1"));
+        StepVerifier.create(feed.accept(new Counted("3"))).expectComplete().verify(ofSeconds(5));
+        assertThat(folded).containsExactly("2", "1", "3");
+    }
+
     // "bad" is in no store. The fold of "2" feeds it, the fold of "bad" fails once, and the marker says the history was
     // read, so a new feed would skip the replay that feeds "bad" again unless the marker is forgotten.
     @Test

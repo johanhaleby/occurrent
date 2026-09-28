@@ -244,8 +244,23 @@ public final class CatchupProjectionFeed<E> {
      * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), record the
      * completion marker, then start delivering the live feed. The returned {@link Mono} completes when the replay and
      * marker are done. Call once, after wiring the live feed.
+     * <p>
+     * A call the view makes while this feed is calling it, from its fold or from a callback such as
+     * {@code replayStarted()}, completes without waiting for the replay, since that replay cannot start before the
+     * view's code returns. The call is recognized when the returned {@link Mono} is part of the {@link Mono} the view's
+     * code returns, or is subscribed, blocking or not, on the thread this feed called that code on. A view that blocks
+     * on it from a thread it switched to is not recognized, and waits for a replay that cannot start while it blocks.
+     * Completing then means the catch-up was asked for, not that it has run. It does not start before the view's code
+     * returns, and it can still be stopped by {@link #stopCatchUp()}, or refused because another catch-up on this feed
+     * failed, and neither reaches the view. When its replay fails, this feed refuses every later event that does not
+     * come from the view's fold, the same as after any failed catch-up.
+     * <p>
+     * A view that calls this for an event a replay delivers asks for another catch-up each time a replay delivers that
+     * event again. Each of those catch-ups replays again unless it finds the catch-up marker written, so a feed built
+     * without a {@link CheckpointStorage} for that marker replays without end.
      *
-     * @return A {@link Mono} that completes when the catch-up replay has finished and the feed has gone live.
+     * @return A {@link Mono} that completes when the catch-up replay has finished and the feed has gone live, or, for a
+     *         call the view makes while this feed is calling it, once the catch-up has been asked for.
      */
     public Mono<Void> catchUp() {
         // Cleared here rather than on subscribe, so a feed stopped once can catch up again instead of stopping

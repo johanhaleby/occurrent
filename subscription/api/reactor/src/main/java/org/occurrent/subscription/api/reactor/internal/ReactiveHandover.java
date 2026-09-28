@@ -72,7 +72,8 @@ import java.util.function.Supplier;
  * {@link Mono} returned by {@link #catchUp(Source)} completes, and the marker is persisted, <em>before</em> the
  * buffered live payloads are folded, because the returned {@code Mono} completes once the marker phase is done rather
  * than at the end of the live stream. It does <em>not</em> complete before the replayed payloads are folded: the marker
- * phase starts only after the replay phase has finished folding. The blocking engine's
+ * phase starts only after the replay phase has finished folding. Called from this engine's own code, it emits
+ * {@code true} before the replay has run, see {@link #catchUp(Source)}. The blocking engine's
  * {@code BlockingHandover.catchUp} returns only <em>after</em> the buffered live
  * payloads are drained. Both are internally consistent. On either engine a live payload's {@code accept} returns, or
  * its {@link Mono} completes, only once its fold has actually run, including a payload buffered during the replay,
@@ -767,7 +768,8 @@ public final class ReactiveHandover<T, K> {
      * how that relates to the buffered live payloads), emitting {@code true} when the catch-up finished and
      * {@code false} when {@link Source#keepReplaying()} stopped it partway. A failure errors it instead, and so does a
      * call while this handover is failing, see {@link #acceptReportingDelivery(Object)}, without replaying or writing
-     * the marker.
+     * the marker. Called from code this handover is running, it emits {@code true} without waiting for the replay, see
+     * below.
      * <p>
      * A replay waits for a live payload still being delivered and then holds the live payloads back until it ends,
      * which matters on a handover that is already live, a feed's {@code catchUp()} after its {@code goLive()}. They are
@@ -779,16 +781,23 @@ public final class ReactiveHandover<T, K> {
      * after this call. When a catch-up on this handover failed while it waited, it errors instead, with a catch-up
      * failure recorded while it waited as the cause. Its own refusal is not recorded as a failure.
      * <p>
-     * A catch-up with nothing to replay called from code this handover is running emits {@code true} without waiting,
-     * since the replay or the hold on live delivery it would wait for cannot end before that code returns. That code
-     * is a fold, live or replayed, {@link Source#alreadyDeliveredByReplay(Object)}, {@link Source#replayStarted()},
-     * {@link Source#replayCompleted()} and {@link Source#replayAbandoned()}. This handover recognizes the call when that
-     * code subscribes the returned {@code Mono} on the thread this handover called it on, which blocking on it does, or
-     * returns the {@code Mono} as part of its own. Every other method here that takes a payload recognizes its caller
-     * the same way. While a replay holds live delivery back, {@link #acceptIfLive(Object)} goes on refusing until that replay
-     * ends. While a replay holds live delivery back, code that blocks on the result from a thread it switched to waits
-     * for that replay, which cannot end while the code blocks. Code that waits for a catch-up that replays waits for a
-     * replay that cannot start before the code returns.
+     * A catch-up called from code this handover is running emits {@code true} without waiting, whether it has anything
+     * to replay or not, since the replay or the hold on live delivery it would wait for cannot end before that code
+     * returns. That {@code true} means the catch-up was asked for, not that it has run. It does not start before that
+     * code returns, and it can still be stopped, or refused because another catch-up on this handover failed. Neither
+     * is reported to that code. Once it runs, it replays like any other catch-up, holding live payloads back until it
+     * ends, and a failure of it starts this handover failing like any failed catch-up. Code that calls this for a
+     * payload asks for another catch-up each time a replay delivers that payload again, and each of those catch-ups
+     * whose {@link Source#isAlreadyCaughtUp()} answers {@code false} replays again. With a source that always answers
+     * {@code false}, the replays do not end. That code is a fold, live or replayed, {@link Source#alreadyDeliveredByReplay(Object)},
+     * {@link Source#replayStarted()}, {@link Source#replayCompleted()} and {@link Source#replayAbandoned()}. This handover
+     * recognizes the call when that code subscribes the returned {@code Mono} on the thread this handover called it on,
+     * which blocking on it does, or returns the {@code Mono} as part of its own. Every other method here that takes a
+     * payload recognizes its caller the same way. A call from that code errors while this handover is failing, the same
+     * as a call from other code, and errors when reading the catch-up marker fails. While a replay holds live delivery
+     * back, {@link #acceptIfLive(Object)} goes on refusing until that replay ends. Code that blocks on the result from
+     * a thread it switched to is not recognized, so it waits like any other caller, for a replay or a hold on live
+     * delivery that cannot end while that code blocks.
      */
     public Mono<Boolean> catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
@@ -1017,10 +1026,10 @@ public final class ReactiveHandover<T, K> {
                             refusedForAnotherFailure, markerMayBeWritten);
                 });
 
-        // A call from a fold or a Source callback of this handover answers without waiting, since the replay or the
-        // pause it would wait for cannot end before that code does. The pipeline above still goes live once they end.
+        // A call from a fold or a Source callback of this handover answers true without waiting, since the replay or
+        // the pause it would wait for cannot end before that code does. The pipeline above runs once that code returns.
         return Mono.deferContextual(context -> ownCode(context)
-                ? alreadyDone.flatMap(done -> done ? Mono.just(true) : catchupDone.asMono())
+                ? alreadyDone.thenReturn(true)
                 : catchupDone.asMono());
     }
 
