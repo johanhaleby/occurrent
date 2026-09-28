@@ -84,6 +84,21 @@ public final class HandoverMessages {
     }
 
     /**
+     * The message a reactor catch-up-then-live caller shows once an event its own handler fed it failed to apply after
+     * the handler was told it was queued, with the caller's own noun substituted in. The caller refuses live events
+     * from then on, the same as after a failed catch-up, so the message names what failed instead.
+     *
+     * @param noun The noun describing what cannot accept live events, e.g. {@code "projection feed"} or
+     *             {@code "subscription"}.
+     */
+    public static String queuedEventFailed(String noun) {
+        return "An event the handler of this " + noun + " fed it failed to apply after it was queued, so it refuses "
+                + "live events rather than acknowledging events that nothing folded, and the source keeps redelivering "
+                + "them. Fix the cause, then replace it: a subscription by cancelling it and subscribing again, a "
+                + "projection feed by building a new one.";
+    }
+
+    /**
      * Refuses a live event this handover did not apply because it was stopped before it went live, whether its replay
      * was stopped or no catch-up was left to run. Not a failure, so it says to offer the event again rather than to
      * rebuild anything.

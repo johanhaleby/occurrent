@@ -140,9 +140,10 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * propagates directly, see {@link PushObserver}.
      *
      * @param cloudEvent The event received from the external source.
-     * @return A {@link Mono} that does not complete before every handler the event reaches has completed, except when
-     * this is called from inside the handler of a {@link CatchupThenPushSubscriptionModel} in front, which completes it
-     * once the event is queued, as that class describes.
+     * @return A {@link Mono} that does not complete before every handler the event reaches has completed. Called from
+     * inside the handler of a {@link CatchupThenPushSubscriptionModel} in front, it does not wait for that handler's
+     * subscription to apply the event, only for the event to be queued there, as that class describes. It still waits
+     * for every other subscription the event reaches.
      */
     public Mono<Void> accept(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
@@ -174,8 +175,8 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      *     <li>{@link RoutingOutcome#UNAVAILABLE} when no subscription is registered, this model is stopped, or the
      *     subscription is paused. Stopping a {@link CatchupThenPushSubscriptionModel} in front stops this model too,
      *     whether or not its replay had finished. Have the broker deliver it again later.</li>
-     *     <li>{@link RoutingOutcome#REFUSED} when the catch-up in front has failed, or is failing and refuses
-     *     every event that does not come from its handler. No redelivery gets past that, so stop consuming.</li>
+     *     <li>{@link RoutingOutcome#REFUSED} when the subscription is failing or has failed, which a failed catch-up
+     *     in front or a failed event its handler wrote starts. No redelivery gets past that, so stop consuming.</li>
      *     <li>{@link RoutingOutcome#NOT_DELIVERABLE} for any other refusal decided before the handler would run, a
      *     full live buffer in the catch-up in front, say. Apply the listener's failure policy.</li>
      * </ul>

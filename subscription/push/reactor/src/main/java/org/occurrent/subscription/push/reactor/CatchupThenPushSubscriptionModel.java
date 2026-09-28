@@ -85,11 +85,13 @@ import java.util.function.Supplier;
  * from the handler, which decides live or not as for any caller, and reports
  * {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} once the event is queued.
  * <p>
- * When applying an event written that way fails, the write has already returned. The subscription then forgets its
- * catch-up marker, refuses every event that does not come from its handler, applies the events it has already taken
- * in and those its handler writes meanwhile, and then fails for good, as after a failed catch-up. Cancel the
- * subscription and subscribe again, and its catch-up replays the history. An event that no replay holds is lost only
- * when applying it failed.
+ * When applying an event written that way fails, the write has already returned. The subscription then starts
+ * failing, and a failed catch-up starts it failing the same way. It deletes its catch-up marker, refuses every event
+ * that does not come from its handler, applies the events it has already taken in and those its handler writes
+ * meanwhile, and then fails for good. Cancel the subscription and subscribe again, and once the marker is gone its
+ * catch-up replays the history. When deleting the marker still fails after 3 retries, the subscription logs an error
+ * naming the subscription id, and the marker has to be deleted by hand before subscribing again. An event that no
+ * replay holds is lost only when applying it failed.
  * <p>
  * Nothing records which live events the subscription has handled, and a crash before the handler has run
  * loses the event from the in-memory event store too, so after a crash the store never holds an event the
@@ -293,7 +295,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public Mono<Void> forgetCaughtUp() {
-                return catchupMarker == null ? Mono.empty() : catchupMarker.delete(subscriptionId);
+                // Names the id, since the handover logs this when every attempt failed and an operator then deletes
+                // the marker by hand.
+                return catchupMarker == null ? Mono.empty() : catchupMarker.delete(subscriptionId)
+                        .onErrorMap(error -> new IllegalStateException("Could not delete the catch-up marker of "
+                                + "subscription " + subscriptionId + ".", error));
             }
 
             @Override
