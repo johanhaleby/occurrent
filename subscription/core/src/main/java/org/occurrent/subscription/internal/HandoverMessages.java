@@ -131,6 +131,20 @@ public final class HandoverMessages {
     }
 
     /**
+     * Refuses a live event fed to the reactive engine from inside one of its own deliveries or callbacks by a call
+     * that waits until the event is applied. That engine delivers one event at a time, so the event cannot be applied
+     * before the delivery the call was made from has finished, and that delivery is waiting for the call.
+     *
+     * @param noun The noun describing what was fed, e.g. {@code "projection feed"}.
+     */
+    public static String waitedForFromOwnDelivery(String noun) {
+        return "A live event was fed to this " + noun + " from inside one of its own deliveries or callbacks, by a call "
+                + "that waits until the event is applied. The event cannot be applied before that delivery finishes, "
+                + "and the delivery is waiting for this call, so it is refused instead. Feed the event from code this "
+                + noun + " is not running.";
+    }
+
+    /**
      * Rejects a null replay-to-live de-dup key. The key function is caller-supplied and declared non-null, but nothing
      * enforces that at runtime, and a null reaches {@code BoundedIdCache} as a null element for its eviction queue,
      * which throws a bare {@link NullPointerException} from inside the cache. On the live path that happens after the

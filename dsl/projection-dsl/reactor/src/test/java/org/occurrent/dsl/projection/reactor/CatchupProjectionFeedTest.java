@@ -316,6 +316,15 @@ class CatchupProjectionFeedTest {
         }
     }
 
+    // Folds every event, and on the one named feeds this feed an event "n" first, recording why it was refused
+    private static Function<Counted, Mono<Void>> feedingBackOn(String eventId, AtomicReference<CatchupProjectionFeed<Counted>> feed,
+                                                               List<String> folded, List<Throwable> refusals) {
+        return event -> (event.eventId().equals(eventId)
+                ? feed.get().accept(new Counted("n")).onErrorResume(refusal -> Mono.fromRunnable(() -> refusals.add(refusal)))
+                : Mono.<Void>empty())
+                .then(Mono.fromRunnable(() -> folded.add(event.eventId())));
+    }
+
     // goLive() subscribes its wait from the one task it schedules, and the marker read ahead of that wait is
     // synchronous, so once that task has run the call is waiting, or has completed, which the caller then catches
     private static CompletableFuture<Void> goLiveWaitingForTheReplay(CatchupProjectionFeed<Counted> feed) {
@@ -606,6 +615,42 @@ class CatchupProjectionFeedTest {
 
         feed.accept(new Counted("3")).block();
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(3));
+    }
+
+    // accept(..) completes once the event is folded, which cannot happen before the fold it is called from returns,
+    // so it is refused there rather than left waiting for that fold
+    @Test
+    void accept_from_the_feeds_own_live_fold_is_refused_and_the_event_is_not_folded() {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", feedingBackOn("2", feedRef, folded, refusals), Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        feedRef.set(feed);
+        StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        StepVerifier.create(feed.accept(new Counted("2"))).expectComplete().verify(ofSeconds(5));
+
+        assertThat(refusals).singleElement().satisfies(refusal -> assertThat(refusal)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.waitedForFromOwnDelivery("projection feed")));
+        assertThat(folded).containsExactly("1", "2");
+    }
+
+    @Test
+    void accept_from_the_feeds_own_replayed_fold_is_refused_and_the_catch_up_completes() {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", feedingBackOn("1", feedRef, folded, refusals), Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, null);
+        feedRef.set(feed);
+
+        StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        assertThat(refusals).singleElement().satisfies(refusal -> assertThat(refusal)
+                .hasMessage(HandoverMessages.waitedForFromOwnDelivery("projection feed")));
+        assertThat(folded).containsExactly("1", "2");
     }
 
     @Test

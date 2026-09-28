@@ -940,6 +940,106 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(delivered).containsExactly("2");
     }
 
+    // A handler that feeds this model an event its own filter accepts, the way a handler writing to the in-memory
+    // event store does, gets its call answered once the event is queued. The event is applied after that handler.
+    @Test
+    void events_a_live_handler_feeds_back_are_applied_after_it_in_the_order_it_fed_them() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> (ce.getId().equals("2")
+                ? feed.accept(cloudEvent("n1", "Created")).then(feed.accept(cloudEvent("n2", "Created")))
+                : Mono.<Void>empty())
+                .then(Mono.fromRunnable(() -> delivered.add(ce.getId())))).waitUntilStarted().block();
+
+        StepVerifier.create(feed.accept(cloudEvent("2", "Updated"))).expectComplete().verify(Duration.ofSeconds(5));
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "2", "n1", "n2"));
+    }
+
+    @Test
+    void an_event_a_live_handler_blocks_on_feeding_back_is_applied_after_it() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
+            if (ce.getId().equals("2")) {
+                feed.accept(cloudEvent("n1", "Created")).block(Duration.ofSeconds(5));
+            }
+            delivered.add(ce.getId());
+        })).waitUntilStarted().block();
+
+        StepVerifier.create(feed.accept(cloudEvent("2", "Updated"))).expectComplete().verify(Duration.ofSeconds(10));
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "2", "n1"));
+    }
+
+    @Test
+    void an_event_a_replayed_handler_feeds_back_is_applied_after_the_replay() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created"), cloudEvent("2", "Updated")), 2);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> (ce.getId().equals("1")
+                ? feed.accept(cloudEvent("n1", "Created"))
+                : Mono.<Void>empty())
+                .then(Mono.fromRunnable(() -> delivered.add(ce.getId()))));
+
+        StepVerifier.create(subscription.waitUntilStarted()).expectComplete().verify(Duration.ofSeconds(5));
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "2", "n1"));
+    }
+
+    // acceptRedeliverable(..) waits until the handler has applied the event, which cannot happen before the handler
+    // it is called from returns, so it is refused rather than left waiting for that handler
+    @Test
+    void accept_redeliverable_from_a_live_handler_returns_not_deliverable_and_the_event_is_not_applied() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        List<RoutingOutcome> nestedOutcomes = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> (ce.getId().equals("2")
+                ? feed.acceptRedeliverable(cloudEvent("n1", "Created")).doOnNext(nestedOutcomes::add).then()
+                : Mono.<Void>empty())
+                .then(Mono.fromRunnable(() -> delivered.add(ce.getId())))).waitUntilStarted().block();
+
+        StepVerifier.create(feed.acceptRedeliverable(cloudEvent("2", "Updated")))
+                .expectNext(RoutingOutcome.DELIVERED)
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
+
+        assertThat(nestedOutcomes).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        StepVerifier.create(feed.acceptRedeliverable(cloudEvent("3", "Updated")))
+                .expectNext(RoutingOutcome.DELIVERED)
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
+        assertThat(delivered).containsExactly("1", "2", "3");
+    }
+
+    // The handler's call was already answered, so nobody is left to hand the failure to. Applying the events behind
+    // the failed one would leave the projection without it, so the catch-up fails for good instead.
+    @Test
+    void a_failure_applying_an_event_a_handler_fed_back_makes_every_later_event_refused() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> switch (ce.getId()) {
+            case "2" -> feed.accept(cloudEvent("bad", "Created")).then(Mono.fromRunnable(() -> delivered.add("2")));
+            case "bad" -> Mono.error(new IllegalStateException("handler failed for bad"));
+            default -> Mono.fromRunnable(() -> delivered.add(ce.getId()));
+        }).waitUntilStarted().block();
+
+        StepVerifier.create(feed.accept(cloudEvent("2", "Updated"))).expectComplete().verify(Duration.ofSeconds(5));
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(feed.acceptRedeliverable(cloudEvent("3", "Updated")).block(Duration.ofSeconds(5))).isEqualTo(RoutingOutcome.REFUSED));
+        assertThat(delivered).containsExactly("1", "2");
+    }
+
     // --- helpers ---
 
     private static Function<CloudEvent, Mono<Void>> recordInto(List<String> delivered) {

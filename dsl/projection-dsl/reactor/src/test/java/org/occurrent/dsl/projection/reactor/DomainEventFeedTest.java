@@ -34,6 +34,7 @@ import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.UnreadableLiveFilterException;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
+import org.occurrent.subscription.internal.HandoverMessages;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -540,6 +541,37 @@ class DomainEventFeedTest {
         } finally {
             releaseL1.countDown();
         }
+    }
+
+    @Test
+    void accept_from_the_registered_fold_is_refused_and_the_event_is_not_folded() {
+        assertThatAFeedBackFromTheLiveFoldIsRefused((feed, converter) -> feed.accept(new Counted("n")));
+    }
+
+    // Refused rather than reported DEFERRED, since the event is live here and redelivering it into the same fold
+    // would only be refused again
+    @Test
+    void accept_cloud_event_from_the_registered_fold_is_refused_and_the_event_is_not_folded() {
+        assertThatAFeedBackFromTheLiveFoldIsRefused((feed, converter) -> feed.acceptCloudEvent(converter.toCloudEvent(new Counted("n"))).then());
+    }
+
+    private static void assertThatAFeedBackFromTheLiveFoldIsRefused(BiFunction<DomainEventFeed<Counted>, CloudEventConverter<Counted>, Mono<Void>> feedBack) {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1"), converter, Counted::eventId);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
+        feed.register("counter", event -> (event.eventId().equals("2")
+                ? feedBack.apply(feed, converter).onErrorResume(refusal -> Mono.fromRunnable(() -> refusals.add(refusal)))
+                : Mono.<Void>empty())
+                .then(Mono.fromRunnable(() -> folded.add(event.eventId()))), Filter.all());
+        StepVerifier.create(feed.catchUp("counter")).expectComplete().verify(Duration.ofSeconds(5));
+
+        StepVerifier.create(feed.accept(new Counted("2"))).expectComplete().verify(Duration.ofSeconds(5));
+
+        assertThat(refusals).singleElement().satisfies(refusal -> assertThat(refusal)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.waitedForFromOwnDelivery("projection feed")));
+        assertThat(folded).containsExactly("1", "2");
     }
 
     // goLive(id) subscribes its wait from the one task it schedules, and the marker read ahead of that wait is
