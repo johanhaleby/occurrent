@@ -2318,6 +2318,29 @@ class ReactiveHandoverTest {
         assertThat(writing.forgetCaughtUpCallCount()).isEqualTo(1);
     }
 
+    // The failure starts while B writes its marker, and B's write then errors although the marker was stored, a timeout
+    // say. B's catch-up is not the first failure, and it still forgets the marker it may have written.
+    @Test
+    void a_marker_write_that_errors_after_the_handover_started_failing_is_forgotten() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        FakeSource unreadable = source(List.of(), true);
+        unreadable.caughtUpFailure = new IllegalStateException("marker read failed");
+        FakeSource writing = source(List.of("R1"), false);
+        writing.onMarkCaughtUp = () -> {
+            assertThat(catchThrowable(() ->
+                    CompletableFuture.supplyAsync(() -> handover.catchUp(unreadable).toFuture()).join().get(5, TimeUnit.SECONDS)))
+                    .hasRootCauseMessage("marker read failed");
+            throw new IllegalStateException("marker write timed out");
+        };
+
+        StepVerifier.create(handover.catchUp(writing)).expectErrorMessage("marker write timed out").verify(Duration.ofSeconds(5));
+
+        assertThat(writing.markCaughtUpCallCount()).isEqualTo(1);
+        assertThat(writing.forgetCaughtUpCallCount()).isEqualTo(1);
+    }
+
     @Test
     void a_marker_that_cannot_be_forgotten_is_retried_and_the_handover_still_delivers_what_it_took_in() {
         List<String> log = new CopyOnWriteArrayList<>();

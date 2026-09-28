@@ -790,8 +790,11 @@ public final class ReactiveHandover<T, K> {
         // A handover that is failing has forgotten its marker and is about to fail for good, so a catch-up that
         // replayed now would write the marker back and report a handover live that refuses every event. A caller
         // that asks for a catch-up once it has failed for good still gets one, which is what it asked for.
+        // Read before failureStarted, so a failure that starts after this point is never mistaken for one this call
+        // was made after, and the checks below refuse it.
+        Throwable failedForGoodBefore = terminalError.get();
         Failing current = failureStarted.get();
-        if (current != null && terminalError.get() == null) {
+        if (current != null && failedForGoodBefore == null) {
             return Mono.error(refusal(current.cause()));
         }
         // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying again
@@ -818,11 +821,14 @@ public final class ReactiveHandover<T, K> {
         AtomicBoolean deliversLive = new AtomicBoolean();
         // Read when this catch-up starts, so the check after the turn asks whether a catch-up failed while this one
         // waited rather than whether the handover had already failed when the caller asked for this one.
-        Throwable failureBeforeWaiting = failure();
+        Throwable failureBeforeWaiting = failedForGoodBefore;
         RecordedFailure latestFailureBeforeWaiting = latestFailure.get();
         // Set when this catch-up refuses because another one failed, so the error handler below does not record that
         // refusal as a failure of its own.
         AtomicBoolean refusedForAnotherFailure = new AtomicBoolean();
+        // Set once markCaughtUp() is called, and cleared once this catch-up has forgotten the marker again, so a
+        // failure of this catch-up forgets a marker whose write errored after it was stored.
+        AtomicBoolean markerMayBeWritten = new AtomicBoolean();
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
@@ -896,13 +902,16 @@ public final class ReactiveHandover<T, K> {
                 refusedForAnotherFailure.set(true);
                 return Mono.<Void>error(refusal(before));
             }
+            markerMayBeWritten.set(true);
             return source.markCaughtUp().then(Mono.defer(() -> {
                 Throwable after = failure();
                 if (after == null || after == failureBeforeWaiting) {
                     return Mono.<Void>empty();
                 }
                 refusedForAnotherFailure.set(true);
-                return forgetCaughtUp(List.of(source)).then(Mono.<Void>error(refusal(after)));
+                return forgetCaughtUp(List.of(source))
+                        .then(Mono.fromRunnable(() -> markerMayBeWritten.set(false)))
+                        .then(Mono.<Void>error(refusal(after)));
             }));
         });
 
@@ -999,7 +1008,7 @@ public final class ReactiveHandover<T, K> {
                         return;
                     }
                     failed(error, source, catchupDone, replayOpen, pause, myDrain, holdsReplayTurn, deliversLive,
-                            refusedForAnotherFailure);
+                            refusedForAnotherFailure, markerMayBeWritten);
                 });
 
         // A call from a fold or a Source callback of this handover answers without waiting, since the replay or the
@@ -1330,7 +1339,8 @@ public final class ReactiveHandover<T, K> {
     // payload its own code was told was queued still gets its delivery. A later one only tells its own caller.
     private void failed(Throwable error, Source<T> source, Sinks.One<Boolean> catchupDone, AtomicBoolean replayOpen,
                         Sinks.Empty<Void> pause, AtomicReference<Drain<T>> myDrain, AtomicBoolean holdsReplayTurn,
-                        AtomicBoolean deliversLive, AtomicBoolean refusedForAnotherFailure) {
+                        AtomicBoolean deliversLive, AtomicBoolean refusedForAnotherFailure,
+                        AtomicBoolean markerMayBeWritten) {
         abandonReplayWithoutMasking(source, replayOpen);
         // This catch-up's own drain goes with its failure, so a payload left in the live sink cannot count it down
         // later and tell a source whose catch-up failed that its buffer drained. Every other drain goes too only when
@@ -1357,19 +1367,24 @@ public final class ReactiveHandover<T, K> {
             if (!refused) {
                 latestFailure.set(new RecordedFailure(error));
             }
-            abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
-            // Logged only when the catch-up signal can no longer error, which is the live phase, where catchupDone
-            // has already emitted and nothing else tells anyone.
-            if (catchupDone.tryEmitError(error).isFailure() && !refused) {
-                log.error("A catch-up of this {} failed after it had already reported its catch-up done, while the {} "
-                        + "was already failing or had failed.", noun, noun, error);
-            }
-            resumeLiveDelivery(pause);
-            releaseReplayTurn(holdsReplayTurn);
+            // A marker write that errored can still have been stored, after the first failure forgot the marker, so
+            // this catch-up forgets it again before it tells its caller.
+            Mono<Void> forgetOwnMarker = markerMayBeWritten.get() ? forgetCaughtUp(List.of(source)) : Mono.empty();
+            forgetOwnMarker.subscribe(null, null, () -> {
+                abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
+                // Logged only when the catch-up signal can no longer error, which is the live phase, where
+                // catchupDone has already emitted and nothing else tells anyone.
+                if (catchupDone.tryEmitError(error).isFailure() && !refused) {
+                    log.error("A catch-up of this {} failed after it had already reported its catch-up done, while "
+                            + "the {} was already failing or had failed.", noun, noun, error);
+                }
+                resumeLiveDelivery(pause);
+                releaseReplayTurn(holdsReplayTurn);
+            });
             return;
         }
         log.error("A catch-up of this {} failed. The {} refuses every event that does not come from its own handler "
-                + "from now on, delivers what it has already taken in, and then fails for good. Fix the cause, then "
+                + "from now on, delivers the events its handler fed it, and then fails for good. Fix the cause, then "
                 + "replace it, a subscription by cancelling it and subscribing again, a projection feed by building a "
                 + "new one. Its catch-up replays the history once the catch-up marker is gone.", noun, noun, error);
         Source<T> live = liveSource.get();
