@@ -290,6 +290,34 @@ public class ReactorMongoSubscriptionModelResilienceTest {
     }
 
     @Nested
+    @DisplayName("operation time")
+    class OperationTimeTest {
+
+        @Test
+        void a_request_for_the_operation_time_that_answers_nothing_restarts_the_change_stream() {
+            // Given
+            ReactiveMongoOperations operations = mock(ReactiveMongoOperations.class);
+            when(operations.executeCommand(any(Document.class)))
+                    .thenReturn(Mono.empty())
+                    .thenAnswer(invocation -> realMongoOperations.executeCommand(invocation.<Document>getArgument(0)));
+            when(operations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class)))
+                    .thenAnswer(invocation -> realMongoOperations.changeStream("events", invocation.getArgument(1), Document.class));
+            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(operations, "events", TimeRepresentation.RFC_3339_STRING,
+                    ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)));
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            disposables.add(subscriptionModel.subscribe().subscribe(state::add));
+
+            // When
+            verify(operations, timeout(5000)).changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class));
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write(UUID.randomUUID().toString(), 0, serialize(nameDefined)).block();
+
+            // Then
+            await().atMost(10, SECONDS).untilAsserted(() -> assertThat(state).extracting(CloudEvent::getId).containsExactly(nameDefined.eventId()));
+        }
+    }
+
+    @Nested
     @DisplayName("waitUntilStarted")
     class WaitUntilStartedTest {
 

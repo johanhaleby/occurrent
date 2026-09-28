@@ -40,6 +40,7 @@ import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -63,9 +64,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static com.mongodb.client.model.Filters.and;
@@ -323,6 +326,24 @@ public class SpringMongoSubscriptionModelTest {
             mongoEventStore.write("2", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2")));
 
             await().atMost(FIVE_SECONDS).until(Not.not(state::isEmpty));
+        }
+
+        @Test
+        void a_subscription_at_now_registered_before_start_starts_from_when_the_model_starts() {
+            // Given
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            notAutoStarted.subscribe(UUID.randomUUID().toString(), StartAt.now(), state::add);
+            NameDefined writtenBeforeStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBeforeStart));
+
+            // When
+            notAutoStarted.start(true);
+            NameDefined writtenAfterStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2");
+            mongoEventStore.write("2", 0, serialize(writtenAfterStart));
+
+            // Then
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(state).extracting(CloudEvent::getId).contains(writtenAfterStart.eventId()));
+            assertThat(state).extracting(CloudEvent::getId).doesNotContain(writtenBeforeStart.eventId());
         }
 
         @Test
@@ -670,6 +691,120 @@ public class SpringMongoSubscriptionModelTest {
             // Then
             await().atMost(FIVE_SECONDS).until(state::size, is(1));
             assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.eventId(), NameDefined.class.getName()));
+        }
+    }
+
+    @Nested
+    @DisplayName("MongoDB cannot be reached")
+    class MongoCannotBeReachedTest {
+
+        private final AtomicBoolean unreachable = new AtomicBoolean();
+        private final AtomicInteger refusedOperationTimeRequests = new AtomicInteger();
+        private final AtomicReference<CountDownLatch> operationTimeRequestsWaitFor = new AtomicReference<>();
+        private final CountDownLatch operationTimeRequestWaiting = new CountDownLatch(1);
+        private MongoTemplate mongoTemplateSpy;
+
+        @BeforeEach
+        void control_the_request_for_the_operation_time() {
+            mongoTemplateSpy = spy(mongoTemplate);
+            doAnswer(invocation -> {
+                CountDownLatch waitFor = operationTimeRequestsWaitFor.get();
+                if (waitFor != null) {
+                    operationTimeRequestWaiting.countDown();
+                    waitFor.await();
+                }
+                if (unreachable.get()) {
+                    refusedOperationTimeRequests.incrementAndGet();
+                    throw new DataAccessResourceFailureException("MongoDB cannot be reached", new MongoTimeoutException("timed out"));
+                }
+                return invocation.callRealMethod();
+            }).when(mongoTemplateSpy).executeCommand(any(Document.class));
+            subscriptionModel.shutdown();
+            subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplateSpy, eventCollectionName, timeRepresentation);
+        }
+
+        @Timeout(value = 30, unit = SECONDS)
+        @Test
+        void subscribe_returns_and_the_subscription_delivers_once_mongodb_can_be_reached() {
+            // Given
+            unreachable.set(true);
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            AtomicReference<Subscription> subscription = new AtomicReference<>();
+
+            // When
+            Throwable thrown = catchThrowable(() -> subscription.set(subscriptionModel.subscribe(UUID.randomUUID().toString(), StartAt.now(), state::add)));
+            await().atMost(FIVE_SECONDS).until(() -> refusedOperationTimeRequests.get() > 0);
+            unreachable.set(false);
+
+            // Then
+            assertThat(thrown).isNull();
+            assertThat(subscription.get().waitUntilStarted(Duration.ofSeconds(20))).isTrue();
+            NameDefined writtenOnceReachable = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenOnceReachable));
+            await().atMost(10, SECONDS).untilAsserted(() -> assertThat(state).extracting(CloudEvent::getId).contains(writtenOnceReachable.eventId()));
+        }
+
+        @Timeout(value = 30, unit = SECONDS)
+        @Test
+        void start_returns_and_every_subscription_delivers_once_mongodb_can_be_reached() {
+            // Given
+            SpringMongoSubscriptionModel notAutoStarted = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig(eventCollectionName, timeRepresentation).autoStartup(false));
+            try {
+                unreachable.set(true);
+                CopyOnWriteArrayList<CloudEvent> first = new CopyOnWriteArrayList<>();
+                CopyOnWriteArrayList<CloudEvent> second = new CopyOnWriteArrayList<>();
+                Throwable thrownBySubscribe = catchThrowable(() -> {
+                    notAutoStarted.subscribe("first", StartAt.now(), first::add);
+                    notAutoStarted.subscribe("second", StartAt.now(), second::add);
+                });
+
+                // When
+                CompletableFuture<Void> start = CompletableFuture.runAsync(() -> notAutoStarted.start(true));
+                await().atMost(FIVE_SECONDS).until(() -> refusedOperationTimeRequests.get() > 0 || start.isDone());
+                unreachable.set(false);
+
+                // Then
+                assertThat(thrownBySubscribe).isNull();
+                assertThat(start).succeedsWithin(Duration.ofSeconds(20));
+                NameDefined writtenOnceReachable = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+                mongoEventStore.write("1", 0, serialize(writtenOnceReachable));
+                await().atMost(10, SECONDS).untilAsserted(() -> assertAll(
+                        () -> assertThat(first).extracting(CloudEvent::getId).contains(writtenOnceReachable.eventId()),
+                        () -> assertThat(second).extracting(CloudEvent::getId).contains(writtenOnceReachable.eventId())));
+            } finally {
+                notAutoStarted.shutdown();
+            }
+        }
+
+        @Timeout(value = 30, unit = SECONDS)
+        @Test
+        void a_request_for_the_operation_time_that_hangs_does_not_hold_up_pausing_or_cancelling_other_subscriptions() throws InterruptedException {
+            // Given
+            subscriptionModel.subscribe("paused", StartAt.now(), __ -> {
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.subscribe("cancelled", StartAt.now(), __ -> {
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            CountDownLatch release = new CountDownLatch(1);
+            operationTimeRequestsWaitFor.set(release);
+            try {
+                CompletableFuture.runAsync(() -> subscriptionModel.subscribe("hanging", StartAt.now(), __ -> {
+                }));
+                assertThat(operationTimeRequestWaiting.await(10, SECONDS)).isTrue();
+
+                // When
+                CompletableFuture<Void> pauseAndCancel = CompletableFuture.runAsync(() -> {
+                    subscriptionModel.pauseSubscription("paused");
+                    subscriptionModel.cancelSubscription("cancelled");
+                });
+
+                // Then
+                assertThat(pauseAndCancel).succeedsWithin(Duration.ofSeconds(2));
+                assertAll(
+                        () -> assertThat(subscriptionModel.isPaused("paused")).isTrue(),
+                        () -> assertThat(subscriptionModel.isRunning("cancelled")).isFalse());
+            } finally {
+                release.countDown();
+            }
         }
     }
 

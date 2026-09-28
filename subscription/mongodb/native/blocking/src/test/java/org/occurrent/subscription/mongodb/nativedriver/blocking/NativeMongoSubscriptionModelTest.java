@@ -18,6 +18,7 @@ package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoTimeoutException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -26,6 +27,7 @@ import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 import org.bson.json.JsonParseException;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -64,6 +66,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static com.mongodb.client.model.Filters.and;
@@ -75,6 +78,9 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.groups.Tuple.tuple;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.ONE_SECOND;
@@ -391,6 +397,40 @@ public class NativeMongoSubscriptionModelTest {
             // Then
             await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                     assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenWhilePaused.eventId()));
+        }
+
+        @Test
+        void subscribe_returns_and_the_subscription_delivers_once_mongodb_can_be_reached() {
+            // Given
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refusedOperationTimeRequests = new AtomicInteger();
+            MongoDatabase databaseSpy = spy(database);
+            doAnswer(invocation -> {
+                if (unreachable.get()) {
+                    refusedOperationTimeRequests.incrementAndGet();
+                    throw new MongoTimeoutException("MongoDB cannot be reached");
+                }
+                return invocation.callRealMethod();
+            }).when(databaseSpy).runCommand(any(Bson.class));
+            ExecutorService executor = Executors.newCachedThreadPool();
+            NativeMongoSubscriptionModel model = new NativeMongoSubscriptionModel(databaseSpy, eventCollection, timeRepresentation, executor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
+            try {
+                CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+
+                // When
+                Throwable thrown = catchThrowable(() -> model.subscribe(UUID.randomUUID().toString(), StartAt.now(), handled::add));
+                await().atMost(5, SECONDS).until(() -> refusedOperationTimeRequests.get() > 0);
+                unreachable.set(false);
+
+                // Then
+                assertThat(thrown).isNull();
+                await().atMost(10, SECONDS).until(() -> model.subscriptionIds().size() == 1);
+                NameDefined writtenOnceReachable = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+                mongoEventStore.write("1", 0, serialize(writtenOnceReachable));
+                await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).contains(writtenOnceReachable.eventId()));
+            } finally {
+                model.shutdown();
+            }
         }
     }
 

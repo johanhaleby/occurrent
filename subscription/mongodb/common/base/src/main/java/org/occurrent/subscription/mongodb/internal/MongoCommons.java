@@ -431,14 +431,15 @@ public class MongoCommons {
      * subscription records. When that resolves to the present, this asks {@code currentOperationTime} for the
      * server's operation time, records it in {@code currentStartAt} with {@link #pinnedTo(StartAt, BsonTimestamp)},
      * and opens the stream at that time. Because it is recorded before the stream opens, a pause and resume, or a
-     * restart, before the first event is handled starts where the subscription first opened. Without it the
-     * position resolves to the present again at that point, and the event being handled and everything written in
-     * between are never delivered.
+     * restart, before the first event is handled opens at that operation time too. Without it the position resolves
+     * to the present again at that point, and the event being handled and everything written in between are never
+     * delivered.
      * <p>
      * The operation time is recorded only if {@code currentStartAt} still holds the position read at the start,
      * since the checkpoint of a handled event is written from another thread and must not be overwritten. When it
      * has changed, the position is resolved again. When {@code currentOperationTime} answers {@code null}, nothing
-     * is recorded and the stream opens at the present.
+     * is recorded and the stream opens at the present. When it throws, nothing is recorded and the exception reaches
+     * the caller.
      *
      * @return The position to open the change stream at, never {@code null}
      */
