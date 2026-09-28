@@ -157,12 +157,13 @@ calls per thread, so during a replay, a call the view hands to another thread wa
 while the view waits for the call. The reactive engine recognizes a call the view blocks on, on the thread the engine
 called the view on, and a `Mono` the view returns as part of its own, whichever thread that runs on. There, only a view
 that blocks on the call from a thread it switched to, while a replay holds live delivery back, waits for a replay that
-cannot end while the view blocks. On the blocking engine a view that waits for a `catchUp()` that replays waits for a
-replay that cannot start before the view's code returns. The reactive engine answers a `catchUp()` it recognizes this
-way `true` without waiting, whether it has anything to replay or not, and its replay does not start before the view's
-code returns. There `true` means the catch-up was asked for, not that it has run. It can still be stopped, or refused
-because another catch-up failed, and a failure of its replay makes the handover fail the way any failed catch-up does. A view that blocks on a `catchUp()` that replays from a thread it
-switched to is not recognized, so it still waits for a replay that cannot start while the view blocks.
+cannot end while the view blocks. Both engines answer a `catchUp()` they recognize this way `true` without waiting,
+whether it has anything to replay or not, and its replay does not start before the view's code returns. The blocking
+engine runs that replay on the same thread once the view's code has returned, before the call into the handover that ran
+the view's code returns, and asking again before it starts runs no second replay. `true` means the catch-up was asked
+for, not that it has run. It can still be stopped, or refused because another catch-up failed, and a failure of its
+replay makes the handover fail the way any failed catch-up does. A view that waits for a `catchUp()` that replays from
+a thread it switched to is not recognized, so it still waits for a replay that cannot start while the view waits.
 
 The reactive engine delivers one live payload at a time, so it cannot deliver a payload its own code feeds it before
 that code returns. Until [#1148](https://github.com/johanhaleby/occurrent/issues/1148) a call waiting for that

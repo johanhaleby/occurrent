@@ -422,6 +422,10 @@ public final class DomainEventFeed<E> {
      * application asked for this projection, so running on without it is worse than not running. Fix the cause and
      * build a new feed.
      * <p>
+     * A call the projection makes while this feed is calling it returns once the catch-up has been asked for, without
+     * waiting for the replay. {@link CatchupProjectionFeed#catchUp()} says which calls those are, and what a call for
+     * an event a replay delivers again leads to.
+     * <p>
      * Named for when a feed could carry several projections. It carries one, so this and {@link #catchUp(String)} do
      * the same thing whenever the id matches.
      *
@@ -435,6 +439,10 @@ public final class DomainEventFeed<E> {
     /**
      * Run the one-time catch-up of the projection registered under {@code id}. Use this over {@link #catchUpAll()}
      * when the caller knows which projection it means and wants a mismatch to fail rather than pass silently.
+     * <p>
+     * A call the projection makes while this feed is calling it returns once the catch-up has been asked for, without
+     * waiting for the replay. {@link CatchupProjectionFeed#catchUp()} says which calls those are, and what a call for
+     * an event a replay delivers again leads to.
      *
      * @throws IllegalArgumentException if no projection with that id is registered on this feed
      */

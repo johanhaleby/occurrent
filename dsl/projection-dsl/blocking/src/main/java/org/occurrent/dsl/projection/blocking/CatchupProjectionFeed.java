@@ -257,6 +257,19 @@ public final class CatchupProjectionFeed<E> {
      * <p>
      * Runs on the calling thread. A caller that wants it off that thread runs it on a thread it owns, and calls
      * {@link #stopCatchUp()} to bring it back down.
+     * <p>
+     * A call the view makes while this feed is calling it, from its fold or from a callback such as
+     * {@code replayStarted()}, returns without waiting for the replay, since that replay cannot start before the
+     * view's code returns. The replay runs on the same thread once the view's code has returned, before the feed call
+     * that ran that code returns, such as the {@link #accept(Object)} that delivered the event. Returning then means
+     * the catch-up was asked for, not that it has run. It can still be stopped by {@link #stopCatchUp()}, or refused
+     * because another catch-up on this feed failed, and neither reaches the view. When its replay fails, this feed
+     * refuses every later event, the same as after any failed catch-up. A view that hands the call to another thread
+     * and waits for it is not recognized, and waits for a replay that cannot start while it waits.
+     * <p>
+     * A view that calls this for an event a replay delivers asks for another catch-up each time a replay delivers that
+     * event again. Each of those catch-ups replays again unless it finds the catch-up marker written, so a feed built
+     * without a {@link CheckpointStorage} for that marker replays without end.
      */
     public void catchUp() {
         // Cleared here rather than only in the handover, so a feed stopped once can catch up again instead of

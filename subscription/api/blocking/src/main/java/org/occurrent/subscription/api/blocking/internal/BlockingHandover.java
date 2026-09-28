@@ -279,6 +279,10 @@ public final class BlockingHandover<T, K> {
     // accept(..) is handed no source of its own. Written when a replay starts rather than by every catchUp(Source), so
     // a catch-up that replays nothing leaves it in place, and cleared with replayedIds when a replay is abandoned.
     private @Nullable Source<T> source = null;
+    // A catch-up with something to replay that this handover's own code asked for. It would wait for that code, so the
+    // thread that asked runs it once it has left this handover. One at a time, so asking again before it starts adds
+    // no second replay.
+    private @Nullable AskedCatchUp<T> askedByOwnCode = null;
 
     private BlockingHandover(Consumer<T> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun) {
         this.deliver = deliver;
@@ -417,11 +421,7 @@ public final class BlockingHandover<T, K> {
         if (notHandled != null) {
             return notHandled;
         }
-        if (deliverKey != null) {
-            deliverOutsideLock(payload, deliverKey);
-        } else if (replayedBy != null) {
-            reportAlreadyDeliveredByReplay(replayedBy, payload);
-        }
+        deliverLive(payload, deliverKey, replayedBy);
         return Answer.APPLIED;
     }
 
@@ -498,11 +498,7 @@ public final class BlockingHandover<T, K> {
                 }
             }
         }
-        if (deliverKey != null) {
-            deliverOutsideLock(payload, deliverKey);
-        } else if (replayedBy != null) {
-            reportAlreadyDeliveredByReplay(replayedBy, payload);
-        }
+        deliverLive(payload, deliverKey, replayedBy);
         return landed;
     }
 
@@ -579,11 +575,24 @@ public final class BlockingHandover<T, K> {
      * replay cannot end before the call returns.
      * <p>
      * A replay also waits for a catch-up that is already replaying, until that catch-up returns or throws, so two
-     * replays never fold into the view at once and each drain and marker belongs to the replay before it. Calling this
-     * from inside a fold, a drain or a {@link Source} callback of a catch-up replaying on this handover deadlocks for
-     * that reason.
+     * replays never fold into the view at once and each drain and marker belongs to the replay before it.
+     * <p>
+     * A catch-up with something to replay called from code this handover is running returns {@code true} without
+     * waiting, since the deliveries and the replay it would wait for cannot end before that code returns. That code is
+     * a fold, live or replayed, and every {@link Source} callback. The {@code true} means the catch-up was asked for,
+     * not that it has run. Its replay runs on the same thread once that code has returned, before the
+     * {@link #accept(Object)}, {@link #acceptReportingDelivery(Object)}, {@link #acceptIfLive(Object)} or
+     * {@code catchUp} call that ran the code returns, and then replays like any other catch-up. It can still be
+     * stopped, or refused because a catch-up on this handover failed after it was asked for. A failure of its replay
+     * is recorded like any failed catch-up, so this handover refuses every later payload. Neither the stop, the
+     * refusal nor the failure is reported to that code or to the call that ran it. Asking again before that replay
+     * starts runs no second replay. Code that calls this for a payload a replay delivers asks for another catch-up each
+     * time a replay delivers that payload, and with a source whose {@link Source#isAlreadyCaughtUp()} always answers
+     * {@code false} those replays do not end. Code that makes the call from a thread it switched to is not recognized,
+     * so it waits like any other caller, for deliveries or a replay that cannot end while that code waits.
      *
-     * @return {@code true} when the catch-up finished and the handover is live, {@code false} when
+     * @return {@code true} when the catch-up finished and the handover is live, or, for a call from code this handover
+     * is running, once the catch-up has been asked for. {@code false} when
      * {@link Source#keepReplaying()} stopped it partway, or when the calling thread was interrupted while waiting for
      * the deliveries or the replay already running to end. The interrupt stays on the thread. An interrupted wait for
      * the deliveries changes nothing on the handover, and the replay an interrupted call waited for still goes live
@@ -591,6 +600,14 @@ public final class BlockingHandover<T, K> {
      */
     public boolean catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
+        try {
+            return catchUpNow(source);
+        } finally {
+            runCatchUpsAskedByOwnCode();
+        }
+    }
+
+    private boolean catchUpNow(Source<T> source) {
         synchronized (lock) {
             // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying
             // again rather than only by building a new one.
@@ -652,6 +669,15 @@ public final class BlockingHandover<T, K> {
                     synchronized (lock) {
                         liveTransitionsRunning--;
                         lock.notifyAll();
+                    }
+                }
+                return true;
+            }
+            if (Objects.requireNonNull(callDepth.get()) > 1) {
+                // Called from this handover's own code, which holds up everything the replay would wait for.
+                synchronized (lock) {
+                    if (askedByOwnCode == null) {
+                        askedByOwnCode = new AskedCatchUp<>(source, Thread.currentThread(), catchUpFailure);
                     }
                 }
                 return true;
@@ -913,6 +939,46 @@ public final class BlockingHandover<T, K> {
         return true;
     }
 
+    private void deliverLive(T payload, @Nullable K deliverKey, @Nullable Source<T> replayedBy) {
+        try {
+            if (deliverKey != null) {
+                deliverOutsideLock(payload, deliverKey);
+            } else if (replayedBy != null) {
+                reportAlreadyDeliveredByReplay(replayedBy, payload);
+            }
+        } finally {
+            runCatchUpsAskedByOwnCode();
+        }
+    }
+
+    // Runs once the calling thread has left this handover's code, so the replay no longer waits for it. A failure is
+    // recorded by the catch-up and refuses every later payload, and the code that asked was already told true, so
+    // neither a failure nor a stop is reported here.
+    private void runCatchUpsAskedByOwnCode() {
+        if (callDepth.get() != null) {
+            return;
+        }
+        while (true) {
+            Source<T> asked;
+            synchronized (lock) {
+                AskedCatchUp<T> taken = askedByOwnCode;
+                if (taken == null || taken.askedOn() != Thread.currentThread()) {
+                    return;
+                }
+                askedByOwnCode = null;
+                // A catch-up that failed since it was asked for refuses it, the same as a caller that waited for one.
+                if (catchUpFailure != taken.failureWhenAsked()) {
+                    continue;
+                }
+                asked = taken.source();
+            }
+            try {
+                catchUpNow(asked);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
     private void reportAlreadyDeliveredByReplay(Source<T> replayedBy, T payload) {
         try {
             enterOwnCall();
@@ -1133,6 +1199,9 @@ public final class BlockingHandover<T, K> {
 
     // A new instance per failure, so two failures of the same exception can still be told apart.
     private record RecordedFailure(Throwable cause) {
+    }
+
+    private record AskedCatchUp<T>(Source<T> source, Thread askedOn, @Nullable Throwable failureWhenAsked) {
     }
 
     private void enterOwnCall() {

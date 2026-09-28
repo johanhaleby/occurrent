@@ -415,6 +415,38 @@ class CatchupProjectionFeedTest {
         assertThat(repo.get("counter")).isEqualTo(2);
     }
 
+    // The fold of "2" calls catchUp(), and that catch-up replays "1", which cannot start before the fold returns
+    @Test
+    void catch_up_from_the_feeds_own_live_fold_returns_without_waiting_and_replays_after_that_fold() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        MaterializedView<Counted> view = event -> {
+            folded.add(event.eventId());
+            if (event.eventId().equals("2")) {
+                feedRef.get().catchUp();
+            }
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", view, Filter.all(), store, converter, Counted::eventId, null);
+        feedRef.set(feed);
+        feed.goLive();
+        FutureTask<Void> accepting = new FutureTask<>(() -> feed.accept(new Counted("2")), null);
+        Thread thread = new Thread(accepting, "live-delivery");
+        thread.start();
+
+        try {
+            assertThat(accepting).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(folded).containsExactly("2", "1");
+            feed.accept(new Counted("3"));
+            assertThat(folded).containsExactly("2", "1", "3");
+        } finally {
+            thread.interrupt();
+        }
+    }
+
     @Test
     void a_live_event_not_in_the_replay_is_folded_after_the_catch_up() {
         InMemoryEventStore store = new InMemoryEventStore();

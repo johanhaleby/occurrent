@@ -38,6 +38,7 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -2232,6 +2233,218 @@ class BlockingHandoverTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    // A catch-up with something to replay called from code this handover is running would wait for a replay that
+    // cannot start before that code returns, so it returns true at once and the replay runs once that code returns.
+    @Test
+    void a_catch_up_with_something_to_replay_from_a_live_fold_replays_once_the_fold_returns() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        FakeSource asked = source(List.of("R1"), false);
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                answers.add(self.get().catchUp(asked));
+                log.add("fold returns");
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        self.set(handover);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> accepting = executor.submit(() -> handover.accept("L1"));
+
+            assertThat(accepting).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(answers).containsExactly(true);
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(asked.markCaughtUpCallCount()).isEqualTo(1);
+            handover.accept("R1");
+            assertThat(handover.acceptIfLive("L2")).isTrue();
+            assertThat(log).containsExactly("L1", "fold returns", "R1", "L2");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_a_replayed_fold_replays_once_the_catch_up_running_it_returns() throws Exception {
+        FakeSource running = source(List.of("R1"), false);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> onR1.set(ask), true, "R1", "asked", "R2");
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_replay_started_replays_once_the_catch_up_running_it_returns() throws Exception {
+        FakeSource running = source(List.of("R1"), false);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> running.onReplayStarted = ask, true, "asked", "R1", "R2");
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_replay_completed_replays_once_the_catch_up_running_it_returns() throws Exception {
+        FakeSource running = source(List.of("R1"), false);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> running.onReplayCompleted = ask, true, "R1", "asked", "R2");
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_history_done_replays_once_the_catch_up_running_it_returns() throws Exception {
+        FakeSource running = source(List.of("R1"), false);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> running.onHistoryDone = ask, true, "R1", "asked", "R2");
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_history_done_of_a_catch_up_with_nothing_to_replay_replays_once_it_returns() throws Exception {
+        FakeSource running = source(List.of(), true);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> running.onHistoryDone = ask, true, "asked", "R2");
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_mark_caught_up_replays_once_the_catch_up_running_it_returns() throws Exception {
+        FakeSource running = source(List.of("R1"), false);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> running.onMarkCaughtUp = ask, true, "R1", "asked", "R2");
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_replay_abandoned_replays_once_the_catch_up_running_it_returns() throws Exception {
+        FakeSource running = source(List.of("R1"), false);
+        running.stopAfter(0);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> running.onReplayAbandoned = ask, false, "asked", "R2");
+    }
+
+    private static void assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(
+            FakeSource running, BiConsumer<AtomicReference<Runnable>, Runnable> calling, boolean runningReturns, String... folded) throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        AtomicReference<Runnable> onR1 = new AtomicReference<>(() -> {
+        });
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                onR1.get().run();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        FakeSource asked = source(List.of("R2"), false);
+        calling.accept(onR1, () -> {
+            answers.add(handover.catchUp(asked));
+            log.add("asked");
+        });
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(runningReturns);
+            assertThat(answers).containsExactly(true);
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(asked.markCaughtUpCallCount()).isEqualTo(1);
+            assertThat(handover.acceptIfLive("L1")).isTrue();
+            assertThat(log).containsExactly(concat(folded, "L1"));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_already_delivered_by_replay_replays_once_that_callback_returns() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource replayed = source(List.of("R1"), false);
+        FakeSource asked = source(List.of("R2"), false);
+        handover.catchUp(source(List.of(), true));
+        handover.catchUp(replayed);
+        replayed.onAlreadyDeliveredByReplay = () -> {
+            answers.add(handover.catchUp(asked));
+            log.add("asked");
+        };
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> accepting = executor.submit(() -> handover.accept("R1"));
+
+            assertThat(accepting).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(answers).containsExactly(true);
+            assertThat(replayed.alreadyDeliveredByReplay).containsExactly("R1");
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(log).containsExactly("R1", "asked", "R2");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // Asking twice before the replay starts asks for one catch-up, and that replay reads everything the second one would.
+    @Test
+    void two_catch_ups_asked_for_by_own_code_before_the_replay_starts_replay_once() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource running = source(List.of("R1"), false);
+        FakeSource first = source(List.of("R1", "R2"), false);
+        FakeSource second = source(List.of("R1", "R2"), false);
+        running.onReplayStarted = () -> {
+            answers.add(handover.catchUp(first));
+            answers.add(handover.catchUp(second));
+        };
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(answers).containsExactly(true, true);
+            assertThat(first.replayCallCount + second.replayCallCount).isEqualTo(1);
+            assertThat(log).containsExactly("R1", "R1", "R2");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // The replay a replay's own code asked for asks again, and that one runs too once the first returns.
+    @Test
+    void a_catch_up_asked_for_by_the_replay_own_code_asked_for_also_replays() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource running = source(List.of("R1"), false);
+        FakeSource asked = source(List.of("R2"), false);
+        FakeSource askedByAsked = source(List.of("R3"), false);
+        running.onReplayStarted = () -> handover.catchUp(asked);
+        asked.onReplayStarted = () -> handover.catchUp(askedByAsked);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(log).containsExactly("R1", "R2", "R3");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // A caller that waits for a catch-up that then fails is refused rather than replaying into a view it was told to
+    // stop using, and one own code asked for is refused the same way.
+    @Test
+    void a_catch_up_asked_for_by_own_code_does_not_replay_when_the_catch_up_running_that_code_fails() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource running = source(List.of("R1"), false);
+        running.replayFailure = new RuntimeException("replay failed");
+        FakeSource asked = source(List.of("R2"), false);
+        running.onReplayStarted = () -> handover.catchUp(asked);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).failsWithin(Duration.ofSeconds(5)).withThrowableThat().havingCause().withMessage("replay failed");
+            assertThat(asked.replayCallCount).isZero();
+            assertThat(log).isEmpty();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private static String[] concat(String[] first, String... second) {
+        return Stream.concat(Stream.of(first), Stream.of(second)).toArray(String[]::new);
     }
 
     // A replay that starts waits for the live fold that is running, but it has already stopped live delivery and is
