@@ -166,8 +166,12 @@ that came after every ask it stands for, and a catch-up failure refuses only the
 every ask was refused does not run. `true` means the catch-up was asked for, not that it has run. A later replay can
 answer it, one that started after the call and has gone live by the time the catch-up's turn comes, and the catch-up
 then replays nothing. It can still be stopped, or refused because another catch-up failed, and a failure of its replay
-makes the handover fail the way any failed catch-up does. A view that waits for a `catchUp()` that replays from a thread
-it switched to is not recognized, so it still waits for a replay that cannot start while the view waits.
+makes the handover fail the way any failed catch-up does. An interrupt keeps the thread that runs the replay from
+waiting, not from replaying. When that thread is interrupted where the replay would wait, it gives up the asks made on
+it and logs a warning. The asks of other threads stay, and their replay runs on the thread of a later call into the
+handover, such as a catch-up or a live delivery, so a `catchUp()` on a thread where the view never asked can throw the
+failure of that replay. A view that waits for a `catchUp()` that replays from a thread it switched to is not recognized,
+so it still waits for a replay that cannot start while the view waits.
 
 The reactive engine delivers one live payload at a time, so it cannot deliver a payload its own code feeds it before
 that code returns. Until [#1148](https://github.com/johanhaleby/occurrent/issues/1148) a call waiting for that

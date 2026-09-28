@@ -261,20 +261,29 @@ public final class CatchupProjectionFeed<E> {
      * {@link #stopCatchUp()} to bring it back down.
      * <p>
      * A call the view makes while this feed is calling it, from its fold or from a callback such as
-     * {@code replayStarted()}, returns without waiting for the replay, since that replay cannot start before the
-     * view's code returns. Returning then means the catch-up was asked for, not that it has run. The replay runs once
-     * the view's code has returned, on the thread that asked first, and before the feed call that ran the view's code
-     * on that thread returns, such as the {@link #accept(Object)} that delivered the event. A call from another thread
-     * that asks before that replay starts asks for the same replay, and can return before it has run. A view that
-     * hands the call to another thread and waits for it is not recognized, and waits for a replay that cannot start
-     * while it waits.
+     * {@code replayStarted()}, returns without waiting for the replay, since that replay cannot start before the view's
+     * code returns. Returning then means the catch-up was asked for, not that it has run. The replay runs once the
+     * view's code has returned, on the thread that asked first, and before the feed call that ran the view's code on
+     * that thread returns, such as the {@link #accept(Object)} that delivered the event, unless an interrupt makes that
+     * thread give up as described below. A call from another thread that asks before that replay starts asks for the
+     * same replay, and can return before it has run. A view that hands the call to another thread and waits for it is
+     * not recognized, and waits for a replay that cannot start while it waits.
      * <p>
      * That replay can still be stopped by a {@link #stopCatchUp()} called after every call that asked for it, or
      * refused because another catch-up on this feed failed after every such call. The view's code is not told, though a
      * stopped replay calls {@code replayStarted()} and {@code replayAbandoned()} on a replay aware view like any other
      * stopped replay. When the replay fails, this feed refuses every later event, the same as after any failed
      * catch-up. A {@code catchUp()} or {@link #goLive()} that runs the replay throws the failure, and an
-     * {@link #accept(Object)} that runs it logs the failure and returns normally, since its event was folded.
+     * {@link #accept(Object)} that runs it logs the failure instead of throwing it.
+     * <p>
+     * An interrupt keeps the thread that runs such a replay from waiting, not from replaying. When that thread is
+     * interrupted where the replay would wait for another fold or replay, it gives up the calls made on it and logs a
+     * warning. The calls made on other threads stay asked for, and their replay has run, or been refused, by the time
+     * the first such call returns or throws, on any thread. Such a call is a {@code catchUp()}, {@link #goLive()}, or
+     * {@link #accept(Object)} that folds its event live, made outside the view's code on a thread that is not
+     * interrupted where the replay would wait. That call can be on a thread where the view never asked, and a
+     * {@code catchUp()} or {@link #goLive()} throws the failure of that replay. The replay runs only on the thread of a
+     * later call into this feed, so if none comes, it does not run.
      * <p>
      * A view that calls this for an event a replay delivers asks for another catch-up each time a replay delivers that
      * event again. Each of those catch-ups replays again unless it finds the catch-up marker written, so a feed built
