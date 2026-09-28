@@ -75,10 +75,27 @@ import java.util.function.Supplier;
  * in-memory event store, and Occurrent ships no reactive {@link PositionOrderedReader} over that store for this model
  * to replay. A write that reaches this model through {@code accept(..)} while its replay runs fails at once when the
  * live sink is full, and otherwise waits until the event has been applied after the replay, or until the replay
- * fails or is stopped. A handler that writes an event the subscription's filter accepts can hang in that write.
- * During the replay the write waits for the replay, which waits for that handler. Once live, this model hands the
- * subscription's events to the handler one at a time, so the new event waits behind the one the handler is still
- * processing. Nothing records which live events the subscription has handled, and a crash before the handler has run
+ * fails or is stopped. A handler that writes an event the subscription's filter accepts does not wait for it. This
+ * model hands the subscription's events to the handler one at a time, so that event cannot be applied before the
+ * handler returns. The write returns once the event is queued, and the handler gets the events it wrote in the
+ * order it wrote them, once it has returned, and for a write made during the replay once the subscription has gone
+ * live. A replay that ends before that writes no catch-up marker, so the next replay hands the handler the same
+ * history again. The model recognizes the write when the handler returns it as part of the {@link Mono} it returns,
+ * or subscribes it, blocking or not, on the thread it was called on. A handler that blocks on the write from a thread
+ * it switched to still waits for itself. The same holds for {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} called
+ * from the handler, which decides live or not as for any caller, and reports
+ * {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} once the event is queued.
+ * <p>
+ * When applying an event written that way fails, the write has already returned. The subscription then starts
+ * failing, and a failed catch-up starts it failing the same way. It deletes its catch-up marker, refuses every later
+ * event that does not come from its handler, applies the events it has already taken in and those its handler writes
+ * meanwhile, and then fails for good. A failed catch-up also refuses each event from anywhere else that is still
+ * waiting, and does not apply it. Cancel the subscription and subscribe again, and once the marker is gone its catch-up replays
+ * the history. When deleting the marker still fails after 3 retries, the subscription logs an error naming the
+ * subscription id, and the marker has to be deleted by hand before subscribing again. An event that no replay can
+ * bring back is lost only when applying it failed.
+ * <p>
+ * Nothing records which live events the subscription has handled, and a crash before the handler has run
  * loses the event from the in-memory event store too, so after a crash the store never holds an event the
  * subscription missed. With a durable event store, such as MongoDB, use a durable subscription, or a broker as
  * described below. The amendment to ADR 133 records why.
@@ -276,6 +293,15 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 return Mono.defer(() -> mayStillMarkCaughtUp(subscriptionId, replayDone)
                         ? CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId)
                         : Mono.empty());
+            }
+
+            @Override
+            public Mono<Void> forgetCaughtUp() {
+                // Names the id, since the handover logs this when every attempt failed and an operator then deletes
+                // the marker by hand.
+                return catchupMarker == null ? Mono.empty() : catchupMarker.delete(subscriptionId)
+                        .onErrorMap(error -> new IllegalStateException("Could not delete the catch-up marker of "
+                                + "subscription " + subscriptionId + ".", error));
             }
 
             @Override

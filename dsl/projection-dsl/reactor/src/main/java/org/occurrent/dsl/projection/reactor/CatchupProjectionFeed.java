@@ -189,8 +189,20 @@ public final class CatchupProjectionFeed<E> {
      * catch-up are buffered and delivered after the replay, and their {@link Mono} completes only then.
      * <p>
      * It errors with an {@link IllegalStateException} instead when the event was not folded, because the catch-up was
-     * stopped before the feed went live, the feed is stopped, the catch-up failed, or the live buffer is full. The
-     * listener must not acknowledge it, and the broker delivers it again.
+     * stopped before the feed went live, the feed is stopped, the feed is failing or has failed, or the live buffer is
+     * full. The listener must not acknowledge it, and the broker delivers it again.
+     * <p>
+     * Called from inside this feed's fold, it completes once the event is queued instead, since this feed folds one
+     * event at a time and the event cannot be folded before that fold returns. The fold's call is recognized when the
+     * returned {@link Mono} is part of the {@link Mono} the fold returns, or is subscribed, blocking or not, on the
+     * thread this feed called the fold on. The event is folded after that fold, in the order it was fed. When folding
+     * it fails, this feed starts failing, and a failed catch-up starts it failing the same way. It deletes its catch-up
+     * marker, refuses every later event that does not come from its fold, folds the events it has already taken in and
+     * those its fold feeds it meanwhile, and then fails for good. A failed catch-up also refuses each event from
+     * anywhere else that is still waiting, and does not fold it. Build a new feed, and once the marker is gone its catch-up replays the history. When deleting
+     * the marker still fails after 3 retries, the feed logs an error naming the feed id, and the marker has to be
+     * deleted by hand before building a new feed. An event that no replay can bring back is lost only when its own
+     * fold failed.
      *
      * @param event The domain event received from the external source.
      * @return A {@link Mono} that completes when the event has been folded.
@@ -266,6 +278,11 @@ public final class CatchupProjectionFeed<E> {
             }
 
             @Override
+            public Mono<Void> forgetCaughtUp() {
+                return CatchupProjectionFeed.this.forgetCaughtUp();
+            }
+
+            @Override
             public void replayStarted() {
                 if (fold instanceof ReactiveReplayAware replayAware) {
                     replayAware.replayStarted();
@@ -334,6 +351,13 @@ public final class CatchupProjectionFeed<E> {
             public Mono<Void> markCaughtUp() {
                 throw new AssertionError("isAlreadyCaughtUp() is true, so nothing here was caught up to mark.");
             }
+
+            // A catchUp() after this call records its marker, and this source can still be the one that delivers
+            // live, so it forgets that marker the same way.
+            @Override
+            public Mono<Void> forgetCaughtUp() {
+                return CatchupProjectionFeed.this.forgetCaughtUp();
+            }
         }).then();
     }
 
@@ -378,6 +402,14 @@ public final class CatchupProjectionFeed<E> {
         return reader.currentPosition()
                 .flatMap(head -> catchupMarker.save(id, GlobalCheckpoint.of(head)))
                 .then();
+    }
+
+    // Names the id, since the handover logs this when every attempt failed and an operator then deletes the marker by
+    // hand.
+    private Mono<Void> forgetCaughtUp() {
+        return catchupMarker == null ? Mono.empty() : catchupMarker.delete(id)
+                .onErrorMap(error -> new IllegalStateException("Could not delete the catch-up marker of projection "
+                        + "feed " + id + ".", error));
     }
 
     private DeliveredEvent<E> replayedItem(CloudEvent cloudEvent) {

@@ -57,6 +57,7 @@ import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
 import static org.occurrent.condition.Condition.eq;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -540,6 +541,40 @@ class DomainEventFeedTest {
         } finally {
             releaseL1.countDown();
         }
+    }
+
+    @Test
+    void accept_from_the_registered_fold_completes_once_queued_and_the_event_is_folded_after_that_fold() {
+        List<Object> answers = assertThatAFeedBackFromTheLiveFoldIsFoldedAfterIt((feed, converter) ->
+                feed.accept(new Counted("n")).thenReturn("queued"));
+
+        assertThat(answers).containsExactly("queued");
+    }
+
+    // The same live-or-not decision any caller gets, answered once "n" is queued rather than once it is folded
+    @Test
+    void accept_cloud_event_from_the_registered_fold_completes_delivered_once_queued_and_the_event_is_folded_after_that_fold() {
+        List<Object> answers = assertThatAFeedBackFromTheLiveFoldIsFoldedAfterIt((feed, converter) ->
+                feed.acceptCloudEvent(converter.toCloudEvent(new Counted("n"))).map(outcome -> outcome));
+
+        assertThat(answers).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    private static List<Object> assertThatAFeedBackFromTheLiveFoldIsFoldedAfterIt(BiFunction<DomainEventFeed<Counted>, CloudEventConverter<Counted>, Mono<Object>> feedBack) {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1"), converter, Counted::eventId);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        List<Object> answers = new CopyOnWriteArrayList<>();
+        feed.register("counter", event -> (event.eventId().equals("2")
+                ? feedBack.apply(feed, converter).doOnNext(answers::add).then()
+                : Mono.<Void>empty())
+                .then(Mono.fromRunnable(() -> folded.add(event.eventId()))), Filter.all());
+        StepVerifier.create(feed.catchUp("counter")).expectComplete().verify(Duration.ofSeconds(5));
+
+        StepVerifier.create(feed.accept(new Counted("2"))).expectComplete().verify(Duration.ofSeconds(5));
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(folded).containsExactly("1", "2", "n"));
+        return answers;
     }
 
     // goLive(id) subscribes its wait from the one task it schedules, and the marker read ahead of that wait is
