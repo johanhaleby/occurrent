@@ -2318,8 +2318,8 @@ class ReactiveHandoverTest {
         assertThat(writing.forgetCaughtUpCallCount()).isEqualTo(1);
     }
 
-    // The failure starts while B writes its marker, and B's write then errors although the marker was stored, a timeout
-    // say. B's catch-up is not the first failure, and it still forgets the marker it may have written.
+    // The failure starts while B writes its marker, and B's write then errors although the marker was stored. B's
+    // catch-up is not the first failure, and it still forgets the marker it may have written.
     @Test
     void a_marker_write_that_errors_after_the_handover_started_failing_is_forgotten() throws Exception {
         List<String> log = new CopyOnWriteArrayList<>();
@@ -2332,10 +2332,10 @@ class ReactiveHandoverTest {
             assertThat(catchThrowable(() ->
                     CompletableFuture.supplyAsync(() -> handover.catchUp(unreadable).toFuture()).join().get(5, TimeUnit.SECONDS)))
                     .hasRootCauseMessage("marker read failed");
-            throw new IllegalStateException("marker write timed out");
+            throw new IllegalStateException("marker write failed");
         };
 
-        StepVerifier.create(handover.catchUp(writing)).expectErrorMessage("marker write timed out").verify(Duration.ofSeconds(5));
+        StepVerifier.create(handover.catchUp(writing)).expectErrorMessage("marker write failed").verify(Duration.ofSeconds(5));
 
         assertThat(writing.markCaughtUpCallCount()).isEqualTo(1);
         assertThat(writing.forgetCaughtUpCallCount()).isEqualTo(1);
@@ -2359,6 +2359,67 @@ class ReactiveHandoverTest {
         assertThat(log).containsExactly("L1", "Y");
         assertThatALaterPayloadIsRefusedFor(handover, "bad1");
         assertThat(source.forgetCaughtUpCallCount()).isEqualTo(4);
+    }
+
+    // Neither marker store ever answers the delete. Each attempt gives up after the timeout, so the catch-up is
+    // answered and the handover delivers what its fold fed it and fails for good, as it does when the delete errors.
+    @Test
+    void a_forget_that_never_completes_still_answers_the_catch_up_and_the_handover_fails_for_good() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingL1 = new CountDownLatch(1);
+        CountDownLatch releaseL1 = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of("L1", self ->
+                self.acceptReportingDelivery("N1").then(Mono.fromRunnable(() -> {
+                    foldingL1.countDown();
+                    awaitQuietly(releaseL1);
+                }))));
+        handover.forgetAttemptTimeout(Duration.ofMillis(50));
+        FakeSource live = source(List.of(), true);
+        live.forgetNeverCompletes = true;
+        StepVerifier.create(handover.catchUp(live)).expectNext(true).verifyComplete();
+        CompletableFuture<Void> l1 = handover.accept("L1").subscribeOn(Schedulers.boundedElastic()).toFuture();
+        assertThat(foldingL1.await(5, TimeUnit.SECONDS)).isTrue();
+        FakeSource unreadable = source(List.of(), true);
+        unreadable.caughtUpFailure = new IllegalStateException("marker read failed");
+        unreadable.forgetNeverCompletes = true;
+
+        StepVerifier.create(handover.catchUp(unreadable)).expectErrorMessage("marker read failed").verify(Duration.ofSeconds(10));
+        releaseL1.countDown();
+
+        l1.get(5, TimeUnit.SECONDS);
+        awaitSize(log, 2);
+        assertThat(log).containsExactly("L1", "N1");
+        assertThat(unreadable.forgetCaughtUpCallCount()).isEqualTo(4);
+        assertThat(live.forgetCaughtUpCallCount()).isEqualTo(4);
+        StepVerifier.create(handover.accept("L2"))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasRootCauseMessage("marker read failed"))
+                .verify(Duration.ofSeconds(5));
+    }
+
+    // B's catch-up lost the race to fail first, so it forgets the marker it may have written before it answers, and
+    // a store that never answers that delete cannot keep it from answering.
+    @Test
+    void a_catch_up_that_is_not_the_first_failure_is_answered_when_its_forget_never_completes() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handoverWhoseFoldFeedsItself(log, Map.of());
+        handover.forgetAttemptTimeout(Duration.ofMillis(50));
+        StepVerifier.create(handover.catchUp(source(List.of(), true))).expectNext(true).verifyComplete();
+        FakeSource unreadable = source(List.of(), true);
+        unreadable.caughtUpFailure = new IllegalStateException("marker read failed");
+        FakeSource writing = source(List.of("R1"), false);
+        writing.forgetNeverCompletes = true;
+        writing.onMarkCaughtUp = () -> {
+            assertThat(catchThrowable(() ->
+                    CompletableFuture.supplyAsync(() -> handover.catchUp(unreadable).toFuture()).join().get(5, TimeUnit.SECONDS)))
+                    .hasRootCauseMessage("marker read failed");
+            throw new IllegalStateException("marker write failed");
+        };
+
+        StepVerifier.create(handover.catchUp(writing)).expectErrorMessage("marker write failed").verify(Duration.ofSeconds(10));
+
+        assertThat(writing.forgetCaughtUpCallCount()).isEqualTo(4);
     }
 
     // No catch-up failed, so the refusal says what did.
@@ -2774,6 +2835,7 @@ class ReactiveHandoverTest {
         private RuntimeException replayFailure;
         private RuntimeException caughtUpFailure;
         private RuntimeException forgetFailure;
+        private boolean forgetNeverCompletes;
         private Runnable onMarkCaughtUp;
         private Runnable onReplayStarted;
         private Runnable onReplayCompleted;
@@ -2794,11 +2856,12 @@ class ReactiveHandoverTest {
 
         @Override
         public Mono<Void> forgetCaughtUp() {
-            return Mono.fromRunnable(() -> {
+            return Mono.defer(() -> {
                 forgetCaughtUpCallCount.incrementAndGet();
-                if (forgetFailure != null) {
-                    throw forgetFailure;
+                if (forgetNeverCompletes) {
+                    return Mono.never();
                 }
+                return forgetFailure == null ? Mono.empty() : Mono.error(forgetFailure);
             });
         }
 

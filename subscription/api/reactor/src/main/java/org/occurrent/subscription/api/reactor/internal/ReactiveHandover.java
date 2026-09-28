@@ -333,6 +333,9 @@ public final class ReactiveHandover<T, K> {
     // Attempts to forget a catch-up marker after the first, and the delay before the first of them, doubled for each.
     private static final int FORGET_RETRIES = 3;
     private static final java.time.Duration FORGET_FIRST_RETRY_DELAY = java.time.Duration.ofMillis(100);
+    // How long one attempt to forget a catch-up marker may take before it counts as failed and is retried, so a store
+    // that never answers cannot hold a failure back forever.
+    private static final java.time.Duration FORGET_ATTEMPT_TIMEOUT = java.time.Duration.ofSeconds(5);
     private static final java.time.Duration CONCURRENT_EMISSION_RETRY_WINDOW = java.time.Duration.ofMillis(100);
     // How long to wait before offering again. The claim is released by one queue write, so this only has to be
     // long enough not to retry into the same instant.
@@ -362,6 +365,7 @@ public final class ReactiveHandover<T, K> {
     // afterwards, mirroring BlockingHandover's live field. acceptIfLive(..) reads this to refuse a payload outright,
     // without ever touching liveSink, rather than buffering it the way acceptReportingDelivery(..) does.
     private volatile boolean live = false;
+    private volatile java.time.Duration forgetAttemptTimeout = FORGET_ATTEMPT_TIMEOUT;
 
     private ReactiveHandover(Function<T, Mono<Void>> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun) {
         this.deliver = deliver;
@@ -437,9 +441,10 @@ public final class ReactiveHandover<T, K> {
      * come from its own code with that failure, delivers every payload it has taken in and every payload its own code
      * feeds it meanwhile, and once none is left fails for good with that failure. A failed catch-up also answers each
      * payload from other code still waiting with its failure, and does not deliver those. Each payload answered
-     * {@code true} gets its delivery attempt. Once the marker is gone, the next catch-up replays the history. A forget
-     * that still fails after 3 retries is logged, and the marker then has to be deleted before the next catch-up. A
-     * payload that no replay can bring back is lost only when its own delivery failed.
+     * {@code true} gets its delivery attempt. Once the marker is gone, the next catch-up replays the history. An
+     * attempt to forget that takes longer than 5 seconds counts as failed. A forget that still fails after 3 retries
+     * is logged, and the marker then has to be deleted before the next catch-up. A payload that no replay can bring
+     * back is lost only when its own delivery failed.
      *
      * @return A {@link Mono} that completes with {@code true} once the payload has been folded, live or by the drain,
      *         including a de-duplicated repeat of an already-delivered payload, or once it is queued when called from
@@ -826,8 +831,9 @@ public final class ReactiveHandover<T, K> {
         // Set when this catch-up refuses because another one failed, so the error handler below does not record that
         // refusal as a failure of its own.
         AtomicBoolean refusedForAnotherFailure = new AtomicBoolean();
-        // Set once markCaughtUp() is called, and cleared once this catch-up has forgotten the marker again, so a
-        // failure of this catch-up forgets a marker whose write errored after it was stored.
+        // Set when markCaughtUp() is called, so a failure of this catch-up forgets a marker whose write errored and
+        // can still have been stored. Cleared only after the check that follows a marker write has forgotten the
+        // marker again, and left set once a write succeeded.
         AtomicBoolean markerMayBeWritten = new AtomicBoolean();
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
@@ -1367,8 +1373,9 @@ public final class ReactiveHandover<T, K> {
             if (!refused) {
                 latestFailure.set(new RecordedFailure(error));
             }
-            // A marker write that errored can still have been stored, after the first failure forgot the marker, so
-            // this catch-up forgets it again before it tells its caller.
+            // A marker write that errored can still have been stored after the first failure forgot the marker, so
+            // this catch-up forgets it again before it tells its caller. A write the store applies after this forget
+            // keeps the marker, see #1150.
             Mono<Void> forgetOwnMarker = markerMayBeWritten.get() ? forgetCaughtUp(List.of(source)) : Mono.empty();
             forgetOwnMarker.subscribe(null, null, () -> {
                 abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
@@ -1480,10 +1487,12 @@ public final class ReactiveHandover<T, K> {
     }
 
     // Retried, since a marker left in place makes the next catch-up skip the replay that delivers a failed payload
-    // again. Never errors, so the failure goes on either way, and the log line tells an operator what to remove.
+    // again, and an attempt that takes longer than forgetAttemptTimeout counts as failed. Never errors, and always
+    // completes, so the failure goes on either way, and the log line tells an operator what to remove.
     private Mono<Void> forgetCaughtUp(List<Source<T>> sources) {
         return Flux.fromIterable(sources)
                 .concatMap(source -> subscribedAsOwnCode(Mono.defer(source::forgetCaughtUp))
+                        .timeout(forgetAttemptTimeout)
                         .retryWhen(Retry.backoff(FORGET_RETRIES, FORGET_FIRST_RETRY_DELAY))
                         .onErrorResume(forgetFailure -> {
                             log.error("The catch-up marker of this {} could not be forgotten, so its next catch-up "
@@ -1492,6 +1501,12 @@ public final class ReactiveHandover<T, K> {
                             return Mono.empty();
                         }))
                 .then();
+    }
+
+    // Package-private for the test of a forget that never completes, which would otherwise wait out four attempts of
+    // FORGET_ATTEMPT_TIMEOUT. Not part of this handover's contract.
+    void forgetAttemptTimeout(java.time.Duration timeout) {
+        this.forgetAttemptTimeout = Objects.requireNonNull(timeout, "timeout cannot be null");
     }
 
     // The cause of a refusal while this handover is failing or has failed, worded for what failed.
