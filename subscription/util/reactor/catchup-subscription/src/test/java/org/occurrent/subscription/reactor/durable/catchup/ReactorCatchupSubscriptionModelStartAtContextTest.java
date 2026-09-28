@@ -39,6 +39,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Guards which subscription model type a caller's {@link StartAt#dynamic(Function)} is shown when the subscription goes
@@ -107,6 +108,30 @@ class ReactorCatchupSubscriptionModelStartAtContextTest {
         StepVerifier.create(streamCatchup.subscribe(StreamSubscriptionFilter.filter(Filter.all()), startAt.startAt())).verifyComplete();
 
         assertThat(startAt.observedTypes).containsOnly(ReactorStreamCatchupSubscriptionModel.class);
+    }
+
+    @Test
+    void a_named_subscribe_on_a_shut_down_dispatcher_does_not_evaluate_a_dynamic_start_position() {
+        // With no filter, choosing the inner model in dual mode evaluates the start position, so the check has to run
+        // before that choice.
+        RecordingStartAt startAt = new RecordingStartAt();
+        ReactorCatchupSubscriptionModel catchup = dualMode();
+        catchup.shutdown();
+
+        assertThatThrownBy(() -> catchup.subscribe("subscription", null, startAt.startAt(), __ -> Mono.empty()))
+                .isInstanceOf(SubscriptionModelShutdownException.class);
+        assertThat(startAt.observedTypes).isEmpty();
+    }
+
+    @Test
+    void a_named_subscribe_on_a_shut_down_dcb_model_does_not_evaluate_a_dynamic_start_position() {
+        RecordingStartAt startAt = new RecordingStartAt();
+        ReactorDcbCatchupSubscriptionModel dcbCatchup = new ReactorDcbCatchupSubscriptionModel(new NoTokenCheckpointModel(), new UnusedDcbEventStore());
+        dcbCatchup.shutdown();
+
+        assertThatThrownBy(() -> dcbCatchup.subscribe("subscription", DcbSubscriptionFilter.filter(DcbCriteria.tags(Tag.parse("name:1"))), startAt.startAt(), __ -> Mono.empty()))
+                .isInstanceOf(SubscriptionModelShutdownException.class);
+        assertThat(startAt.observedTypes).isEmpty();
     }
 
     private static ReactorCatchupSubscriptionModel dualMode() {

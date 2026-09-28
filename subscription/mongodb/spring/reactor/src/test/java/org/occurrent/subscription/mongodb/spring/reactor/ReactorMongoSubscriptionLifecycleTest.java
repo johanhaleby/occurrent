@@ -33,6 +33,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -152,6 +153,18 @@ public class ReactorMongoSubscriptionLifecycleTest {
 
         // Then
         assertThat(throwable).isExactlyInstanceOf(DuplicateSubscriptionIdException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
+    }
+
+    @Test
+    void subscribing_after_the_model_is_shut_down_throws_subscription_model_shutdown_exception() {
+        // Given
+        subscriptionModel.shutdown();
+
+        // When
+        Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> Mono.empty()));
+
+        // Then
+        assertThat(throwable).isExactlyInstanceOf(SubscriptionModelShutdownException.class);
     }
 
     @Test

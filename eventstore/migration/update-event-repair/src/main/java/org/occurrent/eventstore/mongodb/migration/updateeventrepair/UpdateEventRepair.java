@@ -18,6 +18,12 @@
 package org.occurrent.eventstore.mongodb.migration.updateeventrepair;
 
 import com.mongodb.ErrorCategory;
+import com.mongodb.MongoConnectionPoolClearedException;
+import com.mongodb.MongoException;
+import com.mongodb.MongoNodeIsRecoveringException;
+import com.mongodb.MongoNotPrimaryException;
+import com.mongodb.MongoSecurityException;
+import com.mongodb.MongoSocketException;
 import com.mongodb.MongoWriteException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
@@ -27,7 +33,6 @@ import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.Sorts;
 import com.mongodb.client.model.Updates;
-import org.bson.BsonType;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
@@ -37,25 +42,25 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
+import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
-import static com.mongodb.client.model.Filters.exists;
 import static com.mongodb.client.model.Filters.gt;
-import static com.mongodb.client.model.Filters.or;
-import static com.mongodb.client.model.Filters.type;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toCollection;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.POSITION;
-import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * Repairs events that Occurrent's own {@code updateEvent} damaged before 0.34.0, so they become visible to DCB reads
@@ -132,17 +137,30 @@ public final class UpdateEventRepair {
     private final MongoCollection<Document> positionCounterCollection;
 
     /**
-     * Retries every MongoDB operation with exponential backoff from 100 ms up to 2 seconds, so a transient outage
-     * does not abandon a repair that may have hours of collection left to walk.
+     * Retries a MongoDB operation that failed with an error a later attempt can succeed on, with exponential backoff
+     * from 100 ms up to 2 seconds and no limit on attempts, so a transient outage does not abandon a repair that may
+     * have hours of collection left to walk. See {@link #UpdateEventRepair(MongoDatabase, String, UpdateEventRepairOptions, RetryStrategy)}
+     * for which errors those are.
      */
     public UpdateEventRepair(MongoDatabase database, String eventStoreCollectionName, UpdateEventRepairOptions options) {
         this(database, eventStoreCollectionName, options, defaultRetryStrategy());
     }
 
     /**
-     * @param retryStrategy How to retry a MongoDB operation that fails. A repair walks a whole collection, so a
-     *                      strategy that gives up immediately turns a momentary outage into a run an operator has
-     *                      to notice and restart.
+     * Only an error a later attempt can succeed on without anyone changing anything is retried, and each retry is
+     * logged at WARN with the error that caused it. That is the set MongoDB's retryable reads and retryable writes
+     * specifications retry on, a network error, a cleared connection pool, an error labelled
+     * {@code RetryableWriteError}, and a command or write concern error with one of the codes those specifications
+     * list, such as a primary stepping down or a server shutting down. A failure to authenticate that one of those
+     * caused is retried too, as the MongoDB driver retries it. Any other error, a missing privilege or no
+     * server to select before the driver's server selection timeout for instance, fails the run at once, and running
+     * it again resumes from the checkpoint.
+     *
+     * @param retryStrategy How to retry such an error. A repair walks a whole collection, so a strategy that gives up
+     *                      immediately turns a momentary outage into a run an operator has to notice and restart. A
+     *                      strategy built by {@link RetryStrategy#retry()} keeps its own {@code retryIf} as well, so it
+     *                      can narrow the set above but not widen it. One you implement yourself decides on its own
+     *                      which errors to retry.
      */
     public UpdateEventRepair(MongoDatabase database, String eventStoreCollectionName, UpdateEventRepairOptions options, RetryStrategy retryStrategy) {
         requireNonNull(database, "database cannot be null");
@@ -157,20 +175,21 @@ public final class UpdateEventRepair {
     /**
      * Counts the damage in the collection without changing anything, so the size of a repair is known before one is
      * started. It writes nothing, so it is safe to run against a live store, but it is not cheap. Finding an event
-     * whose tag array is missing cannot use an index, so this reads the whole collection. On a large store run it
-     * during a quiet period, the way the runbook's equivalent shell query says to.
+     * whose tag array does not hold its tags cannot use an index, so this reads the whole collection. On a large
+     * store run it during a quiet period, the way the runbook's equivalent shell query says to.
      *
      * <p>
-     * It sizes a repair rather than predicting its outcome. The two counts it returns are independent of each other,
-     * and neither covers the damage only a run can find. A position another event already holds, one that is not a
-     * number or is not positive, and a tag encoding that cannot be read all look like ordinary damage from the
-     * outside, so they surface as an {@link UnrecoverableEvent} during {@link #run()} and not here.
+     * It sizes a repair rather than predicting its outcome. The two counts it returns are independent of each other.
+     * The first counts every event a run visits, and that includes an event it will only report, because a position
+     * another event already holds, one that is not a positive integer, one above the counter and a tag encoding that
+     * cannot be read are told apart from damage the repair can undo only during {@link #run()}, where each surfaces
+     * as an {@link UnrecoverableEvent}.
      *
      * @return how many events the repair would touch, and separately how many have DCB tags and no position at all.
      */
     public UpdateEventRepairReport report() {
-        long needingRepair = withRetry(() -> eventCollection.countDocuments(damagedEventFilter()));
-        long lostPosition = withRetry(() -> eventCollection.countDocuments(lostPositionFilter()));
+        long needingRepair = withRetry(() -> eventCollection.countDocuments(UpdateEventDamage.damagedEvent()));
+        long lostPosition = withRetry(() -> eventCollection.countDocuments(UpdateEventDamage.positionLost()));
         log.info("Repair report for collection '{}': {} events need repair. Separately, {} events have a position that cannot be restored.",
                 eventStoreCollectionName, needingRepair, lostPosition);
         return new UpdateEventRepairReport(needingRepair, lostPosition);
@@ -208,7 +227,7 @@ public final class UpdateEventRepair {
 
         while (true) {
             Object resumeAfter = lastProcessedId;
-            List<Document> batch = withRetry(() -> eventCollection.find(and(damagedEventFilter(), afterFilter(resumeAfter)))
+            List<Document> batch = withRetry(() -> eventCollection.find(and(UpdateEventDamage.damagedEvent(), afterFilter(resumeAfter)))
                     .sort(Sorts.ascending(ID))
                     .limit(options.batchSize())
                     // Only the four fields a repair decision is made from. A stored event carries its data payload,
@@ -240,8 +259,8 @@ public final class UpdateEventRepair {
             // disagree about a candidate, since only the live index can reject one, and only at write time. The
             // count widens for a plan with a finding already on it, since that finding is fixed once the plan is,
             // and it has to survive an event whose write fixes the one thing that made it match the damaged-event
-            // filter, an unrebuildable tag array for instance, while a finding unrelated to that fix, an
-            // unassignable position for instance, still needs reporting after a scan can no longer find the event
+            // filter, an unrebuildable tag array for instance, while a finding unrelated to that fix, a position
+            // above the counter for instance, still needs reporting after a scan can no longer find the event
             // to report it from. The post-batch write below narrows the checkpoint back to exactly what got
             // confirmed, so these local values only outlive the batch when a kill catches it before that narrowing
             // runs.
@@ -323,7 +342,7 @@ public final class UpdateEventRepair {
         // POSITION_LOST event gets its tag array rebuilt, which stops it matching the damaged-event filter, so a run
         // killed between that write and the batch checkpoint leaves an event no resumed run rediscovers. Counting
         // what is still there means a finished run cannot report a clean collection while a position is still gone.
-        long lostPosition = withRetry(() -> eventCollection.countDocuments(lostPositionFilter()));
+        long lostPosition = withRetry(() -> eventCollection.countDocuments(UpdateEventDamage.positionLost()));
 
         String repairedRange = minRepairedPosition == null
                 ? "No position was repaired"
@@ -345,34 +364,14 @@ public final class UpdateEventRepair {
     }
 
     /**
-     * An event that was written by a DCB append, so it had a position, and no longer has one. The repair cannot put
-     * it back, so this is what survives a completed run rather than what a run is looking for.
-     */
-    private static Bson lostPositionFilter() {
-        return and(exists(DcbCloudEvents.TAGS), exists(POSITION, false));
-    }
-
-    /**
-     * An event is damaged when its {@code position} is a string, which is what the old write-back's coercion left
-     * behind, or when it carries the {@code dcbtags} extension without the indexed array derived from it. The two are
-     * separate because one update can produce either alone. An event with no DCB tags only ever loses its position,
-     * and a second update of an already repaired event would restore neither on its own.
-     */
-    private static Bson damagedEventFilter() {
-        return or(
-                type(POSITION, BsonType.STRING),
-                and(exists(DcbCloudEvents.TAGS), exists(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, false))
-        );
-    }
-
-    /**
      * Repairs one event from its plan in a single update, so the fields it can restore are written together or not
      * at all.
      * <p>
      * That is atomicity across the recoverable fields, not a promise that both always come back. When one field is
-     * beyond saving and the other is not, the recoverable one is still restored and the other is reported. An
-     * unreadable position leaves the tag array repairable, and an unreadable tag encoding leaves the position
-     * repairable. Only a rejected write keeps both exactly as they were found.
+     * beyond saving and the other is not, the recoverable one is still restored and the other is reported. The tag
+     * array is rebuilt next to an unreadable position, except a position stored as an array, since MongoDB refuses
+     * to index two arrays in one document, and the position is restored next to an unreadable tag encoding. Only a
+     * rejected write keeps both exactly as they were found.
      *
      * @param repairedPosition filled with this event's numeric {@code position}, but only once the update is
      *                         confirmed to have reached the event. That position can be one this call restored, or
@@ -394,11 +393,12 @@ public final class UpdateEventRepair {
         // throwing, and the retry only ever sees a transient failure. Re-running the same $set is harmless.
         //
         // Matched rather than modified, because a retry after an ambiguous failure has to count as the repair it is.
-        // Every field in this update is one the event does not have yet. Position is set only when it is a string, so
-        // writing it changes its type, and the tag array only when the field is absent. A first attempt that reaches
-        // the server therefore always modifies the document, and modified zero can only mean the lost acknowledgement
-        // of a write that did land. Counting that as unrepaired would understate the run against the event's own log
-        // line, which is written whatever the count says.
+        // Every field in this update holds a value the event does not have yet. Position is set only when it is a
+        // string, so writing it changes its type, and dcbtags and the tag array only when they list a different set
+        // of tags than the one written. A first attempt that reaches the server therefore always modifies the
+        // document, and modified zero can only mean the lost acknowledgement of a write that reached the server.
+        // Counting that as unrepaired would understate the run against the event's own log line, which is written
+        // whatever the count says.
         boolean wrote = withRetry(() -> {
             try {
                 return eventCollection.updateOne(eq(ID, eventId), Updates.combine(plan.updates())).getMatchedCount() > 0;
@@ -449,9 +449,15 @@ public final class UpdateEventRepair {
         if (rawTags instanceof String tags) {
             encodedTags = tags;
         } else if (rawTags == null && !event.containsKey(DcbCloudEvents.TAGS)) {
-            // No dcbtags field at all, which is an ordinary stream event rather than damage. A document holding an
-            // explicit null falls through to the branch below, since the damaged-event filter matches it and a run
-            // that neither updated it nor said anything about it would finish clean while report() still counted it.
+            // No dcbtags field at all, which is an ordinary stream event rather than damage, unless it has a tag
+            // index. Nothing says whether that index is stray or dcbtags was lost, so neither is written. A document
+            // holding an explicit null falls through to the branch below, since the damaged-event filter matches it
+            // and a run that neither updated it nor said anything about it would finish clean while report() still
+            // counted it.
+            if (event.containsKey(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD)) {
+                unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.UNREADABLE,
+                        "no dcbtags field, while dcbTags holds " + event.get(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD)));
+            }
             encodedTags = null;
         } else {
             // The position does not depend on the tags, so carry on and repair it. Only the tag array is beyond
@@ -483,21 +489,44 @@ public final class UpdateEventRepair {
         } else if (storedPosition == null && encodedTags != null) {
             // A DCB append always writes a position, so a DCB event without one lost it. The tag array below is still
             // worth rebuilding, and the position is reported rather than invented.
-            unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_LOST, "no position field"));
-        } else if (storedPosition instanceof Number number) {
-            // This event only matched the filter through its tag array, so its position was never damaged by the
-            // old write-back. A repair that follows a hand-set POSITION_ALREADY_TAKEN fix (the runbook's step 5)
-            // lands here with a position an operator typed by hand, and a slip there is exactly as unassignable as
-            // a forged string position would have been, so it gets the same validation and the same findings.
-            readablePosition = validatedPosition(number.longValue(), positionCeiling, eventId, unrecoverable);
+            String detail = event.containsKey(POSITION) ? "position is null" : "no position field";
+            unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_LOST, detail));
+        } else if (storedPosition != null) {
+            // Never damaged by the old write-back, which only ever turned a position into a string. A repair that
+            // follows a hand-set POSITION_ALREADY_TAKEN fix (the runbook's step 5) reaches this branch with a
+            // position an operator typed by hand, so it is held to UpdateEventDamage's rule, the one
+            // requireRepairedEvents checks, and a value that fails it is reported rather than read as the whole
+            // number next to it. Only a whole number that fits in a long goes on to validatedPosition, as with a
+            // string above.
+            @Nullable Long position = UpdateEventDamage.wholeNumber(storedPosition);
+            if (position == null) {
+                String waiting = encodedTags != null && storedPosition instanceof List<?>
+                        ? ", and the tag array is rebuilt only once position is no longer an array"
+                        : "";
+                unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER,
+                        storedPosition + " (" + storedPosition.getClass().getSimpleName() + ")" + waiting));
+            } else {
+                readablePosition = validatedPosition(position, positionCeiling, eventId, unrecoverable);
+            }
         }
 
-        if (encodedTags != null && !event.containsKey(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD)) {
+        // MongoDB refuses a document that holds two arrays under one compound index, and the dcbTags and position
+        // index is one, so writing a tag array next to an array position fails the same way on every retry
+        if (encodedTags != null && !(storedPosition instanceof List<?>)) {
             try {
-                List<String> canonicalTags = DcbCloudEvents.decodeTags(encodedTags).stream()
+                Set<Tag> tags = DcbCloudEvents.decodeTags(encodedTags);
+                List<String> canonicalTags = tags.stream()
                         .map(Tag::canonical)
                         .collect(toCollection(ArrayList::new));
-                updates.add(Updates.set(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, canonicalTags));
+                Set<String> tagSet = new HashSet<>(canonicalTags);
+                // requireRepairedEvents compares the tag array with the lines of dcbtags as stored, so a dcbtags
+                // an operator wrote back by hand with stray whitespace is rewritten the way an append writes it
+                if (!UpdateEventDamage.listedTags(encodedTags).equals(tagSet)) {
+                    updates.add(Updates.set(DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(tags)));
+                }
+                if (!(event.get(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD) instanceof List<?> index && new HashSet<>(index).equals(tagSet))) {
+                    updates.add(Updates.set(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, canonicalTags));
+                }
             } catch (RuntimeException e) {
                 unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.UNREADABLE, String.valueOf(e.getMessage())));
             }
@@ -512,10 +541,11 @@ public final class UpdateEventRepair {
     /**
      * A position is assignable when it is positive and at or below the store's position counter, whether it came
      * from parsing a damaged string or was read as a number from a document whose position was never damaged. Above
-     * the counter is as unassignable as at or below zero, and just as invisible, because a read clamps its upper
-     * bound to this same counter. The counter is re-read here rather than trusted from the start of the run, so a
+     * the counter is as unassignable as at or below zero, and DCB reads and reads in position order skip it just the
+     * same, because they stop at this same counter. The counter is re-read here rather than trusted from the start of the run, so a
      * store that wrote while the repair walked cannot have an event wrongly called forged. A counter of zero means
-     * there is no counter document to compare against.
+     * there is no ceiling to compare against, which is what {@link #positionCeiling()} returns for a missing counter
+     * document or one no writer would store.
      *
      * @return the position, or {@code null} if it was reported as unrecoverable instead.
      */
@@ -541,16 +571,18 @@ public final class UpdateEventRepair {
     }
 
     /**
-     * The highest position the store has ever handed out, which is the ceiling on any position it assigned. Reads
-     * clamp their upper bound to this same counter, so an event above it is as invisible as one at or below zero.
+     * The highest position the store has ever handed out, which is the ceiling on any position it assigned. DCB reads
+     * and reads in position order stop at this same counter, so they skip an event above it as they skip one at or
+     * below zero.
      *
-     * @return the counter, or {@code 0} when there is no counter document, which is the value the stores themselves
-     * fall back to and which this treats as "no ceiling known" rather than as a ceiling of zero.
+     * @return the counter, or {@code 0} when there is no counter document or its value is one
+     * {@link UpdateEventDamage#counterValue(Object)} rejects, which this treats as "no ceiling known" rather than as a
+     * ceiling of zero. requireRepairedEvents refuses both until the counter is restored.
      */
     private long positionCeiling() {
         Document counter = withRetry(() -> positionCounterCollection.find(eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID)).first());
-        Object value = counter == null ? null : counter.get(DcbMarkerModel.COUNTER_POSITION);
-        return value instanceof Number number ? number.longValue() : 0;
+        Long value = counter == null ? null : UpdateEventDamage.counterValue(counter.get(DcbMarkerModel.COUNTER_POSITION));
+        return value == null ? 0 : value;
     }
 
     private @Nullable Document loadCheckpoint() {
@@ -617,8 +649,67 @@ public final class UpdateEventRepair {
         withRetry(() -> checkpointCollection.deleteOne(eq(ID, UpdateEventRepairCheckpoint.CHECKPOINT_DOCUMENT_ID)));
     }
 
+    // Logged as the retry starts rather than when the error is caught, so an error the strategy has no attempts left
+    // for is not logged as retried
     private <T> T withRetry(Supplier<T> mongoOperation) {
-        return executeWithRetry(mongoOperation, __ -> true, retryStrategy).get();
+        AtomicReference<RuntimeException> previousError = new AtomicReference<>();
+        return retryStrategy.execute(retryInfo -> {
+            RuntimeException previous = previousError.get();
+            if (previous != null) {
+                log.warn("Retrying a MongoDB operation in the repair of collection '{}', attempt {}, after the error below.",
+                        eventStoreCollectionName, retryInfo.getAttemptNumber(), previous);
+            }
+            try {
+                return mongoOperation.get();
+            } catch (RuntimeException e) {
+                previousError.set(e);
+                throw e;
+            }
+        }, UpdateEventRepair::retryable);
+    }
+
+    // The codes the MongoDB specifications retry a read or a write on, "Retryable Error" in
+    // source/retryable-reads/retryable-reads.md and "Determining Retryable Write Errors" in
+    // source/retryable-writes/retryable-writes.md at github.com/mongodb/specifications, and the list
+    // CommandOperationHelper holds in driver 5.8.0. The two specifications list the same codes but for 134, which only
+    // a read gets. A command error and a write concern error can both hold one, since MongoWriteConcernException takes
+    // its code from the write concern error. A server selection timeout is not on either list, so an outage that
+    // outlasts the driver's server selection timeout ends the run, and running it again resumes from the checkpoint.
+    private static final Set<Integer> RETRYABLE_ERROR_CODES = Set.of(
+            6, // HostUnreachable
+            7, // HostNotFound
+            89, // NetworkTimeout
+            91, // ShutdownInProgress
+            134, // ReadConcernMajorityNotAvailableYet
+            189, // PrimarySteppedDown
+            262, // ExceededTimeLimit
+            9001, // SocketException
+            10107, // NotWritablePrimary
+            11600, // InterruptedAtShutdown
+            11602, // InterruptedDueToReplStateChange
+            13435, // NotPrimaryNoSecondaryOk
+            13436 // NotPrimaryOrSecondary
+    );
+
+    // What the driver's CommandOperationHelper retries a read or a write on, an error isRetryableException accepts or
+    // a MongoSecurityException whose cause it accepts, which is how a connection lost while authenticating arrives,
+    // and besides that the RetryableWriteError label a 4.4 or later server puts on a write it may retry
+    static boolean retryable(Throwable error) {
+        return retryableByDriver(error)
+                || error instanceof MongoSecurityException && retryableByDriver(error.getCause())
+                || error instanceof MongoException mongoException && mongoException.hasErrorLabel("RetryableWriteError");
+    }
+
+    // CommandOperationHelper.isRetryableException, a network error, a cleared connection pool, which the retryable
+    // reads specification also lists, a not primary or node is recovering error, which the driver also raises for an
+    // older server that sends only a message, or one of the codes above
+    private static boolean retryableByDriver(@Nullable Throwable error) {
+        return error instanceof MongoException mongoException
+                && (mongoException instanceof MongoSocketException
+                || mongoException instanceof MongoConnectionPoolClearedException
+                || mongoException instanceof MongoNotPrimaryException
+                || mongoException instanceof MongoNodeIsRecoveringException
+                || RETRYABLE_ERROR_CODES.contains(mongoException.getCode()));
     }
 
     private static RetryStrategy defaultRetryStrategy() {

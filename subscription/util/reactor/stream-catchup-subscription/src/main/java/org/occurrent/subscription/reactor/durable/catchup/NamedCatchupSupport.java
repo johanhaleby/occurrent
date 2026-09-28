@@ -24,6 +24,7 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
@@ -72,10 +73,10 @@ import static java.util.Objects.requireNonNull;
  * the same way and replays only once the model starts. This is deliberately safer than the blocking catch-up model,
  * which abandons a stop-interrupted replay outright. The blocking composition never notices, because its durable
  * model parks subscriptions before the catch-up model sees them, a gate the delegating path here does not run
- * through. Cancelling or shutting down aborts in-flight replays. Waiting on a subscription that was cancelled before
- * its handover fails, since that subscription never started and nothing will start it, and the blocking
- * {@code CancelledSubscription} answers {@code false} for the same case. Model-wide calls forward to the wrapped
- * model, so give each composition its own wrapped model rather than sharing one.
+ * through. Cancelling or shutting down aborts in-flight replays. Waiting on a subscription that was cancelled, or
+ * whose model was shut down, before its handover fails, since that subscription never started and nothing will start
+ * it, and the blocking {@code CancelledSubscription} answers {@code false} for the same cases. Model-wide calls
+ * forward to the wrapped model, so give each composition its own wrapped model rather than sharing one.
  */
 @NullMarked
 final class NamedCatchupSupport {
@@ -90,6 +91,9 @@ final class NamedCatchupSupport {
     // handOver park instead of subscribing the delegate on a stopped model. Same role as the blocking
     // AbstractCatchupSubscriptionModel's stopped flag.
     private volatile boolean stopped = false;
+    // Set by shutdown() and never cleared, since a shut-down model cannot be started again. Refuses every named
+    // subscribe, so none replays history and then fails at the handover to a wrapped model that is shut down.
+    private volatile boolean shutdown = false;
     // Who to tell about each id's catch-up boundaries. Kept until this model shuts down, since the registration
     // outlives any one catch-up and a recorder that stopped being told would record the next one's history as
     // though it were live.
@@ -135,6 +139,19 @@ final class NamedCatchupSupport {
         return named;
     }
 
+    private void requireNotShutdown() {
+        if (shutdown) {
+            throw new SubscriptionModelShutdownException();
+        }
+    }
+
+    // What every named subscribe checks, run by the models before they evaluate a dynamic StartAt, so a subscribe
+    // this model refuses runs none of the caller's code.
+    void requireNamedAndNotShutdown() {
+        requireNamed();
+        requireNotShutdown();
+    }
+
     /**
      * Subscribes with a catch-up phase. It replays from {@code startPosition} through {@code reader}, applies the
      * caller's {@code action} to each replayed event without retry, then hands the live half to the wrapped model's
@@ -146,6 +163,7 @@ final class NamedCatchupSupport {
                                       CatchupReader reader, long windowSize, int handoverCacheSize, long startPosition,
                                       Function<CloudEvent, Mono<Void>> action) {
         SubscriptionModel delegate = requireNamed();
+        requireNotShutdown();
         // The wrapped model already knowing the id means an earlier catch-up handed it over (or someone subscribed it
         // directly). Refuse synchronously, like every other subscribe path, instead of replaying history a second
         // time and failing asynchronously at the handover.
@@ -221,8 +239,16 @@ final class NamedCatchupSupport {
         if (catchingUp.putIfAbsent(subscriptionId, state) != null) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
         }
+        // A shutdown() between the check at the top and the line above read the ids it cancels before this id was
+        // added. It sets the flag before that read, so now that the id is in the map either this check sees the flag
+        // or that read cancels the id, and no replay starts on a shut-down model.
+        if (shutdown) {
+            catchingUp.remove(subscriptionId, state);
+            throw new SubscriptionModelShutdownException();
+        }
         synchronized (state) {
-            if (!stopped) {
+            // A shutdown() since the check above may have cancelled the state.
+            if (!stopped && !state.cancelled.get()) {
                 state.launcher.run();
             }
             // else parked: start(..) launches the replay once the model runs again.
@@ -238,6 +264,7 @@ final class NamedCatchupSupport {
     Subscription subscribeStraightToLive(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
                                          StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         SubscriptionModel delegate = requireNamed();
+        requireNotShutdown();
         return delegate.subscribe(subscriptionId, liveSubscriptionFilter, startAt,
                 cloudEvent -> livePredicate.test(cloudEvent) ? action.apply(cloudEvent) : Mono.empty());
     }
@@ -400,14 +427,22 @@ final class NamedCatchupSupport {
     }
 
     void shutdown() {
+        // Before the ids are read below, which the second check in subscribeWithCatchup depends on.
+        shutdown = true;
         catchupListeners.clear();
         new ArrayList<>(catchingUp.keySet()).forEach(subscriptionId -> {
             CatchupState state = catchingUp.remove(subscriptionId);
             if (state != null) {
-                state.cancelled.set(true);
-                Disposable replaying = state.replaying.get();
-                if (replaying != null) {
-                    replaying.dispose();
+                synchronized (state) {
+                    state.cancelled.set(true);
+                    Disposable replaying = state.replaying.get();
+                    if (replaying != null) {
+                        replaying.dispose();
+                    }
+                    // Disposing the replay runs none of its callbacks, so without this waitUntilStarted() never completes.
+                    if (!state.handedOver.get()) {
+                        state.started.tryEmitError(new SubscriptionModelShutdownException());
+                    }
                 }
             }
         });

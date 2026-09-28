@@ -21,12 +21,15 @@ import kotlin.jvm.functions.Function2;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.StartPosition;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
 
 import java.lang.reflect.Method;
@@ -81,6 +84,48 @@ class SubscriptionAnnotationRegistrarTest {
         verify(subscriptions, never()).subscribe(any(String.class), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
         assertThat(reservedHandlers).isEmpty();
         assertThat(claimedIds).isEmpty();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void a_dcb_handler_in_a_context_without_dcb_subscriptions_leaves_the_valid_handler_before_it_unsubscribed_and_unreserved() throws Exception {
+        ApplicationContext context = mock(ApplicationContext.class);
+        Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
+        when(context.getBean(CloudEventConverter.class)).thenReturn(new NoopCloudEventConverter());
+        when(context.getBean(Subscriptions.class)).thenReturn(subscriptions);
+        when(context.getBean(DcbSubscriptions.class)).thenThrow(new NoSuchBeanDefinitionException(DcbSubscriptions.class));
+        SubscriptionAnnotationRegistrar registrar = new SubscriptionAnnotationRegistrar(context, mock(StartPositionSupport.class));
+
+        SubscriptionBesideDcbSubscriber bean = new SubscriptionBesideDcbSubscriber();
+        List<Method> validFirst = List.of(
+                SubscriptionBesideDcbSubscriber.class.getDeclaredMethod("valid", TestEvent.class),
+                SubscriptionBesideDcbSubscriber.class.getDeclaredMethod("dcb", TestEvent.class));
+        Set<Method> reservedHandlers = ConcurrentHashMap.newKeySet();
+        Set<String> claimedIds = ConcurrentHashMap.newKeySet();
+
+        assertThatThrownBy(() -> registrar.registerSubscriptions(bean, validFirst, () -> bean, false,
+                reservedHandlers::add,
+                id -> {
+                    if (!claimedIds.add(id)) {
+                        throw new DuplicateSubscriptionIdException(id);
+                    }
+                },
+                reservedHandlers::remove, claimedIds::remove))
+                .isInstanceOf(NoSuchBeanDefinitionException.class);
+
+        verify(subscriptions, never()).subscribe(any(String.class), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+        assertThat(reservedHandlers).isEmpty();
+        assertThat(claimedIds).isEmpty();
+    }
+
+    static class SubscriptionBesideDcbSubscriber {
+        @Subscription(id = "valid-beside-dcb")
+        void valid(TestEvent event) {
+        }
+
+        @DcbSubscription(id = "dcb-without-dcb-subscriptions")
+        void dcb(TestEvent event) {
+        }
     }
 
     static class TwoStartPositionsSubscriber {

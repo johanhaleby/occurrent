@@ -33,7 +33,9 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
+import org.springframework.context.ApplicationListener;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ClassUtils;
 
@@ -49,6 +51,7 @@ import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -71,7 +74,8 @@ import java.util.function.Supplier;
  * registry, and delegates the actual annotation processing to the package-private collaborators built in
  * {@link #setApplicationContext}.
  */
-class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton, DisposableBean {
+class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton, DisposableBean,
+        ApplicationListener<ContextClosedEvent> {
 
     private ApplicationContext applicationContext;
 
@@ -119,6 +123,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
     private ProjectionAnnotationRegistrar projectionRegistrar;
     private SnapshotAnnotationRegistrar snapshotRegistrar;
+    private final LateSubscriber lateSubscriber = new LateSubscriber();
 
     @Override
     public void setApplicationContext(@NonNull ApplicationContext applicationContext) throws BeansException {
@@ -198,7 +203,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             // one's class and this bean would be scanned for methods its own class does not declare.
             ScanType userClass = new ScanType(userClassOf(bean), true);
             scan(new String[]{beanName}, name -> userClass, name -> bean,
-                    (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved, false);
+                    (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved, false, false);
         }
         return bean;
     }
@@ -228,7 +233,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         synchronized (registrationLock) {
             scanningThread = Thread.currentThread();
             String[] beanNames = applicationContext.getBeanDefinitionNames();
-            while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true)) {
+            while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true, true)) {
                 beanNames = applicationContext.getBeanDefinitionNames();
             }
             startupScanComplete = true;
@@ -277,7 +282,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             // resolve the published bean.
             scan(new String[]{beanName}, name -> userClass, name -> bean,
                     (name, resolved) -> () -> publishedBeanIsResolvable(beanFactory, name, singleton) ? applicationContext.getBean(name) : resolved,
-                    publishedBeanIsResolvable(beanFactory, beanName, singleton));
+                    true, publishedBeanIsResolvable(beanFactory, beanName, singleton));
         }
     }
 
@@ -285,7 +290,12 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // against. handlerTargets turns that object into the one a handler is invoked on, per delivery. They differ
     // only for a bean created after the startup scan, where the object is in hand but its name cannot be resolved
     // until creation finishes. Answers whether anything registered, which is what the loop above repeats on.
-    private boolean scan(String[] beanNames, Function<String, ScanType> typeResolver, Function<String, Object> beanResolver, BiFunction<String, Object, Supplier<Object>> handlerTargets, boolean mayBlockForReplay) {
+    //
+    // mayBlock is true only on the startup thread. A bean built after startup is built on whichever thread asked
+    // for it, a Reactor non-blocking one included, where block() can throw, and only after it has subscribed.
+    // mayBlockForReplay also asks whether a subscription's replay can reach the published bean, so it is never true
+    // where mayBlock is false.
+    private boolean scan(String[] beanNames, Function<String, ScanType> typeResolver, Function<String, Object> beanResolver, BiFunction<String, Object, Supplier<Object>> handlerTargets, boolean mayBlock, boolean mayBlockForReplay) {
         // A presence check, not a resolution: getBeanProvider(...).getIfAvailable() throws NoUniqueBeanDefinitionException
         // the moment two Subscribable beans exist (an application's own asynchronous model plus the register-only
         // SynchronousSubscriptionModel this starter always contributes), which starts failing every context the
@@ -368,6 +378,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             // is a new instance here, and a factory free to return a different implementation would otherwise have
             // this register a method whose id went through no duplicate check and no refusal.
             subscriptionRegistrar.registerSubscriptions(bean, staged.getValue(), handlerTargets.apply(beanName, bean), mayBlockForReplay,
+                    release -> subscribeCall(mayBlock, release),
                     method -> markRegistered(beanName, method),
                     this::claimSubscriptionId,
                     method -> registeredHandlers.remove(handlerKey(beanName, method)),
@@ -382,11 +393,12 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (markRegistered(beanName, method)) {
                 registerDescriptor(beanName, method, projection.id(),
                         "Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(projection.id(), method.getDeclaringClass().getName(), method.getName()),
-                        () -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply(beanName), method, projection));
+                        release -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply(beanName), method, projection, mayBlock,
+                                subscribeCall(mayBlock, release)));
             }
         }
         // Catch up each domain-push feed once, after all its projections are registered.
-        projectionRegistrar.catchUpCollectedFeeds();
+        projectionRegistrar.catchUpCollectedFeeds(mayBlock);
         for (Object[] sm : snapshotMethods) {
             String beanName = (String) sm[0];
             Method method = (Method) sm[1];
@@ -394,7 +406,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (markRegistered(beanName, method)) {
                 registerDescriptor(beanName, method, snapshot.id(),
                         "Duplicate subscription/projection/snapshot id '%s' (used by @Snapshot on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(snapshot.id(), method.getDeclaringClass().getName(), method.getName()),
-                        () -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply(beanName), method, snapshot));
+                        release -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply(beanName), method, snapshot, mayBlock,
+                                subscribeCall(mayBlock, release)));
             }
         }
         for (String beanName : beansToBuild) {
@@ -432,16 +445,21 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // A DuplicateSubscriptionIdException from inside the registration comes from the subscription model instead,
     // for a programmatic subscription already on that id, and the id this call added is still this call's to take
     // back.
-    private void registerDescriptor(String beanName, Method method, String id, String duplicateIdMessage, Runnable registration) {
+    //
+    // The registration is handed the same release, for a subscribe that failed after it returned.
+    private void registerDescriptor(String beanName, Method method, String id, String duplicateIdMessage, Consumer<Runnable> registration) {
         if (!registeredIds.add(id)) {
             registeredHandlers.remove(handlerKey(beanName, method));
             throw new DuplicateSubscriptionIdException(id, duplicateIdMessage);
         }
-        try {
-            registration.run();
-        } catch (RuntimeException | Error e) {
+        Runnable release = () -> {
             registeredIds.remove(id);
             registeredHandlers.remove(handlerKey(beanName, method));
+        };
+        try {
+            registration.accept(release);
+        } catch (RuntimeException | Error e) {
+            release.run();
             throw e;
         }
     }
@@ -508,10 +526,29 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // Stop every catch-up the projection registrar started, so no replay outlives the context that owns the store it
     // is folding into. The blocking twin has had this hook since the push catch-up gained a life cycle. This class
     // implemented no destroy callback at all until the reactor model gained one too.
+    //
+    // A refresh that fails after the startup scan destroys this without publishing a ContextClosedEvent, and so does
+    // a refreshable context replacing its bean factory, so the late subscriber is closed here as well, even though
+    // that is after the subscription model shut down. A second close finds nothing left to cancel.
     @Override
     public void destroy() {
+        lateSubscriber.close();
         if (projectionRegistrar != null) {
             projectionRegistrar.close();
+        }
+    }
+
+    // A startup registration subscribes in place, so a subscribe that fails there fails the refresh as it always has.
+    private LateSubscriber.SubscribeCall subscribeCall(boolean mayBlock, Runnable release) {
+        return mayBlock ? LateSubscriber.INLINE : lateSubscriber.call(release);
+    }
+
+    // Not destroy(), which runs after the subscription model has already shut down, since this post processor was
+    // created before it. A child context's close reaches this listener too, so only this context's own counts.
+    @Override
+    public void onApplicationEvent(ContextClosedEvent event) {
+        if (event.getApplicationContext() == applicationContext) {
+            lateSubscriber.close();
         }
     }
 
