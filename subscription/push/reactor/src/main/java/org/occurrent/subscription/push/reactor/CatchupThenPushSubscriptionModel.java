@@ -78,20 +78,21 @@ import java.util.function.Supplier;
  * fails or is stopped. A handler that writes an event the subscription's filter accepts does not wait for it. This
  * model hands the subscription's events to the handler one at a time, so that event cannot be applied before the
  * handler returns. The write returns once the event is queued, and the handler gets the events it wrote in the
- * order it wrote them, once it has returned, or once the replay has ended for a write made during the replay. The
- * model recognizes the write when the handler returns it as part of the {@link Mono} it returns, or subscribes it,
- * blocking or not, on the thread it was called on. A handler that blocks on the write from a thread it switched to
+ * order it wrote them, once it has returned, and for a write made during the replay once the subscription has gone
+ * live. A replay that ends before that writes no catch-up marker, so the next replay hands the handler the same
+ * history again. The model recognizes the write when the handler returns it as part of
+ * the {@link Mono} it returns, or subscribes it, blocking or not, on the thread it was called on. A handler that blocks on the write from a thread it switched to
  * still waits for itself. The same holds for {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} called
  * from the handler, which decides live or not as for any caller, and reports
  * {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} once the event is queued.
  * <p>
  * When applying an event written that way fails, the write has already returned. The subscription then starts
  * failing, and a failed catch-up starts it failing the same way. It deletes its catch-up marker, refuses every event
- * that does not come from its handler, applies the events it has already taken in and those its handler writes
- * meanwhile, and then fails for good. Cancel the subscription and subscribe again, and once the marker is gone its
- * catch-up replays the history. When deleting the marker still fails after 3 retries, the subscription logs an error
- * naming the subscription id, and the marker has to be deleted by hand before subscribing again. An event that no
- * replay holds is lost only when applying it failed.
+ * that does not come from its handler, applies the events its handler wrote before the failure and meanwhile, and
+ * then fails for good. Cancel the subscription and subscribe again, and once the marker is gone its catch-up replays
+ * the history. When deleting the marker still fails after 3 retries, the subscription logs an error naming the
+ * subscription id, and the marker has to be deleted by hand before subscribing again. An event that no replay can
+ * bring back is lost only when applying it failed.
  * <p>
  * Nothing records which live events the subscription has handled, and a crash before the handler has run
  * loses the event from the in-memory event store too, so after a crash the store never holds an event the

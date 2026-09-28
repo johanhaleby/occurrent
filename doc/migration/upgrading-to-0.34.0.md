@@ -1163,10 +1163,11 @@ the same feed. It happened live and during a replay, whether the handler blocked
 its `Mono`.
 
 Now the call completes once the event is queued. The event is applied once the handler or fold has returned, in the
-order it was fed, or once the replay has ended for an event fed during the replay. That holds for
-`PushSubscriptionModel.accept(..)` and `acceptRedeliverable(..)` called from the handler, and for
-`CatchupProjectionFeed.accept(..)`, `DomainEventFeed.accept(..)` and `DomainEventFeed.acceptCloudEvent(..)` called
-from the fold.
+order it was fed, and an event fed during the replay once the subscription or feed has gone live. A replay that ends
+before that writes no catch-up marker, so the next replay hands the handler or fold the same history again. That holds
+for `PushSubscriptionModel.accept(..)` and `acceptRedeliverable(..)` called from the handler, and for
+`CatchupProjectionFeed.accept(..)`, `DomainEventFeed.accept(..)` and `DomainEventFeed.acceptCloudEvent(..)` called from
+the fold.
 
 `acceptRedeliverable(..)` and `acceptCloudEvent(..)` decide between `DELIVERED` and `DEFERRED` the same way they do
 for any other caller. During a replay that is `DEFERRED`. When live they report `DELIVERED` once the event is queued.
@@ -1175,19 +1176,19 @@ now learns only that it was queued.
 
 When applying one of these events fails, nobody is waiting for it any more. The subscription or feed then starts
 failing. It deletes its catch-up marker, refuses every event from anywhere else with that failure, applies the events
-it has already queued and those its handler or fold feeds it meanwhile, and then fails for good. In 0.33.0 the failure
-went only to the call, so a handler that did not wait for it lost the event, and the next event was applied.
+its handler or fold fed it, before the failure or meanwhile, and then fails for good. In 0.33.0 the failure went only to
+the call, so a handler that did not wait for it lost the event, and the next event was applied.
 
 A failed catch-up starts the subscription or feed failing the same way, whether its replay, its marker read or its
-marker write failed, so an event queued before that failure is still applied. The marker is deleted in that case too.
-So when the marker read fails on a subscription that had already caught up, the next catch-up replays the whole
-history, where 0.33.0 skipped it.
+marker write failed, so an event its handler or fold queued before that failure is still applied. The marker is deleted
+in that case too. So when the marker read fails on a subscription that had already caught up, the next catch-up replays
+the whole history, where 0.33.0 skipped it.
 
 What to do:
 
 - After a failure, fix its cause, then cancel the subscription and subscribe again, or build a new feed. Once the
   catch-up marker is gone, its catch-up replays the history, the failed event and the events after it included. An
-  event that no replay holds is lost only when applying it failed, as in 0.33.0.
+  event that no replay can bring back is lost only when applying it failed, as in 0.33.0.
 - When deleting the marker still fails after 3 retries, the subscription or feed logs an error naming its id. Delete
   the marker stored under that id in the `CheckpointStorage` you passed for catch-up markers before you subscribe again
   or build the new feed, since a marker left in place makes that catch-up skip the replay.

@@ -439,7 +439,7 @@ public final class ReactiveHandover<T, K> {
      * payload from other code still waiting with its failure, and does not deliver those. Each payload answered
      * {@code true} gets its delivery attempt. Once the marker is gone, the next catch-up replays the history. A forget
      * that still fails after 3 retries is logged, and the marker then has to be deleted before the next catch-up. A
-     * payload that no replay holds is lost only when its own delivery failed.
+     * payload that no replay can bring back is lost only when its own delivery failed.
      *
      * @return A {@link Mono} that completes with {@code true} once the payload has been folded, live or by the drain,
      *         including a de-duplicated repeat of an already-delivered payload, or once it is queued when called from
