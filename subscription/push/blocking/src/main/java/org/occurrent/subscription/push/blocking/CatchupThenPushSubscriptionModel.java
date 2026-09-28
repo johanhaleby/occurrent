@@ -297,7 +297,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Fail fast on a filter that cannot be replayed, before registering anything on the live feed.
         Filter replayFilter = ReplayFilters.replayFilterFor(filter);
 
-        BlockingHandover<CloudEvent, CloudEventKey> handover = BlockingHandover.create(action, CloudEventKey::of, options, "subscription");
+        BlockingHandover<CloudEvent, CloudEventKey> handover = BlockingHandover.create(action, CloudEventKey::of, options, "subscription", subscriptionId);
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
         // lost in the gap between the replay head and going live. Registers a delivery-reporting action rather than
         // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) still buffers

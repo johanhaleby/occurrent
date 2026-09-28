@@ -2519,7 +2519,7 @@ class BlockingHandoverTest {
     }
 
     // The asked replay runs its source's isAlreadyCaughtUp() before it takes its turn, and an ask from there is for
-    // the replay about to start.
+    // the replay about to start, which replays from the newer source.
     @Test
     void an_ask_after_the_asked_replay_is_taken_but_before_it_starts_runs_no_second_replay() throws Exception {
         List<String> log = new CopyOnWriteArrayList<>();
@@ -2537,9 +2537,9 @@ class BlockingHandoverTest {
             Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
 
             assertThat(catchingUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
-            assertThat(asked.replayCallCount).isEqualTo(1);
-            assertThat(askedAgain.replayCallCount).isZero();
-            assertThat(log).containsExactly("R1", "R2");
+            assertThat(asked.replayCallCount).isZero();
+            assertThat(askedAgain.replayCallCount).isEqualTo(1);
+            assertThat(log).containsExactly("R1", "R3");
         } finally {
             executor.shutdownNow();
         }
