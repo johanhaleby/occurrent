@@ -244,8 +244,14 @@ public final class CatchupProjectionFeed<E> {
      * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), record the
      * completion marker, then start delivering the live feed. The returned {@link Mono} completes when the replay and
      * marker are done. Call once, after wiring the live feed.
+     * <p>
+     * A call the view makes while this feed is calling it, from its fold or from a callback such as
+     * {@code replayStarted()}, completes without waiting for the replay, since that replay cannot start before the
+     * view's code returns. Completing then means the catch-up has started, not that it has finished. When that replay
+     * fails, this feed refuses every later event, the same as after any failed catch-up.
      *
-     * @return A {@link Mono} that completes when the catch-up replay has finished and the feed has gone live.
+     * @return A {@link Mono} that completes when the catch-up replay has finished and the feed has gone live, or, for a
+     *         call from the view while this feed is calling it, once the catch-up has started.
      */
     public Mono<Void> catchUp() {
         // Cleared here rather than on subscribe, so a feed stopped once can catch up again instead of stopping
