@@ -160,18 +160,34 @@ that blocks on the call from a thread it switched to, while a replay holds live 
 cannot end while the view blocks. On both engines a view that waits for a `catchUp()` that replays waits for a replay
 that cannot start before the view's code returns.
 
-The reactive engine answers a live event the same code feeds it without waiting for that event either, for the same
-reason. It delivers one live event at a time, so the event cannot be applied before the code that fed it returns, and
-until [#1148](https://github.com/johanhaleby/occurrent/issues/1148) a call waiting for it waited forever, live and
-during a replay. A subscription handler that writes to the in-memory event store is the case that needs an answer,
-since the store has already kept the event. `acceptReportingDelivery`, which only that write path uses, now answers
-once the event is queued, and the event is delivered after the code that fed it, in the order it was fed. Nobody
-waits for that delivery, so when it fails the handover fails as after a failed catch-up and refuses every later event,
-rather than deliver the events behind it without it. `accept` and `acceptIfLive` promise an answer only once the event
-is applied, so they refuse the event at once and take nothing in. The engine recognizes these calls the way it
-recognizes a `goLive()`, which leaves the same gap, a view that blocks on the call from a thread it switched to. The
-blocking engine already delivers such an event on the calling thread once live, and refuses a nested `accept` before
-that.
+The reactive engine delivers one live payload at a time, so it cannot deliver a payload its own code feeds it before
+that code returns. Until [#1148](https://github.com/johanhaleby/occurrent/issues/1148) a call waiting for that
+delivery waited forever, live and during a replay. The engine's own code here is the code it recognizes for a
+`goLive()` above.
+
+So a payload that code feeds the reactive engine is queued, answered once it is queued, and delivered after the code
+that fed it, in the order it was fed. That holds for `accept`, `acceptIfLive` and `acceptReportingDelivery`, and
+`acceptIfLive` decides whether the handover is live the same way it does for any other caller. This is what a
+subscription handler gets when it writes to the in-memory event store, or calls `accept` and subscribes to it without
+waiting.
+
+Nobody waits for such a payload once it is queued, so when its delivery fails there is no caller left to tell. The
+handover then starts failing. It first tells the source whose catch-up delivers live to forget its catch-up marker, so
+a caller that sees a refusal and starts a new catch-up gets a replay.
+
+While it is failing, the handover refuses every payload from any other code with that failure. It delivers every
+payload it has already taken in and every payload its own code feeds it meanwhile, and a later failure is logged while
+the rest are still delivered. Once none is left, it fails for good with the first failure, as after a failed catch-up.
+
+So the handover tries to deliver every payload it answered once it was queued before it fails for good. The catch-up
+of the subscription or feed that replaces it replays the history, and with it every failed event the store holds. A
+payload that no replay holds is lost only when its own delivery failed. In 0.33.0 that failure went to a `Mono` the
+feeding code had subscribed and not waited for, so the payload was lost there too.
+
+The engine recognizes these calls when their `Mono` is subscribed, the way it recognizes a `goLive()`. A view that
+blocks on the call from a thread it switched to is not recognized either, and it waits for a delivery that cannot
+happen before its own code returns. The blocking engine delivers such an event on the calling thread once live, and
+refuses a nested `accept` before that.
 
 A replay that fails ends differently on the two engines, because they acknowledge at different moments. The blocking
 engine has already reported each buffered payload handled, so it delivers them before it records the failure. The

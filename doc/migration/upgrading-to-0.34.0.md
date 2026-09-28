@@ -51,9 +51,9 @@ Then feeding a push model's `accept(..)` is supported only from the in-memory ev
 Then a projection feed's `goLive()` called while a catch-up of the same projection is replaying now waits for
 that replay to end, where 0.33.0 did not wait, and fails when a catch-up of that projection failed meanwhile. Read
 [section 14](#14-a-projection-feeds-golive-waits-for-a-running-catch-up).
-Finally, a reactor subscription handler, or the code that applies an event to a reactor projection feed, that feeds
-an event back into its own subscription or feed no longer waits forever. Depending on the call, it is answered once
-the event is queued or refused at once. Read
+Finally, a reactor subscription handler, or the code that applies an event to a reactor projection feed, that feeds an
+event back into its own subscription or feed no longer waits forever. The call is answered once the event is queued,
+and when applying that event fails, the subscription or feed fails for good. Read
 [section 15](#15-feeding-a-reactor-catch-up-from-its-own-handler-no-longer-waits-forever).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
@@ -1162,33 +1162,29 @@ projection feed, the `fold` you pass to `CatchupProjectionFeed.create(..)` or `D
 the same feed. It happened live and during a replay, whether the handler blocked on the call or returned it as part of
 its `Mono`.
 
-Now it depends on the call:
+Now the call completes once the event is queued. The event is applied once the handler or fold has returned, in the
+order it was fed, or once the replay has ended for an event fed during the replay. That holds for
+`PushSubscriptionModel.accept(..)` and `acceptRedeliverable(..)` called from the handler, and for
+`CatchupProjectionFeed.accept(..)`, `DomainEventFeed.accept(..)` and `DomainEventFeed.acceptCloudEvent(..)` called
+from the fold.
 
-- `PushSubscriptionModel.accept(..)` called from the handler, which is how a handler writing to the in-memory event
-  store reaches it, completes once the event is queued. The handler gets the events it wrote in the order it wrote
-  them, once it has returned, or once the replay has ended for a write made during the replay.
-- `PushSubscriptionModel.acceptRedeliverable(..)` called from the handler completes with `NOT_DELIVERABLE`.
-- `CatchupProjectionFeed.accept(..)`, `DomainEventFeed.accept(..)` and `DomainEventFeed.acceptCloudEvent(..)` called
-  from the fold error at once with an `IllegalStateException`, and the feed does not take the event in.
+`acceptRedeliverable(..)` and `acceptCloudEvent(..)` decide between `DELIVERED` and `DEFERRED` the same way they do
+for any other caller, and report `DELIVERED` once the event is queued. A handler or fold that used the call's
+completion, its error or its `DELIVERED` to learn that the event was applied now learns only that it was queued.
 
-You are affected in these cases:
-
-- A fold that fed its own feed without waiting for the result, with `subscribe()` say, did not wait forever. 0.33.0
-  applied an event fed through `accept(..)` after the fold, and one fed through `acceptCloudEvent(..)` too once the
-  feed was live. Now the feed refuses both, and the event is lost unless you handle the error.
-- A handler that called `acceptRedeliverable(..)` on its own subscription without waiting got `DELIVERED` once the
-  event was applied live, or `DEFERRED` during the replay. Now it gets `NOT_DELIVERABLE` in both cases, and the event
-  is not applied.
-- When applying an event a handler wrote fails, the subscription now fails for good and refuses every later event,
-  since the write has already returned. In 0.33.0 a handler that wrote without waiting saw only that write fail.
+When applying one of these events fails, nobody is waiting for it any more. The subscription or feed then refuses
+every event from anywhere else with that failure, applies the events it has already queued and those its handler or
+fold feeds it meanwhile, and then fails for good. In 0.33.0 the failure went only to the call, so a handler that did
+not wait for it lost the event, and the next event was applied.
 
 What to do:
 
-- Feed a projection feed from code the feed is not running, such as the listener that feeds it everything else,
-  rather than from its fold.
-- After fixing a handler whose event failed to apply, cancel the subscription and subscribe again.
-- Block on the call on the thread the handler or fold was called on, or return it as part of the `Mono` it returns.
-  A handler that blocks on the call from a thread it switched to is not recognized, and still waits forever.
+- After a failure, fix its cause, then cancel the subscription and subscribe again, or build a new feed. Its catch-up
+  replays the history, the failed event and the events after it included. An event that no replay holds is lost only
+  when applying it failed, as in 0.33.0.
+- To have the call recognized, subscribe it on the thread the handler or fold was called on, by blocking on it for
+  example, or return it as part of the `Mono` the handler returns. A handler that blocks on the call from a thread it
+  switched to still waits forever.
 
 There is no recipe for this change. Whether a call runs inside a handler of the subscription it feeds is runtime
 behavior that a rewrite of the source cannot see.
