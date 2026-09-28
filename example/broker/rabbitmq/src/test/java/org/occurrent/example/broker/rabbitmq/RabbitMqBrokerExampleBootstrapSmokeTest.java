@@ -208,6 +208,13 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
      * simulated partial-construction failure, must see the order arrive. Without this, a probe that silently never
      * saw anything, a wrong exchange name after a rename, for example, would make every "did not leak" assertion
      * above pass vacuously.
+     * <p>
+     * Both bootstraps forward through the fixed exchange by design (see the class javadoc), so against reused
+     * local containers the probe's {@code #} binding also catches another test's forwarder finishing a durable
+     * checkpoint backlog it had not caught up on before that test's bootstrap closed. Asserting a message count
+     * would make this test flake on exactly that unrelated traffic, so it matches this write's own event id
+     * instead, on {@link #distinctEventIdsOnQueue(String)}. The control still fails the same way, no match within
+     * the wait, if this bootstrap's own forwarder stops reaching the probe.
      */
     @Test
     void the_leak_probe_itself_sees_a_forwarder_that_is_actually_still_running() throws Exception {
@@ -220,10 +227,11 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
                 MongoEventStore eventStore = new MongoEventStore(mongoClient, RabbitMqCloudEventLevelBootstrap.DATABASE_NAME,
                         RabbitMqCloudEventLevelBootstrap.EVENTS_COLLECTION, new EventStoreConfig(TimeRepresentation.RFC_3339_STRING));
                 String orderId = "order-" + UUID.randomUUID();
-                eventStore.write(orderId, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderId, "Widget")));
+                String eventId = UUID.randomUUID().toString();
+                eventStore.write(orderId, converter.toCloudEvent(new OrderPlaced(eventId, orderId, "Widget")));
 
                 await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                        assertThat(adminChannel.queueDeclarePassive(probeQueue).getMessageCount()).isEqualTo(1));
+                        assertThat(distinctEventIdsOnQueue(probeQueue)).contains(eventId));
             } finally {
                 adminChannel.queueDelete(probeQueue);
             }
