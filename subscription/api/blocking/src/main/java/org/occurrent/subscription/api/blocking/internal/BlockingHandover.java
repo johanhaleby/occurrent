@@ -21,6 +21,8 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.HandoverMessages;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -222,7 +224,10 @@ public final class BlockingHandover<T, K> {
     private final Consumer<T> deliver;
     private final Function<T, K> dedupId;
     private final int maxBufferedEvents;
+    private static final Logger log = LoggerFactory.getLogger(BlockingHandover.class);
+
     private final String noun;
+    private final @Nullable String id;
 
     private final Object lock = new Object();
     private final Queue<Held<T>> buffer = new ArrayDeque<>();
@@ -280,17 +285,19 @@ public final class BlockingHandover<T, K> {
     // a catch-up that replays nothing leaves it in place, and cleared with replayedIds when a replay is abandoned.
     private @Nullable Source<T> source = null;
     // A catch-up with something to replay that this handover's own code asked for. It would wait for that code, so the
-    // thread that asked runs it once it has left this handover. One at a time, so asking again before it starts adds
-    // no second replay.
+    // thread that asked first runs it once it has left this handover. Held until its replay takes the replay turn, so
+    // asking again before then, from any thread, adds no second replay.
     private @Nullable AskedCatchUp<T> askedByOwnCode = null;
 
-    private BlockingHandover(Consumer<T> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun) {
+    private BlockingHandover(Consumer<T> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun,
+                             @Nullable String id) {
         this.deliver = deliver;
         this.dedupId = dedupId;
         this.maxBufferedEvents = options.maxBufferedEvents();
         this.deliveredIds = new BoundedIdCache<>(options.dedupCacheSize());
         this.replayedIds = new BoundedIdCache<>(options.dedupCacheSize());
         this.noun = noun;
+        this.id = id;
     }
 
     /**
@@ -309,7 +316,21 @@ public final class BlockingHandover<T, K> {
         Objects.requireNonNull(dedupId, "dedupId cannot be null");
         Objects.requireNonNull(options, "options cannot be null");
         Objects.requireNonNull(noun, "noun cannot be null");
-        return new BlockingHandover<>(deliver, dedupId, options, noun);
+        return new BlockingHandover<>(deliver, dedupId, options, noun, null);
+    }
+
+    /**
+     * As {@link #create(Consumer, Function, CatchupThenLiveOptions, String)}, with the {@code id} of what this handover
+     * feeds, a projection id for example, named in what it logs.
+     */
+    public static <T, K> BlockingHandover<T, K> create(
+            Consumer<T> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun, String id) {
+        Objects.requireNonNull(deliver, "deliver cannot be null");
+        Objects.requireNonNull(dedupId, "dedupId cannot be null");
+        Objects.requireNonNull(options, "options cannot be null");
+        Objects.requireNonNull(noun, "noun cannot be null");
+        Objects.requireNonNull(id, "id cannot be null");
+        return new BlockingHandover<>(deliver, dedupId, options, noun, id);
     }
 
     /**
@@ -580,14 +601,19 @@ public final class BlockingHandover<T, K> {
      * A catch-up with something to replay called from code this handover is running returns {@code true} without
      * waiting, since the deliveries and the replay it would wait for cannot end before that code returns. That code is
      * a fold, live or replayed, and every {@link Source} callback. The {@code true} means the catch-up was asked for,
-     * not that it has run. Its replay runs on the same thread once that code has returned, before the
-     * {@link #accept(Object)}, {@link #acceptReportingDelivery(Object)}, {@link #acceptIfLive(Object)} or
-     * {@code catchUp} call that ran the code returns, and then replays like any other catch-up. It can still be
-     * stopped, or refused because a catch-up on this handover failed after it was asked for. A failure of its replay
-     * is recorded like any failed catch-up, so this handover refuses every later payload. Neither the stop, the
-     * refusal nor the failure is reported to that code or to the call that ran it. Asking again before that replay
-     * starts runs no second replay. Code that calls this for a payload a replay delivers asks for another catch-up each
-     * time a replay delivers that payload, and with a source whose {@link Source#isAlreadyCaughtUp()} always answers
+     * not that it has run. Its replay runs once that code has returned, on the thread of the first call that asked for
+     * it, and replays like any other catch-up. On that thread it runs before the {@link #accept(Object)},
+     * {@link #acceptReportingDelivery(Object)}, {@link #acceptIfLive(Object)} or {@code catchUp} call that ran the code
+     * returns. A call from any thread that asks before that replay takes its turn asks for the same replay, so a call
+     * on another thread can return before the replay has run.
+     * <p>
+     * That replay can still be stopped, or refused because a catch-up on this handover failed after it was asked for,
+     * and neither is reported. A failure of its replay is recorded like any failed catch-up, so this handover refuses
+     * every later payload. A {@code catchUp} call that runs the replay throws that failure. An
+     * {@link #accept(Object)}, {@link #acceptReportingDelivery(Object)} or {@link #acceptIfLive(Object)} that runs it
+     * returns normally, since its payload was applied. When the thread is interrupted, the replay may not run, and a
+     * warning is logged. Code that calls this for a payload a replay delivers asks for another catch-up each time a
+     * replay delivers that payload, and with a source whose {@link Source#isAlreadyCaughtUp()} always answers
      * {@code false} those replays do not end. Code that makes the call from a thread it switched to is not recognized,
      * so it waits like any other caller, for deliveries or a replay that cannot end while that code waits.
      *
@@ -596,18 +622,24 @@ public final class BlockingHandover<T, K> {
      * {@link Source#keepReplaying()} stopped it partway, or when the calling thread was interrupted while waiting for
      * the deliveries or the replay already running to end. The interrupt stays on the thread. An interrupted wait for
      * the deliveries changes nothing on the handover, and the replay an interrupted call waited for still goes live
-     * when it ends. A failure throws rather than returning either.
+     * when it ends. A failure throws rather than returning either, and so does a failure of a replay that code this
+     * handover ran asked for, when this call runs it.
      */
     public boolean catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
+        boolean caughtUp;
         try {
-            return catchUpNow(source);
-        } finally {
-            runCatchUpsAskedByOwnCode();
+            caughtUp = catchUpNow(source, null);
+        } catch (Throwable e) {
+            runCatchUpsAskedByOwnCode(false);
+            throw e;
         }
+        runCatchUpsAskedByOwnCode(true);
+        return caughtUp;
     }
 
-    private boolean catchUpNow(Source<T> source) {
+    // The asked request is the one this call runs, when this handover's own code asked for it.
+    private boolean catchUpNow(Source<T> source, @Nullable AskedCatchUp<T> asked) {
         synchronized (lock) {
             // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying
             // again rather than only by building a new one.
@@ -677,7 +709,7 @@ public final class BlockingHandover<T, K> {
                 // Called from this handover's own code, which holds up everything the replay would wait for.
                 synchronized (lock) {
                     if (askedByOwnCode == null) {
-                        askedByOwnCode = new AskedCatchUp<>(source, Thread.currentThread(), catchUpFailure);
+                        askedByOwnCode = new AskedCatchUp<>(source, Thread.currentThread(), latestFailure);
                     }
                 }
                 return true;
@@ -727,6 +759,10 @@ public final class BlockingHandover<T, K> {
                     this.source = source;
                     replayRunning = true;
                     replayTurnHeld = true;
+                    if (asked != null && askedByOwnCode == asked) {
+                        // An ask from here on is for a replay after this one.
+                        askedByOwnCode = null;
+                    }
                     replayTurnsTaken++;
                     holdsReplayTurn = true;
                     // Cleared again here, not only when this call was entered, because the catch-up it waited for can
@@ -947,34 +983,55 @@ public final class BlockingHandover<T, K> {
                 reportAlreadyDeliveredByReplay(replayedBy, payload);
             }
         } finally {
-            runCatchUpsAskedByOwnCode();
+            runCatchUpsAskedByOwnCode(false);
         }
     }
 
     // Runs once the calling thread has left this handover's code, so the replay no longer waits for it. A failure is
-    // recorded by the catch-up and refuses every later payload, and the code that asked was already told true, so
-    // neither a failure nor a stop is reported here.
-    private void runCatchUpsAskedByOwnCode() {
+    // recorded by the catch-up and refuses every later payload. It is thrown only when throwFailure is set, since the
+    // code that asked was told true and a live payload's caller has its payload applied.
+    private void runCatchUpsAskedByOwnCode(boolean throwFailure) {
         if (callDepth.get() != null) {
             return;
         }
         while (true) {
-            Source<T> asked;
+            AskedCatchUp<T> asked;
             synchronized (lock) {
-                AskedCatchUp<T> taken = askedByOwnCode;
-                if (taken == null || taken.askedOn() != Thread.currentThread()) {
+                asked = askedByOwnCode;
+                if (asked == null || asked.askedOn() != Thread.currentThread()) {
                     return;
                 }
-                askedByOwnCode = null;
                 // A catch-up that failed since it was asked for refuses it, the same as a caller that waited for one.
-                if (catchUpFailure != taken.failureWhenAsked()) {
+                if (latestFailure != asked.failureWhenAsked()) {
+                    askedByOwnCode = null;
                     continue;
                 }
-                asked = taken.source();
             }
+            boolean caughtUp;
             try {
-                catchUpNow(asked);
-            } catch (Throwable ignored) {
+                caughtUp = catchUpNow(asked.source(), asked);
+            } catch (Throwable e) {
+                forget(asked);
+                if (throwFailure) {
+                    // The failure just recorded refuses any ask still waiting on this thread.
+                    runCatchUpsAskedByOwnCode(false);
+                    throw e;
+                }
+                continue;
+            }
+            forget(asked);
+            if (!caughtUp && Thread.currentThread().isInterrupted()) {
+                log.warn("A catch-up that the own code of the {} asked for returned on an interrupted thread, so it may "
+                        + "not have replayed. Call catchUp again to replay the history.", id == null ? noun : noun + " '" + id + "'");
+            }
+        }
+    }
+
+    // A replay that took the replay turn has already let go of its ask.
+    private void forget(AskedCatchUp<T> asked) {
+        synchronized (lock) {
+            if (askedByOwnCode == asked) {
+                askedByOwnCode = null;
             }
         }
     }
@@ -1201,7 +1258,7 @@ public final class BlockingHandover<T, K> {
     private record RecordedFailure(Throwable cause) {
     }
 
-    private record AskedCatchUp<T>(Source<T> source, Thread askedOn, @Nullable Throwable failureWhenAsked) {
+    private record AskedCatchUp<T>(Source<T> source, Thread askedOn, @Nullable RecordedFailure failureWhenAsked) {
     }
 
     private void enterOwnCall() {

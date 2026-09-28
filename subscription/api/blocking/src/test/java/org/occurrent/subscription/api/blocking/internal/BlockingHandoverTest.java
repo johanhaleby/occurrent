@@ -2443,6 +2443,108 @@ class BlockingHandoverTest {
         }
     }
 
+    // The caller of catchUp(..) is told a catch-up it ran failed, including one its code asked for, so startup code
+    // does not take a view that stopped halfway for caught up.
+    @Test
+    void a_catch_up_that_runs_a_failing_replay_its_own_code_asked_for_throws_that_failure() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource running = source(List.of("R1"), false);
+        FakeSource asked = source(List.of("R2"), false);
+        asked.replayFailure = new RuntimeException("asked replay failed");
+        running.onReplayStarted = () -> handover.catchUp(asked);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).failsWithin(Duration.ofSeconds(5)).withThrowableThat().havingCause().withMessage("asked replay failed");
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(handover.refusesPermanently()).isTrue();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void an_accept_that_runs_a_failing_replay_its_fold_asked_for_returns_normally_and_the_handover_refuses_after() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource asked = source(List.of("R1"), false);
+        asked.replayFailure = new RuntimeException("asked replay failed");
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                self.get().catchUp(asked);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        self.set(handover);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> accepting = executor.submit(() -> handover.accept("L1"));
+
+            assertThat(accepting).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(handover.refusesPermanently()).isTrue();
+            assertThat(log).containsExactly("L1");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // The first failure stays the recorded one, so only a record of the most recent failure can tell that another
+    // catch-up failed after the ask on a handover that had already failed.
+    @Test
+    void a_catch_up_asked_for_by_own_code_does_not_replay_when_the_catch_up_running_that_code_fails_on_a_handover_that_already_failed() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource firstFailure = source(List.of("R0"), false);
+        firstFailure.replayFailure = new RuntimeException("first replay failed");
+        assertThatThrownBy(() -> handover.catchUp(firstFailure)).hasMessage("first replay failed");
+        FakeSource running = source(List.of("R1"), false);
+        running.replayFailure = new RuntimeException("second replay failed");
+        FakeSource asked = source(List.of("R2"), false);
+        running.onReplayStarted = () -> handover.catchUp(asked);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).failsWithin(Duration.ofSeconds(5)).withThrowableThat().havingCause().withMessage("second replay failed");
+            assertThat(asked.replayCallCount).isZero();
+            assertThat(log).isEmpty();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // The asked replay runs its source's isAlreadyCaughtUp() before it takes its turn, and an ask from there is for
+    // the replay about to start.
+    @Test
+    void an_ask_after_the_asked_replay_is_taken_but_before_it_starts_runs_no_second_replay() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource running = source(List.of("R1"), false);
+        FakeSource asked = source(List.of("R2"), false);
+        FakeSource askedAgain = source(List.of("R3"), false);
+        running.onReplayStarted = () -> {
+            handover.catchUp(asked);
+            asked.onIsAlreadyCaughtUp = () -> handover.catchUp(askedAgain);
+        };
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(askedAgain.replayCallCount).isZero();
+            assertThat(log).containsExactly("R1", "R2");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
     private static String[] concat(String[] first, String... second) {
         return Stream.concat(Stream.of(first), Stream.of(second)).toArray(String[]::new);
     }
@@ -2899,6 +3001,7 @@ class BlockingHandoverTest {
         private Runnable onReplayAbandoned;
         private Runnable onAlreadyDeliveredByReplay;
         private Runnable onHistoryDone;
+        private Runnable onIsAlreadyCaughtUp;
         private int replayCallCount = 0;
         private int markCaughtUpCallCount = 0;
         private int stopAfter = Integer.MAX_VALUE;
@@ -2936,6 +3039,9 @@ class BlockingHandoverTest {
 
         @Override
         public boolean isAlreadyCaughtUp() {
+            if (onIsAlreadyCaughtUp != null) {
+                onIsAlreadyCaughtUp.run();
+            }
             return alreadyCaughtUp;
         }
 
