@@ -172,16 +172,21 @@ subscription handler gets when it writes to the in-memory event store, or calls 
 waiting.
 
 Nobody waits for such a payload once it is queued, so when its delivery fails there is no caller left to tell. The
-handover then starts failing. It first tells the source whose catch-up delivers live to forget its catch-up marker, so
-a caller that sees a refusal and starts a new catch-up gets a replay.
+handover then starts failing. A failed catch-up starts it failing the same way, whether the replay, the marker read or
+the marker write failed, because a payload queued before that failure was answered too. The handover first tells the
+source whose catch-up failed and the source whose catch-up delivers live to forget the catch-up marker, so a caller
+that sees a refusal and starts a new catch-up gets a replay. A forget that errors is retried 3 times, and after that
+the handover logs an error that says to delete the marker by hand before replacing the subscription or feed.
 
-While it is failing, the handover refuses every payload from any other code with that failure. It delivers every
-payload it has already taken in and every payload its own code feeds it meanwhile, and a later failure is logged while
-the rest are still delivered. Once none is left, it fails for good with the first failure, as after a failed catch-up.
+While it is failing, the handover refuses every payload from any other code with that failure, and refuses a new
+catch-up. It delivers every payload it has already taken in and every payload its own code feeds it meanwhile, and a
+later failure is logged while the rest are still delivered. Once none is left, it fails for good with the first
+failure.
 
-So the handover tries to deliver every payload it answered once it was queued before it fails for good. The catch-up
-of the subscription or feed that replaces it replays the history, and with it every failed event the store holds. A
-payload that no replay holds is lost only when its own delivery failed. In 0.33.0 that failure went to a `Mono` the
+So every payload the handover answered once it was queued gets its delivery attempt before the handover fails for
+good, whatever made it fail. Once the marker is gone, the catch-up of the subscription or feed that replaces it
+replays the history, and with it every failed event the store holds. A payload that no replay holds is lost only when
+its own delivery failed. In 0.33.0 that failure went to a `Mono` the
 feeding code had subscribed and not waited for, so the payload was lost there too.
 
 The engine recognizes these calls when their `Mono` is subscribed, the way it recognizes a `goLive()`. A view that
@@ -191,8 +196,9 @@ refuses a nested `accept` before that.
 
 A replay that fails ends differently on the two engines, because they acknowledge at different moments. The blocking
 engine has already reported each buffered payload handled, so it delivers them before it records the failure. The
-reactive engine has not acknowledged the payloads it holds back, and the failure fails their acknowledgements, so it
-does not deliver them. Their callers offer them again, and the handover refuses everything from then on.
+reactive engine has not acknowledged the payloads it holds back from other code, and the failure fails their
+acknowledgements, so it does not deliver them. Their callers offer them again. The payloads its own code fed it were
+answered once they were queued, so it delivers them before it fails for good, as above.
 
 This also settles the reactive engine's second catch-up. Its live sink accepts one subscriber ever, so a catch-up on
 a handover that is already live does not subscribe it again and keeps the pipeline that is already running.
