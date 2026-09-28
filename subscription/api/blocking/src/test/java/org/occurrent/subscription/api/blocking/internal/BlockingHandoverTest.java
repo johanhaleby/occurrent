@@ -37,6 +37,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -2542,6 +2543,108 @@ class BlockingHandoverTest {
             assertThat(log).containsExactly("R1", "R3");
         } finally {
             executor.shutdownNow();
+        }
+    }
+
+    // A catch-up fails between two asks that join one replay. The ask before the failure is refused and the one after
+    // it is not, the same as when each had asked for a replay of its own.
+    @Test
+    void an_ask_that_joins_a_pending_one_after_a_catch_up_failed_between_them_still_replays() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource askedBeforeFailure = source(List.of("R1"), false);
+        FakeSource askedAfterFailure = source(List.of("R2"), false);
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch secondFolding = new CountDownLatch(1);
+        CountDownLatch failed = new CountDownLatch(1);
+        CountDownLatch secondAsked = new CountDownLatch(1);
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(askedBeforeFailure);
+                firstAsked.countDown();
+                awaitOrFail(secondAsked);
+            } else if (payload.equals("L2")) {
+                secondFolding.countDown();
+                awaitOrFail(failed);
+                handoverRef.get().catchUp(askedAfterFailure);
+                secondAsked.countDown();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> first = executor.submit(() -> handover.accept("L1"));
+            Future<?> second = executor.submit(() -> handover.accept("L2"));
+            awaitOrFail(firstAsked);
+            awaitOrFail(secondFolding);
+            FakeSource failing = source(List.of(), false);
+            failing.onIsAlreadyCaughtUp = () -> {
+                throw new IllegalStateException("marker lookup failed");
+            };
+            assertThatThrownBy(() -> handover.catchUp(failing)).hasMessage("marker lookup failed");
+            failed.countDown();
+
+            assertThat(first).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(second).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(askedBeforeFailure.replayCallCount).isZero();
+            assertThat(askedAfterFailure.replayCallCount).isEqualTo(1);
+            assertThat(log).containsExactlyInAnyOrder("L1", "L2", "R2");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // The asked catch-up finds the history caught up by the time it runs, and an ask made while it looked still gets
+    // a replay after it, since that lookup answered only the asks made before it.
+    @Test
+    void an_ask_made_while_the_asked_catch_up_finds_the_history_caught_up_still_replays() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource running = source(List.of("R1"), false);
+        FakeSource askedAgain = source(List.of("R3"), false);
+        AtomicInteger lookups = new AtomicInteger();
+        BlockingHandover.Source<String> caughtUpWhenRun = new BlockingHandover.Source<>() {
+            @Override
+            public boolean isAlreadyCaughtUp() {
+                if (lookups.incrementAndGet() == 1) {
+                    return false;
+                }
+                handover.catchUp(askedAgain);
+                return true;
+            }
+
+            @Override
+            public Stream<String> replay() {
+                return Stream.of("R2");
+            }
+
+            @Override
+            public void markCaughtUp() {
+            }
+        };
+        running.onReplayStarted = () -> handover.catchUp(caughtUpWhenRun);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(lookups).hasValue(2);
+            assertThat(askedAgain.replayCallCount).isEqualTo(1);
+            assertThat(log).containsExactly("R1", "R3");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private static void awaitOrFail(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
         }
     }
 

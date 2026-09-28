@@ -161,12 +161,13 @@ cannot end while the view blocks. Both engines answer a `catchUp()` they recogni
 whether it has anything to replay or not, and its replay does not start before the view's code returns. The blocking
 engine runs that replay once the view's code has returned, on the thread that asked first, before the call into the
 handover that ran the view's code on that thread returns. An ask from any thread before that replay takes its turn asks
-for the same replay, so a call on another thread can return before the replay has run. `true` means the catch-up was
-asked for, not that it has run. On the reactive engine a later replay can answer it, one that started after the call and
-has gone live by the time the catch-up's turn comes, and the catch-up then replays nothing. It can still be stopped, or
-refused because another catch-up failed, and a failure of its replay makes the handover fail the way any failed catch-up
-does. A view that waits for a `catchUp()` that replays from a thread it switched to is not recognized, so it still waits
-for a replay that cannot start while the view waits.
+for the same replay, so a call on another thread can return before the replay has run. That replay stops only for a stop
+that came after every ask it stands for, and a catch-up failure refuses only the asks made before it. A replay whose
+every ask was refused does not run. `true` means the catch-up was asked for, not that it has run. A later replay can
+answer it, one that started after the call and has gone live by the time the catch-up's turn comes, and the catch-up
+then replays nothing. It can still be stopped, or refused because another catch-up failed, and a failure of its replay
+makes the handover fail the way any failed catch-up does. A view that waits for a `catchUp()` that replays from a thread
+it switched to is not recognized, so it still waits for a replay that cannot start while the view waits.
 
 The reactive engine delivers one live payload at a time, so it cannot deliver a payload its own code feeds it before
 that code returns. Until [#1148](https://github.com/johanhaleby/occurrent/issues/1148) a call waiting for that

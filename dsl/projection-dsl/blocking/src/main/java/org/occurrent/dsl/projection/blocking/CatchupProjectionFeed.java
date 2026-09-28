@@ -269,12 +269,12 @@ public final class CatchupProjectionFeed<E> {
      * hands the call to another thread and waits for it is not recognized, and waits for a replay that cannot start
      * while it waits.
      * <p>
-     * That replay can still be stopped by a {@link #stopCatchUp()} called after the last call that asked for it, or
-     * refused because another catch-up on this feed failed. The view's code is not told, though a stopped replay calls
-     * {@code replayStarted()} and {@code replayAbandoned()} on a replay aware view like any other stopped replay. When
-     * the replay fails, this feed refuses every later event, the same as after any failed catch-up. A {@code catchUp()}
-     * or {@link #goLive()} that runs the replay throws the failure, and an {@link #accept(Object)} that runs it logs
-     * the failure and returns normally, since its event was folded.
+     * That replay can still be stopped by a {@link #stopCatchUp()} called after every call that asked for it, or
+     * refused because another catch-up on this feed failed after every such call. The view's code is not told, though a
+     * stopped replay calls {@code replayStarted()} and {@code replayAbandoned()} on a replay aware view like any other
+     * stopped replay. When the replay fails, this feed refuses every later event, the same as after any failed
+     * catch-up. A {@code catchUp()} or {@link #goLive()} that runs the replay throws the failure, and an
+     * {@link #accept(Object)} that runs it logs the failure and returns normally, since its event was folded.
      * <p>
      * A view that calls this for an event a replay delivers asks for another catch-up each time a replay delivers that
      * event again. Each of those catch-ups replays again unless it finds the catch-up marker written, so a feed built

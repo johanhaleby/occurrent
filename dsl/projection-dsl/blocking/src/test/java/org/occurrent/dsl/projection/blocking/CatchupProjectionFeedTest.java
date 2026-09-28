@@ -623,6 +623,100 @@ class CatchupProjectionFeedTest {
         }
     }
 
+    // The fold of "3" asks first but reaches the handover last, since its marker lookup blocks until the fold of "4"
+    // has stopped the catch-up and asked again. The ask of "4" came after the stop, so the catch-up still replays.
+    @Test
+    void a_catch_up_asked_for_after_a_stop_replays_when_an_ask_from_before_the_stop_reaches_the_handover_after_it() throws Exception {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch lookingUpMarker = new CountDownLatch(1);
+        CountDownLatch askedAfterStop = new CountDownLatch(1);
+        AtomicBoolean blockLookup = new AtomicBoolean();
+        CheckpointStorage marker = new InMemoryCheckpointStorage() {
+            @Override
+            public boolean exists(String subscriptionId) {
+                if (Thread.currentThread().getName().equals("fold-3") && blockLookup.compareAndSet(true, false)) {
+                    lookingUpMarker.countDown();
+                    awaitOrFail(askedAfterStop);
+                }
+                return super.exists(subscriptionId);
+            }
+        };
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        MaterializedView<Counted> view = event -> {
+            folded.add(event.eventId());
+            if (event.eventId().equals("3")) {
+                blockLookup.set(true);
+                feedRef.get().catchUp();
+            } else if (event.eventId().equals("4")) {
+                awaitOrFail(lookingUpMarker);
+                feedRef.get().stopCatchUp();
+                feedRef.get().catchUp();
+                askedAfterStop.countDown();
+            }
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", view, Filter.all(), store, converter, Counted::eventId, marker);
+        feedRef.set(feed);
+        feed.goLive();
+        FutureTask<Void> first = new FutureTask<>(() -> feed.accept(new Counted("3")), null);
+        FutureTask<Void> second = new FutureTask<>(() -> feed.accept(new Counted("4")), null);
+        Thread firstThread = new Thread(first, "fold-3");
+        Thread secondThread = new Thread(second, "fold-4");
+        firstThread.start();
+        secondThread.start();
+
+        try {
+            assertThat(first).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(second).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(folded).containsExactlyInAnyOrder("3", "4", "1", "2");
+            assertThat(folded.subList(2, 4)).containsExactly("1", "2");
+            assertThat(marker.exists("counter")).isTrue();
+        } finally {
+            firstThread.interrupt();
+            secondThread.interrupt();
+        }
+    }
+
+    // A stop after both asks stops the one catch-up they asked for.
+    @Test
+    void stop_catch_up_after_two_asks_from_the_feeds_own_fold_stops_the_catch_up_they_asked_for() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CheckpointStorage marker = new InMemoryCheckpointStorage();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        MaterializedView<Counted> view = event -> {
+            folded.add(event.eventId());
+            if (event.eventId().equals("3")) {
+                feedRef.get().catchUp();
+                feedRef.get().catchUp();
+                feedRef.get().stopCatchUp();
+            }
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", view, Filter.all(), store, converter, Counted::eventId, marker);
+        feedRef.set(feed);
+        feed.goLive();
+
+        feed.accept(new Counted("3"));
+
+        assertThat(folded).containsExactly("3");
+        assertThat(marker.exists("counter")).isFalse();
+    }
+
+    private static void awaitOrFail(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
     @Test
     void a_live_event_not_in_the_replay_is_folded_after_the_catch_up() {
         InMemoryEventStore store = new InMemoryEventStore();
