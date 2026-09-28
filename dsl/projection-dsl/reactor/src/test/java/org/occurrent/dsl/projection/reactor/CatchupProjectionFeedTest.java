@@ -316,12 +316,10 @@ class CatchupProjectionFeedTest {
         }
     }
 
-    // Folds every event, and on the one named feeds this feed an event "n" first, recording why it was refused
+    // Folds every event, and on the one named first runs what feeds this feed, before the event itself is recorded
     private static Function<Counted, Mono<Void>> feedingBackOn(String eventId, AtomicReference<CatchupProjectionFeed<Counted>> feed,
-                                                               List<String> folded, List<Throwable> refusals) {
-        return event -> (event.eventId().equals(eventId)
-                ? feed.get().accept(new Counted("n")).onErrorResume(refusal -> Mono.fromRunnable(() -> refusals.add(refusal)))
-                : Mono.<Void>empty())
+                                                               List<String> folded, Function<CatchupProjectionFeed<Counted>, Mono<Void>> feedBack) {
+        return event -> (event.eventId().equals(eventId) ? Mono.defer(() -> feedBack.apply(feed.get())) : Mono.<Void>empty())
                 .then(Mono.fromRunnable(() -> folded.add(event.eventId())));
     }
 
@@ -617,40 +615,84 @@ class CatchupProjectionFeedTest {
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(3));
     }
 
-    // accept(..) completes once the event is folded, which cannot happen before the fold it is called from returns,
-    // so it is refused there rather than left waiting for that fold
+    // The fold returns the call as part of its own Mono, so the call completes once "n" is queued, and "n" is folded
+    // after that fold
     @Test
-    void accept_from_the_feeds_own_live_fold_is_refused_and_the_event_is_not_folded() {
+    void accept_from_the_feeds_own_live_fold_completes_once_queued_and_the_event_is_folded_after_that_fold() {
         List<String> folded = new CopyOnWriteArrayList<>();
-        List<Throwable> refusals = new CopyOnWriteArrayList<>();
         AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
-        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
-                "counter", feedingBackOn("2", feedRef, folded, refusals), Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                feedingBackOn("2", feedRef, folded, self -> self.accept(new Counted("n"))),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
         feedRef.set(feed);
         StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
 
         StepVerifier.create(feed.accept(new Counted("2"))).expectComplete().verify(ofSeconds(5));
 
-        assertThat(refusals).singleElement().satisfies(refusal -> assertThat(refusal)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage(HandoverMessages.waitedForFromOwnDelivery("projection feed")));
-        assertThat(folded).containsExactly("1", "2");
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(folded).containsExactly("1", "2", "n"));
+    }
+
+    // The 0.33.0 shape of a fold feeding its own feed, subscribed and not waited for
+    @Test
+    void accept_the_feeds_own_live_fold_subscribes_and_leaves_has_its_event_folded_after_that_fold() {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                feedingBackOn("2", feedRef, folded, self -> Mono.fromRunnable(() -> self.accept(new Counted("n")).subscribe())),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        feedRef.set(feed);
+        StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        StepVerifier.create(feed.accept(new Counted("2"))).expectComplete().verify(ofSeconds(5));
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(folded).containsExactly("1", "2", "n"));
     }
 
     @Test
-    void accept_from_the_feeds_own_replayed_fold_is_refused_and_the_catch_up_completes() {
+    void accept_from_the_feeds_own_replayed_fold_completes_once_queued_and_the_event_is_folded_after_the_replay() {
         List<String> folded = new CopyOnWriteArrayList<>();
-        List<Throwable> refusals = new CopyOnWriteArrayList<>();
         AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
-        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
-                "counter", feedingBackOn("1", feedRef, folded, refusals), Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, null);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                feedingBackOn("1", feedRef, folded, self -> self.accept(new Counted("n"))),
+                Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, null);
         feedRef.set(feed);
 
         StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
 
-        assertThat(refusals).singleElement().satisfies(refusal -> assertThat(refusal)
-                .hasMessage(HandoverMessages.waitedForFromOwnDelivery("projection feed")));
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(folded).containsExactly("1", "2", "n"));
+    }
+
+    // "bad" is in no store. The fold of "2" feeds it, the fold of "bad" fails once, and the marker says the history was
+    // read, so a new feed would skip the replay that feeds "bad" again unless the marker is forgotten.
+    @Test
+    void after_an_event_a_fold_fed_fails_a_new_feed_replays_the_history_and_the_fold_feeds_it_again() {
+        CheckpointStorage marker = new InMemoryCheckpointStorage();
+        AtomicBoolean badFails = new AtomicBoolean(true);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        Function<Counted, Mono<Void>> fold = event -> switch (event.eventId()) {
+            case "2" -> feedRef.get().accept(new Counted("bad")).then(Mono.fromRunnable(() -> folded.add("2")));
+            case "bad" -> badFails.getAndSet(false)
+                    ? Mono.error(new IllegalStateException("fold failed for bad"))
+                    : Mono.fromRunnable(() -> folded.add("bad"));
+            default -> Mono.fromRunnable(() -> folded.add(event.eventId()));
+        };
+        CatchupProjectionFeed<Counted> failed = CatchupProjectionFeed.create(
+                "counter", fold, Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, marker);
+        feedRef.set(failed);
+        StepVerifier.create(failed.catchUp()).expectComplete().verify(ofSeconds(5));
+        await().atMost(ofSeconds(5)).untilAsserted(() -> StepVerifier.create(failed.accept(new Counted("3")))
+                .expectErrorSatisfies(error -> assertThat(error).hasRootCauseMessage("fold failed for bad"))
+                .verify(ofSeconds(5)));
         assertThat(folded).containsExactly("1", "2");
+
+        folded.clear();
+        CatchupProjectionFeed<Counted> rebuilt = CatchupProjectionFeed.create(
+                "counter", fold, Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, marker);
+        feedRef.set(rebuilt);
+        StepVerifier.create(rebuilt.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(folded).containsExactly("1", "2", "bad"));
     }
 
     @Test

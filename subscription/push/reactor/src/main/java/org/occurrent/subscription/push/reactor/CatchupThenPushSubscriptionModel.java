@@ -78,15 +78,20 @@ import java.util.function.Supplier;
  * fails or is stopped. A handler that writes an event the subscription's filter accepts does not wait for it. This
  * model hands the subscription's events to the handler one at a time, so that event cannot be applied before the
  * handler returns. The write returns once the event is queued, and the handler gets the events it wrote in the
- * order it wrote them, once it has returned, or once the replay has ended for a write made during the replay. When
- * applying such an event fails, the write has already returned, so the subscription fails as after a failed catch-up
- * and refuses every later event rather than apply the ones behind it without it. Cancel the subscription and
- * subscribe again. The model
- * recognizes the write when the handler blocks on it on the thread it was called on, or returns it as part of the
- * {@link Mono} it returns. A handler that blocks on the write from a thread it switched to still waits for itself.
- * A handler that calls {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} on the model feeding it gets
- * {@link org.occurrent.subscription.RoutingOutcome#NOT_DELIVERABLE}, since that call waits until the event is
- * applied. Nothing records which live events the subscription has handled, and a crash before the handler has run
+ * order it wrote them, once it has returned, or once the replay has ended for a write made during the replay. The
+ * model recognizes the write when the handler returns it as part of the {@link Mono} it returns, or subscribes it,
+ * blocking or not, on the thread it was called on. A handler that blocks on the write from a thread it switched to
+ * still waits for itself. The same holds for {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} called
+ * from the handler, which decides live or not as for any caller, and reports
+ * {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} once the event is queued.
+ * <p>
+ * When applying an event written that way fails, the write has already returned. The subscription then forgets its
+ * catch-up marker, refuses every event that does not come from its handler, applies the events it has already taken
+ * in and those its handler writes meanwhile, and then fails for good, as after a failed catch-up. Cancel the
+ * subscription and subscribe again, and its catch-up replays the history. An event that no replay holds is lost only
+ * when applying it failed.
+ * <p>
+ * Nothing records which live events the subscription has handled, and a crash before the handler has run
  * loses the event from the in-memory event store too, so after a crash the store never holds an event the
  * subscription missed. With a durable event store, such as MongoDB, use a durable subscription, or a broker as
  * described below. The amendment to ADR 133 records why.
@@ -284,6 +289,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 return Mono.defer(() -> mayStillMarkCaughtUp(subscriptionId, replayDone)
                         ? CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId)
                         : Mono.empty());
+            }
+
+            @Override
+            public Mono<Void> forgetCaughtUp() {
+                return catchupMarker == null ? Mono.empty() : catchupMarker.delete(subscriptionId);
             }
 
             @Override

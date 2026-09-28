@@ -36,7 +36,9 @@ import org.occurrent.subscription.RoutingOutcome;
  * {@code outcome} is {@link RoutingOutcome#DELIVERED}
  * only when the model is running, a currently registered, unpaused subscription's filter accepted the event, and
  * the action ran rather than refusing the event before attempting it, independent of whether that handler then
- * completes or errors, apart from the {@link Error} named above, which reports nothing at all.
+ * completes or errors, apart from the {@link Error} named above, which reports nothing at all. With a
+ * {@link CatchupThenPushSubscriptionModel} in front, an event written from inside its handler is reported
+ * {@link RoutingOutcome#DELIVERED} once it is queued behind that handler, before the handler has run for it.
  * It is {@link RoutingOutcome#FILTERED} when that
  * same subscription evaluated the event and declined it, and {@link RoutingOutcome#UNAVAILABLE} when there was
  * no running, unpaused subscription for the event to reach at all, whether because nothing is registered, the model

@@ -192,10 +192,13 @@ public final class CatchupProjectionFeed<E> {
      * stopped before the feed went live, the feed is stopped, the catch-up failed, or the live buffer is full. The
      * listener must not acknowledge it, and the broker delivers it again.
      * <p>
-     * It also errors with an {@link IllegalStateException}, at once and with nothing taken in, when called from inside
-     * this feed's fold, as part of the {@link Mono} the fold returns or blocking on the thread this feed called the fold
-     * on. This feed folds one event at a time, so the event could not be folded before the fold returns. A fold that
-     * blocks on this call from a thread it switched to is not recognized, and waits for itself.
+     * Called from inside this feed's fold, it completes once the event is queued instead, since this feed folds one
+     * event at a time and the event cannot be folded before that fold returns. The fold's call is recognized when the
+     * returned {@link Mono} is part of the {@link Mono} the fold returns, or is subscribed, blocking or not, on the
+     * thread this feed called the fold on. The event is folded after that fold, in the order it was fed. When folding
+     * it fails, this feed folds what it has already taken in, refuses every other event, and then fails for good, as
+     * after a failed catch-up. Build a new feed, whose catch-up replays the history. An event that no replay feeds
+     * again is lost only when its own fold failed.
      *
      * @param event The domain event received from the external source.
      * @return A {@link Mono} that completes when the event has been folded.
@@ -271,6 +274,11 @@ public final class CatchupProjectionFeed<E> {
             }
 
             @Override
+            public Mono<Void> forgetCaughtUp() {
+                return CatchupProjectionFeed.this.forgetCaughtUp();
+            }
+
+            @Override
             public void replayStarted() {
                 if (fold instanceof ReactiveReplayAware replayAware) {
                     replayAware.replayStarted();
@@ -339,6 +347,13 @@ public final class CatchupProjectionFeed<E> {
             public Mono<Void> markCaughtUp() {
                 throw new AssertionError("isAlreadyCaughtUp() is true, so nothing here was caught up to mark.");
             }
+
+            // A catchUp() after this call records its marker, and this source can still be the one that delivers
+            // live, so it forgets that marker the same way.
+            @Override
+            public Mono<Void> forgetCaughtUp() {
+                return CatchupProjectionFeed.this.forgetCaughtUp();
+            }
         }).then();
     }
 
@@ -383,6 +398,10 @@ public final class CatchupProjectionFeed<E> {
         return reader.currentPosition()
                 .flatMap(head -> catchupMarker.save(id, GlobalCheckpoint.of(head)))
                 .then();
+    }
+
+    private Mono<Void> forgetCaughtUp() {
+        return catchupMarker == null ? Mono.empty() : catchupMarker.delete(id);
     }
 
     private DeliveredEvent<E> replayedItem(CloudEvent cloudEvent) {
