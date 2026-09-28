@@ -681,6 +681,112 @@ class CatchupProjectionFeedTest {
         assertThat(folded).containsExactly("2", "1", "3");
     }
 
+    // The fold of "2" asks for two catch-ups, both replaying "1", before either can start
+    @Test
+    void two_catch_ups_from_the_feeds_own_live_fold_replay_once() {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                feedingBackOn("2", feedRef, folded, self -> self.catchUp().then(self.catchUp())),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        feedRef.set(feed);
+        StepVerifier.create(feed.goLive()).expectComplete().verify(ofSeconds(5));
+
+        StepVerifier.create(feed.accept(new Counted("2"))).expectComplete().verify(ofSeconds(5));
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(folded).contains("1"));
+        StepVerifier.create(feed.accept(new Counted("3"))).expectComplete().verify(ofSeconds(5));
+        assertThat(folded).containsExactly("2", "1", "3");
+    }
+
+    // The fold of "1" stops the running replay and then asks for a catch-up, before that replay reads "2"
+    @Test
+    void a_catch_up_the_view_asks_for_after_a_stop_does_not_undo_that_stop_for_the_running_replay() {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        AtomicBoolean asked = new AtomicBoolean();
+        Function<Counted, Mono<Void>> fold = event -> (event.eventId().equals("1") && asked.compareAndSet(false, true)
+                ? Mono.defer(() -> {
+                    feedRef.get().stopCatchUp();
+                    return feedRef.get().catchUp();
+                })
+                : Mono.<Void>empty())
+                .then(Mono.fromRunnable(() -> folded.add(event.eventId())));
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", fold, Filter.all(),
+                reader("1", "2"), countedConverter(), Counted::eventId, marker);
+        feedRef.set(feed);
+
+        StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> StepVerifier.create(marker.read("counter")).expectNextCount(1).verifyComplete());
+        assertThat(folded).containsExactly("1", "1", "2");
+        StepVerifier.create(feed.accept(new Counted("3"))).expectComplete().verify(ofSeconds(5));
+        assertThat(folded).containsExactly("1", "1", "2", "3");
+    }
+
+    // The stop comes when the replay reads its history, after catchUp() and before the catch-up ends, and there is no
+    // event to notice it at
+    @Test
+    void a_stop_during_a_catch_up_with_an_empty_history_does_not_keep_the_feed_from_going_live() {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        PositionOrderedReader stoppingOnRead = new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return Flux.defer(() -> {
+                    feedRef.get().stopCatchUp();
+                    return Flux.<CloudEvent>empty();
+                });
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return Mono.just(0L);
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
+            }
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                event -> Mono.fromRunnable(() -> folded.add(event.eventId())), Filter.all(), stoppingOnRead,
+                countedConverter(), Counted::eventId, marker);
+        feedRef.set(feed);
+
+        StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        StepVerifier.create(marker.read("counter")).expectNextCount(1).verifyComplete();
+        StepVerifier.create(feed.accept(new Counted("1"))).expectComplete().verify(ofSeconds(5));
+        assertThat(folded).containsExactly("1");
+    }
+
+    // The batch is larger than the history, so the first write is the flush in replayCompleted(), and the stop comes
+    // after the replay has read its last event
+    @Test
+    void a_stop_while_a_coalescing_view_writes_its_replay_batch_does_not_keep_the_feed_from_going_live() {
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        AtomicReference<CatchupProjectionFeed<Counted>> feedRef = new AtomicReference<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, (id, state) -> {
+            feedRef.get().stopCatchUp();
+            repo.put(id, state);
+        });
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                Projections.reactiveUpdateWithMetadata(projection(), repository, new MaterializedViewOptions(100)),
+                Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, marker);
+        feedRef.set(feed);
+
+        StepVerifier.create(feed.catchUp()).expectComplete().verify(ofSeconds(5));
+
+        assertThat(repo.get("counter")).isEqualTo(2);
+        StepVerifier.create(marker.read("counter")).expectNextCount(1).verifyComplete();
+        StepVerifier.create(feed.accept(new Counted("3"))).expectComplete().verify(ofSeconds(5));
+        assertThat(repo.get("counter")).isEqualTo(3);
+    }
+
     // "bad" is in no store. The fold of "2" feeds it, the fold of "bad" fails once, and the marker says the history was
     // read, so a new feed would skip the replay that feeds "bad" again unless the marker is forgotten.
     @Test
