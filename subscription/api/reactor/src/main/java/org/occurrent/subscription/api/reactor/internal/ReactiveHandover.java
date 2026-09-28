@@ -1375,7 +1375,7 @@ public final class ReactiveHandover<T, K> {
             }
             // A marker write that errored can still have been stored after the first failure forgot the marker, so
             // this catch-up forgets it again before it tells its caller. A write the store applies after this forget
-            // keeps the marker, see #1150.
+            // keeps the marker.
             Mono<Void> forgetOwnMarker = markerMayBeWritten.get() ? forgetCaughtUp(List.of(source)) : Mono.empty();
             forgetOwnMarker.subscribe(null, null, () -> {
                 abandonedDrains.forEach(abandoned -> releaseReplayTurn(abandoned.holdsReplayTurn()));
