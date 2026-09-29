@@ -485,8 +485,13 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
                 // Same snapshot reasoning as stop(): resumeSubscription moves each id out of pausedSubscriptions as it
                 // goes, so iterating the live map here would be exposed to the same hazard.
                 for (String subscriptionId : new ArrayList<>(pausedSubscriptions.keySet())) {
-                    // The run itself, since the dispatcher may already have forgotten it by the time the map is read
-                    resumed.put(subscriptionId, doResumeSubscription(subscriptionId, null));
+                    resumeSubscription(subscriptionId);
+                    // Only the dispatcher writes to this map without the lock, and it only removes a run whose history
+                    // was lost, so this is the run the resume started, or nothing when there is nothing to wait for
+                    InternalSubscription run = runningSubscriptions.get(subscriptionId);
+                    if (run != null) {
+                        resumed.put(subscriptionId, run);
+                    }
                 }
             }
         }
@@ -568,7 +573,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      */
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
-        return new NativeMongoSubscription(subscriptionId, doResumeSubscription(subscriptionId, null).startedLatch);
+        return doResumeSubscription(subscriptionId, null);
     }
 
     /**
@@ -580,13 +585,13 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     public synchronized Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         MongoCommons.checkStartPosition(startAt, new SubscriptionModelContext(NativeMongoSubscriptionModel.class));
-        return new NativeMongoSubscription(subscriptionId, doResumeSubscription(subscriptionId, startAt).startedLatch);
+        return doResumeSubscription(subscriptionId, startAt);
     }
 
-    // The shared resume path, returning the run it starts. repositionTo is the caller's explicit position from the
-    // two-arg overload, or null from the one-arg overload, in which case the subscription's own currentStartAt
-    // reference is left untouched and the resume continues from whatever it already holds.
-    private InternalSubscription doResumeSubscription(String subscriptionId, @Nullable StartAt repositionTo) {
+    // The shared resume path. repositionTo is the caller's explicit position from the two-arg overload, or null
+    // from the one-arg overload, in which case the subscription's own currentStartAt reference is left untouched
+    // and the resume continues from whatever it already holds.
+    private Subscription doResumeSubscription(String subscriptionId, @Nullable StartAt repositionTo) {
         if (shutdown) {
             throw new IllegalStateException(SubscriptionModel.class.getSimpleName() + " is shutdown");
         }
@@ -615,7 +620,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             pausedSubscriptions.put(subscriptionId, internalSubscription);
         });
 
-        return resumed;
+        return new NativeMongoSubscription(subscriptionId, resumed.startedLatch);
     }
 
     /**

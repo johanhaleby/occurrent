@@ -57,7 +57,7 @@ and when applying that event fails, the subscription or feed fails for good. Rea
 [section 15](#15-feeding-a-reactor-catch-up-from-its-own-handler-no-longer-waits-forever).
 Finally, on `NativeMongoSubscriptionModel`, `waitUntilStarted()` on a subscription made while the model is stopped now
 waits until `start()` or `resumeSubscription(..)` opens its change stream, so calling it before `start()` on the thread
-that calls `start()` waits forever. Read
+that calls `start()` waits forever, and so do the DSL calls that call it for you. Read
 [section 16](#16-waituntilstarted-on-a-native-mongodb-subscription-made-while-the-model-is-stopped-waits-for-start).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
@@ -1216,15 +1216,22 @@ starts it, and `waitUntilStarted()` returns once that change stream has opened. 
 waited this way in 0.33.0.
 
 You are affected when one thread calls `stop()`, then `subscribe(..)` and `waitUntilStarted()`, and then `start()`.
-That thread now waits in `waitUntilStarted()` until it is interrupted. The Kotlin subscription DSL's `subscribe(..)`
-calls `waitUntilStarted()` unless you pass `waitUntilStarted = false`, so a DSL `subscribe(..)` between `stop()` and
-`start()` on one thread waits the same way.
+That thread now waits in `waitUntilStarted()` until it is interrupted. These calls wait the same way when they run
+between `stop()` and `start()` on one thread, because they call `waitUntilStarted()` for you:
+
+- The Kotlin subscription DSL's `subscribe(..)` and the Kotlin `subscribeDcb(..)` and `subscribeDcbWithMetadata(..)`,
+  unless you pass `waitUntilStarted = false`.
+- `ProjectionRunner.project(..)` and `SagaRunner.run(..)`, unless you call the overload that takes `waitUntilStarted`
+  and pass `false`.
+- `DcbProjectionRunner.project(..)` and the Kotlin `DcbSubscriptions.project(..)`, always.
 
 What to do:
 
 - Call `start()` before you wait, or wait on another thread.
-- In the Kotlin DSL, pass `waitUntilStarted = false` to a `subscribe(..)` made while the model is stopped, and call
-  `waitUntilStarted()` on the `Subscription` it returns once `start()` has returned.
+- For a call that takes `waitUntilStarted`, pass `false` while the model is stopped, and call `waitUntilStarted()` on
+  the `Subscription` it returns once `start()` has returned.
+- `DcbProjectionRunner.project(..)` and the Kotlin `DcbSubscriptions.project(..)` take no such flag, so call them
+  after `start()`, or on another thread.
 - `waitUntilStarted(Duration)` returns `false` once the timeout has passed, so a wait with a timeout ends on its own.
 
 There is no recipe for this change. Whether the model is stopped when `subscribe(..)` runs is runtime behavior that a

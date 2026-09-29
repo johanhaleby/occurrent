@@ -477,6 +477,35 @@ public class NativeMongoSubscriptionModelTest {
         }
 
         @Test
+        void start_resumes_the_subscriptions_that_stop_paused_through_resumeSubscription() {
+            // Given a subclass that records what resumeSubscription(..) is called for
+            CopyOnWriteArrayList<String> resumedThroughTheOverride = new CopyOnWriteArrayList<>();
+            ExecutorService executor = Executors.newCachedThreadPool();
+            NativeMongoSubscriptionModel model = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, executor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2)) {
+                @Override
+                public Subscription resumeSubscription(String subscriptionId) {
+                    resumedThroughTheOverride.add(subscriptionId);
+                    return super.resumeSubscription(subscriptionId);
+                }
+            };
+            try {
+                String subscriptionId = UUID.randomUUID().toString();
+                model.subscribe(subscriptionId, __ -> {
+                }).waitUntilStarted(Duration.ofSeconds(5));
+                model.stop();
+
+                // When
+                model.start();
+
+                // Then
+                assertThat(resumedThroughTheOverride).containsExactly(subscriptionId);
+                assertThat(model.isRunning(subscriptionId)).isTrue();
+            } finally {
+                model.shutdown();
+            }
+        }
+
+        @Test
         void an_interrupted_wait_for_a_subscription_to_start_leaves_the_thread_interrupted() {
             // Given a subscription made while the model is stopped, so it does not start until the model does
             subscriptionModel.stop();
