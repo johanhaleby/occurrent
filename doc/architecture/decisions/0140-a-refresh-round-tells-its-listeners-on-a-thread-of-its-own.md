@@ -27,7 +27,9 @@ thread, which calls the listeners in the order the round decided the changes.**
 
 A change can be out of date by the time the notifier gets to it, since registering, releasing and the next round keep
 changing the lease meanwhile. The notifier therefore calls `onConsumeGranted` only if the consumer still holds the
-lease, since starting a subscription on a node without its lease would deliver events twice. It always calls
+lease, since starting a subscription on a node without its lease would deliver events twice. The notifier checks
+before the listener takes its monitor, so the lease can still move on in between, and `CompetingConsumerSubscriptionModel`
+asks the strategy again once it holds its monitor and ignores a grant for a lease the node no longer holds. It always calls
 `onConsumeProhibited`, also for a lease the node has won back since. `CompetingConsumerSubscriptionModel` then pauses
 the subscription and releases the lease, and a later round grants it again and resumes the subscription. Dropping
 that prohibition would keep a subscription whose delivery ended while the prohibition waited on a lease this node
@@ -49,5 +51,6 @@ whose pause is still waiting keeps delivering events until the pause completes, 
 writes use the fencing token of the lease it lost, so they are refused once the next holder has written (ADR 139).
 
 A `CompetingConsumerListener` of your own is now called from the notifier thread for a change a refresh round made.
-It is not called for a grant the lease has already moved past, and it can be told about a prohibition for a lease the
-node holds again by then.
+It is not called for a grant the lease had already moved past when the notifier checked, but the lease can move on
+before the listener acts, so a listener that starts something on a grant asks the strategy again first. It can be told
+about a prohibition for a lease the node holds again by then.

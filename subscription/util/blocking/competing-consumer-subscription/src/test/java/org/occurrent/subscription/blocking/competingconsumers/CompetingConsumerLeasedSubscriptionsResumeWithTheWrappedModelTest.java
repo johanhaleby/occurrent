@@ -32,6 +32,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -59,10 +60,10 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 /**
- * A subscription that won its lease while the wrapped model was not started yet sits paused in the wrapped model,
- * although this model records it as running. Starting this model resumes it, and so does a grant that starts the
- * wrapped model, since this node holds its lease. A stop, on the other hand, stops this model whether the wrapped model
- * was started or not, and a subscription made while this model is stopped takes no lease until it is started.
+ * A subscription that wins its lease while the wrapped model is not started starts the wrapped model first, as a grant
+ * does, so it is never left paused there while this model records it as running. A stop, on the other hand, stops this
+ * model whether the wrapped model was started or not, and a subscription made while this model is stopped takes no
+ * lease until it is started.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -96,36 +97,33 @@ class CompetingConsumerLeasedSubscriptionsResumeWithTheWrappedModelTest {
     }
 
     @Test
-    void a_grant_that_starts_the_wrapped_model_resumes_the_subscriptions_whose_lease_this_node_already_held() {
-        rival = strategy();
-        assertThat(rival.registerCompetingConsumer("W", "rival")).isTrue();
-        node = new CompetingConsumerSubscriptionModel(notStartedSpringModel(), strategy());
+    void a_subscription_that_wins_its_lease_while_the_wrapped_model_is_not_started_starts_it() {
+        SpringMongoSubscriptionModel spring = notStartedSpringModel();
+        node = new CompetingConsumerSubscriptionModel(spring, strategy());
         CopyOnWriteArrayList<CloudEvent> handledByX = new CopyOnWriteArrayList<>();
-        node.subscribe("node", "X", null, StartAt.subscriptionModelDefault(), handledByX::add);
-        node.subscribe("node", "W", null, StartAt.subscriptionModelDefault(), __ -> {
-        });
 
-        rival.unregisterCompetingConsumer("W", "rival");
-        await("the node is granted W, which starts the wrapped model").atMost(6, SECONDS).until(() -> node.isRunning("W"));
+        Subscription subscription = node.subscribe("node", "X", null, StartAt.subscriptionModelDefault(), handledByX::add);
+
+        assertThat(spring.isRunning()).as("the wrapped model is started before X is subscribed there").isTrue();
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).as("X starts without a start of this model").isTrue();
         String eventId = writeEvent();
-
         await().atMost(5, SECONDS).untilAsserted(() -> assertThat(handledByX).extracting(CloudEvent::getId)
-                .as("X, whose lease the node holds, is resumed along with the wrapped model")
+                .as("X receives events without a start of this model")
                 .contains(eventId));
     }
 
     @Test
-    void starting_this_model_resumes_the_subscriptions_whose_lease_this_node_already_held() {
+    void a_subscription_that_won_its_lease_before_this_model_was_started_receives_events_after_the_start() {
         node = new CompetingConsumerSubscriptionModel(notStartedSpringModel(), strategy());
         CopyOnWriteArrayList<CloudEvent> handledByX = new CopyOnWriteArrayList<>();
         node.subscribe("node", "X", null, StartAt.subscriptionModelDefault(), handledByX::add);
 
         node.start();
-        await("X, whose lease the node holds, is resumed when the model is started").atMost(5, SECONDS).until(() -> node.isRunning("X"));
+        await("X, whose lease the node holds, runs once the model is started").atMost(5, SECONDS).until(() -> node.isRunning("X"));
         String eventId = writeEvent();
 
         await().atMost(5, SECONDS).untilAsserted(() -> assertThat(handledByX).extracting(CloudEvent::getId)
-                .as("X, whose lease the node holds, is resumed when the model is started")
+                .as("X, whose lease the node holds, receives events once the model is started")
                 .contains(eventId));
     }
 

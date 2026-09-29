@@ -275,12 +275,11 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     }
 
     @Test
-    void a_custom_lease_strategy_that_throws_on_one_leased_consumer_does_not_keep_another_from_resuming() {
+    void a_custom_lease_strategy_that_throws_on_one_consumer_does_not_keep_another_from_resuming() {
         strategy.grantOnRegister = true;
         subscribe("a");
         subscribe("b");
-        delegate.holdPausedWhileNotStarted("a");
-        delegate.holdPausedWhileNotStarted("b");
+        model.stop();
         strategy.hasLockThrowsOn.add("a");
 
         Throwable thrown = catchThrowable(() -> model.start(true));
@@ -290,38 +289,72 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     }
 
     @Test
-    void a_leased_consumer_the_wrapped_model_fails_to_resume_gives_its_lease_back_and_resumes_on_the_next_grant() {
+    void a_subscription_that_wins_its_lease_while_the_wrapped_model_is_stopped_is_delivered_once_after_a_start() {
         strategy.grantOnRegister = true;
         subscribe("x");
-        delegate.holdPausedWhileNotStarted("x");
-        delegate.throwsOn.add("x");
+        model.stop();
+        strategy.grantOnRegister = false;
+        model.start(true);
+        assertThat(delegate.isRunning()).as("a start that won no lease does not start the wrapped model").isFalse();
+        strategy.grantOnRegister = true;
 
-        Throwable thrown = catchThrowable(() -> model.start(true));
+        subscribe("y");
+        strategy.grantOnRegister = false;
+        model.start(true);
 
-        assertThat(thrown).isInstanceOf(IllegalStateException.class);
-        assertThat(strategy.holders).as("the lease nothing on this node serves is given back").isEmpty();
-        assertThat(model.isPaused("x")).isTrue();
-        delegate.throwsOn.clear();
-        strategy.grant("x");
-        assertThat(delegate.running).as("x keeps competing for the lease, so the next grant resumes it").contains("x");
+        assertThat(delegate.running).as("y is subscribed once, in a wrapped model that was started first").containsExactly("y");
     }
 
     @Test
-    void start_reports_a_consumer_that_failed_to_resume_when_the_wrapped_model_then_fails_to_start() {
+    void a_subscription_that_wins_its_lease_while_the_wrapped_model_fails_to_start_gives_the_lease_back_and_keeps_nothing() {
         strategy.grantOnRegister = true;
         subscribe("y");
-        model.pauseSubscription("y");
-        subscribe("x");
-        delegate.holdPausedWhileNotStarted("x");
-        delegate.throwsOn.add("y");
+        model.stop();
+        model.start(false);
         delegate.startThrows = true;
 
-        Throwable thrown = catchThrowable(() -> model.start(true));
+        Throwable thrown = catchThrowable(() -> subscribe("x"));
 
-        assertThat(thrown.getSuppressed()).as("the failure to resume y is not lost when starting the wrapped model for x fails").hasSize(1);
-        assertThat(strategy.holders).as("both leases are given back").isEmpty();
+        assertThat(thrown).as("the caller of subscribe learns that the wrapped model did not start").hasMessage("The wrapped model cannot start right now");
+        assertThat(strategy.holders).as("the lease nothing on this node serves is given back").isEmpty();
+        assertThat(model.subscriptionIds()).as("the failed subscription is not kept").containsExactly("y");
+    }
+
+    @Test
+    void a_subscription_the_user_resumes_while_the_model_is_stopped_runs_once_this_node_wins_its_lease_later() {
+        strategy.grantOnRegister = false;
+        subscribe("x");
+        model.stop();
+        model.resumeSubscription("x");
+
+        strategy.grant("x");
+
+        assertThat(delegate.running).as("a resume runs x whether the lease is won straight away or later").containsExactly("x");
+        assertThat(strategy.holders).containsExactly("x");
+    }
+
+    @Test
+    void a_stop_that_the_wrapped_model_fails_still_gives_every_lease_back() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        delegate.stopThrows = true;
+
+        Throwable thrown = catchThrowable(model::stop);
+
+        assertThat(thrown).as("the caller of stop learns that the wrapped model did not stop").hasMessage("The wrapped model cannot stop right now");
+        assertThat(strategy.holders).as("a stopped node holds no lease, although the wrapped model failed to stop").isEmpty();
         assertThat(model.isPaused("x")).isTrue();
-        assertThat(model.isPaused("y")).isTrue();
+    }
+
+    @Test
+    void a_grant_for_a_lease_this_node_no_longer_holds_starts_nothing() {
+        strategy.grantOnRegister = false;
+        subscribe("x");
+
+        strategy.grantWithoutTheLease("x");
+
+        assertThat(delegate.running).as("x waits for a lease this node holds").isEmpty();
+        assertThat(model.isRunning("x")).isFalse();
     }
 
     private void subscribe(String subscriptionId) {
@@ -336,9 +369,11 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     }
 
     /**
-     * Keeps track of which subscriptions run and which are paused, and throws when starting any subscription in
-     * {@link #throwsOn}. Like the MongoDB models, it parks a subscription while it is not started, and like
-     * {@code SpringMongoSubscriptionModel} it starts itself to resume one.
+     * Keeps track of which subscriptions deliver and which are paused, and throws when starting any subscription in
+     * {@link #throwsOn}. Like {@code NativeMongoSubscriptionModel}, and unlike {@code SpringMongoSubscriptionModel}, it
+     * does not wait until it is started to deliver a subscription. It delivers it while reporting it as paused, so a
+     * resume delivers it a second time, which {@link #running} then lists twice. Like both MongoDB models, it starts
+     * itself to resume a subscription.
      */
     private static final class RecordingDelegate implements SubscriptionModel {
         private final Set<String> throwsOn = new HashSet<>();
@@ -346,14 +381,13 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         private final Set<String> paused = new HashSet<>();
         private boolean started = true;
         private boolean startThrows;
+        private boolean stopThrows;
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             throwIfRefused(subscriptionId);
-            // Parked while the model is not started, as the MongoDB models do
-            if (started) {
-                running.add(subscriptionId);
-            } else {
+            running.add(subscriptionId);
+            if (!started) {
                 paused.add(subscriptionId);
             }
             return new FakeSubscription(subscriptionId);
@@ -361,12 +395,15 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
         @Override
         public void cancelSubscription(String subscriptionId) {
-            running.remove(subscriptionId);
+            running.removeIf(subscriptionId::equals);
             paused.remove(subscriptionId);
         }
 
         @Override
         public void stop() {
+            if (stopThrows) {
+                throw new IllegalStateException("The wrapped model cannot stop right now");
+            }
             started = false;
             paused.addAll(running);
             running.clear();
@@ -380,16 +417,6 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
             started = true;
         }
 
-        /**
-         * Puts {@code subscriptionId} in the state a wrapped model that was never started keeps a subscription
-         * registered with it, paused while the model is stopped.
-         */
-        void holdPausedWhileNotStarted(String subscriptionId) {
-            running.remove(subscriptionId);
-            paused.add(subscriptionId);
-            started = false;
-        }
-
         @Override
         public boolean isRunning() {
             return started;
@@ -397,7 +424,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
         @Override
         public boolean isRunning(String subscriptionId) {
-            return running.contains(subscriptionId);
+            return running.contains(subscriptionId) && !paused.contains(subscriptionId);
         }
 
         @Override
@@ -408,7 +435,6 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         @Override
         public Subscription resumeSubscription(String subscriptionId) {
             throwIfRefused(subscriptionId);
-            // As SpringMongoSubscriptionModel does, which starts its container to resume a subscription
             if (!started) {
                 start(false);
             }
@@ -419,7 +445,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
         @Override
         public void pauseSubscription(String subscriptionId) {
-            running.remove(subscriptionId);
+            running.removeIf(subscriptionId::equals);
             paused.add(subscriptionId);
         }
 
@@ -451,6 +477,15 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         private final List<CompetingConsumerListener> listeners = new ArrayList<>();
         private boolean grantOnRegister;
         private boolean registerThrows;
+
+        /**
+         * A grant the strategy decided before the lease moved on, which reaches the listeners once this node no longer
+         * holds it.
+         */
+        void grantWithoutTheLease(String subscriptionId) {
+            calls.add("stale grant " + subscriptionId);
+            listeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, SUBSCRIBER_ID));
+        }
 
         void grant(String subscriptionId) {
             if (!registered.contains(subscriptionId)) {
