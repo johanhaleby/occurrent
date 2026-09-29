@@ -57,7 +57,6 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -224,32 +223,60 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         // in there, for a reason checkStartPosition documents.
         MongoCommons.checkStartPosition(startAt, new SubscriptionModelContext(NativeMongoSubscriptionModel.class));
 
-        CountDownLatch subscriptionStartedLatch = new CountDownLatch(1);
-        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
-
-        Runnable internalSubscription = () -> newInternalSubscription(subscriptionId, pipeline, filter, currentStartAt, action, subscriptionStartedLatch);
-
         if (shutdown || cloudEventDispatcher.isShutdown() || cloudEventDispatcher.isTerminated()) {
             throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");
         }
-        startSubscription(internalSubscription);
-        return new NativeMongoSubscription(subscriptionId, subscriptionStartedLatch);
+
+        InternalSubscription internalSubscription = new InternalSubscription(new AtomicReference<>(startAt), action, pipeline);
+        // Known from here on rather than once its change stream opens, so a pause or a cancel reaches it while MongoDB
+        // cannot be reached, and a wrapper asking which subscriptions this model runs gets the right answer
+        if (running) {
+            startSubscription(subscriptionId, internalSubscription);
+            runningSubscriptions.put(subscriptionId, internalSubscription);
+        } else {
+            // Opens nothing until start() or a resume does, like a subscription that stop() paused
+            pausedSubscriptions.put(subscriptionId, internalSubscription);
+        }
+        return new NativeMongoSubscription(subscriptionId, internalSubscription.startedLatch);
     }
 
-    private void startSubscription(Runnable internalSubscription) {
-        cloudEventDispatcher.execute(executeWithRetry(internalSubscription, RETRYABLE, retryStrategy));
+    private void startSubscription(String subscriptionId, InternalSubscription internalSubscription) {
+        cloudEventDispatcher.execute(() -> runUntilStopped(subscriptionId, internalSubscription));
+    }
+
+    // Restarts with the retry strategy's backoff until the subscription is closed or the strategy gives up. A pause,
+    // cancel or shutdown closes it, and a resume runs a new one, so a restart due after the backoff opens nothing for
+    // a subscription that was paused or cancelled meanwhile, and its last error is logged rather than thrown. When the
+    // strategy gives up, the last error is thrown on the dispatcher thread and the subscription stays known and
+    // running, so a pause and a resume start it again.
+    private void runUntilStopped(String subscriptionId, InternalSubscription internalSubscription) {
+        try {
+            executeWithRetry(() -> newInternalSubscription(subscriptionId, internalSubscription), RETRYABLE.and(__ -> !internalSubscription.isIntentionallyClosed()), retryStrategy).run();
+        } catch (RuntimeException e) {
+            if (!internalSubscription.isIntentionallyClosed()) {
+                throw e;
+            }
+            log.debug("Stopped restarting subscription {} because it was paused, cancelled or shut down while waiting to restart after {}.", subscriptionId, e.getClass().getName(), e);
+        } finally {
+            internalSubscription.stoppedRestarting();
+        }
     }
 
     // currentStartAt tracks the last change-stream document read (updated below, even without a delivered
-    // CloudEvent), shared with startSubscription's executeWithRetry wrapper so a restart or resume continues
-    // gap-free from there instead of the original StartAt. Before the first one it holds the operation time the
-    // stream opened at, when MongoDB's reply had one, so an original StartAt of the present is not resolved again.
+    // CloudEvent), shared by every attempt of runUntilStopped and by a resume, so each continues gap-free from there
+    // instead of the original StartAt. Before the first one it holds the operation time the stream opened at, when
+    // MongoDB's reply had one, so an original StartAt of the present is not resolved again.
     // The try block spans opening the cursor too: a change-stream error (history lost, failover) can surface
     // there just as well as while iterating.
-    private void newInternalSubscription(String subscriptionId, List<Bson> pipeline, SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
-        InternalSubscription internalSubscription = null;
+    private void newInternalSubscription(String subscriptionId, InternalSubscription internalSubscription) {
+        if (internalSubscription.isIntentionallyClosed()) {
+            return;
+        }
+        AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
+        Consumer<CloudEvent> action = internalSubscription.action;
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = null;
         try {
-            ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
+            ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(internalSubscription.pipeline, Document.class);
             if (batchSize != null) {
                 changeStreamDocuments = changeStreamDocuments.batchSize(batchSize);
             }
@@ -259,26 +286,27 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(NativeMongoSubscriptionModel.class);
             StartAt openingPosition = MongoCommons.resolveOpeningPosition(currentStartAt, subscriptionModelContext, this::currentOperationTime);
             ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, openingPosition, subscriptionModelContext);
-            MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAtPosition.cursor();
-
-            internalSubscription = new InternalSubscription(cursor, currentStartAt, action, filter, pipeline, subscriptionStartedLatch);
-
-            if (running) {
-                runningSubscriptions.put(subscriptionId, internalSubscription);
-            } else {
-                pausedSubscriptions.put(subscriptionId, internalSubscription);
+            cursor = changeStreamDocumentsAtPosition.cursor();
+            if (!internalSubscription.opened(cursor)) {
+                // Closed while the change stream was opening, and the finally block closes the cursor
+                return;
             }
 
             internalSubscription.started();
 
             cursor.forEachRemaining(changeStreamDocument -> {
+                // A document already fetched when the subscription was closed is left to a resume, rather than
+                // delivered to a subscription that is paused or cancelled
+                if (internalSubscription.isIntentionallyClosed()) {
+                    return;
+                }
                 MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
                         .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())))
-                        .ifPresent(executeWithRetry(action, RETRYABLE, retryStrategy));
+                        .ifPresent(executeWithRetry(action, RETRYABLE.and(__ -> !internalSubscription.isIntentionallyClosed()), retryStrategy));
                 currentStartAt.set(StartAt.checkpoint(new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())));
             });
         } catch (RuntimeException e) {
-            if ((internalSubscription != null && internalSubscription.isIntentionallyClosed()) || isCursorNoLongerOpen(e)) {
+            if (internalSubscription.isIntentionallyClosed() || isCursorNoLongerOpen(e)) {
                 log.debug("Caught {} (message={}) for subscription {}, this might happen when a subscription is paused or cancelled.", e.getClass().getName(), e.getMessage(), subscriptionId, e);
             } else if (e instanceof CheckpointWriteConditionNotFulfilledException) {
                 // Stays known and pausable, unlike the history-lost branch below, since forgetting it here would let
@@ -294,8 +322,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
                     throw e;
                 } else {
                     log.error("There was not enough oplog to resume subscription {}, will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.", subscriptionId, e);
-                    runningSubscriptions.remove(subscriptionId);
-                    pausedSubscriptions.remove(subscriptionId);
+                    forget(subscriptionId, internalSubscription);
                 }
             } else if (shutdown) {
                 log.debug("Subscription {} is shutting down, ignoring {}.", subscriptionId, e.getClass().getName(), e);
@@ -304,15 +331,21 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
                 throw e;
             }
         } finally {
-            if (internalSubscription != null) {
+            if (cursor != null) {
                 internalSubscription.stopped();
                 try {
-                    internalSubscription.cursor.close();
+                    cursor.close();
                 } catch (Exception closeException) {
                     log.debug("Failed to close cursor for subscription {}, this can happen if the connection was already closed.", subscriptionId, closeException);
                 }
             }
         }
+    }
+
+    // Only while the subscription is still on this run. A pause and a resume in the meantime started a new run, which
+    // has not lost anything.
+    private synchronized void forget(String subscriptionId, InternalSubscription internalSubscription) {
+        runningSubscriptions.remove(subscriptionId, internalSubscription);
     }
 
     private @Nullable BsonTimestamp currentOperationTime() {
@@ -375,7 +408,10 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         if (internalSubscription != null) {
             internalSubscription.close();
         }
-        pausedSubscriptions.remove(subscriptionId);
+        InternalSubscription pausedSubscription = pausedSubscriptions.remove(subscriptionId);
+        if (pausedSubscription != null) {
+            pausedSubscription.close();
+        }
     }
 
     @PreDestroy
@@ -416,14 +452,44 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         }
     }
 
+    /**
+     * Start the model and, when {@code resumeSubscriptionsAutomatically} is {@code true}, resume every paused
+     * subscription and wait until each one's change stream has opened. Pausing, cancelling and listing subscriptions
+     * keep working while it waits.
+     * <p>
+     * The wait for a subscription ends early when it's paused or cancelled, when the model shuts down, or when its
+     * change stream won't open at all, because its {@code RetryStrategy} gave up or its change stream history was lost
+     * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off.
+     * <p>
+     * A subscription made while the model is stopped is paused until this call or a resume starts it, and a
+     * {@link StartAt#now()} it was given means the moment it starts.
+     */
     @Override
-    public synchronized void start(boolean resumeSubscriptionsAutomatically) {
-        if (!shutdown) {
+    public void start(boolean resumeSubscriptionsAutomatically) {
+        Map<String, InternalSubscription> resumed = new LinkedHashMap<>();
+        synchronized (this) {
+            if (shutdown) {
+                return;
+            }
             running = true;
             if (resumeSubscriptionsAutomatically) {
                 // Same snapshot reasoning as stop(): resumeSubscription moves each id out of pausedSubscriptions as it
                 // goes, so iterating the live map here would be exposed to the same hazard.
-                new ArrayList<>(pausedSubscriptions.keySet()).forEach(subscriptionId -> resumeSubscription(subscriptionId).waitUntilStarted());
+                for (String subscriptionId : new ArrayList<>(pausedSubscriptions.keySet())) {
+                    resumeSubscription(subscriptionId);
+                    resumed.put(subscriptionId, runningSubscriptions.get(subscriptionId));
+                }
+            }
+        }
+        // Waited for outside the lock, so pause, cancel and subscriptionIds() answer while a change stream cannot open
+        resumed.forEach(this::waitUntilStartedOrNoLongerRunning);
+    }
+
+    private void waitUntilStartedOrNoLongerRunning(String subscriptionId, InternalSubscription internalSubscription) {
+        Subscription subscription = new NativeMongoSubscription(subscriptionId, internalSubscription.startedLatch);
+        while (!subscription.waitUntilStarted(Duration.ofMillis(100))) {
+            if (shutdown || runningSubscriptions.get(subscriptionId) != internalSubscription || internalSubscription.hasStoppedRestarting()) {
+                return;
             }
         }
     }
@@ -477,8 +543,11 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * subscription started at the present opens, and records it as that subscription's position. One paused before it
      * handled any event resumes from that time, so the events written since are delivered too, as long as the oplog
      * still holds that time. When it no longer does, the resume gets the handling that
-     * {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has no operation time, nothing is
-     * recorded and the resume opens at the present.
+     * {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has no operation time, or the
+     * subscription was paused before this model asked for it, nothing is recorded and the resume opens at the present.
+     * <p>
+     * A subscription whose {@code RetryStrategy} gave up opening its change stream still counts as running, and
+     * pausing it and then resuming it starts it again.
      * <p>
      * That is what this call does on its own. A {@code DurableSubscriptionModel} wrapping this model calls
      * {@link #resumeSubscription(String, StartAt)} with a stored checkpoint instead whenever one exists, so a
@@ -517,7 +586,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             throw new SubscriptionAlreadyRunningException(subscriptionId);
         }
 
-        InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
+        InternalSubscription internalSubscription = pausedSubscriptions.get(subscriptionId);
         if (internalSubscription == null) {
             throw new SubscriptionNotRunningException(subscriptionId);
         }
@@ -527,14 +596,14 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
         running = true;
 
-        CountDownLatch startedLatch = new CountDownLatch(1);
-        // Reuses the same currentStartAt reference so a resume continues from the last change-stream document
+        // Shares the same currentStartAt reference so a resume continues from the last change-stream document
         // read before the subscription was paused, not the original StartAt, unless repositionTo overrode it above.
-        Runnable newSubscription = () -> newInternalSubscription(subscriptionId, internalSubscription.pipeline,
-                internalSubscription.filter, internalSubscription.currentStartAt, internalSubscription.action, startedLatch);
-        startSubscription(newSubscription);
+        InternalSubscription resumed = internalSubscription.resumed();
+        startSubscription(subscriptionId, resumed);
+        pausedSubscriptions.remove(subscriptionId);
+        runningSubscriptions.put(subscriptionId, resumed);
 
-        return new NativeMongoSubscription(subscriptionId, startedLatch);
+        return new NativeMongoSubscription(subscriptionId, resumed.startedLatch);
     }
 
     /**
@@ -566,56 +635,73 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         }
     }
 
+    // One run of a subscription, from a subscribe or a resume until a pause, a cancel or a shutdown closes it. A
+    // restart after an error reuses the same run, and a resume starts a new one, so a closed run never opens a change
+    // stream again.
     private static class InternalSubscription {
-        private final SubscriptionFilter filter;
         // Kept so a resume reuses the pipeline built when subscribing, rather than deriving the same one again from the
         // same filter.
         private final List<Bson> pipeline;
-        final CountDownLatch startedLatch;
-        final CountDownLatch stoppedLatch;
-        final MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
+        final CountDownLatch startedLatch = new CountDownLatch(1);
+        private final CountDownLatch stoppedRestartingLatch = new CountDownLatch(1);
         final AtomicReference<StartAt> currentStartAt;
         final Consumer<CloudEvent> action;
-        private final AtomicBoolean intentionallyClosed = new AtomicBoolean(false);
+        private volatile boolean intentionallyClosed = false;
+        // Read and written under this object's lock. The cursor the current attempt delivers from, and a latch released
+        // once that attempt stops.
+        private @Nullable MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
+        private CountDownLatch stoppedLatch = new CountDownLatch(0);
 
-        private InternalSubscription(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, SubscriptionFilter filter, List<Bson> pipeline, CountDownLatch startedLatch) {
-            this.filter = filter;
+        private InternalSubscription(AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline) {
             this.pipeline = pipeline;
-            this.startedLatch = startedLatch;
-            this.cursor = cursor;
             this.currentStartAt = currentStartAt;
             this.action = action;
+        }
+
+        InternalSubscription resumed() {
+            return new InternalSubscription(currentStartAt, action, pipeline);
+        }
+
+        // False when this was closed while the change stream opened, and the caller then closes the cursor itself
+        synchronized boolean opened(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor) {
+            if (intentionallyClosed) {
+                return false;
+            }
+            this.cursor = cursor;
             this.stoppedLatch = new CountDownLatch(1);
-        }
-
-        @Override
-        public boolean equals(@Nullable Object o) {
-            if (this == o) return true;
-            if (!(o instanceof InternalSubscription that)) return false;
-            return Objects.equals(filter, that.filter) && Objects.equals(startedLatch, that.startedLatch) && Objects.equals(stoppedLatch, that.stoppedLatch) && Objects.equals(cursor, that.cursor) && Objects.equals(currentStartAt, that.currentStartAt) && Objects.equals(action, that.action);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(filter, startedLatch, stoppedLatch, cursor, currentStartAt, action);
+            return true;
         }
 
         void started() {
             startedLatch.countDown();
         }
 
-        void stopped() {
+        synchronized void stopped() {
+            cursor = null;
             stoppedLatch.countDown();
         }
 
+        void stoppedRestarting() {
+            stoppedRestartingLatch.countDown();
+        }
+
+        boolean hasStoppedRestarting() {
+            return stoppedRestartingLatch.getCount() == 0;
+        }
+
         boolean isIntentionallyClosed() {
-            return intentionallyClosed.get();
+            return intentionallyClosed;
         }
 
         public boolean waitUntilStopped(Duration duration) {
+            CountDownLatch attemptStopped;
+            synchronized (this) {
+                attemptStopped = stoppedLatch;
+            }
             try {
-                return stoppedLatch.await(duration.toMillis(), MILLISECONDS);
+                return attemptStopped.await(duration.toMillis(), MILLISECONDS);
             } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
                 throw new RuntimeException(e);
             }
         }
@@ -623,9 +709,16 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         // Marked before closing so the change-stream error this deliberately triggers is recognized as benign
         // (pause/cancel/shutdown) rather than an unexpected failure that should restart the subscription.
         public void close() {
-            intentionallyClosed.set(true);
+            MongoChangeStreamCursor<ChangeStreamDocument<Document>> openCursor;
+            synchronized (this) {
+                intentionallyClosed = true;
+                openCursor = cursor;
+            }
+            if (openCursor == null) {
+                return;
+            }
             try {
-                cursor.close();
+                openCursor.close();
             } catch (Exception e) {
                 log.error("Failed to cancel subscription, this might happen if Mongo connection has been shutdown", e);
             }

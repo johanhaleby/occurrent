@@ -45,6 +45,7 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -431,6 +432,48 @@ public class NativeMongoSubscriptionModelTest {
             } finally {
                 model.shutdown();
             }
+        }
+
+        @Test
+        void a_subscription_made_while_the_model_is_stopped_delivers_nothing_until_started_and_then_each_event_once() {
+            // Given
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            boolean startedWhileStopped = subscriptionModel.subscribe(subscriptionId, handled::add).waitUntilStarted(Duration.ofMillis(500));
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+            await().during(ONE_SECOND).atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).isEmpty());
+            boolean pausedWhileStopped = subscriptionModel.isPaused(subscriptionId);
+
+            // When
+            subscriptionModel.start();
+            NameDefined writtenAfterStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2");
+            mongoEventStore.write("2", 0, serialize(writtenAfterStart));
+
+            // Then
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).contains(writtenAfterStart.eventId()));
+            await().during(ONE_SECOND).atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsOnlyOnce(writtenAfterStart.eventId()));
+            assertAll(
+                    () -> assertThat(startedWhileStopped).isFalse(),
+                    () -> assertThat(pausedWhileStopped).isTrue()
+            );
+        }
+
+        @Test
+        void an_interrupted_wait_for_a_subscription_to_start_leaves_the_thread_interrupted() {
+            // Given a subscription made while the model is stopped, so it does not start until the model does
+            subscriptionModel.stop();
+            Subscription notStarted = subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> {
+            });
+            Thread.currentThread().interrupt();
+
+            // When
+            Throwable thrown = catchThrowable(() -> notStarted.waitUntilStarted(Duration.ofSeconds(2)));
+
+            // Then: Thread.interrupted() also clears the flag, so it isn't still set when the next test runs
+            boolean stillInterrupted = Thread.interrupted();
+            assertThat(stillInterrupted).isTrue();
+            assertThat(thrown).hasCauseInstanceOf(InterruptedException.class);
         }
     }
 

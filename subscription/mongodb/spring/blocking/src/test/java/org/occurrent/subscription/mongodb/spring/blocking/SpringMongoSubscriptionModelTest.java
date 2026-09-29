@@ -306,6 +306,22 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
+        void an_interrupted_wait_for_a_subscription_to_start_leaves_the_thread_interrupted() {
+            // Given
+            Subscription notStarted = notAutoStarted.subscribe(UUID.randomUUID().toString(), __ -> {
+            });
+            Thread.currentThread().interrupt();
+
+            // When
+            Throwable thrown = catchThrowable(() -> notStarted.waitUntilStarted(Duration.ofSeconds(2)));
+
+            // Then: Thread.interrupted() also clears the flag, so it isn't still set when the next test runs
+            boolean stillInterrupted = Thread.interrupted();
+            assertThat(stillInterrupted).isTrue();
+            assertThat(thrown).hasCauseInstanceOf(InterruptedException.class);
+        }
+
+        @Test
         void subscribing_on_a_model_that_did_not_auto_start_registers_the_subscription_as_paused() {
             String subscriptionId = UUID.randomUUID().toString();
 

@@ -58,6 +58,7 @@ public class SpringMongoSubscription implements Subscription {
             try {
                 continueWaiting = !subscriptionReference.get().await(Duration.ofMillis(100));
             } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
                 throw new RuntimeException(e);
             }
         }
