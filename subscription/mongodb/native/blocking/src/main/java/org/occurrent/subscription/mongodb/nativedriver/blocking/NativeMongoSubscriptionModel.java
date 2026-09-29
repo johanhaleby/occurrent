@@ -463,19 +463,25 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
     /**
      * Start the model and, when {@code resumeSubscriptionsAutomatically} is {@code true}, resume every paused
-     * subscription and wait until each one's change stream has opened. Pausing, cancelling and listing subscriptions
-     * keep working while it waits.
+     * subscription through {@link #resumeSubscription(String)} and wait until the {@link Subscription} each call
+     * returns has started. Pausing, cancelling and listing subscriptions keep working while it waits.
      * <p>
      * The wait for a subscription ends early when it's paused or cancelled, when the model shuts down, or when its
      * change stream won't open at all, because its {@code RetryStrategy} gave up or its change stream history was lost
-     * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off.
+     * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off. A subscription that isn't running once
+     * {@code resumeSubscription(..)} returns, such as when an override doesn't call the super method, isn't waited for.
+     * A subscription that an override already resumed or cancelled while resuming an earlier one is left out.
+     * <p>
+     * When a resume or a wait throws, every other subscription is still resumed and waited for, and then this method
+     * throws the first exception with the others added as suppressed.
      * <p>
      * A subscription made while the model is stopped is paused until this call or a resume starts it, and a
      * {@link StartAt#now()} it was given means the moment it starts.
      */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        Map<String, InternalSubscription> resumed = new LinkedHashMap<>();
+        Map<String, ResumedByStart> resumed = new LinkedHashMap<>();
+        List<RuntimeException> failures = new ArrayList<>();
         synchronized (this) {
             if (shutdown) {
                 return;
@@ -485,22 +491,46 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
                 // Same snapshot reasoning as stop(): resumeSubscription moves each id out of pausedSubscriptions as it
                 // goes, so iterating the live map here would be exposed to the same hazard.
                 for (String subscriptionId : new ArrayList<>(pausedSubscriptions.keySet())) {
-                    resumeSubscription(subscriptionId);
-                    // Only the dispatcher writes to this map without the lock, and it only removes a run whose history
-                    // was lost, so this is the run the resume started, or nothing when there is nothing to wait for
-                    InternalSubscription run = runningSubscriptions.get(subscriptionId);
-                    if (run != null) {
-                        resumed.put(subscriptionId, run);
+                    // An override may already have resumed or cancelled this subscription while resuming an earlier one
+                    if (!pausedSubscriptions.containsKey(subscriptionId)) {
+                        continue;
+                    }
+                    try {
+                        Subscription subscription = resumeSubscription(subscriptionId);
+                        // Only the dispatcher writes to this map without the lock, and it only removes a run whose
+                        // history was lost, so this is the run the resume started, or nothing when there is nothing
+                        // to wait for
+                        InternalSubscription run = runningSubscriptions.get(subscriptionId);
+                        if (run != null) {
+                            resumed.put(subscriptionId, new ResumedByStart(subscription, run));
+                        }
+                    } catch (RuntimeException e) {
+                        failures.add(e);
                     }
                 }
             }
         }
         // Waited for outside the lock, so pause, cancel and subscriptionIds() answer while a change stream cannot open
-        resumed.forEach(this::waitUntilStartedOrNoLongerRunning);
+        resumed.forEach((subscriptionId, resumedByStart) -> {
+            try {
+                waitUntilStartedOrNoLongerRunning(subscriptionId, resumedByStart);
+            } catch (RuntimeException e) {
+                failures.add(e);
+            }
+        });
+        if (!failures.isEmpty()) {
+            RuntimeException first = failures.getFirst();
+            failures.subList(1, failures.size()).forEach(first::addSuppressed);
+            throw first;
+        }
     }
 
-    private void waitUntilStartedOrNoLongerRunning(String subscriptionId, InternalSubscription internalSubscription) {
-        Subscription subscription = new NativeMongoSubscription(subscriptionId, internalSubscription.startedLatch);
+    private record ResumedByStart(Subscription subscription, InternalSubscription run) {
+    }
+
+    private void waitUntilStartedOrNoLongerRunning(String subscriptionId, ResumedByStart resumedByStart) {
+        Subscription subscription = resumedByStart.subscription();
+        InternalSubscription internalSubscription = resumedByStart.run();
         while (!subscription.waitUntilStarted(Duration.ofMillis(100))) {
             if (shutdown || runningSubscriptions.get(subscriptionId) != internalSubscription || internalSubscription.hasStoppedRestarting()) {
                 return;

@@ -55,10 +55,10 @@ Then a reactor subscription handler, or the code that applies an event to a reac
 event back into its own subscription or feed no longer waits forever. The call is answered once the event is queued,
 and when applying that event fails, the subscription or feed fails for good. Read
 [section 15](#15-feeding-a-reactor-catch-up-from-its-own-handler-no-longer-waits-forever).
-Finally, on `NativeMongoSubscriptionModel`, `waitUntilStarted()` on a subscription made while the model is stopped now
-waits until `start()` or `resumeSubscription(..)` opens its change stream, so calling it before `start()` on the thread
-that calls `start()` waits forever, and so do the DSL calls that call it for you. Read
-[section 16](#16-waituntilstarted-on-a-native-mongodb-subscription-made-while-the-model-is-stopped-waits-for-start).
+Finally, on `NativeMongoSubscriptionModel`, a subscription made while the model is stopped now starts when `start()`
+opens its change stream. A call that waits for it to start hangs when it runs before `start()` on the thread that calls
+`start()`, and a `StartAt.now()` it was given means the moment it starts. Read
+[section 16](#16-a-native-mongodb-subscription-made-while-the-model-is-stopped-starts-with-start).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1204,35 +1204,44 @@ What to do:
 There is no recipe for this change. Whether a call runs inside a handler of the subscription it feeds is runtime
 behavior that a rewrite of the source cannot see.
 
-## 16. `waitUntilStarted()` on a native MongoDB subscription made while the model is stopped waits for `start()`
+## 16. A native MongoDB subscription made while the model is stopped starts with `start()`
 
 This covers `NativeMongoSubscriptionModel`. In 0.33.0 `subscribe(..)` opened a change stream even when the model was
-stopped, so `waitUntilStarted()` on the `Subscription` it returned came back once that change stream opened. That
-change stream delivered events while `isPaused(..)` returned `true`, and `start()` opened a second one next to it, so
-every event written after `start()` arrived twice.
+stopped. That change stream delivered events while `isPaused(..)` returned `true`, and `start()` opened a second one
+next to it, so every event written after `start()` arrived twice.
 
 Now a subscription made while the model is stopped opens no change stream until `start()` or `resumeSubscription(..)`
-starts it, and `waitUntilStarted()` returns once that change stream has opened. `SpringMongoSubscriptionModel` already
-waited this way in 0.33.0.
+starts it. That changes when a wait for it returns, and where a `StartAt.now()` it was given starts.
 
-You are affected when one thread calls `stop()`, then `subscribe(..)` and `waitUntilStarted()`, and then `start()`.
-That thread now waits in `waitUntilStarted()` until it is interrupted. These calls wait the same way when they run
-between `stop()` and `start()` on one thread, because they call `waitUntilStarted()` for you:
+### A wait for the subscription to start waits for `start()`
 
-- The Kotlin subscription DSL's `subscribe(..)` and the Kotlin `subscribeDcb(..)` and `subscribeDcbWithMetadata(..)`,
-  unless you pass `waitUntilStarted = false`.
-- `ProjectionRunner.project(..)` and `SagaRunner.run(..)`, unless you call the overload that takes `waitUntilStarted`
-  and pass `false`.
-- `DcbProjectionRunner.project(..)` and the Kotlin `DcbSubscriptions.project(..)`, always.
+`waitUntilStarted()` on the `Subscription` that `subscribe(..)` returns now returns once `start()` or
+`resumeSubscription(..)` has opened its change stream. In 0.33.0 it returned once the change stream that `subscribe(..)`
+opened was open. `SpringMongoSubscriptionModel` already waited this way in 0.33.0.
+
+So any call that waits for the subscription to start hangs when it runs between `stop()` and `start()` on the thread
+that later calls `start()`. That thread waits until it is interrupted. Many DSL and runner calls wait by default, for
+example the Kotlin subscription DSL's `subscribe(..)`, `ProjectionRunner.project(..)` and `SagaRunner.run(..)`.
 
 What to do:
 
-- Call `start()` before you wait, or wait on another thread.
-- For a call that takes `waitUntilStarted`, pass `false` while the model is stopped, and call `waitUntilStarted()` on
-  the `Subscription` it returns once `start()` has returned.
-- `DcbProjectionRunner.project(..)` and the Kotlin `DcbSubscriptions.project(..)` take no such flag, so call them
-  after `start()`, or on another thread.
+- Call `start()` before anything waits for the subscription to start, or subscribe from another thread.
+- Where a call takes a `waitUntilStarted` flag, passing `false` makes it return without waiting. Call
+  `waitUntilStarted()` on the `Subscription` it returns once `start()` has returned.
 - `waitUntilStarted(Duration)` returns `false` once the timeout has passed, so a wait with a timeout ends on its own.
+
+### `StartAt.now()` means the moment the subscription starts
+
+A `StartAt.now()` given to a subscription made while the model is stopped now means the moment `start()` or
+`resumeSubscription(..)` opens its change stream. So events written between `subscribe(..)` and `start()` are not
+delivered to it. In 0.33.0 the change stream that `subscribe(..)` opened delivered them.
+
+A subscription made without a `StartAt` starts at the present on this model, so it skips those events too.
+
+When the subscription needs those events, read `globalCheckpoint()` from the model before you call `subscribe(..)`,
+and pass `StartAt.checkpoint(..)` with that checkpoint to `subscribe(..)`. Or call `start()` before `subscribe(..)`. `globalCheckpoint()`
+returns `null` when the server refuses the `hostInfo` command it reads the checkpoint with, as a shared Atlas cluster
+does, and then only calling `start()` first works.
 
 There is no recipe for this change. Whether the model is stopped when `subscribe(..)` runs is runtime behavior that a
 rewrite of the source cannot see.
