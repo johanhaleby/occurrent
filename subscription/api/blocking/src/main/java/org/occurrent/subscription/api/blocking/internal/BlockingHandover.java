@@ -21,6 +21,8 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.HandoverMessages;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -222,7 +224,10 @@ public final class BlockingHandover<T, K> {
     private final Consumer<T> deliver;
     private final Function<T, K> dedupId;
     private final int maxBufferedEvents;
+    private static final Logger log = LoggerFactory.getLogger(BlockingHandover.class);
+
     private final String noun;
+    private final @Nullable String id;
 
     private final Object lock = new Object();
     private final Queue<Held<T>> buffer = new ArrayDeque<>();
@@ -279,14 +284,22 @@ public final class BlockingHandover<T, K> {
     // accept(..) is handed no source of its own. Written when a replay starts rather than by every catchUp(Source), so
     // a catch-up that replays nothing leaves it in place, and cleared with replayedIds when a replay is abandoned.
     private @Nullable Source<T> source = null;
+    // A catch-up with something to replay that this handover's own code asked for. It would wait for that code, so the
+    // thread that asked first runs it once it has returned from this handover's code, or, after an interrupt made that
+    // thread give up or leave it, the next thread that returns from a call into this handover. Held until its replay
+    // takes the replay turn, so asking again before then, from any thread, adds an ask to it rather than a second
+    // replay.
+    private @Nullable AskedCatchUp<T> askedByOwnCode = null;
 
-    private BlockingHandover(Consumer<T> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun) {
+    private BlockingHandover(Consumer<T> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun,
+                             @Nullable String id) {
         this.deliver = deliver;
         this.dedupId = dedupId;
         this.maxBufferedEvents = options.maxBufferedEvents();
         this.deliveredIds = new BoundedIdCache<>(options.dedupCacheSize());
         this.replayedIds = new BoundedIdCache<>(options.dedupCacheSize());
         this.noun = noun;
+        this.id = id;
     }
 
     /**
@@ -305,7 +318,21 @@ public final class BlockingHandover<T, K> {
         Objects.requireNonNull(dedupId, "dedupId cannot be null");
         Objects.requireNonNull(options, "options cannot be null");
         Objects.requireNonNull(noun, "noun cannot be null");
-        return new BlockingHandover<>(deliver, dedupId, options, noun);
+        return new BlockingHandover<>(deliver, dedupId, options, noun, null);
+    }
+
+    /**
+     * As {@link #create(Consumer, Function, CatchupThenLiveOptions, String)}, with the {@code id} of what this handover
+     * feeds, a projection or subscription id, named in what it logs.
+     */
+    public static <T, K> BlockingHandover<T, K> create(
+            Consumer<T> deliver, Function<T, K> dedupId, CatchupThenLiveOptions options, String noun, String id) {
+        Objects.requireNonNull(deliver, "deliver cannot be null");
+        Objects.requireNonNull(dedupId, "dedupId cannot be null");
+        Objects.requireNonNull(options, "options cannot be null");
+        Objects.requireNonNull(noun, "noun cannot be null");
+        Objects.requireNonNull(id, "id cannot be null");
+        return new BlockingHandover<>(deliver, dedupId, options, noun, id);
     }
 
     /**
@@ -417,11 +444,7 @@ public final class BlockingHandover<T, K> {
         if (notHandled != null) {
             return notHandled;
         }
-        if (deliverKey != null) {
-            deliverOutsideLock(payload, deliverKey);
-        } else if (replayedBy != null) {
-            reportAlreadyDeliveredByReplay(replayedBy, payload);
-        }
+        deliverLive(payload, deliverKey, replayedBy);
         return Answer.APPLIED;
     }
 
@@ -498,11 +521,7 @@ public final class BlockingHandover<T, K> {
                 }
             }
         }
-        if (deliverKey != null) {
-            deliverOutsideLock(payload, deliverKey);
-        } else if (replayedBy != null) {
-            reportAlreadyDeliveredByReplay(replayedBy, payload);
-        }
+        deliverLive(payload, deliverKey, replayedBy);
         return landed;
     }
 
@@ -531,8 +550,9 @@ public final class BlockingHandover<T, K> {
 
     /**
      * Whether this engine refuses every live payload from now on and will go on refusing. True once a
-     * {@link #catchUp(Source)} attempt has thrown, and never false again after that, since the failure it records
-     * is never cleared. False while replaying, while buffering, and once live.
+     * {@link #catchUp(Source)} attempt has thrown a failure it records, which is every failure except one on an
+     * interrupted thread, and never false again after that, since the failure it records is
+     * never cleared. False while replaying, while buffering, and once live.
      * <p>
      * Distinct from {@link #isReadyForLiveDelivery()}, which is also false during a replay that is going to
      * succeed. A caller deciding whether to stop for good needs to tell those two apart, and reading this after
@@ -579,18 +599,88 @@ public final class BlockingHandover<T, K> {
      * replay cannot end before the call returns.
      * <p>
      * A replay also waits for a catch-up that is already replaying, until that catch-up returns or throws, so two
-     * replays never fold into the view at once and each drain and marker belongs to the replay before it. Calling this
-     * from inside a fold, a drain or a {@link Source} callback of a catch-up replaying on this handover deadlocks for
-     * that reason.
+     * replays never fold into the view at once and each drain and marker belongs to the replay before it.
+     * <p>
+     * A catch-up whose failure reaches this handover on an interrupted thread is not recorded as a failed catch-up,
+     * since a store client can fail every read once the thread is interrupted. This handover does not refuse later
+     * payloads for it, and leaves the thread interrupted. Only the thread's interrupt flag counts. A failure on a
+     * thread that is not interrupted is recorded, even with an {@link InterruptedException} as its cause, since that
+     * can come from another thread, and so is an {@link java.io.InterruptedIOException}, which clients throw for
+     * timeouts too.
+     * <p>
+     * A replay the interrupt cut short is abandoned like a stopped one. On a live handover the payloads buffered
+     * during that replay are delivered and the handover goes live again. When an interrupt fails a delivery of the
+     * buffer, after a replay or instead of one, the payloads not yet delivered go back into the buffer and the
+     * handover is no longer live. On a handover that is not live, a payload a caller waits on in the buffer is
+     * answered the way a stop answers it once the last catch-up returns, and the rest stay for the next catch-up to
+     * deliver. When an interrupt fails the marker write, every payload has been delivered and the handover stays
+     * live without a marker, so the next catch-up replays the whole history again. A later catch-up replays the
+     * history the interrupted one did not finish.
+     * <p>
+     * A catch-up with something to replay called from code this handover is running returns {@code true} without
+     * waiting, since the deliveries and the replay it would wait for cannot end before that code returns. That code is
+     * a fold, live or replayed, and every {@link Source} callback. The {@code true} means the catch-up was asked for,
+     * not that it has run. Its replay runs once that code has returned, on the thread of the first call that asked for
+     * it, and replays like any other catch-up. On that thread it runs before the {@link #accept(Object)},
+     * {@link #acceptReportingDelivery(Object)}, {@link #acceptIfLive(Object)} or {@code catchUp} call that ran the code
+     * returns, unless an interrupt makes that thread give up or leave it as described below. A call from any thread
+     * that asks before that replay takes its turn asks for the same replay, so a call on another thread can return
+     * before the replay has run. That replay keeps replaying while the {@link Source} of any call it stands for answers
+     * {@link Source#keepReplaying()} with {@code true}, and makes every other call on the source of the call that asked
+     * last.
+     * <p>
+     * A call is refused when a catch-up on this handover failed after it asked and before its replay starts or finds
+     * the history caught up already. A replay whose every call was refused does not run, and another catch-up that
+     * fails while the replay runs refuses none of its calls. A call made on a handover that had already failed is not
+     * refused for that failure. Neither a stop nor a refusal is reported. A failure of its replay is handled like that
+     * of any other catch-up, so unless it failed on an interrupted thread, this handover refuses every later payload. A
+     * {@code catchUp} call that runs the replay throws that failure. An {@link #accept(Object)},
+     * {@link #acceptReportingDelivery(Object)} or {@link #acceptIfLive(Object)} that runs it logs the failure instead
+     * of throwing it, since the failure is not about its payload.
+     * <p>
+     * An interrupt keeps the thread that runs such a replay from waiting. When that thread is interrupted where the
+     * replay would wait, for the deliveries or for another replay, it gives up every call made on it that is still
+     * asked for, logs a warning, and runs no further replay before it returns. When the replay fails on an interrupted
+     * thread, as above, the thread puts back every call the replay stands for, logs a warning, and runs no further
+     * replay before it returns. It throws nothing for that failure, not even from a {@code catchUp}. The calls it puts
+     * back, and the calls on other threads when it gives up, stay asked for. A later call into this handover takes them
+     * over when it is made from outside this handover's own code, on any thread, and is a {@code catchUp}, an
+     * {@link #acceptIfLive(Object)} that returns, or an {@link #accept(Object)} or
+     * {@link #acceptReportingDelivery(Object)} that delivers its payload live or finds it delivered already. Before
+     * that call returns or throws, their replay has run, been refused, or been given up or put back again as above. A
+     * call on another thread that finds them taken over returns without waiting for that replay. The call that takes
+     * them over can be on a thread where no code asked, and a {@code catchUp} throws the failure of that replay like
+     * any replay it runs. Calls left this way replay only when such a call comes, so if none comes, their replay does
+     * not run.
+     * <p>
+     * Code that calls this for a payload a replay delivers asks for another catch-up each time a replay delivers that
+     * payload, and with a source whose {@link Source#isAlreadyCaughtUp()} always answers {@code false} those replays do
+     * not end. Code that makes the call from a thread it switched to is not recognized, so it waits like any other
+     * caller, for deliveries or a replay that cannot end while that code waits.
      *
-     * @return {@code true} when the catch-up finished and the handover is live, {@code false} when
+     * @return {@code true} when the catch-up finished and the handover is live, or, for a call from code this handover
+     * is running, once the catch-up has been asked for. {@code false} when
      * {@link Source#keepReplaying()} stopped it partway, or when the calling thread was interrupted while waiting for
      * the deliveries or the replay already running to end. The interrupt stays on the thread. An interrupted wait for
      * the deliveries changes nothing on the handover, and the replay an interrupted call waited for still goes live
-     * when it ends. A failure throws rather than returning either.
+     * when it ends. A failure throws rather than returning either, and so does a failure of a replay that code this
+     * handover ran asked for, when this call runs it on a thread that the failure did not find interrupted.
      */
     public boolean catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
+        boolean caughtUp;
+        try {
+            caughtUp = catchUpNow(source, null);
+        } catch (Throwable e) {
+            runCatchUpsAskedByOwnCode(false);
+            throw e;
+        }
+        runCatchUpsAskedByOwnCode(true);
+        return caughtUp;
+    }
+
+    // The asked request is the one this call runs, when this handover's own code asked for it.
+    private boolean catchUpNow(Source<T> source, @Nullable AskedCatchUp<T> asked) {
         synchronized (lock) {
             // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying
             // again rather than only by building a new one.
@@ -623,11 +713,19 @@ public final class BlockingHandover<T, K> {
                         // handover live while acceptIfLive(..) still refuses.
                         RecordedFailure failureBeforeWaiting = latestFailure;
                         if (!awaitRunningReplayUnderLock()) {
+                            if (asked != null) {
+                                asked.gaveUp = true;
+                            }
                             return false;
                         }
-                        if (latestFailure != null && latestFailure != failureBeforeWaiting) {
+                        if (asked == null && latestFailure != null && latestFailure != failureBeforeWaiting) {
                             failedWhileWaiting = latestFailure.cause();
                         }
+                    }
+                    if (asked != null && everyAnsweredAskRefusedUnderLock(asked)) {
+                        // Refused without a report, the same as a replay whose every ask was refused. The failure can
+                        // come while this call waited or before it took this lock.
+                        return false;
                     }
                     if (failedWhileWaiting == null) {
                         if (replayRunning) {
@@ -656,9 +754,23 @@ public final class BlockingHandover<T, K> {
                 }
                 return true;
             }
+            if (Objects.requireNonNull(callDepth.get()) > 1) {
+                // Called from this handover's own code, which holds up everything the replay would wait for.
+                synchronized (lock) {
+                    if (askedByOwnCode == null) {
+                        askedByOwnCode = new AskedCatchUp<>(Thread.currentThread());
+                    }
+                    // Every ask is kept, since asks can reach this lock in another order than the one their sources
+                    // were made in, and each answers keepReplaying() and a failure for itself.
+                    askedByOwnCode.asks.add(new Ask<>(source, Thread.currentThread(), latestFailure));
+                }
+                return true;
+            }
             boolean stoppedMidReplay = false;
             boolean interrupted = false;
             boolean drainAfterInterrupt = false;
+            boolean everyAskRefused = false;
+            Source<T> askedSources = null;
             Throwable alreadyFailed = null;
             synchronized (lock) {
                 // Read before the wait, so the check after it asks whether a catch-up failed while this call waited
@@ -673,6 +785,9 @@ public final class BlockingHandover<T, K> {
                     // during the wait did so for its own caller, and writing the value read before the wait would
                     // take that back.
                     interrupted = true;
+                    if (asked != null) {
+                        asked.gaveUp = true;
+                    }
                     if (wasLive || live) {
                         // Claimed under this lock, so the drain below runs the way a catch-up with nothing to replay
                         // drains, with a replay waiting rather than starting next to it.
@@ -684,13 +799,20 @@ public final class BlockingHandover<T, K> {
                         // with the payloads after this belonging in its buffer rather than dropped.
                         stopUnderLock();
                     }
-                } else if (catchUpFailure != null && catchUpFailure != failureBeforeWaiting) {
+                } else if (asked == null && catchUpFailure != null && catchUpFailure != failureBeforeWaiting) {
                     // The catch-up this call waited for failed, which leaves the handover refusing everything and its
                     // caller told to replace it. So this replay does not start and fold a history into a view its
                     // caller was told to stop using. A caller that asks for a catch-up on a handover that had already
                     // failed still gets one, which is what it asked for.
                     alreadyFailed = catchUpFailure;
+                } else if (asked != null && (askedSources = takeAsksUnderLock(asked)) == null) {
+                    // Refused without a report, the same as before this call started.
+                    everyAskRefused = true;
+                    answerAwaitedInBuffer(Answer.REFUSED, catchUpFailure);
                 } else {
+                    if (askedSources != null) {
+                        source = askedSources;
+                    }
                     // Written after the wait rather than before it, because wait() releases this lock, and a
                     // catch-up going live in that window sets live back to true, which would put the replay next to
                     // a live handover. Reading live again here is what makes the two one step.
@@ -708,6 +830,9 @@ public final class BlockingHandover<T, K> {
                     // handover left stopped would drop them.
                     stopped = false;
                 }
+            }
+            if (everyAskRefused) {
+                return false;
             }
             if (alreadyFailed != null) {
                 refusedForAnotherFailure = true;
@@ -793,6 +918,14 @@ public final class BlockingHandover<T, K> {
             // coming back. That is the loss the refusal exists to prevent. A NoClassDefFoundError out of the fold is
             // one way it arrives, and a checked exception from a fold written in Kotlin, which declares nothing, is
             // another. An OutOfMemoryError is recorded too, since a replay it cut short is just as incomplete.
+            //
+            // A failure on an interrupted thread is the exception. A store client can throw on any read once the
+            // thread is interrupted, the Mongo driver among them, so the interrupt made it fail rather than the
+            // history, and a later catch-up can still replay. It is not recorded. A live handover delivers its buffer
+            // below. One that is not live, including one whose drain the interrupt failed, is stopped once the last
+            // catch-up returns, which answers every payload a caller waits on as not applied and keeps the rest for
+            // the drain after the next replay.
+            boolean failedOnInterrupt = !refusedForAnotherFailure && isInterruption();
             if (replayOpen) {
                 abandonReplayWithoutMasking(source);
             }
@@ -822,6 +955,23 @@ public final class BlockingHandover<T, K> {
                         e.addSuppressed(deliveryFailure);
                     }
                 }
+            }
+            if (failedOnInterrupt) {
+                synchronized (lock) {
+                    if (holdsReplayTurn) {
+                        replayRunning = false;
+                    }
+                    if (asked != null) {
+                        asked.left = true;
+                    }
+                }
+                // Set again in case replayAbandoned() or the drain above cleared it, since the caller still has to see
+                // it.
+                Thread.currentThread().interrupt();
+                if (asked != null) {
+                    return false;
+                }
+                throw e;
             }
             synchronized (lock) {
                 // The first failure is the one that matters, so a later call refusing because of it does not take its
@@ -913,6 +1063,180 @@ public final class BlockingHandover<T, K> {
         return true;
     }
 
+    private void deliverLive(T payload, @Nullable K deliverKey, @Nullable Source<T> replayedBy) {
+        try {
+            if (deliverKey != null) {
+                deliverOutsideLock(payload, deliverKey);
+            } else if (replayedBy != null) {
+                reportAlreadyDeliveredByReplay(replayedBy, payload);
+            }
+        } finally {
+            runCatchUpsAskedByOwnCode(false);
+        }
+    }
+
+    // Runs once the calling thread has left this handover's code, so the replay no longer waits for it. A failure is
+    // recorded by the catch-up and refuses every later payload, unless the thread is interrupted. It is thrown only
+    // when throwFailure is set, since the code that asked was told true and a live payload's caller has its payload
+    // applied.
+    private void runCatchUpsAskedByOwnCode(boolean throwFailure) {
+        if (callDepth.get() != null) {
+            return;
+        }
+        while (true) {
+            AskedCatchUp<T> asked;
+            Source<T> latestSource;
+            synchronized (lock) {
+                asked = askedByOwnCode;
+                if (asked == null) {
+                    return;
+                }
+                if (asked.askedOn == null) {
+                    // Left by a run that was interrupted. A failure on an interrupted thread is not recorded, so this
+                    // thread takes it over whether it is interrupted or not.
+                    asked.askedOn = Thread.currentThread();
+                }
+                if (asked.askedOn != Thread.currentThread()) {
+                    return;
+                }
+                refuseAsksFailedSinceUnderLock(asked);
+                if (asked.asks.isEmpty()) {
+                    askedByOwnCode = null;
+                    continue;
+                }
+                // Asks that come while this runs stay for a run after it, unless its replay takes them at its turn.
+                asked.answered = asked.asks.size();
+                latestSource = asked.asks.get(asked.answered - 1).source();
+            }
+            try {
+                catchUpNow(latestSource, asked);
+            } catch (Throwable e) {
+                boolean gaveUp = letGoOfAnswered(asked);
+                if (throwFailure) {
+                    if (!gaveUp) {
+                        // The failure just recorded refuses any ask still waiting on this thread.
+                        runCatchUpsAskedByOwnCode(false);
+                    }
+                    throw e;
+                }
+                log.error("A catch-up that the own code of the {} asked for failed. The call that ran it fed a "
+                        + "payload, so the failure is logged rather than thrown, and it is recorded like that of any "
+                        + "failed catch-up.",
+                        describe(), e);
+                if (gaveUp) {
+                    return;
+                }
+                continue;
+            }
+            if (letGoOfAnswered(asked)) {
+                return;
+            }
+        }
+    }
+
+    private String describe() {
+        return id == null ? noun : noun + " '" + id + "'";
+    }
+
+    // An ask that a catch-up failure came after is refused, the same as a caller that waited for that catch-up. One
+    // made on a handover that had already failed still gets its replay.
+    private void refuseAsksFailedSinceUnderLock(AskedCatchUp<T> asked) {
+        asked.asks.removeIf(ask -> ask.failureWhenAsked() != latestFailure);
+    }
+
+    // At the replay turn, so the replay answers every ask made until then and an ask from here on is for a replay
+    // after this one. Null when a failure refused every ask.
+    private @Nullable Source<T> takeAsksUnderLock(AskedCatchUp<T> asked) {
+        if (askedByOwnCode == asked) {
+            askedByOwnCode = null;
+        }
+        refuseAsksFailedSinceUnderLock(asked);
+        asked.answered = asked.asks.size();
+        if (asked.asks.isEmpty()) {
+            return null;
+        }
+        List<Source<T>> sources = new ArrayList<>(asked.asks.size());
+        for (Ask<T> ask : asked.asks) {
+            sources.add(ask.source());
+        }
+        return sources.size() == 1 ? sources.get(0) : new AskedSources<>(sources);
+    }
+
+    private boolean everyAnsweredAskRefusedUnderLock(AskedCatchUp<T> asked) {
+        for (int i = 0; i < asked.answered; i++) {
+            if (asked.asks.get(i).failureWhenAsked() == latestFailure) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Answers whether the run gave up or left its asks, and so runs no further asks before it returns. It gave up
+    // when its thread was interrupted where it had to wait. Its turn was not taken, so the record is still the pending
+    // one and holds every ask made on this thread since, the drain's included. The thread gives those up. The other
+    // threads were told true, so their asks stay for the next thread that returns from a call into this handover. It
+    // left its asks when it failed on an interrupted thread, before or after its turn. Every ask it answered stays for
+    // that next thread too, behind any ask made since.
+    private boolean letGoOfAnswered(AskedCatchUp<T> asked) {
+        boolean gaveUp;
+        boolean left;
+        boolean gaveUpOwnAsks = false;
+        synchronized (lock) {
+            gaveUp = asked.gaveUp;
+            left = asked.left;
+            if (gaveUp) {
+                Thread current = Thread.currentThread();
+                gaveUpOwnAsks = asked.asks.removeIf(ask -> ask.askedBy() == current);
+                asked.gaveUp = false;
+                asked.askedOn = null;
+            } else if (left) {
+                asked.left = false;
+                asked.askedOn = null;
+                if (askedByOwnCode == null) {
+                    // Its turn took the record, so it is put back.
+                    askedByOwnCode = asked;
+                } else if (askedByOwnCode != asked) {
+                    // Added behind the asks made since, which a run of that record may be answering already.
+                    askedByOwnCode.asks.addAll(asked.asks);
+                    asked.asks.clear();
+                    if (askedByOwnCode.askedOn == Thread.currentThread()) {
+                        // Asked by this replay's own folds, and this thread runs no further asks.
+                        askedByOwnCode.askedOn = null;
+                    }
+                }
+            } else {
+                asked.asks.subList(0, Math.min(asked.answered, asked.asks.size())).clear();
+            }
+            asked.answered = 0;
+            if (askedByOwnCode == asked && asked.asks.isEmpty()) {
+                askedByOwnCode = null;
+            }
+        }
+        if (gaveUpOwnAsks) {
+            log.warn("A catch-up that the own code of the {} asked for on this thread did not replay, because the "
+                    + "thread was interrupted where the catch-up had to wait. Call catchUp again to replay the "
+                    + "history.", describe());
+        } else if (gaveUp || left) {
+            warnLeftForLaterCall();
+        }
+        return gaveUp || left;
+    }
+
+    // Only the interrupt flag is read. The MongoDB driver leaves it set when it fails on an interrupt, and an
+    // interruptible NIO channel sets it along with its ClosedByInterruptException. An InterruptedException in the
+    // cause chain is not read, because it can come from another thread, a pool task its shutdown interrupted say,
+    // and then the failure is the view's and a later catch-up fails the same way. A client that clears the flag and
+    // wraps the InterruptedException is taken for a failure. So is an InterruptedIOException, which clients throw for
+    // timeouts as well.
+    private static boolean isInterruption() {
+        return Thread.currentThread().isInterrupted();
+    }
+
+    private void warnLeftForLaterCall() {
+        log.warn("A catch-up that the own code of the {} asked for is left for the next call into it, because "
+                + "the thread that was to run it is interrupted.", describe());
+    }
+
     private void reportAlreadyDeliveredByReplay(Source<T> replayedBy, T payload) {
         try {
             enterOwnCall();
@@ -944,9 +1268,12 @@ public final class BlockingHandover<T, K> {
         // whether that delivery applied the key.
         List<Held<T>> repeats;
         List<K> repeatKeys;
+        // Every payload taken below that this drain still has to answer, in buffer order.
+        List<Held<T>> taken;
         Source<T> replayedBy;
         synchronized (lock) {
             replayedBy = this.source;
+            taken = new ArrayList<>(buffer.size());
             toDeliver = new ArrayList<>(buffer.size());
             keysToDeliver = new ArrayList<>(buffer.size());
             alreadyReplayed = new ArrayList<>();
@@ -958,6 +1285,7 @@ public final class BlockingHandover<T, K> {
                     buffered.answer(Answer.APPLIED, null);
                     continue;
                 }
+                taken.add(buffered);
                 if (replayedIds.contains(key)) {
                     // Applied by the replay already, so delivering it again would apply it twice. Collected instead,
                     // for the call the source is owed once this lock is released (ADR 137).
@@ -986,13 +1314,32 @@ public final class BlockingHandover<T, K> {
         try {
             deliverTaken(replayedBy, toDeliver, keysToDeliver, alreadyReplayed);
         } catch (Throwable e) {
-            // The catch-up records this failure once it reaches catchUp(..), and refuses every payload from then on.
-            // A payload this drain took but did not apply is answered the same way now, since nothing delivers it
-            // later.
             synchronized (lock) {
-                answerAll(toDeliver, Answer.REFUSED, e);
-                answerAll(alreadyReplayed, Answer.REFUSED, e);
-                answerAll(repeats, Answer.REFUSED, e);
+                if (isInterruption()) {
+                    // The catch-up records no failure for this, so a later one drains again. The payloads this drain
+                    // did not answer go back to the front of the buffer in their order, and the handover is not live,
+                    // so the last catch-up to return stops it the way a stopped replay leaves it. That answers a
+                    // payload a caller waits on and keeps one fed through acceptReportingDelivery(..) for the next
+                    // drain, where dropping it would lose it for good once this handover went live without it.
+                    List<Held<T>> putBack = new ArrayList<>(taken.size() + buffer.size());
+                    for (Held<T> held : taken) {
+                        if (!held.answered) {
+                            putBack.add(held);
+                        }
+                    }
+                    putBack.addAll(buffer);
+                    buffer.clear();
+                    buffer.addAll(putBack);
+                    live = false;
+                    lock.notifyAll();
+                } else {
+                    // The catch-up records this failure once it reaches catchUp(..), and refuses every payload from
+                    // then on. A payload this drain took but did not apply is answered the same way now, since
+                    // nothing delivers it later.
+                    answerAll(toDeliver, Answer.REFUSED, e);
+                    answerAll(alreadyReplayed, Answer.REFUSED, e);
+                    answerAll(repeats, Answer.REFUSED, e);
+                }
             }
             throw e;
         }
@@ -1135,6 +1482,90 @@ public final class BlockingHandover<T, K> {
     private record RecordedFailure(Throwable cause) {
     }
 
+    private static final class AskedCatchUp<T> {
+        // Guarded by lock. Null once an interrupted thread gave up or left the asks, until a thread takes them over.
+        private @Nullable Thread askedOn;
+        // Guarded by lock. In the order the asks reached it, and only askedOn takes asks out.
+        private final List<Ask<T>> asks = new ArrayList<>();
+        // Guarded by lock. How many asks, from the first, the run on askedOn answers.
+        private int answered;
+        // Guarded by lock. Set by the run on askedOn when an interrupt keeps it from waiting, before its replay takes
+        // its turn, and cleared by that run once it has given up its asks.
+        private boolean gaveUp;
+        // Guarded by lock. Set by the run on askedOn when it fails on an interrupted thread, and cleared by that run
+        // once it has left its asks for the next thread.
+        private boolean left;
+
+        private AskedCatchUp(@Nullable Thread askedOn) {
+            this.askedOn = askedOn;
+        }
+    }
+
+    private record Ask<T>(Source<T> source, Thread askedBy, @Nullable RecordedFailure failureWhenAsked) {
+    }
+
+    // One replay for several asks. It keeps replaying while any ask's source would, so a stop reaches it only once it
+    // came after every ask. Every other call goes to the source of the ask that came last.
+    private static final class AskedSources<T> implements Source<T> {
+        private final List<Source<T>> sources;
+        private final Source<T> latest;
+
+        private AskedSources(List<Source<T>> sources) {
+            this.sources = List.copyOf(sources);
+            this.latest = this.sources.get(this.sources.size() - 1);
+        }
+
+        @Override
+        public boolean isAlreadyCaughtUp() {
+            return latest.isAlreadyCaughtUp();
+        }
+
+        @Override
+        public Stream<T> replay() {
+            return latest.replay();
+        }
+
+        @Override
+        public void markCaughtUp() {
+            latest.markCaughtUp();
+        }
+
+        @Override
+        public boolean keepReplaying() {
+            for (Source<T> source : sources) {
+                if (source.keepReplaying()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        @Override
+        public void replayStarted() {
+            latest.replayStarted();
+        }
+
+        @Override
+        public void replayCompleted() {
+            latest.replayCompleted();
+        }
+
+        @Override
+        public void replayAbandoned() {
+            latest.replayAbandoned();
+        }
+
+        @Override
+        public void historyDone() {
+            latest.historyDone();
+        }
+
+        @Override
+        public void alreadyDeliveredByReplay(T payload) {
+            latest.alreadyDeliveredByReplay(payload);
+        }
+    }
+
     private void enterOwnCall() {
         Integer depth = callDepth.get();
         callDepth.set(depth == null ? 1 : depth + 1);
@@ -1162,6 +1593,9 @@ public final class BlockingHandover<T, K> {
         private final boolean awaited;
         private Answer answer = Answer.PENDING;
         private @Nullable Throwable failure;
+        // Guarded by lock. Whether a drain has answered this payload, which is also set for one nobody waits on, so a
+        // drain an interrupt cut short puts back exactly the payloads it did not get to.
+        private boolean answered;
 
         private Held(T payload, boolean awaited) {
             this.payload = payload;
@@ -1169,6 +1603,7 @@ public final class BlockingHandover<T, K> {
         }
 
         private void answer(Answer answer, @Nullable Throwable failure) {
+            answered = true;
             if (awaited && this.answer == Answer.PENDING) {
                 this.answer = answer;
                 this.failure = failure;

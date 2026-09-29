@@ -24,20 +24,26 @@ import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.HandoverMessages;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -47,6 +53,7 @@ import static org.assertj.core.api.Assertions.*;
 class BlockingHandoverTest {
 
     private static final String NOUN = "thing";
+    private static final String INTERRUPTED_READ = "store read on an interrupted thread";
 
     @Test
     void live_payloads_accepted_before_catch_up_are_buffered_and_delivered_after_the_replay_in_order() {
@@ -2234,6 +2241,1301 @@ class BlockingHandoverTest {
         }
     }
 
+    // A catch-up with something to replay called from code this handover is running would wait for a replay that
+    // cannot start before that code returns, so it returns true at once and the replay runs once that code returns.
+    @Test
+    void a_catch_up_with_something_to_replay_from_a_live_fold_replays_once_the_fold_returns() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        FakeSource asked = source(List.of("R1"), false);
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                answers.add(self.get().catchUp(asked));
+                log.add("fold returns");
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        self.set(handover);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> accepting = executor.submit(() -> handover.accept("L1"));
+
+            assertThat(accepting).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(answers).containsExactly(true);
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(asked.markCaughtUpCallCount()).isEqualTo(1);
+            handover.accept("R1");
+            assertThat(handover.acceptIfLive("L2")).isTrue();
+            assertThat(log).containsExactly("L1", "fold returns", "R1", "L2");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_a_replayed_fold_replays_once_the_catch_up_running_it_returns() throws Exception {
+        FakeSource running = source(List.of("R1"), false);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> onR1.set(ask), true, "R1", "asked", "R2");
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_replay_started_replays_once_the_catch_up_running_it_returns() throws Exception {
+        FakeSource running = source(List.of("R1"), false);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> running.onReplayStarted = ask, true, "asked", "R1", "R2");
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_replay_completed_replays_once_the_catch_up_running_it_returns() throws Exception {
+        FakeSource running = source(List.of("R1"), false);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> running.onReplayCompleted = ask, true, "R1", "asked", "R2");
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_history_done_replays_once_the_catch_up_running_it_returns() throws Exception {
+        FakeSource running = source(List.of("R1"), false);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> running.onHistoryDone = ask, true, "R1", "asked", "R2");
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_history_done_of_a_catch_up_with_nothing_to_replay_replays_once_it_returns() throws Exception {
+        FakeSource running = source(List.of(), true);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> running.onHistoryDone = ask, true, "asked", "R2");
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_mark_caught_up_replays_once_the_catch_up_running_it_returns() throws Exception {
+        FakeSource running = source(List.of("R1"), false);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> running.onMarkCaughtUp = ask, true, "R1", "asked", "R2");
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_replay_abandoned_replays_once_the_catch_up_running_it_returns() throws Exception {
+        FakeSource running = source(List.of("R1"), false);
+        running.stopAfter(0);
+        assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(running, (onR1, ask) -> running.onReplayAbandoned = ask, false, "asked", "R2");
+    }
+
+    private static void assertThatACatchUpFromOwnCodeReplaysOnceThatCodeReturns(
+            FakeSource running, BiConsumer<AtomicReference<Runnable>, Runnable> calling, boolean runningReturns, String... folded) throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        AtomicReference<Runnable> onR1 = new AtomicReference<>(() -> {
+        });
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("R1")) {
+                onR1.get().run();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        FakeSource asked = source(List.of("R2"), false);
+        calling.accept(onR1, () -> {
+            answers.add(handover.catchUp(asked));
+            log.add("asked");
+        });
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(runningReturns);
+            assertThat(answers).containsExactly(true);
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(asked.markCaughtUpCallCount()).isEqualTo(1);
+            assertThat(handover.acceptIfLive("L1")).isTrue();
+            assertThat(log).containsExactly(concat(folded, "L1"));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_catch_up_with_something_to_replay_from_already_delivered_by_replay_replays_once_that_callback_returns() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource replayed = source(List.of("R1"), false);
+        FakeSource asked = source(List.of("R2"), false);
+        handover.catchUp(source(List.of(), true));
+        handover.catchUp(replayed);
+        replayed.onAlreadyDeliveredByReplay = () -> {
+            answers.add(handover.catchUp(asked));
+            log.add("asked");
+        };
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> accepting = executor.submit(() -> handover.accept("R1"));
+
+            assertThat(accepting).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(answers).containsExactly(true);
+            assertThat(replayed.alreadyDeliveredByReplay).containsExactly("R1");
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(log).containsExactly("R1", "asked", "R2");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // Asking twice before the replay starts asks for one catch-up, and that replay reads everything the second one would.
+    @Test
+    void two_catch_ups_asked_for_by_own_code_before_the_replay_starts_replay_once() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        List<Boolean> answers = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource running = source(List.of("R1"), false);
+        FakeSource first = source(List.of("R1", "R2"), false);
+        FakeSource second = source(List.of("R1", "R2"), false);
+        running.onReplayStarted = () -> {
+            answers.add(handover.catchUp(first));
+            answers.add(handover.catchUp(second));
+        };
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(answers).containsExactly(true, true);
+            assertThat(first.replayCallCount + second.replayCallCount).isEqualTo(1);
+            assertThat(log).containsExactly("R1", "R1", "R2");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // The replay a replay's own code asked for asks again, and that one runs too once the first returns.
+    @Test
+    void a_catch_up_asked_for_by_the_replay_own_code_asked_for_also_replays() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource running = source(List.of("R1"), false);
+        FakeSource asked = source(List.of("R2"), false);
+        FakeSource askedByAsked = source(List.of("R3"), false);
+        running.onReplayStarted = () -> handover.catchUp(asked);
+        asked.onReplayStarted = () -> handover.catchUp(askedByAsked);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(log).containsExactly("R1", "R2", "R3");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // A caller that waits for a catch-up that then fails is refused rather than replaying into a view it was told to
+    // stop using, and one own code asked for is refused the same way.
+    @Test
+    void a_catch_up_asked_for_by_own_code_does_not_replay_when_the_catch_up_running_that_code_fails() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource running = source(List.of("R1"), false);
+        running.replayFailure = new RuntimeException("replay failed");
+        FakeSource asked = source(List.of("R2"), false);
+        running.onReplayStarted = () -> handover.catchUp(asked);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).failsWithin(Duration.ofSeconds(5)).withThrowableThat().havingCause().withMessage("replay failed");
+            assertThat(asked.replayCallCount).isZero();
+            assertThat(log).isEmpty();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // The caller of catchUp(..) is told a catch-up it ran failed, including one its code asked for, so startup code
+    // does not take a view that stopped halfway for caught up.
+    @Test
+    void a_catch_up_that_runs_a_failing_replay_its_own_code_asked_for_throws_that_failure() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource running = source(List.of("R1"), false);
+        FakeSource asked = source(List.of("R2"), false);
+        asked.replayFailure = new RuntimeException("asked replay failed");
+        running.onReplayStarted = () -> handover.catchUp(asked);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).failsWithin(Duration.ofSeconds(5)).withThrowableThat().havingCause().withMessage("asked replay failed");
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(handover.refusesPermanently()).isTrue();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void an_accept_that_runs_a_failing_replay_its_fold_asked_for_returns_normally_and_the_handover_refuses_after() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource asked = source(List.of("R1"), false);
+        asked.replayFailure = new RuntimeException("asked replay failed");
+        AtomicReference<BlockingHandover<String, String>> self = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                self.get().catchUp(asked);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        self.set(handover);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> accepting = executor.submit(() -> handover.accept("L1"));
+
+            assertThat(accepting).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(handover.refusesPermanently()).isTrue();
+            assertThat(log).containsExactly("L1");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // The first failure stays the recorded one, so only a record of the most recent failure can tell that another
+    // catch-up failed after the ask on a handover that had already failed.
+    @Test
+    void a_catch_up_asked_for_by_own_code_does_not_replay_when_the_catch_up_running_that_code_fails_on_a_handover_that_already_failed() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource firstFailure = source(List.of("R0"), false);
+        firstFailure.replayFailure = new RuntimeException("first replay failed");
+        assertThatThrownBy(() -> handover.catchUp(firstFailure)).hasMessage("first replay failed");
+        FakeSource running = source(List.of("R1"), false);
+        running.replayFailure = new RuntimeException("second replay failed");
+        FakeSource asked = source(List.of("R2"), false);
+        running.onReplayStarted = () -> handover.catchUp(asked);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).failsWithin(Duration.ofSeconds(5)).withThrowableThat().havingCause().withMessage("second replay failed");
+            assertThat(asked.replayCallCount).isZero();
+            assertThat(log).isEmpty();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // The asked replay runs its source's isAlreadyCaughtUp() before it takes its turn, and an ask from there is for
+    // the replay about to start, which replays from the newer source.
+    @Test
+    void an_ask_after_the_asked_replay_is_taken_but_before_it_starts_runs_no_second_replay() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource running = source(List.of("R1"), false);
+        FakeSource asked = source(List.of("R2"), false);
+        FakeSource askedAgain = source(List.of("R3"), false);
+        running.onReplayStarted = () -> {
+            handover.catchUp(asked);
+            asked.onIsAlreadyCaughtUp = () -> handover.catchUp(askedAgain);
+        };
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(asked.replayCallCount).isZero();
+            assertThat(askedAgain.replayCallCount).isEqualTo(1);
+            assertThat(log).containsExactly("R1", "R3");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // A catch-up fails between two asks that join one replay. The ask before the failure is refused and the one after
+    // it is not, the same as when each had asked for a replay of its own.
+    @Test
+    void an_ask_that_joins_a_pending_one_after_a_catch_up_failed_between_them_still_replays() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource askedBeforeFailure = source(List.of("R1"), false);
+        FakeSource askedAfterFailure = source(List.of("R2"), false);
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch secondFolding = new CountDownLatch(1);
+        CountDownLatch failed = new CountDownLatch(1);
+        CountDownLatch secondAsked = new CountDownLatch(1);
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(askedBeforeFailure);
+                firstAsked.countDown();
+                awaitOrFail(secondAsked);
+            } else if (payload.equals("L2")) {
+                secondFolding.countDown();
+                awaitOrFail(failed);
+                handoverRef.get().catchUp(askedAfterFailure);
+                secondAsked.countDown();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> first = executor.submit(() -> handover.accept("L1"));
+            Future<?> second = executor.submit(() -> handover.accept("L2"));
+            awaitOrFail(firstAsked);
+            awaitOrFail(secondFolding);
+            FakeSource failing = source(List.of(), false);
+            failing.onIsAlreadyCaughtUp = () -> {
+                throw new IllegalStateException("marker lookup failed");
+            };
+            assertThatThrownBy(() -> handover.catchUp(failing)).hasMessage("marker lookup failed");
+            failed.countDown();
+
+            assertThat(first).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(second).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(askedBeforeFailure.replayCallCount).isZero();
+            assertThat(askedAfterFailure.replayCallCount).isEqualTo(1);
+            assertThat(log).containsExactlyInAnyOrder("L1", "L2", "R2");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // The asked catch-up finds the history caught up by the time it runs, and an ask made while it looked still gets
+    // a replay after it, since that lookup answered only the asks made before it.
+    @Test
+    void an_ask_made_while_the_asked_catch_up_finds_the_history_caught_up_still_replays() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = handover(log);
+        FakeSource running = source(List.of("R1"), false);
+        FakeSource askedAgain = source(List.of("R3"), false);
+        AtomicInteger lookups = new AtomicInteger();
+        BlockingHandover.Source<String> caughtUpWhenRun = new BlockingHandover.Source<>() {
+            @Override
+            public boolean isAlreadyCaughtUp() {
+                if (lookups.incrementAndGet() == 1) {
+                    return false;
+                }
+                handover.catchUp(askedAgain);
+                return true;
+            }
+
+            @Override
+            public Stream<String> replay() {
+                return Stream.of("R2");
+            }
+
+            @Override
+            public void markCaughtUp() {
+            }
+        };
+        running.onReplayStarted = () -> handover.catchUp(caughtUpWhenRun);
+        handover.catchUp(source(List.of(), true));
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Boolean> catchingUp = executor.submit(() -> handover.catchUp(running));
+
+            assertThat(catchingUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(lookups).hasValue(2);
+            assertThat(askedAgain.replayCallCount).isEqualTo(1);
+            assertThat(log).containsExactly("R1", "R3");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // The asked catch-up finds the history caught up while another thread's replay runs, waits for that replay, and
+    // that replay fails. The ask is refused without a report, so the catch-up whose own replay asked for it and
+    // succeeded returns normally, and only the failed one throws.
+    @Test
+    void a_catch_up_whose_asked_catch_up_is_refused_by_another_threads_failed_replay_returns_normally() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        CountDownLatch otherReplayStarted = new CountDownLatch(1);
+        AtomicBoolean lookedUp = new AtomicBoolean();
+        AtomicReference<Thread> askingThread = new AtomicReference<>();
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        AtomicInteger lookups = new AtomicInteger();
+        AtomicInteger historyDone = new AtomicInteger();
+        BlockingHandover.Source<String> caughtUpWhenRun = new BlockingHandover.Source<>() {
+            @Override
+            public boolean isAlreadyCaughtUp() {
+                if (lookups.incrementAndGet() == 1) {
+                    return false;
+                }
+                awaitOrFail(otherReplayStarted);
+                lookedUp.set(true);
+                return true;
+            }
+
+            @Override
+            public Stream<String> replay() {
+                return Stream.of("R2");
+            }
+
+            @Override
+            public void markCaughtUp() {
+            }
+
+            @Override
+            public void historyDone() {
+                historyDone.incrementAndGet();
+            }
+        };
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("R0")) {
+                handoverRef.get().catchUp(caughtUpWhenRun);
+            } else if (payload.equals("R1")) {
+                awaitWaiting(askingThread.get(), lookedUp);
+                throw new IllegalStateException("other replay failed");
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        FakeSource asking = source(List.of("R0"), false);
+        FakeSource other = source(List.of("R1"), false);
+        other.onReplayStarted = otherReplayStarted::countDown;
+        CountDownLatch askingReplayStarted = new CountDownLatch(1);
+        asking.onReplayStarted = askingReplayStarted::countDown;
+        FutureTask<Boolean> askingCatchUp = new FutureTask<>(() -> handover.catchUp(asking));
+        // Asks for its catch-up once the asking replay holds the turn, so it replays after that one.
+        FutureTask<Boolean> otherCatchUp = new FutureTask<>(() -> {
+            awaitOrFail(askingReplayStarted);
+            return handover.catchUp(other);
+        });
+        Thread asker = new Thread(askingCatchUp, "asking");
+        askingThread.set(asker);
+        Thread otherThread = new Thread(otherCatchUp, "other");
+        asker.start();
+        otherThread.start();
+
+        try {
+            assertThat(otherCatchUp).failsWithin(Duration.ofSeconds(5))
+                    .withThrowableThat().havingCause().withMessage("other replay failed");
+            assertThat(askingCatchUp).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            assertThat(lookups).hasValue(2);
+            assertThat(historyDone).hasValue(0);
+            assertThat(log).containsExactly("R0", "R1");
+        } finally {
+            asker.interrupt();
+            otherThread.interrupt();
+        }
+    }
+
+    // The thread that runs a catch-up two threads asked for is interrupted before the replay starts. It warns and
+    // gives up its own ask, and the ask of the other thread is run by the next call that leaves this handover, here
+    // the live delivery of that other thread.
+    @Test
+    void an_interrupt_of_the_thread_running_an_asked_catch_up_leaves_the_ask_of_another_thread_for_the_next_call() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource askedFirst = source(List.of("R1"), false);
+        FakeSource askedByOther = source(List.of("R2"), false);
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch otherAsked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger lookups = new AtomicInteger();
+        askedByOther.onIsAlreadyCaughtUp = () -> {
+            if (lookups.incrementAndGet() == 2) {
+                // The run of the first thread looks up the latest ask, then waits for the other thread's delivery.
+                Thread.currentThread().interrupt();
+            }
+        };
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(askedFirst);
+                firstAsked.countDown();
+                awaitOrFail(otherAsked);
+            } else if (payload.equals("L2")) {
+                awaitOrFail(firstAsked);
+                handoverRef.get().catchUp(askedByOther);
+                otherAsked.countDown();
+                awaitOrFail(release);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        AtomicBoolean interruptedAfter = new AtomicBoolean();
+        FutureTask<Void> first = new FutureTask<>(() -> {
+            handover.accept("L1");
+            interruptedAfter.set(Thread.currentThread().isInterrupted());
+        }, null);
+        FutureTask<Void> second = new FutureTask<>(() -> handover.accept("L2"), null);
+        Thread firstThread = new Thread(first, "first");
+        Thread secondThread = new Thread(second, "second");
+        firstThread.start();
+        secondThread.start();
+
+        try {
+            assertThat(first).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(interruptedAfter).isTrue();
+            release.countDown();
+            assertThat(second).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(askedByOther.replayCallCount).isEqualTo(1);
+            assertThat(askedFirst.replayCallCount).isZero();
+            assertThat(log).containsExactlyInAnyOrder("L1", "L2", "R2");
+        } finally {
+            release.countDown();
+            firstThread.interrupt();
+            secondThread.interrupt();
+        }
+    }
+
+    // The ask of the second thread stays when the first thread's run is interrupted. The second thread is then
+    // interrupted too, and keeps delivering while its view asks each time. Nothing is running, so none of its runs
+    // has to wait, and the interrupt does not keep it from replaying.
+    @Test
+    void an_interrupted_thread_runs_the_asked_catch_ups_it_can_run_without_waiting() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource askedFirst = source(List.of("R1"), false);
+        FakeSource askedBySecond = source(List.of("R2"), false);
+        Map<String, FakeSource> askedLater = Map.of(
+                "L3", source(List.of("R3"), false),
+                "L4", source(List.of("R4"), false),
+                "L5", source(List.of("R5"), false));
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch secondAsked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger lookups = new AtomicInteger();
+        askedBySecond.onIsAlreadyCaughtUp = () -> {
+            if (lookups.incrementAndGet() == 2) {
+                // The run of the first thread looks up the latest ask, then waits for the second thread's delivery.
+                Thread.currentThread().interrupt();
+            }
+        };
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(askedFirst);
+                firstAsked.countDown();
+                awaitOrFail(secondAsked);
+            } else if (payload.equals("L2")) {
+                awaitOrFail(firstAsked);
+                handoverRef.get().catchUp(askedBySecond);
+                secondAsked.countDown();
+                awaitOrFail(release);
+                Thread.currentThread().interrupt();
+            } else if (askedLater.containsKey(payload)) {
+                handoverRef.get().catchUp(askedLater.get(payload));
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        AtomicBoolean interruptedAfter = new AtomicBoolean();
+        FutureTask<Void> first = new FutureTask<>(() -> handover.accept("L1"), null);
+        FutureTask<Void> second = new FutureTask<>(() -> {
+            handover.accept("L2");
+            handover.accept("L3");
+            handover.accept("L4");
+            handover.accept("L5");
+            interruptedAfter.set(Thread.currentThread().isInterrupted());
+        }, null);
+        Thread firstThread = new Thread(first, "first");
+        Thread secondThread = new Thread(second, "second");
+        firstThread.start();
+        secondThread.start();
+
+        try {
+            assertThat(first).succeedsWithin(Duration.ofSeconds(5));
+            release.countDown();
+            assertThat(second).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(interruptedAfter).isTrue();
+            assertThat(askedFirst.replayCallCount).isZero();
+            assertThat(askedBySecond.replayCallCount).isEqualTo(1);
+            assertThat(askedLater.values()).allSatisfy(asked -> assertThat(asked.replayCallCount).isEqualTo(1));
+            assertThat(log.subList(0, 2)).containsExactlyInAnyOrder("L1", "L2");
+            assertThat(log.subList(2, log.size())).containsExactly("R2", "L3", "R3", "L4", "R4", "L5", "R5");
+        } finally {
+            release.countDown();
+            firstThread.interrupt();
+            secondThread.interrupt();
+        }
+    }
+
+    // A catch-up fails after the view asked and before the asked run finds the history caught up. The ask is refused
+    // the same as one whose run waits for that catch-up, so the run does not tell the source its history was read.
+    @Test
+    void an_asked_catch_up_that_finds_the_history_caught_up_after_another_catch_up_failed_is_refused() throws Exception {
+        ExecutorService otherThread = Executors.newSingleThreadExecutor();
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        FakeSource failing = source(List.of("R1"), false);
+        failing.replayFailure = new IllegalStateException("other catch-up failed");
+        AtomicInteger lookups = new AtomicInteger();
+        AtomicInteger historyDone = new AtomicInteger();
+        BlockingHandover.Source<String> caughtUpAfterTheFailure = new BlockingHandover.Source<>() {
+            @Override
+            public boolean isAlreadyCaughtUp() {
+                if (lookups.incrementAndGet() == 1) {
+                    return false;
+                }
+                Future<Boolean> failed = otherThread.submit(() -> handoverRef.get().catchUp(failing));
+                assertThat(failed).failsWithin(Duration.ofSeconds(5));
+                return true;
+            }
+
+            @Override
+            public Stream<String> replay() {
+                return Stream.of("R2");
+            }
+
+            @Override
+            public void markCaughtUp() {
+            }
+
+            @Override
+            public void historyDone() {
+                historyDone.incrementAndGet();
+            }
+        };
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(caughtUpAfterTheFailure);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+
+        try {
+            handover.accept("L1");
+
+            assertThat(lookups).hasValue(2);
+            assertThat(failing.replayCallCount).isEqualTo(1);
+            assertThat(historyDone).hasValue(0);
+            assertThat(handover.isReadyForLiveDelivery()).isFalse();
+        } finally {
+            otherThread.shutdownNow();
+        }
+    }
+
+    // The first thread's run is interrupted, gives up its own ask and keeps that of the second thread. A third thread
+    // that is interrupted too delivers next and takes that ask over. Its marker lookup fails on the interrupted thread,
+    // which puts the ask back for the second thread rather than failing the handover.
+    @Test
+    void an_interrupted_thread_that_takes_over_a_catch_up_another_thread_asked_for_does_not_fail_the_handover() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource askedFirst = source(List.of("R1"), false);
+        FakeSource askedBySecond = source(List.of("R2"), false);
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch secondAsked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger lookups = new AtomicInteger();
+        askedBySecond.onIsAlreadyCaughtUp = () -> {
+            if (lookups.incrementAndGet() == 2) {
+                // The run of the first thread looks up the latest ask, then waits for the second thread's delivery.
+                Thread.currentThread().interrupt();
+            } else if (Thread.currentThread().isInterrupted()) {
+                throw new IllegalStateException("store read on an interrupted thread");
+            }
+        };
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(askedFirst);
+                firstAsked.countDown();
+                awaitOrFail(secondAsked);
+            } else if (payload.equals("L2")) {
+                awaitOrFail(firstAsked);
+                handoverRef.get().catchUp(askedBySecond);
+                secondAsked.countDown();
+                awaitOrFail(release);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        FutureTask<Void> first = new FutureTask<>(() -> handover.accept("L1"), null);
+        FutureTask<Void> second = new FutureTask<>(() -> handover.accept("L2"), null);
+        FutureTask<Boolean> interrupted = new FutureTask<>(() -> {
+            Thread.currentThread().interrupt();
+            return handover.acceptIfLive("L3");
+        });
+        Thread firstThread = new Thread(first, "first");
+        Thread secondThread = new Thread(second, "second");
+        Thread interruptedThread = new Thread(interrupted, "interrupted");
+        firstThread.start();
+        secondThread.start();
+
+        try {
+            assertThat(first).succeedsWithin(Duration.ofSeconds(5));
+            interruptedThread.start();
+            assertThat(interrupted).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+            // The third lookup is the interrupted thread's, so it did take the ask over and its lookup failed.
+            assertThat(lookups).hasValue(3);
+            assertThat(handover.refusesPermanently()).isFalse();
+            release.countDown();
+            assertThat(second).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(askedBySecond.replayCallCount).isEqualTo(1);
+            assertThat(handover.refusesPermanently()).isFalse();
+            assertThat(log).contains("R2");
+        } finally {
+            release.countDown();
+            firstThread.interrupt();
+            secondThread.interrupt();
+        }
+    }
+
+    // The first thread asks first, so the replay is its to run, and a second thread asks for the same replay. The
+    // first thread is interrupted by the time it would run it, and its marker lookup fails there, so it puts the
+    // replay back and the second thread runs it.
+    @Test
+    void an_interrupted_thread_whose_catch_up_lookup_fails_leaves_it_to_another_thread_that_asked_for_it() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource askedFirst = source(List.of("R1"), false);
+        FakeSource askedBySecond = source(List.of("R2"), false);
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch secondAsked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger lookups = new AtomicInteger();
+        askedBySecond.onIsAlreadyCaughtUp = () -> {
+            lookups.incrementAndGet();
+            if (Thread.currentThread().isInterrupted()) {
+                throw new IllegalStateException("store read on an interrupted thread");
+            }
+        };
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(askedFirst);
+                firstAsked.countDown();
+                awaitOrFail(secondAsked);
+                Thread.currentThread().interrupt();
+            } else if (payload.equals("L2")) {
+                awaitOrFail(firstAsked);
+                handoverRef.get().catchUp(askedBySecond);
+                secondAsked.countDown();
+                awaitOrFail(release);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        FutureTask<Void> first = new FutureTask<>(() -> handover.accept("L1"), null);
+        FutureTask<Void> second = new FutureTask<>(() -> handover.accept("L2"), null);
+        Thread firstThread = new Thread(first, "first");
+        Thread secondThread = new Thread(second, "second");
+        firstThread.start();
+        secondThread.start();
+
+        try {
+            assertThat(first).succeedsWithin(Duration.ofSeconds(5));
+            // The first lookup is the second thread's ask, and the second is the interrupted run of the first thread.
+            assertThat(lookups).hasValue(2);
+            assertThat(handover.refusesPermanently()).isFalse();
+            release.countDown();
+            assertThat(second).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(askedFirst.replayCallCount + askedBySecond.replayCallCount).isEqualTo(1);
+            assertThat(handover.refusesPermanently()).isFalse();
+            assertThat(log).endsWith("R2");
+        } finally {
+            release.countDown();
+            firstThread.interrupt();
+            secondThread.interrupt();
+        }
+    }
+
+    // The ask of the second thread is left unowned. A third thread takes it over and waits for a fold on a fourth, so
+    // the second thread's own delivery returns before the replay of its ask has run, and the third thread runs it.
+    @Test
+    void a_left_ask_replays_before_the_call_that_takes_it_over_returns() throws Exception {
+        FakeSource askedFirst = source(List.of("R1"), false);
+        FakeSource askedBySecond = source(List.of("R2"), false);
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch secondAsked = new CountDownLatch(1);
+        CountDownLatch firstReturned = new CountDownLatch(1);
+        CountDownLatch otherFolding = new CountDownLatch(1);
+        CountDownLatch releaseOther = new CountDownLatch(1);
+        AtomicReference<Thread> takingOver = new AtomicReference<>();
+        AtomicInteger lookups = new AtomicInteger();
+        askedBySecond.onIsAlreadyCaughtUp = () -> {
+            if (lookups.incrementAndGet() == 2) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("L0")) {
+                otherFolding.countDown();
+                awaitOrFail(releaseOther);
+            } else if (payload.equals("L1")) {
+                handoverRef.get().catchUp(askedFirst);
+                firstAsked.countDown();
+                awaitOrFail(secondAsked);
+            } else if (payload.equals("L2")) {
+                awaitOrFail(firstAsked);
+                handoverRef.get().catchUp(askedBySecond);
+                secondAsked.countDown();
+                awaitOrFail(firstReturned);
+                awaitWaiting(takingOver.get());
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        FutureTask<Void> other = new FutureTask<>(() -> handover.accept("L0"), null);
+        FutureTask<Void> first = new FutureTask<>(() -> handover.accept("L1"), null);
+        FutureTask<Void> second = new FutureTask<>(() -> handover.accept("L2"), null);
+        FutureTask<Boolean> takeOver = new FutureTask<>(() -> handover.acceptIfLive("L3"));
+        Thread otherThread = new Thread(other, "other");
+        Thread firstThread = new Thread(first, "first");
+        Thread secondThread = new Thread(second, "second");
+        Thread takingOverThread = new Thread(takeOver, "taking over");
+        takingOver.set(takingOverThread);
+        otherThread.start();
+        awaitOrFail(otherFolding);
+        firstThread.start();
+        secondThread.start();
+
+        try {
+            assertThat(first).succeedsWithin(Duration.ofSeconds(5));
+            takingOverThread.start();
+            firstReturned.countDown();
+            assertThat(second).succeedsWithin(Duration.ofSeconds(5));
+            int replaysWhenSecondReturned = askedBySecond.replayCallCount;
+            releaseOther.countDown();
+            assertThat(takeOver).succeedsWithin(Duration.ofSeconds(5)).isEqualTo(true);
+
+            assertThat(replaysWhenSecondReturned).isZero();
+            assertThat(askedBySecond.replayCallCount).isEqualTo(1);
+        } finally {
+            releaseOther.countDown();
+            firstReturned.countDown();
+            otherThread.interrupt();
+            firstThread.interrupt();
+            secondThread.interrupt();
+        }
+    }
+
+    // A catch-up whose marker lookup throws fails while the replay a live fold asked for runs. The failure came after
+    // the ask, but the replay had taken its turn, so the ask is not refused and the replay goes on to mark caught up.
+    @Test
+    void a_catch_up_failure_while_an_asked_replay_runs_does_not_refuse_its_ask() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        ExecutorService otherThread = Executors.newSingleThreadExecutor();
+        FakeSource asked = source(List.of("R1", "R2"), false);
+        FakeSource failingLookup = source(List.of(), false);
+        failingLookup.onIsAlreadyCaughtUp = () -> {
+            throw new IllegalStateException("lookup failed");
+        };
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(asked);
+            } else if (payload.equals("R1")) {
+                Future<Boolean> failed = otherThread.submit(() -> handoverRef.get().catchUp(failingLookup));
+                assertThat(failed).failsWithin(Duration.ofSeconds(5));
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+
+        try {
+            handover.accept("L1");
+
+            assertThat(handover.refusesPermanently()).isTrue();
+            assertThat(asked.replayCallCount).isEqualTo(1);
+            assertThat(asked.markCaughtUpCallCount()).isEqualTo(1);
+            assertThat(log).containsExactly("L1", "R1", "R2");
+        } finally {
+            otherThread.shutdownNow();
+        }
+    }
+
+    // The second thread's view is interrupted and asks for a catch-up whose marker lookup fails for it. That failure
+    // reaches its view, and the ask the first thread made before it still replays.
+    @Test
+    void a_catch_up_lookup_that_fails_on_an_interrupted_thread_refuses_no_ask_of_another_thread() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource askedByFirst = source(List.of("R1"), false);
+        FakeSource askedBySecond = source(List.of("R2"), false);
+        askedByFirst.failWhenInterrupted = true;
+        askedBySecond.failWhenInterrupted = true;
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch secondDone = new CountDownLatch(1);
+        AtomicReference<Throwable> thrownIntoSecond = new AtomicReference<>();
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(askedByFirst);
+                firstAsked.countDown();
+                awaitOrFail(secondDone);
+            } else if (payload.equals("L2")) {
+                awaitOrFail(firstAsked);
+                Thread.currentThread().interrupt();
+                try {
+                    handoverRef.get().catchUp(askedBySecond);
+                } catch (Throwable e) {
+                    thrownIntoSecond.set(e);
+                } finally {
+                    secondDone.countDown();
+                }
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        FutureTask<Void> first = new FutureTask<>(() -> handover.accept("L1"), null);
+        FutureTask<Void> second = new FutureTask<>(() -> handover.accept("L2"), null);
+        Thread firstThread = new Thread(first, "first");
+        Thread secondThread = new Thread(second, "second");
+        firstThread.start();
+        secondThread.start();
+
+        try {
+            assertThat(second).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(first).succeedsWithin(Duration.ofSeconds(5));
+
+            assertThat(thrownIntoSecond.get()).hasMessage(INTERRUPTED_READ);
+            assertThat(handover.refusesPermanently()).isFalse();
+            assertThat(askedByFirst.replayCallCount).isEqualTo(1);
+            assertThat(log).containsExactlyInAnyOrder("L1", "L2", "R1");
+            handover.accept("L3");
+            assertThat(log).endsWith("L3");
+        } finally {
+            secondDone.countDown();
+        }
+    }
+
+    // The thread is interrupted after its view asked, so the marker lookup of its own run fails. The catch-up stays
+    // asked for, and the next call runs it.
+    @Test
+    void an_asked_catch_up_whose_lookup_fails_on_an_interrupted_thread_is_left_for_the_next_call() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource asked = source(List.of("R1"), false);
+        asked.failWhenInterrupted = true;
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(asked);
+                Thread.currentThread().interrupt();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        FutureTask<Void> interrupted = new FutureTask<>(() -> handover.accept("L1"), null);
+        new Thread(interrupted, "interrupted").start();
+
+        assertThat(interrupted).succeedsWithin(Duration.ofSeconds(5));
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(asked.replayCallCount).isZero();
+        handover.accept("L2");
+
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(asked.replayCallCount).isEqualTo(1);
+        assertThat(asked.markCaughtUpCallCount()).isEqualTo(1);
+        assertThat(log).containsExactly("L1", "L2", "R1");
+    }
+
+    // The first thread takes the catch-up over and its lookup passes. The second thread asks for the same replay, and
+    // the first thread is interrupted before the replay opens, so opening the replay fails. Both asks are left for
+    // the next call.
+    @Test
+    void an_interrupt_after_the_takeover_leaves_every_ask_for_the_next_call() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource askedByFirst = source(List.of("R1"), false);
+        FakeSource askedBySecond = source(List.of("R2"), false);
+        askedByFirst.failWhenInterrupted = true;
+        askedBySecond.failWhenInterrupted = true;
+        CountDownLatch tookOver = new CountDownLatch(1);
+        CountDownLatch secondReturned = new CountDownLatch(1);
+        AtomicInteger lookups = new AtomicInteger();
+        askedByFirst.onIsAlreadyCaughtUp = () -> {
+            if (lookups.incrementAndGet() == 2) {
+                tookOver.countDown();
+                awaitOrFail(secondReturned);
+                Thread.currentThread().interrupt();
+            }
+        };
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(askedByFirst);
+            } else if (payload.equals("L2")) {
+                handoverRef.get().catchUp(askedBySecond);
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        FutureTask<Void> first = new FutureTask<>(() -> handover.accept("L1"), null);
+        Thread firstThread = new Thread(first, "first");
+        firstThread.start();
+
+        try {
+            awaitOrFail(tookOver);
+            FutureTask<Void> second = new FutureTask<>(() -> handover.accept("L2"), null);
+            new Thread(second, "second").start();
+            assertThat(second).succeedsWithin(Duration.ofSeconds(5));
+            secondReturned.countDown();
+            assertThat(first).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(handover.refusesPermanently()).isFalse();
+            assertThat(log).doesNotContain("R2");
+            handover.accept("L3");
+
+            assertThat(handover.refusesPermanently()).isFalse();
+            assertThat(log).containsExactly("L1", "L2", "L3", "R2");
+            assertThat(askedBySecond.markCaughtUpCallCount()).isEqualTo(1);
+        } finally {
+            secondReturned.countDown();
+        }
+    }
+
+    // The second thread runs the replay both threads asked for and is interrupted by a fold of it, so the next read
+    // of the history fails. The asks are left for the next call, which replays the whole history.
+    @Test
+    void an_interrupt_during_an_asked_replay_leaves_its_asks_for_the_next_call() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource askedByFirst = source(List.of("R1"), false);
+        FakeSource askedBySecond = source(List.of("R2", "R3"), false);
+        askedByFirst.failWhenInterrupted = true;
+        askedBySecond.failWhenInterrupted = true;
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch secondAsked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicBoolean interruptOnce = new AtomicBoolean(true);
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(askedByFirst);
+                firstAsked.countDown();
+                awaitOrFail(secondAsked);
+                Thread.currentThread().interrupt();
+            } else if (payload.equals("L2")) {
+                awaitOrFail(firstAsked);
+                handoverRef.get().catchUp(askedBySecond);
+                secondAsked.countDown();
+                awaitOrFail(release);
+            } else if (payload.equals("R2") && interruptOnce.getAndSet(false)) {
+                Thread.currentThread().interrupt();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        FutureTask<Void> first = new FutureTask<>(() -> handover.accept("L1"), null);
+        FutureTask<Void> second = new FutureTask<>(() -> handover.accept("L2"), null);
+        Thread firstThread = new Thread(first, "first");
+        Thread secondThread = new Thread(second, "second");
+        firstThread.start();
+
+        try {
+            // Started once the first thread has asked, so L1 is in the log before L2. The handover orders the two
+            // live folds in no way, and started together either thread can log first.
+            awaitOrFail(firstAsked);
+            secondThread.start();
+            assertThat(first).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(handover.refusesPermanently()).isFalse();
+            release.countDown();
+            assertThat(second).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(handover.refusesPermanently()).isFalse();
+            assertThat(log).containsExactly("L1", "L2", "R2");
+            handover.accept("L3");
+
+            assertThat(handover.refusesPermanently()).isFalse();
+            assertThat(log).containsExactly("L1", "L2", "R2", "L3", "R2", "R3");
+            assertThat(askedBySecond.markCaughtUpCallCount()).isEqualTo(1);
+        } finally {
+            release.countDown();
+        }
+    }
+
+    // A fold of the asked replay asks again and interrupts its thread, so the next read of the history fails. The ask
+    // it made and the asks of the replay are both left for the next call.
+    @Test
+    void an_ask_made_by_a_replay_that_fails_on_an_interrupt_is_left_for_the_next_call_too() throws Exception {
+        List<String> log = new CopyOnWriteArrayList<>();
+        FakeSource asked = source(List.of("R1", "R2"), false);
+        FakeSource askedByReplay = source(List.of("R3"), false);
+        asked.failWhenInterrupted = true;
+        askedByReplay.failWhenInterrupted = true;
+        AtomicBoolean askOnce = new AtomicBoolean(true);
+        AtomicReference<BlockingHandover<String, String>> handoverRef = new AtomicReference<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            log.add(payload);
+            if (payload.equals("L1")) {
+                handoverRef.get().catchUp(asked);
+            } else if (payload.equals("R1") && askOnce.getAndSet(false)) {
+                handoverRef.get().catchUp(askedByReplay);
+                Thread.currentThread().interrupt();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handoverRef.set(handover);
+        handover.catchUp(source(List.of(), true));
+        FutureTask<Void> interrupted = new FutureTask<>(() -> handover.accept("L1"), null);
+        new Thread(interrupted, "interrupted").start();
+
+        assertThat(interrupted).succeedsWithin(Duration.ofSeconds(5));
+        assertThat(log).containsExactly("L1", "R1");
+        assertThat(handover.refusesPermanently()).isFalse();
+        handover.accept("L2");
+
+        assertThat(log).containsExactly("L1", "R1", "L2", "R1", "R2");
+        assertThat(asked.markCaughtUpCallCount()).isEqualTo(1);
+    }
+
+    // An InterruptedException can come from another thread, a pool task its shutdown interrupted say, while the thread
+    // running the catch-up is not interrupted. The view fails the same way on every replay, so the failure is recorded.
+    @Test
+    void a_catch_up_failure_with_an_interrupted_exception_as_its_cause_on_a_thread_that_is_not_interrupted_is_recorded() {
+        AtomicInteger folds = new AtomicInteger();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            folds.incrementAndGet();
+            if (payload.equals("R1")) {
+                throw new IllegalStateException("remote call failed",
+                        new ExecutionException(new InterruptedException("worker interrupted by pool shutdown")));
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+
+        Throwable thrown = catchThrowable(() -> handover.catchUp(source(List.of("R0", "R1"), false)));
+        boolean interruptedAfter = Thread.interrupted();
+
+        assertThat(thrown).hasRootCauseInstanceOf(InterruptedException.class);
+        assertThat(handover.refusesPermanently()).isTrue();
+        assertThat(interruptedAfter).isFalse();
+        assertThat(folds).hasValue(2);
+    }
+
+    // The first payload of the drain interrupts its thread, so the view fails the next one. The payloads the drain did
+    // not deliver go back into the buffer and the handover is not live, so none of them is dropped and no later
+    // payload is delivered ahead of them.
+    @Test
+    void a_drain_that_fails_on_an_interrupt_keeps_the_payloads_it_did_not_deliver_for_the_next_catch_up() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new IllegalStateException("write on an interrupted thread");
+            }
+            log.add(payload);
+            if (payload.equals("L1")) {
+                Thread.currentThread().interrupt();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        assertThat(handover.acceptReportingDelivery("L1")).isTrue();
+        assertThat(handover.acceptReportingDelivery("L2")).isTrue();
+        assertThat(handover.acceptReportingDelivery("L3")).isTrue();
+
+        Throwable thrown = catchThrowable(() -> handover.catchUp(source(List.of(), false)));
+        boolean interruptedAfter = Thread.interrupted();
+
+        assertThat(thrown).hasMessage("write on an interrupted thread");
+        assertThat(interruptedAfter).isTrue();
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(handover.isReadyForLiveDelivery()).isFalse();
+        assertThat(handover.acceptIfLive("L4")).isFalse();
+        assertThat(handover.catchUp(source(List.of(), false))).isTrue();
+        assertThat(log).containsExactly("L1", "L2", "L3");
+        assertThat(handover.acceptIfLive("L4")).isTrue();
+        assertThat(log).containsExactly("L1", "L2", "L3", "L4");
+    }
+
+    // A caller of accept(..) waits for its payload. The drain the interrupt failed did not apply L2, so its caller is
+    // answered as when a catch-up is stopped before the handover goes live, and offers it again.
+    @Test
+    void a_drain_that_fails_on_an_interrupt_answers_a_waiting_caller_it_did_not_deliver_to_as_stopped() throws InterruptedException {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new IllegalStateException("write on an interrupted thread");
+            }
+            log.add(payload);
+            if (payload.equals("L1")) {
+                Thread.currentThread().interrupt();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        AtomicReference<Throwable> firstFailure = new AtomicReference<>();
+        AtomicReference<Throwable> secondFailure = new AtomicReference<>();
+        Thread first = new Thread(() -> firstFailure.set(catchThrowable(() -> handover.accept("L1"))), "first");
+        Thread second = new Thread(() -> secondFailure.set(catchThrowable(() -> handover.accept("L2"))), "second");
+        first.start();
+        awaitWaiting(first);
+        second.start();
+        awaitWaiting(second);
+
+        Throwable thrown = catchThrowable(() -> handover.catchUp(source(List.of(), false)));
+        boolean interruptedAfter = Thread.interrupted();
+        first.join(5_000);
+        second.join(5_000);
+
+        assertThat(thrown).hasMessage("write on an interrupted thread");
+        assertThat(interruptedAfter).isTrue();
+        assertThat(firstFailure.get()).isNull();
+        assertThat(secondFailure.get()).isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied(NOUN));
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(handover.isReadyForLiveDelivery()).isFalse();
+        assertThat(handover.catchUp(source(List.of(), false))).isTrue();
+        handover.accept("L2");
+        assertThat(log).containsExactly("L1", "L2");
+    }
+
+    // Every payload is delivered before the marker is written, so a marker write that fails on an interrupt leaves the
+    // handover live. With no marker written, the next catch-up replays the whole history again.
+    @Test
+    void a_marker_write_that_fails_on_an_interrupt_leaves_the_handover_live_and_the_next_catch_up_replays_again() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        FakeSource interruptedMarker = source(List.of("R1"), false);
+        AtomicBoolean interruptOnce = new AtomicBoolean(true);
+        interruptedMarker.onMarkCaughtUp = () -> {
+            if (interruptOnce.getAndSet(false)) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("marker write on an interrupted thread");
+            }
+        };
+
+        Throwable thrown = catchThrowable(() -> handover.catchUp(interruptedMarker));
+        boolean interruptedAfter = Thread.interrupted();
+
+        assertThat(thrown).hasMessage("marker write on an interrupted thread");
+        assertThat(interruptedAfter).isTrue();
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(handover.isReadyForLiveDelivery()).isTrue();
+        assertThat(handover.catchUp(interruptedMarker)).isTrue();
+        assertThat(log).containsExactly("R1", "R1");
+        assertThat(interruptedMarker.markCaughtUpCallCount()).isEqualTo(2);
+    }
+
+    // Clients throw an InterruptedIOException for a timeout too, one that no interrupt caused, so it fails the catch-up
+    // like any other failure.
+    @Test
+    void a_catch_up_failure_caused_by_a_timeout_is_recorded() {
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        FakeSource timedOut = source(List.of("R1"), false);
+        timedOut.replayFailure = new UncheckedIOException(new InterruptedIOException("timeout"));
+
+        Throwable thrown = catchThrowable(() -> handover.catchUp(timedOut));
+        boolean interruptedAfter = Thread.interrupted();
+
+        assertThat(thrown).isSameAs(timedOut.replayFailure);
+        assertThat(interruptedAfter).isFalse();
+        assertThat(handover.refusesPermanently()).isTrue();
+    }
+
+    private static void awaitWaiting(Thread thread, AtomicBoolean ready) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!(ready.get() && thread.getState() == Thread.State.WAITING)) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError(thread.getName() + " did not start waiting");
+            }
+            Thread.onSpinWait();
+        }
+    }
+
+    private static void awaitOrFail(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static String[] concat(String[] first, String... second) {
+        return Stream.concat(Stream.of(first), Stream.of(second)).toArray(String[]::new);
+    }
+
     // A replay that starts waits for the live fold that is running, but it has already stopped live delivery and is
     // not running yet, so the fold's catch-up goes live the way one from any other thread would at that point.
     // acceptIfLive(..) accepts until the replay starts, and the replay goes live again once it ends.
@@ -2686,6 +3988,9 @@ class BlockingHandoverTest {
         private Runnable onReplayAbandoned;
         private Runnable onAlreadyDeliveredByReplay;
         private Runnable onHistoryDone;
+        private Runnable onIsAlreadyCaughtUp;
+        // Throws on every store read while the thread is interrupted, the way the Mongo driver does.
+        private boolean failWhenInterrupted;
         private int replayCallCount = 0;
         private int markCaughtUpCallCount = 0;
         private int stopAfter = Integer.MAX_VALUE;
@@ -2723,6 +4028,10 @@ class BlockingHandoverTest {
 
         @Override
         public boolean isAlreadyCaughtUp() {
+            failIfInterrupted();
+            if (onIsAlreadyCaughtUp != null) {
+                onIsAlreadyCaughtUp.run();
+            }
             return alreadyCaughtUp;
         }
 
@@ -2739,11 +4048,19 @@ class BlockingHandoverTest {
             if (replayFailure != null) {
                 throw replayFailure;
             }
-            return history.stream();
+            failIfInterrupted();
+            return history.stream().peek(payload -> failIfInterrupted());
+        }
+
+        private void failIfInterrupted() {
+            if (failWhenInterrupted && Thread.currentThread().isInterrupted()) {
+                throw new IllegalStateException(INTERRUPTED_READ);
+            }
         }
 
         @Override
         public void markCaughtUp() {
+            failIfInterrupted();
             markCaughtUpCallCount++;
             if (onMarkCaughtUp != null) {
                 onMarkCaughtUp.run();
