@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Fourteen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
+Sixteen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -51,10 +51,14 @@ Then feeding a push model's `accept(..)` is supported only from the in-memory ev
 Then a projection feed's `goLive()` called while a catch-up of the same projection is replaying now waits for
 that replay to end, where 0.33.0 did not wait, and fails when a catch-up of that projection failed meanwhile. Read
 [section 14](#14-a-projection-feeds-golive-waits-for-a-running-catch-up).
-Finally, a reactor subscription handler, or the code that applies an event to a reactor projection feed, that feeds an
+Then a reactor subscription handler, or the code that applies an event to a reactor projection feed, that feeds an
 event back into its own subscription or feed no longer waits forever. The call is answered once the event is queued,
 and when applying that event fails, the subscription or feed fails for good. Read
 [section 15](#15-feeding-a-reactor-catch-up-from-its-own-handler-no-longer-waits-forever).
+Finally, on `NativeMongoSubscriptionModel`, `waitUntilStarted()` on a subscription made while the model is stopped now
+waits until `start()` or `resumeSubscription(..)` opens its change stream, so calling it before `start()` on the thread
+that calls `start()` waits forever. Read
+[section 16](#16-waituntilstarted-on-a-native-mongodb-subscription-made-while-the-model-is-stopped-waits-for-start).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1199,3 +1203,29 @@ What to do:
 
 There is no recipe for this change. Whether a call runs inside a handler of the subscription it feeds is runtime
 behavior that a rewrite of the source cannot see.
+
+## 16. `waitUntilStarted()` on a native MongoDB subscription made while the model is stopped waits for `start()`
+
+This covers `NativeMongoSubscriptionModel`. In 0.33.0 `subscribe(..)` opened a change stream even when the model was
+stopped, so `waitUntilStarted()` on the `Subscription` it returned came back once that change stream opened. That
+change stream delivered events while `isPaused(..)` returned `true`, and `start()` opened a second one next to it, so
+every event written after `start()` arrived twice.
+
+Now a subscription made while the model is stopped opens no change stream until `start()` or `resumeSubscription(..)`
+starts it, and `waitUntilStarted()` returns once that change stream has opened. `SpringMongoSubscriptionModel` already
+waited this way in 0.33.0.
+
+You are affected when one thread calls `stop()`, then `subscribe(..)` and `waitUntilStarted()`, and then `start()`.
+That thread now waits in `waitUntilStarted()` until it is interrupted. The Kotlin subscription DSL's `subscribe(..)`
+calls `waitUntilStarted()` unless you pass `waitUntilStarted = false`, so a DSL `subscribe(..)` between `stop()` and
+`start()` on one thread waits the same way.
+
+What to do:
+
+- Call `start()` before you wait, or wait on another thread.
+- In the Kotlin DSL, pass `waitUntilStarted = false` to a `subscribe(..)` made while the model is stopped, and call
+  `waitUntilStarted()` on the `Subscription` it returns once `start()` has returned.
+- `waitUntilStarted(Duration)` returns `false` once the timeout has passed, so a wait with a timeout ends on its own.
+
+There is no recipe for this change. Whether the model is stopped when `subscribe(..)` runs is runtime behavior that a
+rewrite of the source cannot see.

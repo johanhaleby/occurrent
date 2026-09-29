@@ -59,6 +59,7 @@ import java.util.List;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -387,6 +388,61 @@ public class NativeMongoSubscriptionModelResilienceTest {
             // Then
             assertThat(pausing).isLessThan(Duration.ofMillis(500));
             assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue();
+        }
+
+        @Test
+        void start_returns_when_a_subscription_it_resumes_loses_its_history_before_start_waits_for_it() {
+            // Given a dispatcher that runs a subscription on the thread that starts it, so the model has forgotten the
+            // subscription whose history was lost by the time the resume inside start() returns
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsOnce(changeStreamHistoryLostException()), TimeRepresentation.RFC_3339_STRING, new CallerRunsExecutorService(),
+                    NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            subscriptionModel.stop();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
+
+            // When
+            Throwable thrown = catchThrowable(subscriptionModel::start);
+
+            // Then
+            assertThat(thrown).isNull();
+            assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId);
+        }
+    }
+
+    // Runs each task on the calling thread
+    private static class CallerRunsExecutorService extends AbstractExecutorService {
+        private volatile boolean shutdown;
+
+        @Override
+        public void execute(Runnable command) {
+            command.run();
+        }
+
+        @Override
+        public void shutdown() {
+            shutdown = true;
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            shutdown = true;
+            return List.of();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return shutdown;
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return shutdown;
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) {
+            return shutdown;
         }
     }
 
