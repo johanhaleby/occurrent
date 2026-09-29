@@ -167,15 +167,23 @@ before the replay starts or finds the history caught up already, so a failure wh
 them. A replay whose every ask was refused does not run. `true` means the catch-up was asked for, not that it has run. A
 later replay can answer it, one that started after the call and has gone live by the time the catch-up's turn comes, and
 the catch-up then replays nothing. It can still be stopped, or refused because another catch-up failed, and a failure of
-its replay makes the handover fail the way any failed catch-up does. An interrupt keeps the thread that runs the replay
-from waiting, not from replaying. When that thread is interrupted where the replay would wait, it gives up the asks made
-on it and logs a warning. An interrupted thread also does not begin to run a replay that an ask from another thread
-stands for, because reading the catch-up marker can fail on an interrupted thread, and a failed catch-up refuses every
-later payload. Every ask the interrupted thread did not give up stays, and its replay runs on the thread of a later call
-into the handover, such as a catch-up or a live delivery on a thread that is not interrupted, before that call returns,
-unless that call is interrupted where the replay would wait. So a `catchUp()` on a thread where the view never asked can
-throw the failure of that replay. A view that waits for a `catchUp()` that replays from a thread it switched to is not
-recognized, so it still waits for a replay that cannot start while the view waits.
+its replay makes the handover fail the way any failed catch-up does, unless an interrupt caused it. A catch-up that
+fails on an interrupted thread, or for a failure whose cause is an interrupt, is not recorded as a failed catch-up,
+since a store client can fail its reads once the thread is interrupted, the MongoDB driver among them. The handover
+abandons that replay like a stopped one, leaves the thread interrupted, and does not refuse later payloads for it.
+The blocking `CatchupThenPushSubscriptionModel` then replays the history again on a new thread, since nothing else
+replays it for that subscription, and a live event the stopped handover dropped from the in-memory event store's write
+path is read from the store by that replay. It does so up to 3 times for a subscription, and after that leaves the
+catch-up for `resumeSubscription(..)` or `start(true)` like one a stop interrupted, so a handler that interrupts its own
+thread on every replay does not apply the history again in an endless loop. An interrupt keeps the thread that runs the replay from waiting. When that thread is interrupted where the replay would
+wait, it gives up the asks made on it and logs a warning. When the replay fails on an interrupted thread, the thread
+puts back every ask the replay stands for and logs a warning. The asks it puts back, and the asks of other threads when
+it gives up, stay, and their replay runs on the thread of a later call into the handover, such as a catch-up or a live
+delivery made outside the handover's own code, before that call returns. That call can be interrupted too, and then
+gives up or puts back the asks again. So a `catchUp()` on a thread where the view never asked can throw the failure of
+that replay. Asks left this way run only when a later call comes, so if none comes, their replay does not run. A view
+that waits for a `catchUp()` that replays from a thread it switched to is not recognized, so it still waits for a replay
+that cannot start while the view waits.
 
 The reactive engine delivers one live payload at a time, so it cannot deliver a payload its own code feeds it before
 that code returns. Until [#1148](https://github.com/johanhaleby/occurrent/issues/1148) a call waiting for that

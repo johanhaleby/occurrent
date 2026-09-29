@@ -246,8 +246,9 @@ public final class CatchupProjectionFeed<E> {
     }
 
     // Package-private, beside isReadyForLiveDelivery() and for the same reason: the handover owns this state, so
-    // asking it beats tracking a second copy. False until this feed's own catch-up throws and true forever after,
-    // which is what makes it safe to read after catching the refusal rather than at the moment it was thrown.
+    // asking it beats tracking a second copy. False until this feed's own catch-up throws for a cause other than an
+    // interrupt and true forever after, which is what makes it safe to read after catching the refusal rather than at
+    // the moment it was thrown.
     boolean refusesPermanently() {
         return handover.refusesPermanently();
     }
@@ -259,6 +260,12 @@ public final class CatchupProjectionFeed<E> {
      * <p>
      * Runs on the calling thread. A caller that wants it off that thread runs it on a thread it owns, and calls
      * {@link #stopCatchUp()} to bring it back down.
+     * <p>
+     * A catch-up that fails on an interrupted thread, or because an interrupt made a read fail, throws that failure but
+     * is not recorded as a failed catch-up, since a store client can fail its reads once the thread is interrupted, the
+     * MongoDB driver among them. This feed does not refuse later events for it, and leaves the thread interrupted.
+     * A replay it cut short is abandoned like a stopped one, and a later {@code catchUp()} replays the history it did
+     * not finish.
      * <p>
      * A call the view makes while this feed is calling it, from its fold or from a callback such as
      * {@code replayStarted()}, returns without waiting for the replay, since that replay cannot start before the view's
@@ -274,21 +281,20 @@ public final class CatchupProjectionFeed<E> {
      * the history caught up already. Another catch-up that fails while the replay runs does not refuse it. The view's
      * code is not told, though a stopped replay calls {@code replayStarted()} and {@code replayAbandoned()} on a replay
      * aware view like any other stopped replay. When the replay fails, this feed refuses every later event, the same as
-     * after any failed catch-up. A {@code catchUp()} or {@link #goLive()} that runs the replay throws the failure, and
-     * an {@link #accept(Object)} that runs it logs the failure instead of throwing it.
+     * after any other failed catch-up, unless an interrupt caused the failure. A {@code catchUp()} or {@link #goLive()}
+     * that runs the replay throws the failure, and an {@link #accept(Object)} that runs it logs the failure instead of
+     * throwing it.
      * <p>
-     * An interrupt keeps the thread that runs such a replay from waiting, not from replaying. When that thread is
-     * interrupted where the replay would wait for another fold or replay, it gives up the calls made on it and logs a
-     * warning. An interrupted thread also does not begin to run a replay that a call on another thread already asked
-     * for, since reading the catch-up marker from its {@link CheckpointStorage} can fail on an interrupted thread, and
-     * a failed catch-up refuses every later event. It logs a warning when the replay was its own to run. The calls in
-     * that replay, and the calls on other threads when it gives up, stay asked for. A later call takes them over when
-     * it is a {@code catchUp()}, {@link #goLive()}, or {@link #accept(Object)} that folds its event live, made outside
-     * the view's code on a thread that is not interrupted or on which every one of those calls was made. Their replay
-     * has run, or been refused, before the call that takes them over returns or throws, unless that call is interrupted
-     * where the replay would wait. A call on another thread that finds them taken over returns without waiting for that
-     * replay. The call that takes them over can be on a thread where the view never asked, and a {@code catchUp()} or
-     * {@link #goLive()} throws the failure of that replay. If no such call comes, the replay does not run.
+     * An interrupt keeps the thread that runs such a replay from waiting. When that thread is interrupted where the
+     * replay would wait for another fold or replay, it gives up the calls made on it and logs a warning. When the
+     * replay fails on an interrupted thread, as above, the thread puts back every call the replay stands for and logs a
+     * warning, and throws nothing for that failure. The calls it puts back, and the calls on other threads when it
+     * gives up, stay asked for. A later call takes them over when it is a {@code catchUp()}, {@link #goLive()}, or
+     * {@link #accept(Object)} that folds its event live, made outside the view's code on any thread. Before that call
+     * returns or throws, their replay has run, been refused, or been given up or put back again. A call on another
+     * thread that finds them taken over returns without waiting for that replay. The call that takes them over can be
+     * on a thread where the view never asked, and a {@code catchUp()} or {@link #goLive()} throws the failure of that
+     * replay. Calls left this way replay only when such a call comes, so if none comes, the replay does not run.
      * <p>
      * A view that calls this for an event a replay delivers asks for another catch-up each time a replay delivers that
      * event again. Each of those catch-ups replays again unless it finds the catch-up marker written, so a feed built

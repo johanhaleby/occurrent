@@ -365,6 +365,98 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(model.isCatchingUp("sub")).isFalse();
     }
 
+    // The handler interrupts its own thread, and the store then fails its next read on that thread, as the MongoDB
+    // driver does. The handover records no failure for that, so the model relaunches the replay on a thread no
+    // interrupt has reached. The event written while the first replay ran reaches the handler once, from the
+    // relaunched replay, which reads it from the store.
+    @Test
+    void a_catch_up_that_fails_on_an_interrupt_is_relaunched_and_replays_what_the_failed_one_dropped() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("h1", "Created"), cloudEvent("h2", "Created")));
+        PositionOrderedReader failsWhenInterrupted = new PositionOrderedReader() {
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return store.readInPositionOrder(filter, range).map(cloudEvent -> {
+                    if (Thread.currentThread().isInterrupted()) {
+                        throw new IllegalStateException("read on an interrupted thread");
+                    }
+                    return cloudEvent;
+                });
+            }
+
+            @Override
+            public long currentPosition() {
+                return store.currentPosition();
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return store.writesPosition();
+            }
+        };
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failsWhenInterrupted, feed, null);
+        AtomicInteger folds = new AtomicInteger();
+        List<String> handled = new CopyOnWriteArrayList<>();
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            handled.add(cloudEvent.getId());
+            if (folds.incrementAndGet() == 1) {
+                store.write("s2", List.of(cloudEvent("written", "Created")));
+                Thread.currentThread().interrupt();
+            }
+        });
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (model.isCatchingUp("sub") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+
+        assertThat(handled).containsExactly("h1", "h1", "h2", "written");
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+        store.write("s3", List.of(cloudEvent("live", "Created")));
+        assertThat(handled).endsWith("live");
+    }
+
+    // A replay that fails on an interrupt every time relaunches itself three times and is then left like a stopped
+    // one, so a handler that interrupts its own thread on every replay does not apply the history in a loop. The
+    // handover refuses live events without failing, so the source redelivers them, and resuming replays again.
+    @Test
+    void a_catch_up_that_keeps_failing_on_an_interrupt_is_left_for_resume_subscription_after_three_relaunches() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        AtomicInteger reads = new AtomicInteger();
+        PositionOrderedReader alwaysInterrupted = new PositionOrderedReader() {
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                reads.incrementAndGet();
+                throw new IllegalStateException("read interrupted", new InterruptedException());
+            }
+
+            @Override
+            public long currentPosition() {
+                return 0;
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
+            }
+        };
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(alwaysInterrupted, feed, null);
+
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        });
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (model.isCatchingUp("sub") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+
+        assertThat(model.isCatchingUp("sub")).isFalse();
+        assertThat(reads).hasValue(4);
+        assertThat(feed.acceptRedeliverable(cloudEvent("1", "Created"))).isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(model.resumeSubscription("sub").waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+        assertThat(reads).hasValue(5);
+    }
+
     /**
      * The broker-path counterpart to the test above, and the regression guard for a Copilot review finding: a
      * refusal decided before any dispatch was attempted must report {@link RoutingOutcome#REFUSED}, never
