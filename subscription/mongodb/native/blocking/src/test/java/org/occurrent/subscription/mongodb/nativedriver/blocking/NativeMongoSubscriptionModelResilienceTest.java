@@ -42,6 +42,7 @@ import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -172,8 +173,9 @@ public class NativeMongoSubscriptionModelResilienceTest {
     /**
      * Wraps {@code realEventCollection} so that the first change stream fails with a failover-like error as soon as
      * it is iterated, while every later {@code watch(...)} call behaves like the real collection and is counted in
-     * {@code reopened}. {@code failed} counts down when the model closes the first one's cursor, which it does once it
-     * has decided to restart, so a test acting after that acts during the backoff.
+     * {@code reopened}. {@code failed} counts down when the model closes the first one's cursor, which it does after it
+     * has decided to restart and before the backoff starts. A test that acts right after that, with a backoff much
+     * longer than the time it takes to act, acts during the backoff.
      */
     @SuppressWarnings("unchecked")
     private MongoCollection<Document> collectionThatFailsDuringIterationOnce(CountDownLatch failed, AtomicInteger reopened) {
@@ -213,10 +215,84 @@ public class NativeMongoSubscriptionModelResilienceTest {
     }
 
     private static MongoCommandException changeStreamHistoryLostException() {
+        return new MongoCommandException(changeStreamHistoryLostResponse(), new ServerAddress());
+    }
+
+    private static BsonDocument changeStreamHistoryLostResponse() {
         List<BsonElement> elements = new ArrayList<>();
         elements.add(new BsonElement("code", new BsonInt32(286)));
         elements.add(new BsonElement("codeName", new BsonString("ChangeStreamHistoryLost")));
-        return new MongoCommandException(new BsonDocument(elements), new ServerAddress());
+        return new BsonDocument(elements);
+    }
+
+    /**
+     * Wraps a cursor whose change stream fails with lost history as soon as it is iterated. The model reads the
+     * error code only after it has checked that the subscription wasn't closed, so {@code checkingErrorCode} counts
+     * down once the model has decided the failure is its own, and the error code isn't returned until the model
+     * closes the cursor.
+     */
+    @SuppressWarnings("unchecked")
+    private MongoCollection<Document> collectionThatLosesHistoryUntilItsCursorIsClosed(CountDownLatch checkingErrorCode) {
+        CountDownLatch closed = new CountDownLatch(1);
+        MongoCommandException historyLost = new MongoCommandException(changeStreamHistoryLostResponse(), new ServerAddress()) {
+            @Override
+            public int getErrorCode() {
+                checkingErrorCode.countDown();
+                try {
+                    closed.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.getErrorCode();
+            }
+        };
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = mock(MongoChangeStreamCursor.class);
+        doThrow(historyLost).when(cursor).forEachRemaining(any());
+        doAnswer(invocation -> {
+            closed.countDown();
+            return null;
+        }).when(cursor).close();
+        ChangeStreamIterable<Document> iterable = iterableOf(cursor);
+        MongoCollection<Document> collection = mock(MongoCollection.class);
+        when(collection.watch(anyList(), eq(Document.class))).thenReturn(iterable);
+        return collection;
+    }
+
+    /**
+     * Wraps {@code realEventCollection} so that the first change stream hands {@code batch} to the model one document
+     * at a time and ignores being closed, as the driver's own cursor does for the documents it has already fetched.
+     * Every later {@code watch(...)} call behaves like the real collection.
+     */
+    @SuppressWarnings("unchecked")
+    private MongoCollection<Document> collectionThatHasFetched(List<ChangeStreamDocument<Document>> batch) {
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = mock(MongoChangeStreamCursor.class);
+        doAnswer(invocation -> {
+            java.util.function.Consumer<ChangeStreamDocument<Document>> consumer = invocation.getArgument(0);
+            batch.forEach(consumer);
+            return null;
+        }).when(cursor).forEachRemaining(any());
+        ChangeStreamIterable<Document> iterable = iterableOf(cursor);
+        MongoCollection<Document> collection = mock(MongoCollection.class);
+        when(collection.watch(anyList(), eq(Document.class)))
+                .thenReturn(iterable)
+                .thenAnswer(invocation -> realEventCollection.watch((List<? extends Bson>) invocation.getArgument(0), Document.class));
+        return collection;
+    }
+
+    // Real change-stream documents for events written to the real collection, with real resume tokens
+    private List<ChangeStreamDocument<Document>> changeStreamDocumentsFor(List<CloudEvent> events) {
+        try (MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = realEventCollection.watch(Document.class).cursor()) {
+            mongoEventStore.write("fetched", 0, events);
+            List<ChangeStreamDocument<Document>> documents = new ArrayList<>();
+            await().atMost(FIVE_SECONDS).until(() -> {
+                ChangeStreamDocument<Document> document = cursor.tryNext();
+                if (document != null) {
+                    documents.add(document);
+                }
+                return documents.size() == events.size();
+            });
+            return documents;
+        }
     }
 
     /**
@@ -290,6 +366,76 @@ public class NativeMongoSubscriptionModelResilienceTest {
             assertThat(started).isFalse();
             await().atMost(Duration.ofSeconds(1)).during(Duration.ofMillis(500)).untilAsserted(() -> assertThat(state).isEmpty());
             assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
+        }
+
+        @Test
+        void a_pause_does_not_wait_for_a_subscription_whose_history_was_lost_just_before_it() throws InterruptedException {
+            // Given a subscription the model is about to forget because its history was lost
+            CountDownLatch checkingErrorCode = new CountDownLatch(1);
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatLosesHistoryUntilItsCursorIsClosed(checkingErrorCode), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
+            assertThat(checkingErrorCode.await(10, SECONDS)).isTrue();
+
+            // When
+            long pauseStarted = System.nanoTime();
+            subscriptionModel.pauseSubscription(subscriptionId);
+            Duration pausing = Duration.ofNanos(System.nanoTime() - pauseStarted);
+
+            // Then
+            assertThat(pausing).isLessThan(Duration.ofMillis(500));
+            assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("Pause while delivering")
+    class PauseWhileDeliveringTest {
+
+        @Test
+        void events_the_change_stream_fetched_before_a_pause_are_delivered_after_the_resume_rather_than_the_pause() throws InterruptedException {
+            // Given three events fetched in one batch, and a handler still busy with the first one when the pause comes
+            List<CloudEvent> events = new ArrayList<>();
+            for (String eventId : List.of("e1", "e2", "e3")) {
+                events.addAll(serialize(new NameDefined(eventId, LocalDateTime.now(), "name", eventId)));
+            }
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatHasFetched(changeStreamDocumentsFor(events)), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            CountDownLatch handlingFirst = new CountDownLatch(1);
+            CountDownLatch finishFirst = new CountDownLatch(1);
+            AtomicBoolean pauseReturned = new AtomicBoolean();
+            AtomicBoolean resumed = new AtomicBoolean();
+            CopyOnWriteArrayList<String> deliveredAfterPause = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<String> deliveredAfterResume = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, cloudEvent -> {
+                if (resumed.get()) {
+                    deliveredAfterResume.add(cloudEvent.getId());
+                } else if (pauseReturned.get()) {
+                    deliveredAfterPause.add(cloudEvent.getId());
+                } else if (handlingFirst.getCount() == 1) {
+                    handlingFirst.countDown();
+                    try {
+                        finishFirst.await(10, SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            });
+            assertThat(handlingFirst.await(10, SECONDS)).isTrue();
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+            pauseReturned.set(true);
+            finishFirst.countDown();
+
+            // Then
+            await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(deliveredAfterPause).isEmpty());
+            resumed.set(true);
+            subscriptionModel.resumeSubscription(subscriptionId);
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(deliveredAfterResume).containsExactly("e2", "e3"));
         }
     }
 
@@ -613,6 +759,27 @@ public class NativeMongoSubscriptionModelResilienceTest {
             assertThat(pauseRefusal).isNull();
             assertThat(subscriptionModel.isPaused("paused")).isTrue();
             assertThat(subscriptionModel.subscriptionIds()).containsExactly("paused");
+        }
+
+        @Test
+        void the_subscription_paused_before_its_change_stream_opened_answers_that_it_started_once_a_resume_opens_it() {
+            // Given
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsWhile(unreachable, refused, () -> new MongoTimeoutException("MongoDB cannot be reached")), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            Subscription subscription = subscriptionModel.subscribe("a", __ -> {
+            });
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 1);
+            subscriptionModel.pauseSubscription("a");
+            unreachable.set(false);
+
+            // When
+            boolean resumed = subscriptionModel.resumeSubscription("a").waitUntilStarted(Duration.ofSeconds(10));
+
+            // Then
+            assertThat(resumed).isTrue();
+            assertThat(subscription.waitUntilStarted(Duration.ofSeconds(2))).isTrue();
         }
 
         @Test

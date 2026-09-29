@@ -69,8 +69,8 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 /**
  * A native subscription loses its lease while MongoDB cannot be reached, before its change stream has opened. The
  * competing consumer model pauses it through the native model, so once MongoDB is back the subscription stays paused
- * and delivers nothing, and only the node that took the lease consumes. The lease handover is driven through the
- * listener call a strategy's refresh would make, so nothing here waits for a lease to expire.
+ * and this node delivers nothing. The test runs one node, and the lease loss is the listener call a strategy's refresh
+ * would make when another node takes the lease, so nothing here waits for a lease to expire.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)

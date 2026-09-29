@@ -65,6 +65,16 @@ public class SpringMongoSubscription implements Subscription {
         return !continueWaiting;
     }
 
+    // Whether the change stream this handle points at has opened, without waiting for it
+    boolean hasStarted() {
+        try {
+            return subscriptionReference.get().await(Duration.ZERO);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
     AtomicReference<org.springframework.data.mongodb.core.messaging.Subscription> getSubscriptionReference() {
         return subscriptionReference;
     }

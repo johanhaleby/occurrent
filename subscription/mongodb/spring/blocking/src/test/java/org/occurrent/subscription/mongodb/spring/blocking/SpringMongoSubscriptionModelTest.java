@@ -369,6 +369,22 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
+        void the_subscription_registered_before_start_answers_that_it_started_once_start_opens_its_change_stream() {
+            // Given
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            Subscription subscription = notAutoStarted.subscribe(UUID.randomUUID().toString(), StartAt.now(), state::add);
+
+            // When
+            notAutoStarted.start(true);
+            NameDefined writtenAfterStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenAfterStart));
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(state).extracting(CloudEvent::getId).contains(writtenAfterStart.eventId()));
+
+            // Then
+            assertThat(subscription.waitUntilStarted(Duration.ofSeconds(2))).isTrue();
+        }
+
+        @Test
         void a_subscription_registered_before_start_receives_each_event_once() {
             // Given
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();

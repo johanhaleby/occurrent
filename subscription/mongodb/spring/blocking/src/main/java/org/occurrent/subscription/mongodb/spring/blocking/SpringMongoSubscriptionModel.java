@@ -733,9 +733,18 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private record InternalSubscription(SpringMongoSubscription occurrentSubscription, AtomicReference<StartAt> currentStartAt, Supplier<ChangeStreamRequest<Document>> changeStreamRequestBuilder) {
 
         // Keeps the same currentStartAt reference, so the resumed subscription continues from where the paused
-        // one got to rather than from the StartAt it was created with.
+        // one got to rather than from the StartAt it was created with. A handle whose change stream never opened is
+        // pointed at the new one instead of replaced, so the handle subscribe(..) returned while the model was stopped
+        // answers true once the resumed change stream opens.
         InternalSubscription copy(org.springframework.data.mongodb.core.messaging.Subscription springSubscription) {
-            return new InternalSubscription(new SpringMongoSubscription(occurrentSubscription.id(), springSubscription), currentStartAt, changeStreamRequestBuilder);
+            final SpringMongoSubscription handle;
+            if (occurrentSubscription.hasStarted()) {
+                handle = new SpringMongoSubscription(occurrentSubscription.id(), springSubscription);
+            } else {
+                handle = occurrentSubscription;
+                handle.changeSubscription(springSubscription);
+            }
+            return new InternalSubscription(handle, currentStartAt, changeStreamRequestBuilder);
         }
 
         ChangeStreamRequest<Document> newChangeStreamRequest() {

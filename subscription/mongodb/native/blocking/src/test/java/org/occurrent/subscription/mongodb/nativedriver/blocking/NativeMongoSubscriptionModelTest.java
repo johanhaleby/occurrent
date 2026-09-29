@@ -460,6 +460,23 @@ public class NativeMongoSubscriptionModelTest {
         }
 
         @Test
+        void the_subscription_made_while_the_model_is_stopped_answers_that_it_started_once_start_opens_its_change_stream() {
+            // Given
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            Subscription subscription = subscriptionModel.subscribe(UUID.randomUUID().toString(), handled::add);
+
+            // When
+            subscriptionModel.start();
+            NameDefined writtenAfterStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenAfterStart));
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).contains(writtenAfterStart.eventId()));
+
+            // Then
+            assertThat(subscription.waitUntilStarted(Duration.ofSeconds(2))).isTrue();
+        }
+
+        @Test
         void an_interrupted_wait_for_a_subscription_to_start_leaves_the_thread_interrupted() {
             // Given a subscription made while the model is stopped, so it does not start until the model does
             subscriptionModel.stop();

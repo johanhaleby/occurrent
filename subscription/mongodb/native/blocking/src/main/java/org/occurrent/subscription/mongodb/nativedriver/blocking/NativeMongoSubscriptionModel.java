@@ -231,17 +231,25 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         // Known from here on rather than once its change stream opens, so a pause or a cancel reaches it while MongoDB
         // cannot be reached, and a wrapper asking which subscriptions this model runs gets the right answer
         if (running) {
-            startSubscription(subscriptionId, internalSubscription);
             runningSubscriptions.put(subscriptionId, internalSubscription);
+            startSubscription(subscriptionId, internalSubscription, () -> runningSubscriptions.remove(subscriptionId, internalSubscription));
         } else {
             // Opens nothing until start() or a resume does, like a subscription that stop() paused
             pausedSubscriptions.put(subscriptionId, internalSubscription);
         }
-        return new NativeMongoSubscription(subscriptionId, internalSubscription.startedLatch);
+        // Follows every run of the subscription, so it answers true once start() or a resume opens the change stream of
+        // one subscribed while the model was stopped, or paused before its change stream opened
+        return new NativeMongoSubscription(subscriptionId, internalSubscription.firstStartedLatch);
     }
 
-    private void startSubscription(String subscriptionId, InternalSubscription internalSubscription) {
-        cloudEventDispatcher.execute(() -> runUntilStopped(subscriptionId, internalSubscription));
+    // Called once the subscription is registered, so forget(..) on the dispatcher thread always finds the run it removes
+    private void startSubscription(String subscriptionId, InternalSubscription internalSubscription, Runnable unregister) {
+        try {
+            cloudEventDispatcher.execute(() -> runUntilStopped(subscriptionId, internalSubscription));
+        } catch (RuntimeException e) {
+            unregister.run();
+            throw e;
+        }
     }
 
     // Restarts with the retry strategy's backoff until the subscription is closed or the strategy gives up. A pause,
@@ -343,8 +351,9 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     }
 
     // Only while the subscription is still on this run. A pause and a resume in the meantime started a new run, which
-    // has not lost anything.
-    private synchronized void forget(String subscriptionId, InternalSubscription internalSubscription) {
+    // has not lost anything. Runs on the dispatcher thread without this model's lock, because a pause holds that lock
+    // while it waits for the dispatcher to stop.
+    private void forget(String subscriptionId, InternalSubscription internalSubscription) {
         runningSubscriptions.remove(subscriptionId, internalSubscription);
     }
 
@@ -599,9 +608,12 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         // Shares the same currentStartAt reference so a resume continues from the last change-stream document
         // read before the subscription was paused, not the original StartAt, unless repositionTo overrode it above.
         InternalSubscription resumed = internalSubscription.resumed();
-        startSubscription(subscriptionId, resumed);
         pausedSubscriptions.remove(subscriptionId);
         runningSubscriptions.put(subscriptionId, resumed);
+        startSubscription(subscriptionId, resumed, () -> {
+            runningSubscriptions.remove(subscriptionId, resumed);
+            pausedSubscriptions.put(subscriptionId, internalSubscription);
+        });
 
         return new NativeMongoSubscription(subscriptionId, resumed.startedLatch);
     }
@@ -643,6 +655,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         // same filter.
         private final List<Bson> pipeline;
         final CountDownLatch startedLatch = new CountDownLatch(1);
+        // Shared by every run of the subscription, and released the first time one of them opens its change stream
+        final CountDownLatch firstStartedLatch;
         private final CountDownLatch stoppedRestartingLatch = new CountDownLatch(1);
         final AtomicReference<StartAt> currentStartAt;
         final Consumer<CloudEvent> action;
@@ -653,13 +667,18 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         private CountDownLatch stoppedLatch = new CountDownLatch(0);
 
         private InternalSubscription(AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline) {
+            this(currentStartAt, action, pipeline, new CountDownLatch(1));
+        }
+
+        private InternalSubscription(AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, CountDownLatch firstStartedLatch) {
             this.pipeline = pipeline;
             this.currentStartAt = currentStartAt;
             this.action = action;
+            this.firstStartedLatch = firstStartedLatch;
         }
 
         InternalSubscription resumed() {
-            return new InternalSubscription(currentStartAt, action, pipeline);
+            return new InternalSubscription(currentStartAt, action, pipeline, firstStartedLatch);
         }
 
         // False when this was closed while the change stream opened, and the caller then closes the cursor itself
@@ -674,6 +693,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
         void started() {
             startedLatch.countDown();
+            firstStartedLatch.countDown();
         }
 
         synchronized void stopped() {
