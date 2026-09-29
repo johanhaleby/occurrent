@@ -306,6 +306,22 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
+        void an_interrupted_wait_for_a_subscription_to_start_leaves_the_thread_interrupted() {
+            // Given
+            Subscription notStarted = notAutoStarted.subscribe(UUID.randomUUID().toString(), __ -> {
+            });
+            Thread.currentThread().interrupt();
+
+            // When
+            Throwable thrown = catchThrowable(() -> notStarted.waitUntilStarted(Duration.ofSeconds(2)));
+
+            // Then: Thread.interrupted() also clears the flag, so it isn't still set when the next test runs
+            boolean stillInterrupted = Thread.interrupted();
+            assertThat(stillInterrupted).isTrue();
+            assertThat(thrown).hasCauseInstanceOf(InterruptedException.class);
+        }
+
+        @Test
         void subscribing_on_a_model_that_did_not_auto_start_registers_the_subscription_as_paused() {
             String subscriptionId = UUID.randomUUID().toString();
 
@@ -350,6 +366,22 @@ public class SpringMongoSubscriptionModelTest {
             // Then
             await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(state).extracting(CloudEvent::getId).contains(writtenAfterStart.eventId()));
             assertThat(state).extracting(CloudEvent::getId).doesNotContain(writtenBeforeStart.eventId());
+        }
+
+        @Test
+        void the_subscription_registered_before_start_answers_that_it_started_once_start_opens_its_change_stream() {
+            // Given
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            Subscription subscription = notAutoStarted.subscribe(UUID.randomUUID().toString(), StartAt.now(), state::add);
+
+            // When
+            notAutoStarted.start(true);
+            NameDefined writtenAfterStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenAfterStart));
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(state).extracting(CloudEvent::getId).contains(writtenAfterStart.eventId()));
+
+            // Then
+            assertThat(subscription.waitUntilStarted(Duration.ofSeconds(2))).isTrue();
         }
 
         @Test

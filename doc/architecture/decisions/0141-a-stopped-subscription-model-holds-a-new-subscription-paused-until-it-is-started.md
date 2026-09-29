@@ -20,7 +20,8 @@ for it. `ManualStartSubscriptionModel` stores that position when a subscription 
 started it from the position at that time, and skipped every event written between `subscribe(..)` and `start()`.
 
 Passing it on straight away is only safe when the wrapped model holds it paused. Two models did not.
-`NativeMongoSubscriptionModel` opened a change stream for it straight away, which #1171 changes. The blocking
+`NativeMongoSubscriptionModel` opened a change stream for it straight away, until
+[#1171](https://github.com/johanhaleby/occurrent/pull/1171) changed that. The blocking
 `CatchupSubscriptionModel` ended the replay of a subscription made while it was stopped as soon as the replay began,
 and did the same to a replay that `stop()` cut short. In both cases the subscription still counted as running a
 catch-up, so `isRunning()` returned `true` for good, the replay never went on to the live model, and nothing ran it
