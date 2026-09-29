@@ -1,0 +1,118 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.subscription.blocking.durable;
+
+import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.DisplayNameGeneration;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Test;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
+import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * The model it wraps can outlive it, so shutting it down has to take back the listener it added there.
+ */
+@DisplayNameGeneration(ReplaceUnderscores.class)
+class DurableSubscriptionModelHistoryLossListenerTest {
+
+    @Test
+    void shutting_down_removes_the_history_loss_listener_it_added_to_the_wrapped_model() {
+        HistoryLossReportingModel wrapped = new HistoryLossReportingModel();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+        assertThat(wrapped.listeners).hasSize(1);
+
+        model.shutdown();
+
+        assertThat(wrapped.listeners).as("the wrapped model no longer holds the listener after shutdown").isEmpty();
+    }
+
+    private static final class HistoryLossReportingModel implements CheckpointAwareSubscriptionModel, HistoryLossReportingSubscriptions {
+        final List<HistoryLossListener> listeners = new ArrayList<>();
+
+        @Override
+        public void addHistoryLossListener(HistoryLossListener listener) {
+            listeners.add(listener);
+        }
+
+        @Override
+        public void removeHistoryLossListener(HistoryLossListener listener) {
+            listeners.remove(listener);
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public @Nullable Checkpoint globalCheckpoint() {
+            return null;
+        }
+
+        @Override
+        public void shutdown() {
+        }
+
+        @Override
+        public void stop() {
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+        }
+
+        @Override
+        public boolean isRunning() {
+            return true;
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+        }
+    }
+}

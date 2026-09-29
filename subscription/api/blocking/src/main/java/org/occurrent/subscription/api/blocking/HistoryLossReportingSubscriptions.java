@@ -44,6 +44,14 @@ public interface HistoryLossReportingSubscriptions extends SubscriptionModelCapa
     void addHistoryLossListener(HistoryLossListener listener);
 
     /**
+     * Removes a listener added with {@link #addHistoryLossListener(HistoryLossListener)}, so the model no longer
+     * tells it anything or keeps a reference to it. Removing a listener that was never added does nothing.
+     *
+     * @param listener The listener to remove, the same instance that was added.
+     */
+    void removeHistoryLossListener(HistoryLossListener listener);
+
+    /**
      * Finds the {@link HistoryLossReportingSubscriptions} capability behind {@code subscriptionModel}, unwrapping a
      * {@link SubscriptionModelWrapper} chain until one is found.
      *

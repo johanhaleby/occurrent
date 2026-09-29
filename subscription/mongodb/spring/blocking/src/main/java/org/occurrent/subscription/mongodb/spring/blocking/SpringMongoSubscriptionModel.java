@@ -634,6 +634,12 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         historyLossListeners.add(listener);
     }
 
+    @Override
+    public void removeHistoryLossListener(HistoryLossListener listener) {
+        requireNonNull(listener, HistoryLossListener.class.getSimpleName() + " cannot be null");
+        historyLossListeners.remove(listener);
+    }
+
     // Tells the listeners the present before restarting from it, unless the subscription no longer runs the Spring
     // subscription this restart loop is responsible for. Called outside this model's monitor, since a listener takes a
     // lock that a subscribe holds while it waits for this monitor. Without an operation time in the reply to ping,

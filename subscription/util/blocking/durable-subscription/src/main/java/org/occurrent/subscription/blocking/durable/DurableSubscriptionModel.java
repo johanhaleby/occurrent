@@ -91,6 +91,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private final Set<String> notCheckpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
     // Ids this model stores checkpoints for, so a restart after lost history stores a position only for those
     private final Set<String> checkpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    // Kept so shutdown can remove the same instance it added, since every method reference is a new object
+    private final HistoryLossReportingSubscriptions.HistoryLossListener historyLossListener = this::storeRestartPositionAfterHistoryLoss;
     // Striped rather than one lock object per id, since subscriptionId is caller-supplied to public methods
     // (cancelSubscription, resumeSubscription) and an unknown or made-up id must not grow this without bound. A
     // fixed number of locks bounds memory for good and needs no lifecycle bookkeeping to remove an entry once its
@@ -173,7 +175,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         this.config = config;
         this.writeVersionSource = writeVersionSource;
         HistoryLossReportingSubscriptions.findIn(subscriptionModel)
-                .ifPresent(model -> model.addHistoryLossListener(this::storeRestartPositionAfterHistoryLoss));
+                .ifPresent(model -> model.addHistoryLossListener(historyLossListener));
     }
 
     // Stored now rather than with the next event, since a process stopping before that event would restart from
@@ -485,7 +487,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     @Override
     @PreDestroy
     public void shutdown() {
-        subscriptionModel.shutdown();
+        // Removed even when shutting the wrapped model down throws, since a wrapped model that outlives this model
+        // would otherwise keep it reachable and keep telling it about lost history
+        try {
+            subscriptionModel.shutdown();
+        } finally {
+            HistoryLossReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.removeHistoryLossListener(historyLossListener));
+        }
     }
 
     @Nullable

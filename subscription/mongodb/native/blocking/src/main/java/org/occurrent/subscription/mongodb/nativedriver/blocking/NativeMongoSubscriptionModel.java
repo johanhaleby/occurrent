@@ -335,6 +335,12 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         historyLossListeners.add(listener);
     }
 
+    @Override
+    public void removeHistoryLossListener(HistoryLossListener listener) {
+        requireNonNull(listener, HistoryLossListener.class.getSimpleName() + " cannot be null");
+        historyLossListeners.remove(listener);
+    }
+
     private @Nullable BsonTimestamp currentOperationTime() {
         Document reply = database.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND);
         BsonTimestamp operationTime = MongoCommons.operationTimeAfter(reply);

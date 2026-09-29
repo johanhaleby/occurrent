@@ -10,8 +10,9 @@ which share `MongoLeaseCompetingConsumerStrategySupport`.
 
 ## Context
 
-Each strategy refreshes every lease on the node from one scheduled thread, every half lease time. Until now that
-thread also called `onConsumeGranted` and `onConsumeProhibited` on every `CompetingConsumerListener` as soon as it
+Each strategy refreshes every lease on the node from one scheduled thread. The strategies schedule it with
+`ScheduledRefresh.auto()`, which runs a round every half lease time, and `ScheduledRefresh.every(..)` runs one at a
+period its caller chooses. Until now that thread also called `onConsumeGranted` and `onConsumeProhibited` on every `CompetingConsumerListener` as soon as it
 had refreshed a lease, and `CompetingConsumerSubscriptionModel` is such a listener.
 
 A prohibition pauses the subscription in the wrapped model. `SpringMongoSubscriptionModel` pauses a subscription whose

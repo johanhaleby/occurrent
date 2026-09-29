@@ -38,9 +38,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * What starting the model and resuming a subscription do when the lease is not free, or when the wrapped model throws
- * on a subscription whose lease was just won. The strategy tells its listeners about a grant on the thread that
- * registers, the way the MongoDB lease strategies do, and nothing here needs MongoDB.
+ * What starting the model, and resuming or pausing a subscription, do when the lease is not free, when registering
+ * with the strategy throws, or when the wrapped model throws on a subscription whose lease was just won. The strategy
+ * tells its listeners about a grant on the thread that registers, the way the MongoDB lease strategies do, and nothing
+ * here needs MongoDB.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CompetingConsumerSubscriptionModelStartAndResumeTest {
@@ -101,6 +102,38 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
                 .isTrue();
         assertThat(strategy.holders).containsExactly("stopped");
         assertThat(strategy.calls).as("nothing gave the lease up after the grant").endsWith("grant stopped");
+    }
+
+    @Test
+    void a_consumer_whose_registration_threw_on_start_is_resumed_by_the_next_start() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        model.stop();
+        strategy.registerThrows = true;
+        assertThat(catchThrowable(() -> model.start(true))).as("the lease store is down").isInstanceOf(IllegalStateException.class);
+        strategy.registerThrows = false;
+
+        model.start(true);
+
+        assertThat(delegate.running).as("x resumes on the next start once the lease store is back").contains("x");
+        assertThat(strategy.holders).containsExactly("x");
+    }
+
+    @Test
+    void a_user_pause_of_a_consumer_waiting_for_its_lease_keeps_it_paused_after_the_grant() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        model.pauseSubscription("x");
+        strategy.grantOnRegister = false;
+        model.resumeSubscription("x");
+
+        Throwable thrown = catchThrowable(() -> model.pauseSubscription("x"));
+        strategy.grant("x");
+
+        assertThat(delegate.running).as("the grant does not resume a subscription the user paused").doesNotContain("x");
+        assertThat(thrown).as("the pause is recorded rather than refused").isNull();
+        assertThat(model.isPaused("x")).isTrue();
+        assertThat(strategy.holders).as("the grant was handed back").isEmpty();
     }
 
     private void subscribe(String subscriptionId) {
@@ -196,6 +229,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         private final Set<String> holders = new HashSet<>();
         private final List<CompetingConsumerListener> listeners = new ArrayList<>();
         private boolean grantOnRegister;
+        private boolean registerThrows;
 
         void grant(String subscriptionId) {
             calls.add("grant " + subscriptionId);
@@ -206,6 +240,9 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         @Override
         public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
             calls.add("register " + subscriptionId);
+            if (registerThrows) {
+                throw new IllegalStateException("The lease store cannot be reached");
+            }
             if (grantOnRegister && holders.add(subscriptionId)) {
                 listeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
             }
