@@ -230,8 +230,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * the wrapped model parked the subscription while this model recorded it as running. Nothing else resumes it, since
      * a grant only comes on a change of status and {@link #start(boolean)} only resumes what it finds paused here.
      * <p>
-     * One that fails to resume is recorded as paused by the system and gives its lease back, so a later grant tries it
-     * again.
+     * One that fails to resume, or whose wrapped model fails to start, is recorded as paused by the system and gives
+     * its lease back, so a later grant tries it again. Failing to start the wrapped model fails every such consumer
+     * the same way rather than escaping on its own, so the failures of the others are not lost.
      *
      * @return the first failure, with the rest suppressed, or {@code null} if every such consumer resumed
      */
@@ -239,17 +240,16 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         List<CompetingConsumer> leasedButPaused = competingConsumers.values().stream()
                 .filter(cc -> cc.isRunning() && delegate.isPaused(cc.getSubscriptionId()) && hasLock(cc.getSubscriptionId(), cc.getSubscriberId()))
                 .toList();
-        if (leasedButPaused.isEmpty()) {
-            return null;
-        }
-        if (!delegate.isRunning()) {
-            delegate.start(false);
-        }
         @Nullable RuntimeException firstFailure = null;
         for (CompetingConsumer cc : leasedButPaused) {
             logDebug("Resuming CompetingConsumer this node holds the lease for but the wrapped model holds paused (subscriberId={}, subscriptionId={})", cc.getSubscriberId(), cc.getSubscriptionId());
             try {
-                giveTheLeaseBackIfItThrows(cc.subscriptionIdAndSubscriberId, new CompetingConsumerState.Paused(false), () -> delegate.resumeSubscription(cc.getSubscriptionId()));
+                giveTheLeaseBackIfItThrows(cc.subscriptionIdAndSubscriberId, new CompetingConsumerState.Paused(false), () -> {
+                    if (!delegate.isRunning()) {
+                        delegate.start(false);
+                    }
+                    return delegate.resumeSubscription(cc.getSubscriptionId());
+                });
             } catch (RuntimeException e) {
                 if (firstFailure == null) {
                     firstFailure = e;
@@ -602,8 +602,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * <p>
      * {@code previous} is the state the consumer had before it was recorded as running, and it is put back first, so
      * a synchronous {@code onConsumeProhibited} out of giving the lease back finds nothing running to pause. A
-     * consumer that was not recorded at all, a {@code null} {@code previous}, is unregistered, and so is one the user
-     * paused. Any other is released, so it stays a candidate and a later grant tries it again.
+     * consumer that was not recorded at all, a {@code null} {@code previous}, is removed and unregistered, and the
+     * caller of {@code subscribe} gets the failure. Any other is released, so it stays a candidate and a later grant
+     * tries it again, also on a node with no other node to take the subscription over. A paused consumer is put back as
+     * paused by the system, whoever paused it, since starting it again is what was asked for. Put back as paused by the
+     * user, it would never compete for the lease again, and nothing would retry it.
      */
     private Subscription giveTheLeaseBackIfItThrows(SubscriptionIdAndSubscriberId key, @Nullable CompetingConsumerState previous, Supplier<Subscription> start) {
         try {
@@ -611,9 +614,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         } catch (Throwable e) {
             log.warn("The wrapped subscription model failed to start the subscription this node just won the lease for, so the lease is given back (subscriberId={}, subscriptionId={})",
                     key.subscriberId(), key.subscriptionId());
-            boolean unregister = previous == null || previous instanceof CompetingConsumerState.Paused paused && paused.pausedByUser;
+            boolean unregister = previous == null;
             if (previous == null) {
                 competingConsumers.remove(key);
+            } else if (previous instanceof CompetingConsumerState.Paused) {
+                competingConsumers.put(key, new CompetingConsumer(key, new CompetingConsumerState.Paused(false)));
             } else {
                 competingConsumers.put(key, new CompetingConsumer(key, previous));
             }

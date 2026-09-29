@@ -136,6 +136,56 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         assertThat(strategy.holders).as("the grant was handed back").isEmpty();
     }
 
+    @Test
+    void a_consumer_the_wrapped_model_fails_to_resume_on_start_resumes_on_the_next_grant() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        model.stop();
+        delegate.throwsOn.add("x");
+        assertThat(catchThrowable(() -> model.start(true))).isInstanceOf(IllegalStateException.class);
+        delegate.throwsOn.clear();
+
+        strategy.grant("x");
+
+        assertThat(delegate.running).as("x keeps competing for the lease, so the next grant resumes it, with no other node to take it over").contains("x");
+        assertThat(strategy.holders).containsExactly("x");
+    }
+
+    @Test
+    void a_leased_consumer_the_wrapped_model_fails_to_resume_gives_its_lease_back_and_resumes_on_the_next_grant() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        delegate.holdPausedWhileNotStarted("x");
+        delegate.throwsOn.add("x");
+
+        Throwable thrown = catchThrowable(() -> model.start(true));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class);
+        assertThat(strategy.holders).as("the lease nothing on this node serves is given back").isEmpty();
+        assertThat(model.isPaused("x")).isTrue();
+        delegate.throwsOn.clear();
+        strategy.grant("x");
+        assertThat(delegate.running).as("x keeps competing for the lease, so the next grant resumes it").contains("x");
+    }
+
+    @Test
+    void start_reports_a_consumer_that_failed_to_resume_when_the_wrapped_model_then_fails_to_start() {
+        strategy.grantOnRegister = true;
+        subscribe("y");
+        model.pauseSubscription("y");
+        subscribe("x");
+        delegate.holdPausedWhileNotStarted("x");
+        delegate.throwsOn.add("y");
+        delegate.startThrows = true;
+
+        Throwable thrown = catchThrowable(() -> model.start(true));
+
+        assertThat(thrown.getSuppressed()).as("the failure to resume y is not lost when starting the wrapped model for x fails").hasSize(1);
+        assertThat(strategy.holders).as("both leases are given back").isEmpty();
+        assertThat(model.isPaused("x")).isTrue();
+        assertThat(model.isPaused("y")).isTrue();
+    }
+
     private void subscribe(String subscriptionId) {
         model.subscribe(SUBSCRIBER_ID, subscriptionId, null, StartAt.subscriptionModelDefault(), __ -> {
         });
@@ -150,6 +200,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         private final List<String> running = new ArrayList<>();
         private final Set<String> paused = new HashSet<>();
         private boolean started = true;
+        private boolean startThrows;
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -173,7 +224,20 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
         @Override
         public void start(boolean resumeSubscriptionsAutomatically) {
+            if (startThrows) {
+                throw new IllegalStateException("The wrapped model cannot start right now");
+            }
             started = true;
+        }
+
+        /**
+         * Puts {@code subscriptionId} in the state a wrapped model that was never started keeps a subscription
+         * registered with it, paused while the model is stopped.
+         */
+        void holdPausedWhileNotStarted(String subscriptionId) {
+            running.remove(subscriptionId);
+            paused.add(subscriptionId);
+            started = false;
         }
 
         @Override
