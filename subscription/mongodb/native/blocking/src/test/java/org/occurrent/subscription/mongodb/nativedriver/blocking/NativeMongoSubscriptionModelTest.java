@@ -68,6 +68,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
@@ -420,13 +421,14 @@ public class NativeMongoSubscriptionModelTest {
                 CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
 
                 // When
-                Throwable thrown = catchThrowable(() -> model.subscribe(UUID.randomUUID().toString(), StartAt.now(), handled::add));
+                AtomicReference<Subscription> subscription = new AtomicReference<>();
+                Throwable thrown = catchThrowable(() -> subscription.set(model.subscribe(UUID.randomUUID().toString(), StartAt.now(), handled::add)));
                 await().atMost(5, SECONDS).until(() -> refusedOperationTimeRequests.get() > 0);
                 unreachable.set(false);
 
                 // Then
                 assertThat(thrown).isNull();
-                await().atMost(10, SECONDS).until(() -> model.subscriptionIds().size() == 1);
+                assertThat(subscription.get().waitUntilStarted(Duration.ofSeconds(10))).isTrue();
                 NameDefined writtenOnceReachable = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
                 mongoEventStore.write("1", 0, serialize(writtenOnceReachable));
                 await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).contains(writtenOnceReachable.eventId()));
