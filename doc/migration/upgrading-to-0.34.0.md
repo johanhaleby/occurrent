@@ -1234,9 +1234,10 @@ With `StartAt.now()`, without a `StartAt`, or with a dynamic `StartAt` answering
 at MongoDB's operation time, which `subscribe(..)` asks for on the model's executor without waiting for the answer. So
 where it starts is fixed when MongoDB answers, shortly after `subscribe(..)` returns, and an event written before then
 isn't delivered to it. To be sure an event is delivered, call `start()` and wait for `waitUntilStarted()` on the
-subscription before writing it. Its change stream waits for the answer before it opens, so `start()` waits for it too.
-While MongoDB can't be reached, the question is retried with the model's `RetryStrategy`, as opening the change stream
-is. When the strategy gives up, the change stream doesn't open until a pause and a resume ask again.
+subscription before writing it. `start()` waits for the answer when it opens the change stream at it. While MongoDB
+can't be reached, the question is retried with the model's `RetryStrategy`, as opening the change stream is. When the
+strategy gives up, the give-up can keep the change stream from opening, and pausing and resuming the subscription after
+that starts it again.
 
 There is no recipe for this change. Whether the model is stopped when `subscribe(..)` runs is runtime behavior that a
 rewrite of the source cannot see.

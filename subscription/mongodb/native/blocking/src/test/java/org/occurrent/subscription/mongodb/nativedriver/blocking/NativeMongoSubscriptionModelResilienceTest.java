@@ -720,6 +720,37 @@ public class NativeMongoSubscriptionModelResilienceTest {
             assertThat(state).extracting(CloudEvent::getType)
                     .containsExactly(NameDefined.class.getName(), NameWasChanged.class.getName(), NameWasChanged.class.getName(), NameWasChanged.class.getName());
         }
+
+        @Test
+        void a_resume_at_a_given_position_keeps_that_position_when_mongodb_answers_the_request_for_its_operation_time_afterwards() {
+            // Given a subscription resumed at a given position while its request for MongoDB's operation time has been
+            // answered, but not yet returned
+            FirstReplyHeld operationTimeAtSubscribe = firstReplyHeld();
+            subscriptionModel = new NativeMongoSubscriptionModel(operationTimeAtSubscribe.wrap(database), realEventCollection, TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, handled::add);
+            operationTimeAtSubscribe.awaitAnswered();
+            NameDefined writtenBeforeResumeAt = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBeforeResumeAt));
+            BsonTimestamp resumeAt = MongoCommons.operationTimeAfter(database.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND));
+            subscriptionModel.pauseSubscription(subscriptionId);
+            assertThat(subscriptionModel.resumeSubscription(subscriptionId, StartAt.checkpoint(new MongoOperationTimeCheckpoint(resumeAt))).waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+            // When the answer returns, and the subscription is then paused and resumed without a position
+            operationTimeAtSubscribe.release();
+            await().atMost(FIVE_SECONDS).until(() -> operationTimeAtSubscribe.waiting() == 0);
+            await().pollDelay(Duration.ofMillis(500)).atMost(FIVE_SECONDS).until(() -> true);
+            subscriptionModel.pauseSubscription(subscriptionId);
+            boolean resumed = subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(5));
+            NameDefined writtenAfterResume = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2");
+            mongoEventStore.write("2", 0, serialize(writtenAfterResume));
+
+            // Then
+            assertThat(resumed).isTrue();
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenAfterResume.eventId()));
+        }
     }
 
     /**
@@ -1028,6 +1059,35 @@ public class NativeMongoSubscriptionModelResilienceTest {
         }
 
         @Test
+        void a_subscription_made_while_the_model_is_stopped_whose_retry_strategy_gave_up_on_mongodb_asks_again_when_resumed_at_the_present_after_opening_at_a_given_position() {
+            // Given a subscription whose retry strategy gave up on MongoDB before anything started it, resumed at a given
+            // position and then paused
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseThatCannotBeReachedWhile(unreachable, refused, new AtomicInteger()), realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcherRecordingUncaughtExceptions(),
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100)).maxAttempts(2)));
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, handled::add);
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 2);
+            unreachable.set(false);
+            BsonTimestamp resumeAt = MongoCommons.getServerOperationTime(database.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND));
+            assertThat(subscriptionModel.resumeSubscription(subscriptionId, StartAt.checkpoint(new MongoOperationTimeCheckpoint(resumeAt))).waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+            subscriptionModel.pauseSubscription(subscriptionId);
+
+            // When
+            boolean resumed = subscriptionModel.resumeSubscription(subscriptionId, StartAt.now()).waitUntilStarted(Duration.ofSeconds(5));
+            NameDefined writtenAfterResume = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenAfterResume));
+
+            // Then
+            assertThat(resumed).isTrue();
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenAfterResume.eventId()));
+            assertThat(uncaught).describedAs("errors thrown on the dispatcher thread").isEmpty();
+        }
+
+        @Test
         void a_subscription_whose_retry_strategy_gave_up_on_mongodb_asks_again_when_paused_and_resumed() {
             // Given a subscription that start() didn't open because its retry strategy gave up on MongoDB
             AtomicBoolean unreachable = new AtomicBoolean(true);
@@ -1321,6 +1381,37 @@ public class NativeMongoSubscriptionModelResilienceTest {
             // Then
             assertThat(starting).succeedsWithin(Duration.ofSeconds(5));
             await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenBeforeStart.eventId()));
+        }
+
+        @Test
+        void start_opens_the_change_stream_of_a_dynamic_position_answering_the_present_at_the_operation_time_asked_for_at_subscribe() {
+            // Given a subscription at a dynamic position whose request for MongoDB's operation time has been answered,
+            // but not yet returned
+            CopyOnWriteArrayList<Throwable> uncaught = new CopyOnWriteArrayList<>();
+            ExecutorService dispatcher = Executors.newCachedThreadPool(runnable -> {
+                Thread thread = new Thread(runnable);
+                thread.setUncaughtExceptionHandler((t, throwable) -> uncaught.add(throwable));
+                return thread;
+            });
+            FirstReplyHeld operationTimeAtSubscribe = firstReplyHeld();
+            subscriptionModel = new NativeMongoSubscriptionModel(operationTimeAtSubscribe.wrap(database), realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcher,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), StartAt.dynamic(StartAt::now), handled::add);
+            operationTimeAtSubscribe.awaitAnswered();
+            NameDefined writtenBeforeStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBeforeStart));
+
+            // When start() gets there before the answer
+            CompletableFuture<Void> starting = CompletableFuture.runAsync(subscriptionModel::start);
+            await().pollDelay(Duration.ofMillis(500)).atMost(FIVE_SECONDS).until(() -> true);
+            operationTimeAtSubscribe.release();
+
+            // Then
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenBeforeStart.eventId()));
+            assertThat(uncaught).describedAs("errors thrown on the dispatcher thread").isEmpty();
+            assertThat(starting).succeedsWithin(Duration.ofSeconds(5));
         }
 
         @Test
