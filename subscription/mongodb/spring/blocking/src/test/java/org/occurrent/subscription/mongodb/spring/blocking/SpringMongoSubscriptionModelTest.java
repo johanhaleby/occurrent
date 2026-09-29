@@ -864,7 +864,7 @@ public class SpringMongoSubscriptionModelTest {
 
         @Timeout(value = 30, unit = SECONDS)
         @Test
-        void start_returns_once_restarting_a_subscription_gives_up_and_leaves_it_paused_for_a_resume() {
+        void start_returns_once_restarting_a_subscription_gives_up_and_a_pause_and_resume_starts_it_again() {
             // Given
             SpringMongoSubscriptionModel givesUpAfterTwoAttempts = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig(eventCollectionName, timeRepresentation)
                     .autoStartup(false).retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100)).maxAttempts(2)));
@@ -878,10 +878,9 @@ public class SpringMongoSubscriptionModelTest {
 
                 // Then
                 assertThat(start).succeedsWithin(Duration.ofSeconds(10));
-                assertAll(
-                        () -> assertThat(givesUpAfterTwoAttempts.isRunning("gives-up")).isFalse(),
-                        () -> assertThat(givesUpAfterTwoAttempts.isPaused("gives-up")).isTrue());
+                assertThat(givesUpAfterTwoAttempts.isRunning("gives-up")).isTrue();
                 unreachable.set(false);
+                givesUpAfterTwoAttempts.pauseSubscription("gives-up");
                 assertThat(givesUpAfterTwoAttempts.resumeSubscription("gives-up").waitUntilStarted(Duration.ofSeconds(10))).isTrue();
                 NameDefined writtenOnceResumed = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
                 mongoEventStore.write("1", 0, serialize(writtenOnceResumed));
@@ -932,7 +931,7 @@ public class SpringMongoSubscriptionModelTest {
         @SuppressWarnings("unchecked")
         @Timeout(value = 20, unit = SECONDS)
         @Test
-        void pauses_subscription_when_change_stream_history_is_lost_and_not_configured_to_restart() {
+        void start_returns_when_change_stream_history_is_lost_and_not_configured_to_restart() {
             // Given
             MongoTemplate mongoTemplateSpy = spy(mongoTemplate);
             MongoDatabase mongoDatabase = mock(MongoDatabase.class);
@@ -947,17 +946,17 @@ public class SpringMongoSubscriptionModelTest {
             when(mongoDatabase.getCollection("events")).thenReturn(mongoCollection);
             when(mongoCollection.watch(any(Class.class))).thenThrow(new UncategorizedMongoDbException("expected", new MongoCommandException(new BsonDocument(elements), new ServerAddress())));
 
-            subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(false));
+            subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(false).autoStartup(false));
             String subscriptionId = UUID.randomUUID().toString();
-
-            // When
             subscriptionModel.subscribe(subscriptionId, __ -> {
             });
 
+            // When
+            CompletableFuture<Void> start = CompletableFuture.runAsync(() -> subscriptionModel.start(true));
+
             // Then
-            await().atMost(10, SECONDS).untilAsserted(() -> assertAll(
-                    () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
-                    () -> assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue()));
+            assertThat(start).succeedsWithin(Duration.ofSeconds(10));
+            assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
         }
     }
 
