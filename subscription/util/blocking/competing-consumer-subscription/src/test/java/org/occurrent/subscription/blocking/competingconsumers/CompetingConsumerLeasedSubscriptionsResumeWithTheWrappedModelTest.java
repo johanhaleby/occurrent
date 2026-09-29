@@ -61,7 +61,8 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 /**
  * A subscription that won its lease while the wrapped model was not started yet sits paused in the wrapped model,
  * although this model records it as running. Starting this model resumes it, and so does a grant that starts the
- * wrapped model, since this node holds its lease.
+ * wrapped model, since this node holds its lease. A stop, on the other hand, stops this model whether the wrapped model
+ * was started or not.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -126,6 +127,27 @@ class CompetingConsumerLeasedSubscriptionsResumeWithTheWrappedModelTest {
         await().atMost(5, SECONDS).untilAsserted(() -> assertThat(handledByX).extracting(CloudEvent::getId)
                 .as("X, whose lease the node holds, is resumed when the model is started")
                 .contains(eventId));
+    }
+
+    @Test
+    void a_stop_after_a_start_that_found_the_lease_taken_keeps_the_subscription_stopped_once_the_lease_is_free() {
+        rival = strategy();
+        node = new CompetingConsumerSubscriptionModel(new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING)), strategy());
+        CopyOnWriteArrayList<CloudEvent> handledByX = new CopyOnWriteArrayList<>();
+        node.subscribe("node", "X", null, StartAt.subscriptionModelDefault(), handledByX::add);
+        await().atMost(5, SECONDS).until(() -> node.isRunning("X"));
+        node.stop();
+        assertThat(rival.registerCompetingConsumer("X", "rival")).as("another node takes the lease while this node is stopped").isTrue();
+        node.start();
+        assertThat(node.getWrappedSubscriptionModel().isRunning()).as("nothing started the wrapped model, since this node won no lease").isFalse();
+
+        node.stop();
+        rival.unregisterCompetingConsumer("X", "rival");
+        String eventId = writeEvent();
+
+        await().during(5, SECONDS).atMost(7, SECONDS).untilAsserted(() -> assertThat(handledByX).extracting(CloudEvent::getId)
+                .as("X delivers nothing after the user stopped the model, although the lease is free")
+                .doesNotContain(eventId));
     }
 
     private SpringMongoLeaseCompetingConsumerStrategy strategy() {

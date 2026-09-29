@@ -148,12 +148,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     @Override
     public synchronized void stop() {
         logDebug("Stopping CompetingConsumer subscription model");
-        if (!isRunning()) {
-            return;
-        }
-
+        // Whether the wrapped model runs says nothing about whether this model has anything left to stop. After a
+        // start() that won no lease, or failed part way, the wrapped model can still be stopped while consumers are
+        // registered, and a grant would resume one after a stop() that had returned without doing anything.
         stoppedByUser.set(true);
-        delegate.stop();
+        if (delegate.isRunning()) {
+            delegate.stop();
+        }
         // Unregister every competing consumer, not only the running ones. A waiting consumer left registered
         // keeps competing for the lock through the strategy's refresh thread, so a stopped model can take a
         // lock it then refuses to act on, and start() sees no status change and never starts it.
