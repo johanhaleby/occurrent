@@ -18,6 +18,7 @@ package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoTimeoutException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -26,6 +27,7 @@ import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 import org.bson.json.JsonParseException;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -59,9 +61,12 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static com.mongodb.client.model.Filters.and;
@@ -73,6 +78,9 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.groups.Tuple.tuple;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.ONE_SECOND;
@@ -328,10 +336,101 @@ public class NativeMongoSubscriptionModelTest {
             mongoEventStore.write("2", 0, serialize(nameDefined2));
             mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
+            // nameDefined1 too, since it was written after subscription1 first opened and resuming starts from there
             await("subscription1 received all events").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
-                    assertThat(subscription1State).extracting(CloudEvent::getId).containsExactly(nameDefined2.eventId(), nameWasChanged1.eventId()));
+                    assertThat(subscription1State).extracting(CloudEvent::getId).containsExactly(nameDefined1.eventId(), nameDefined2.eventId(), nameWasChanged1.eventId()));
             await("subscription2 received all events").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                     assertThat(subscription2State).extracting(CloudEvent::getId).containsExactly(nameDefined1.eventId(), nameDefined2.eventId(), nameWasChanged1.eventId()));
+        }
+
+        @Test
+        void a_subscription_paused_while_handling_its_first_event_delivers_what_was_written_while_paused_once_resumed() throws InterruptedException {
+            // Given: a handler that holds on to the first event until released, so the subscription has not finished
+            // handling anything when it is paused
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined first = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameWasChanged writtenWhilePaused = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
+            AtomicBoolean firstCall = new AtomicBoolean(true);
+            CountDownLatch handlingFirstEvent = new CountDownLatch(1);
+            CountDownLatch releaseFirstEvent = new CountDownLatch(1);
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+                if (firstCall.getAndSet(false)) {
+                    handlingFirstEvent.countDown();
+                    try {
+                        releaseFirstEvent.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                handled.add(cloudEvent);
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            mongoEventStore.write("1", 0, serialize(first));
+            assertThat(handlingFirstEvent.await(10, SECONDS)).isTrue();
+
+            // When: resumed before the handler returns, so the resume cannot start from the position recorded once
+            // the first event is handled
+            subscriptionModel.pauseSubscription(subscriptionId);
+            mongoEventStore.write("1", 1, serialize(writtenWhilePaused));
+            subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+            releaseFirstEvent.countDown();
+
+            // Then: the first event may be handed over twice, but nothing is skipped
+            await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(handled).extracting(CloudEvent::getId).contains(first.eventId(), writtenWhilePaused.eventId()));
+        }
+
+        @Test
+        void a_subscription_paused_before_handling_anything_delivers_what_was_written_while_paused_once_resumed() {
+            // Given
+            NameDefined writtenWhilePaused = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), handled::add).waitUntilStarted(Duration.ofSeconds(10));
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+            mongoEventStore.write("1", 0, serialize(writtenWhilePaused));
+            subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+
+            // Then
+            await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenWhilePaused.eventId()));
+        }
+
+        @Test
+        void subscribe_returns_and_the_subscription_delivers_once_mongodb_can_be_reached() {
+            // Given
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refusedOperationTimeRequests = new AtomicInteger();
+            MongoDatabase databaseSpy = spy(database);
+            doAnswer(invocation -> {
+                if (unreachable.get()) {
+                    refusedOperationTimeRequests.incrementAndGet();
+                    throw new MongoTimeoutException("MongoDB cannot be reached");
+                }
+                return invocation.callRealMethod();
+            }).when(databaseSpy).runCommand(any(Bson.class));
+            ExecutorService executor = Executors.newCachedThreadPool();
+            NativeMongoSubscriptionModel model = new NativeMongoSubscriptionModel(databaseSpy, eventCollection, timeRepresentation, executor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
+            try {
+                CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+
+                // When
+                Throwable thrown = catchThrowable(() -> model.subscribe(UUID.randomUUID().toString(), StartAt.now(), handled::add));
+                await().atMost(5, SECONDS).until(() -> refusedOperationTimeRequests.get() > 0);
+                unreachable.set(false);
+
+                // Then
+                assertThat(thrown).isNull();
+                await().atMost(10, SECONDS).until(() -> model.subscriptionIds().size() == 1);
+                NameDefined writtenOnceReachable = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+                mongoEventStore.write("1", 0, serialize(writtenOnceReachable));
+                await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).contains(writtenOnceReachable.eventId()));
+            } finally {
+                model.shutdown();
+            }
         }
     }
 

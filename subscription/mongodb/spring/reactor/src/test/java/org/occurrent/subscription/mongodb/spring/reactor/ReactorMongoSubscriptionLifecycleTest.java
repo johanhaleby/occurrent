@@ -57,6 +57,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.time.ZoneOffset.UTC;
@@ -254,6 +255,60 @@ public class ReactorMongoSubscriptionLifecycleTest {
         // Then: none of the 5 events are lost, even though they were read out of the change stream well before
         // the blocked first action call ever completed.
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(state).hasSize(5));
+    }
+
+    @Test
+    void a_subscription_paused_while_handling_its_first_event_delivers_what_was_written_while_paused_once_resumed() {
+        // Given: an action whose first Mono completes only when released, so the subscription has not finished
+        // handling anything when it is paused. Pausing cancels that Mono, so its event counts as handled only if it
+        // is handed over again.
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined first = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined writtenWhilePaused = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        CountDownLatch handlingFirstEvent = new CountDownLatch(1);
+        Sinks.Empty<Void> releaseFirstEvent = Sinks.empty();
+        CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+            Mono<Void> handle = Mono.fromRunnable(() -> handled.add(cloudEvent));
+            if (firstCall.getAndSet(false)) {
+                handlingFirstEvent.countDown();
+                return releaseFirstEvent.asMono().then(handle);
+            }
+            return handle;
+        }).waitUntilStarted().block(Duration.ofSeconds(10));
+        mongoEventStore.write("1", 0, serialize(first)).block();
+        await().atMost(10, SECONDS).until(() -> handlingFirstEvent.getCount() == 0);
+
+        // When
+        subscriptionModel.pauseSubscription(subscriptionId);
+        mongoEventStore.write("1", 1, serialize(writtenWhilePaused)).block();
+        subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted().block(Duration.ofSeconds(10));
+        releaseFirstEvent.tryEmitEmpty();
+
+        // Then: the first event may be handed over twice, but nothing is skipped
+        await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                assertThat(handled).extracting(CloudEvent::getId).contains(first.eventId(), writtenWhilePaused.eventId()));
+    }
+
+    @Test
+    void a_subscription_paused_before_handling_anything_delivers_what_was_written_while_paused_once_resumed() {
+        // Given
+        NameDefined writtenWhilePaused = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+        CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> handled.add(cloudEvent)))
+                .waitUntilStarted().block(Duration.ofSeconds(10));
+
+        // When
+        subscriptionModel.pauseSubscription(subscriptionId);
+        mongoEventStore.write("1", 0, serialize(writtenWhilePaused)).block();
+        subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted().block(Duration.ofSeconds(10));
+
+        // Then
+        await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenWhilePaused.eventId()));
     }
 
     @Test
