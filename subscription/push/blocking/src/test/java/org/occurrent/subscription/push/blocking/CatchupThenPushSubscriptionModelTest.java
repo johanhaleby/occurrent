@@ -1002,10 +1002,7 @@ class CatchupThenPushSubscriptionModelTest {
         // which is the answer CatchupProjectionFeed.stopCatchUp() already recorded.
         model.start(true);
 
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (!marker.exists("proj") && System.nanoTime() < deadline) {
-            Thread.sleep(10);
-        }
+        awaitHandover(model, marker, "proj");
 
         assertThat(marker.exists("proj")).isTrue();
         assertThat(model.isRunning("proj")).isTrue();
@@ -1523,10 +1520,7 @@ class CatchupThenPushSubscriptionModelTest {
         // completion.
         model.start(true);
 
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (!marker.exists("sub") && System.nanoTime() < deadline) {
-            Thread.sleep(10);
-        }
+        awaitHandover(model, marker, "sub");
 
         assertThat(marker.exists("sub")).as("the relaunched replay's own completion writes the marker").isTrue();
         assertThat(model.isRunning("sub")).isTrue();
@@ -1901,6 +1895,15 @@ class CatchupThenPushSubscriptionModelTest {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);
+        }
+    }
+
+    // The marker is written before the replay entry is removed, so the marker alone does not mean the handover is done.
+    private static void awaitHandover(CatchupThenPushSubscriptionModel model, InMemoryCheckpointStorage marker, String subscriptionId) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!(marker.exists(subscriptionId) && !model.isCatchingUp(subscriptionId) && model.isRunning(subscriptionId))
+                && System.nanoTime() < deadline) {
+            Thread.sleep(10);
         }
     }
 
