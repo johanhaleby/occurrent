@@ -38,8 +38,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * What starting the model, and resuming or pausing a subscription, do when the lease is not free, when registering
- * with the strategy throws, or when the wrapped model throws on a subscription whose lease was just won. The strategy
+ * What starting the model, and resuming or pausing a subscription, do when the lease is not free, when the strategy
+ * throws, or when the wrapped model throws on starting itself or on a subscription, competing or not. The strategy
  * tells its listeners about a grant on the thread that registers, the way the MongoDB lease strategies do, and nothing
  * here needs MongoDB.
  */
@@ -143,12 +143,57 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         model.stop();
         delegate.throwsOn.add("x");
         assertThat(catchThrowable(() -> model.start(true))).isInstanceOf(IllegalStateException.class);
+        assertThat(strategy.calls).as("x gives its lease back and stays registered, so it keeps competing for it").endsWith("release x");
         delegate.throwsOn.clear();
 
         strategy.grant("x");
 
         assertThat(delegate.running).as("x keeps competing for the lease, so the next grant resumes it, with no other node to take it over").contains("x");
         assertThat(strategy.holders).containsExactly("x");
+    }
+
+    @Test
+    void a_non_competing_subscription_the_wrapped_model_fails_to_resume_does_not_keep_a_competing_consumer_from_starting() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        subscribeNonCompeting("nc");
+        model.stop();
+        delegate.throwsOn.add("nc");
+
+        Throwable thrown = catchThrowable(() -> model.start(true));
+
+        assertThat(thrown).as("the caller of start learns that nc did not resume").hasMessage("The wrapped model cannot start nc right now");
+        assertThat(delegate.running).as("x starts although nc fails").containsExactly("x");
+        assertThat(strategy.holders).containsExactly("x");
+    }
+
+    @Test
+    void a_wrapped_model_that_fails_to_start_does_not_keep_the_subscriptions_from_their_turn() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        subscribeNonCompeting("nc");
+        model.stop();
+        delegate.startThrows = true;
+
+        Throwable thrown = catchThrowable(() -> model.start(true));
+
+        assertThat(thrown).as("the caller of start learns that the wrapped model did not start").hasMessage("The wrapped model cannot start right now");
+        assertThat(delegate.running).as("x and nc still get their turn").containsExactlyInAnyOrder("x", "nc");
+    }
+
+    @Test
+    void a_lease_strategy_that_throws_on_one_leased_consumer_does_not_keep_another_from_resuming() {
+        strategy.grantOnRegister = true;
+        subscribe("a");
+        subscribe("b");
+        delegate.holdPausedWhileNotStarted("a");
+        delegate.holdPausedWhileNotStarted("b");
+        strategy.hasLockThrowsOn.add("a");
+
+        Throwable thrown = catchThrowable(() -> model.start(true));
+
+        assertThat(thrown).as("the caller of start learns that the lease store could not answer for a").hasMessage("The lease store cannot answer for a right now");
+        assertThat(delegate.running).as("b resumes although asking about a threw").containsExactly("b");
     }
 
     @Test
@@ -188,6 +233,12 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
     private void subscribe(String subscriptionId) {
         model.subscribe(SUBSCRIBER_ID, subscriptionId, null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+    }
+
+    // A start position that resolves to null here makes the model hand the subscription straight to the wrapped model
+    private void subscribeNonCompeting(String subscriptionId) {
+        model.subscribe(SUBSCRIBER_ID, subscriptionId, null, StartAt.dynamic(__ -> null), __ -> {
         });
     }
 
@@ -286,16 +337,23 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     /**
      * Grants the lease on register when {@link #grantOnRegister} is set, and tells the listeners on the registering
      * thread, as a lease strategy does for a lease that changed hands. {@link #grant(String)} plays a refresh round
-     * granting a lease that another node gave up.
+     * granting a lease that another node gave up, which, as with the MongoDB lease strategies, only a registered
+     * consumer can win. Releasing a lease keeps the consumer registered, unregistering does not.
      */
     private static final class SynchronousLeaseStrategy implements CompetingConsumerStrategy {
         private final List<String> calls = new ArrayList<>();
+        private final Set<String> registered = new HashSet<>();
         private final Set<String> holders = new HashSet<>();
+        private final Set<String> hasLockThrowsOn = new HashSet<>();
         private final List<CompetingConsumerListener> listeners = new ArrayList<>();
         private boolean grantOnRegister;
         private boolean registerThrows;
 
         void grant(String subscriptionId) {
+            if (!registered.contains(subscriptionId)) {
+                calls.add("no grant for unregistered " + subscriptionId);
+                return;
+            }
             calls.add("grant " + subscriptionId);
             holders.add(subscriptionId);
             listeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, SUBSCRIBER_ID));
@@ -307,6 +365,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
             if (registerThrows) {
                 throw new IllegalStateException("The lease store cannot be reached");
             }
+            registered.add(subscriptionId);
             if (grantOnRegister && holders.add(subscriptionId)) {
                 listeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
             }
@@ -316,6 +375,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         @Override
         public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
             calls.add("unregister " + subscriptionId);
+            registered.remove(subscriptionId);
             if (holders.remove(subscriptionId)) {
                 listeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
             }
@@ -331,6 +391,9 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
         @Override
         public boolean hasLock(String subscriptionId, String subscriberId) {
+            if (hasLockThrowsOn.contains(subscriptionId)) {
+                throw new IllegalStateException("The lease store cannot answer for " + subscriptionId + " right now");
+            }
             return holders.contains(subscriptionId);
         }
 
