@@ -39,9 +39,12 @@ that does not compete at all, whose checkpoint writes the Spring Boot starter al
 `any()` exactly as before. The rule for two consumers registered for one subscription in the same instance is
 unchanged, and it still answers empty for as long as both are registered.
 
-A write made with the stale token is refused once another node has written with a higher one, and the subscription
-model already treats that refusal as the end of delivery on this node (ADR 116). A write made with it before anyone
-else has written is accepted, which is correct, since nothing newer exists to be overwritten.
+A write made with the stale token is refused once another node has written with a higher one. On
+`NativeMongoSubscriptionModel` that refusal ends delivery on this node (ADR 116). On `SpringMongoSubscriptionModel` it
+does not. Spring's `CursorReadingTask` hands the exception to the error handler and goes on reading the change stream,
+and the error handler only keeps the subscription from being restarted, by ending a restart loop that runs for it or
+never starting one. A write made with the stale token before anyone else has written is accepted, which is correct,
+since nothing newer exists to be overwritten.
 
 Reading the token before the handler runs ties the write to the lease that was held when the event was handed over. A
 node that won the lease back in the meantime cannot lend its new token to a handler that started under the old one.

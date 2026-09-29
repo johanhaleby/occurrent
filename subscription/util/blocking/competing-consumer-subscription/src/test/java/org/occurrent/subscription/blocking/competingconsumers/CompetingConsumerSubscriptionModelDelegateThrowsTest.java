@@ -77,7 +77,8 @@ class CompetingConsumerSubscriptionModelDelegateThrowsTest {
         });
         delegate.throwsOnNextStarts.set(1);
 
-        assertThatCode(strategy::grant).as("the strategy granting the lease has nobody to hand the failure to").doesNotThrowAnyException();
+        assertThat(catchThrowable(strategy::grant)).as("the failure reaches the strategy, which logs it on a refresh round")
+                .isInstanceOf(IllegalStateException.class);
 
         assertThat(strategy.calls).containsExactly("register", "release");
         assertThat(strategy.holders).isEmpty();

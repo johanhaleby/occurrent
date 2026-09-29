@@ -31,6 +31,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -38,6 +39,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -178,8 +180,10 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         }
 
         scheduledRefresh.scheduleInBackground(() -> {
+            // Empty until an attempt of this round fails, and then the consumers the next attempt refreshes again
+            AtomicReference<@Nullable Set<CompetingConsumer>> failedInThisRound = new AtomicReference<>();
             try {
-                retryStrategyToUse.execute(() -> fn.apply(this::refreshOrAcquireLease).run(), whileRunning);
+                retryStrategyToUse.execute(() -> fn.apply(collection -> refreshOrAcquireLease(collection, failedInThisRound)).run(), whileRunning);
             } catch (Exception e) {
                 // scheduleAtFixedRate cancels every later execution once one throws, so a round that exhausted
                 // cappedRetryStrategy is caught here instead of taking the whole schedule down with it.
@@ -343,34 +347,56 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     /**
-     * One refresh round. A consumer whose refresh fails is logged and left for the next round, and the others are
-     * refreshed regardless, since one lease MongoDB refuses to write must not let every other lease on this instance
-     * expire. What a round changed reaches the listeners through {@link ScheduledRefresh#notifyInBackground}, so a
+     * One attempt at a refresh round. The first attempt refreshes every consumer, and a retry of the round refreshes
+     * only the consumers in {@code failedInThisRound}. A consumer whose refresh fails does not stop the others from
+     * being refreshed, since one lease MongoDB refuses to write must not let every other lease on this instance
+     * expire. Once every consumer has had its turn, the first failure is thrown with the others attached as
+     * suppressed, so the round's retry strategy gives a failing consumer the same attempts it gave the whole round
+     * before. What a round changed reaches the listeners through {@link ScheduledRefresh#notifyInBackground}, so a
      * listener that blocks, which pausing a subscription whose change stream is still opening does, holds up the
      * notifications behind it but never the next refresh round.
      */
-    private void refreshOrAcquireLease(MongoCollection<BsonDocument> collection) {
+    private void refreshOrAcquireLease(MongoCollection<BsonDocument> collection, AtomicReference<@Nullable Set<CompetingConsumer>> failedInThisRound) {
         logDebug("In refreshOrAcquireLease with {} competing consumers", competingConsumers.size());
-        competingConsumers.forEach((cc, __) -> {
+        Set<CompetingConsumer> toRefresh = failedInThisRound.get();
+        Set<CompetingConsumer> failed = new HashSet<>();
+        @Nullable RuntimeException firstFailure = null;
+        for (CompetingConsumer cc : competingConsumers.keySet()) {
+            if (toRefresh != null && !toRefresh.contains(cc)) {
+                continue;
+            }
             final Outcome outcome;
             try {
                 outcome = inConsumerLock(cc, () -> refreshOne(collection, cc));
             } catch (RuntimeException e) {
-                log.warn("Failed to refresh the lease due to {} - {}. The other consumers are refreshed regardless and the next round tries this one again (subscriberId={}, subscriptionId={})",
-                        e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId, e);
-                return;
+                logDebug("Failed to refresh the lease due to {} - {}, refreshing the other consumers before this one is tried again (subscriberId={}, subscriptionId={})",
+                        e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId);
+                failed.add(cc);
+                if (firstFailure == null) {
+                    firstFailure = e;
+                } else {
+                    firstFailure.addSuppressed(e);
+                }
+                continue;
             }
             if (outcome.notification() != Notification.NONE) {
                 scheduledRefresh.notifyInBackground(() -> notifyListenersIfStillTrue(outcome, cc));
             }
-        });
+        }
+        failedInThisRound.set(failed);
+        if (firstFailure != null) {
+            throw firstFailure;
+        }
     }
 
     /**
      * Runs later than the round that decided it, on the notifier thread, and by then the consumer may have moved on.
-     * A grant for a consumer that no longer holds the lock, or a prohibition for one that holds it again, is dropped
-     * rather than delivered, since acting on either would leave the subscription paused while this instance holds its
-     * lease, or running while it does not. A listener that throws is logged, and the other listeners are told anyway.
+     * A grant for a consumer that no longer holds the lock is dropped, since starting the subscription would leave it
+     * running on an instance without its lease. A prohibition is always delivered, also to a consumer that holds the
+     * lock again. The listener then pauses the subscription and gives the lease up, and a later round grants it again.
+     * Dropping it could leave this instance refreshing a lease for a subscription that has stopped delivering, which
+     * no grant would restart, since the listener finds the consumer running already, and which no other instance
+     * could take over. A listener that throws is logged, and the other listeners are told anyway.
      */
     private void notifyListenersIfStillTrue(Outcome outcome, CompetingConsumer cc) {
         if (!running) {
@@ -379,7 +405,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         boolean holdsTheLockNow = hasLock(cc.subscriptionId, cc.subscriberId);
         boolean stillTrue = switch (outcome.notification()) {
             case GRANTED -> holdsTheLockNow;
-            case PROHIBITED -> !holdsTheLockNow;
+            case PROHIBITED -> true;
             case NONE -> false;
         };
         if (!stillTrue) {

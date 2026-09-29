@@ -61,7 +61,10 @@ class ScheduledRefresh {
         this(scheduleIt, null);
     }
 
-    private ScheduledRefresh(BiConsumer<Duration, Scheduler> scheduleIt, @Nullable ExecutorService notifier) {
+    /**
+     * Runs every notification on {@code notifier}, or on the thread that runs the refresh when it is {@code null}.
+     */
+    ScheduledRefresh(BiConsumer<Duration, Scheduler> scheduleIt, @Nullable ExecutorService notifier) {
         this.scheduleIt = scheduleIt;
         this.notifier = notifier;
     }

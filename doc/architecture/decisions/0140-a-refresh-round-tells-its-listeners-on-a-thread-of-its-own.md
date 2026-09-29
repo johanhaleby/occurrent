@@ -26,9 +26,12 @@ thread, which calls the listeners in the order the round decided the changes.**
 
 A change can be out of date by the time the notifier gets to it, since registering, releasing and the next round keep
 changing the lease meanwhile. The notifier therefore calls `onConsumeGranted` only if the consumer still holds the
-lease, and `onConsumeProhibited` only if it still does not. Delivering a prohibition for a lease the node has won back
-would pause a subscription that keeps its lease, and no later round would resume it, since a grant is only reported
-when the lease changes hands.
+lease, since starting a subscription on a node without its lease would deliver events twice. It always calls
+`onConsumeProhibited`, also for a lease the node has won back since. `CompetingConsumerSubscriptionModel` then pauses
+the subscription and releases the lease, and a later round grants it again and resumes the subscription. Dropping
+that prohibition would keep a subscription whose delivery ended while the prohibition waited on a lease this node
+goes on refreshing. The grant for the lease won back finds the subscription recorded as running and does nothing, and
+no other node can take the lease over.
 
 A listener that throws is logged, and the other listeners are called anyway. After `shutdown()` the notifier stops
 without waiting for a call in progress, since that call may be waiting for the monitor of the subscription model that is
@@ -44,5 +47,6 @@ A listener that blocks now holds up the calls queued behind it, but no longer th
 whose pause is still waiting keeps delivering events until the pause completes, as it did before. Its checkpoint
 writes use the fencing token of the lease it lost, so they are refused once the next holder has written (ADR 139).
 
-A `CompetingConsumerListener` of your own is now called from the notifier thread for a change a refresh round made,
-and is not called at all for a change the lease has already moved past.
+A `CompetingConsumerListener` of your own is now called from the notifier thread for a change a refresh round made.
+It is not called for a grant the lease has already moved past, and it can be told about a prohibition for a lease the
+node holds again by then.
