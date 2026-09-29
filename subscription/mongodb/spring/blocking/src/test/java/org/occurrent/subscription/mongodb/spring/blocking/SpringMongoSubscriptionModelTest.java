@@ -383,6 +383,25 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
+        void resuming_one_subscription_before_start_leaves_the_others_registered_before_start_paused() {
+            // Given
+            CopyOnWriteArrayList<CloudEvent> resumedState = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<CloudEvent> otherState = new CopyOnWriteArrayList<>();
+            notAutoStarted.subscribe("resumed", StartAt.now(), resumedState::add);
+            notAutoStarted.subscribe("other", StartAt.now(), otherState::add);
+
+            // When
+            notAutoStarted.resumeSubscription("resumed").waitUntilStarted(Duration.ofSeconds(10));
+            NameDefined writtenOnceResumed = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenOnceResumed));
+
+            // Then
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(resumedState).extracting(CloudEvent::getId).contains(writtenOnceResumed.eventId()));
+            assertThat(notAutoStarted.isPaused("other")).isTrue();
+            await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(otherState).isEmpty());
+        }
+
+        @Test
         void the_default_still_auto_starts() {
             assertAll(
                     () -> assertThat(subscriptionModel.isRunning()).isTrue(),
@@ -842,6 +861,35 @@ public class SpringMongoSubscriptionModelTest {
                 release.countDown();
             }
         }
+
+        @Timeout(value = 30, unit = SECONDS)
+        @Test
+        void start_returns_once_restarting_a_subscription_gives_up_and_leaves_it_paused_for_a_resume() {
+            // Given
+            SpringMongoSubscriptionModel givesUpAfterTwoAttempts = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig(eventCollectionName, timeRepresentation)
+                    .autoStartup(false).retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100)).maxAttempts(2)));
+            try {
+                unreachable.set(true);
+                CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+                givesUpAfterTwoAttempts.subscribe("gives-up", StartAt.now(), state::add);
+
+                // When
+                CompletableFuture<Void> start = CompletableFuture.runAsync(() -> givesUpAfterTwoAttempts.start(true));
+
+                // Then
+                assertThat(start).succeedsWithin(Duration.ofSeconds(10));
+                assertAll(
+                        () -> assertThat(givesUpAfterTwoAttempts.isRunning("gives-up")).isFalse(),
+                        () -> assertThat(givesUpAfterTwoAttempts.isPaused("gives-up")).isTrue());
+                unreachable.set(false);
+                assertThat(givesUpAfterTwoAttempts.resumeSubscription("gives-up").waitUntilStarted(Duration.ofSeconds(10))).isTrue();
+                NameDefined writtenOnceResumed = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+                mongoEventStore.write("1", 0, serialize(writtenOnceResumed));
+                await().atMost(10, SECONDS).untilAsserted(() -> assertThat(state).extracting(CloudEvent::getId).contains(writtenOnceResumed.eventId()));
+            } finally {
+                givesUpAfterTwoAttempts.shutdown();
+            }
+        }
     }
 
     @Nested
@@ -881,6 +929,36 @@ public class SpringMongoSubscriptionModelTest {
             await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
         }
 
+        @SuppressWarnings("unchecked")
+        @Timeout(value = 20, unit = SECONDS)
+        @Test
+        void pauses_subscription_when_change_stream_history_is_lost_and_not_configured_to_restart() {
+            // Given
+            MongoTemplate mongoTemplateSpy = spy(mongoTemplate);
+            MongoDatabase mongoDatabase = mock(MongoDatabase.class);
+            MongoCollection<Document> mongoCollection = (MongoCollection<Document>) mock(MongoCollection.class);
+
+            List<BsonElement> elements = new ArrayList<>();
+            elements.add(new BsonElement("code", new BsonInt32(286)));
+            elements.add(new BsonElement("codeName", new BsonString("ChangeStreamHistoryLost")));
+
+            // Called in org.springframework.data.mongodb.core.messaging.ChangeStreamTask#initCursor
+            when(mongoTemplateSpy.getDb()).thenReturn(mongoDatabase).thenCallRealMethod();
+            when(mongoDatabase.getCollection("events")).thenReturn(mongoCollection);
+            when(mongoCollection.watch(any(Class.class))).thenThrow(new UncategorizedMongoDbException("expected", new MongoCommandException(new BsonDocument(elements), new ServerAddress())));
+
+            subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(false));
+            String subscriptionId = UUID.randomUUID().toString();
+
+            // When
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
+
+            // Then
+            await().atMost(10, SECONDS).untilAsserted(() -> assertAll(
+                    () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
+                    () -> assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue()));
+        }
     }
 
     @Nested

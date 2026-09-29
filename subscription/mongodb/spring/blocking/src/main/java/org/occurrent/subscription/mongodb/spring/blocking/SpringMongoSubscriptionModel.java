@@ -352,10 +352,17 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * Delivery is <i>at least once</i> across a pause: an event whose handler had not finished when the subscription
      * was paused, and every event another consumer of the same subscription id handled in the meantime, is handed to
      * this handler again on resume. That is deliberate, since wasted work is the cheaper mistake, and it means
-     * handlers must be idempotent. A subscription started at the present records MongoDB's operation time when its
-     * change stream opens, and one paused before it handled any event resumes from that time rather than from the time
-     * of the resume, so the events written in between are delivered too. When MongoDB's reply has no operation time, or
-     * the change stream never opened before the pause, the resume opens at the present.
+     * handlers must be idempotent. This model asks MongoDB for its operation time right before the change stream of a
+     * subscription started at the present opens, and records it as that subscription's position. One paused before it
+     * handled any event resumes from that time, so the events written since are delivered too, as long as the oplog
+     * still holds that time. When it no longer does, the resume gets the handling that
+     * {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has no operation time, or the
+     * subscription was paused before this model asked for it, nothing is recorded and the resume opens at the present.
+     * <p>
+     * A subscription whose {@code RetryStrategy} gave up restarting its change stream is paused, and this call starts it
+     * again. One whose change stream history was lost with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned
+     * off is paused too, and {@link #resumeSubscription(String, StartAt)} at a position the oplog still holds starts it
+     * again.
      * <p>
      * That is what this call does on its own. A {@code DurableSubscriptionModel} wrapping this model calls
      * {@link #resumeSubscription(String, StartAt)} with a stored checkpoint instead whenever one exists, so a
@@ -526,12 +533,13 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
     private org.springframework.data.mongodb.core.messaging.Subscription registerNewSpringSubscription(String subscriptionId, ChangeStreamRequest<Document> documentChangeStreamRequest, @Nullable CompletableFuture<@Nullable RestartSignal> failureSignal) {
         logDebug("registerNewSpringSubscription for subscription {}", subscriptionId);
-        return messageListenerContainer.register(documentChangeStreamRequest, Document.class, throwable -> {
+        AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> registration = new AtomicReference<>();
+        registration.set(messageListenerContainer.register(documentChangeStreamRequest, Document.class, throwable -> {
             if (throwable instanceof CheckpointWriteConditionNotFulfilledException) {
-                // Stays known and pausable, unlike the history-lost branch below, since forgetting it here would let
-                // the strategy pause a subscription this model no longer knows about. Logged at error level because
-                // nothing else would say why the node went quiet. reportFailure with a null signal ends this
-                // subscription's restart loop, or never starts one, instead of running it unbounded.
+                // Stays running, unlike the history-lost branch below, so the lease refresh that follows pauses it the
+                // way it pauses any running subscription. Logged at error level because nothing else would say why the
+                // node went quiet. reportFailure with a null signal ends this subscription's restart loop, or never
+                // starts one, instead of running it unbounded.
                 log.error("Checkpoint write for subscription {} was refused: {}. This node's lease has moved to another one, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it, and a resume redelivers the event once this node holds the lease again.", subscriptionId, throwable.getMessage(), throwable);
                 reportFailure(subscriptionId, failureSignal, null);
             } else if (throwable instanceof DataAccessException) {
@@ -540,14 +548,13 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                     log.warn("Caught {} ({}) for subscription {}, will restart!", MongoQueryException.class.getSimpleName(), cause.getMessage(), subscriptionId, throwable);
                     reportFailure(subscriptionId, failureSignal, new RestartSignal(null, throwable));
                 } else if (cause instanceof MongoCommandException && ((MongoCommandException) cause).getErrorCode() == CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
-                    String restartMessage = restartSubscriptionsOnChangeStreamHistoryLost ? "will restart subscription from current time." :
-                            "will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.";
                     if (restartSubscriptionsOnChangeStreamHistoryLost) {
-                        log.warn("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
+                        log.warn("There was not enough oplog to resume subscription {}, will restart subscription from current time.", subscriptionId, throwable);
                         reportFailure(subscriptionId, failureSignal, new RestartSignal(StartAt.now(), throwable));
                     } else {
-                        log.error("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
+                        log.error("There was not enough oplog to resume subscription {}, will not restart subscription! It is paused, and resuming it at a position the oplog still holds starts it again. Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.", subscriptionId, throwable);
                         reportFailure(subscriptionId, failureSignal, null);
+                        pauseAfterGivingUp(subscriptionId, registration);
                     }
                 } else if (shutdown) {
                     if (log.isDebugEnabled()) {
@@ -567,7 +574,24 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                 log.error("An error occurred for subscription {}, will restart", subscriptionId, throwable);
                 reportFailure(subscriptionId, failureSignal, new RestartSignal(null, throwable));
             }
-        });
+        }));
+        return requireNonNull(registration.get());
+    }
+
+    // Moves a subscription this model stopped restarting to paused, so a start(..) waiting for it returns and
+    // resumeSubscription(..) can start it again. "failed" is read under the lock, which the caller registering it holds
+    // until it has stored it. A subscription paused and resumed in between runs another Spring subscription and is left
+    // alone.
+    private synchronized void pauseAfterGivingUp(String subscriptionId, AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> failed) {
+        InternalSubscription running = runningSubscriptions.get(subscriptionId);
+        if (shutdown || running == null || failed.get() == null || running.getSpringSubscription() != failed.get()) {
+            return;
+        }
+        runningSubscriptions.remove(subscriptionId);
+        stopRestartLoop(subscriptionId);
+        messageListenerContainer.remove(running.getSpringSubscription());
+        pausedSubscriptions.put(subscriptionId, running);
+        logDebug("Subscription {} paused because it will not be restarted", subscriptionId);
     }
 
     // Carries what a restart attempt should do next: reconnect because "cause" triggered it, from
@@ -593,10 +617,11 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     // further restart needed.
     private void runRestartLoop(String subscriptionId, RestartSignal firstSignal) {
         AtomicReference<RestartSignal> next = new AtomicReference<>(firstSignal);
+        AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> restarted = new AtomicReference<>();
         try {
             executeWithRetry((Runnable) () -> {
                 RestartSignal signal = requireNonNull(next.get());
-                RestartSignal outcome = restartOnce(subscriptionId, signal);
+                RestartSignal outcome = restartOnce(subscriptionId, signal, restarted);
                 if (outcome == null) {
                     next.set(null);
                     return;
@@ -613,14 +638,16 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
             } else if (shutdown) {
                 logDebug("Stopped restarting subscription {} because the subscription model is shutting down", subscriptionId);
             } else {
-                log.error("Giving up restarting subscription {}, retries exhausted", subscriptionId, e);
+                log.error("Giving up restarting subscription {}, retries exhausted. It is paused, and resuming it starts it again.", subscriptionId, e);
+                pauseAfterGivingUp(subscriptionId, restarted);
             }
         }
     }
 
     // Performs one restart attempt, then blocks (without the model's lock) until the subscription fails
     // again or is told to stop. Returns the next failure signal for the caller to retry, or null if done.
-    private @Nullable RestartSignal restartOnce(String subscriptionId, RestartSignal signal) {
+    // "restarted" is set under the lock to the Spring subscription this loop is responsible for.
+    private @Nullable RestartSignal restartOnce(String subscriptionId, RestartSignal signal, AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> restarted) {
         CompletableFuture<@Nullable RestartSignal> failureSignal = new CompletableFuture<>();
         synchronized (this) {
             InternalSubscription internalSubscription = runningSubscriptions.get(subscriptionId);
@@ -629,6 +656,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                 return null;
             }
             org.springframework.data.mongodb.core.messaging.Subscription oldSpringSubscription = internalSubscription.getSpringSubscription();
+            restarted.set(oldSpringSubscription);
             StartAt restartFrom = signal.restartFrom();
             if (restartFrom != null) {
                 // Only change stream history loss names a position, and it names the present because the
@@ -646,6 +674,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
             messageListenerContainer.remove(oldSpringSubscription);
             org.springframework.data.mongodb.core.messaging.Subscription newSpringSubscription = registerNewSpringSubscription(subscriptionId, newChangeStreamRequest, failureSignal);
             internalSubscription.occurrentSubscription.changeSubscription(newSpringSubscription);
+            restarted.set(newSpringSubscription);
         }
         log.info("Subscription {} successfully restarted", subscriptionId);
         try {

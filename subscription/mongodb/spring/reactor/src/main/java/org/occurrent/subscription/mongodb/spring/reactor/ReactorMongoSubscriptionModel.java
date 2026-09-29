@@ -365,10 +365,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * Delivery is <i>at least once</i> across a pause: an event whose action's {@code Mono} had not completed when
      * the subscription was paused, and every event another consumer of the same subscription id handled in the
      * meantime, is handed to this action again on resume. That is deliberate, since wasted work is the cheaper
-     * mistake, and it means actions must be idempotent. A subscription started at the present records MongoDB's
-     * operation time when its change stream opens, and one paused before it handled any event resumes from that time
-     * rather than from the time of the resume, so the events written in between are delivered too. When MongoDB's reply
-     * has no operation time, or the change stream never opened before the pause, the resume opens at the present.
+     * mistake, and it means actions must be idempotent. This model asks MongoDB for its operation time right before the
+     * change stream of a subscription started at the present opens, and records it as that subscription's position. One
+     * paused before it handled any event resumes from that time, so the events written since are delivered too, as long
+     * as the oplog still holds that time. When it no longer does, the resume gets the handling that
+     * {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has no operation time, or the
+     * subscription was paused before MongoDB answered, nothing is recorded and the resume opens at the present.
      *
      * @see #pauseSubscription(String)
      */
