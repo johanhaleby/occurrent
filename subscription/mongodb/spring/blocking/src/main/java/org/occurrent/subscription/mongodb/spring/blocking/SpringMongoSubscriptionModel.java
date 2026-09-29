@@ -38,6 +38,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
@@ -64,6 +65,7 @@ import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.StringJoiner;
@@ -88,7 +90,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, SmartLifecycle {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -127,6 +129,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     // Tracks the in-flight "wait for next failure or stop signal" future for a restarting subscription, so
     // pause/cancel/shutdown can wake a blocked restart loop instead of leaving it parked forever.
     private final ConcurrentMap<String, CompletableFuture<@Nullable RestartSignal>> activeRestartSignal;
+    private final List<HistoryLossListener> historyLossListeners = new CopyOnWriteArrayList<>();
 
     private volatile boolean shutdown = false;
 
@@ -494,13 +497,13 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                 Throwable cause = throwable.getCause();
                 if (cause instanceof MongoQueryException) {
                     log.warn("Caught {} ({}) for subscription {}, will restart!", MongoQueryException.class.getSimpleName(), cause.getMessage(), subscriptionId, throwable);
-                    reportFailure(subscriptionId, failureSignal, new RestartSignal(null, throwable));
+                    reportFailure(subscriptionId, failureSignal, new RestartSignal(throwable));
                 } else if (cause instanceof MongoCommandException && ((MongoCommandException) cause).getErrorCode() == CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
                     String restartMessage = restartSubscriptionsOnChangeStreamHistoryLost ? "will restart subscription from current time." :
                             "will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.";
                     if (restartSubscriptionsOnChangeStreamHistoryLost) {
                         log.warn("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
-                        reportFailure(subscriptionId, failureSignal, new RestartSignal(StartAt.now(), throwable));
+                        reportFailure(subscriptionId, failureSignal, RestartSignal.afterHistoryLost(throwable));
                     } else {
                         log.error("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
                         reportFailure(subscriptionId, failureSignal, null);
@@ -512,7 +515,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                     reportFailure(subscriptionId, failureSignal, null);
                 } else {
                     log.error("Error caught for subscription {}: {} {}. Will restart!", subscriptionId, cause.getClass().getName(), cause.getMessage(), throwable);
-                    reportFailure(subscriptionId, failureSignal, new RestartSignal(null, throwable));
+                    reportFailure(subscriptionId, failureSignal, new RestartSignal(throwable));
                 }
             } else if (isCursorNoLongerOpen(throwable)) {
                 if (log.isDebugEnabled()) {
@@ -521,16 +524,41 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                 reportFailure(subscriptionId, failureSignal, null);
             } else {
                 log.error("An error occurred for subscription {}, will restart", subscriptionId, throwable);
-                reportFailure(subscriptionId, failureSignal, new RestartSignal(null, throwable));
+                reportFailure(subscriptionId, failureSignal, new RestartSignal(throwable));
             }
         });
     }
 
-    // Carries what a restart attempt should do next: reconnect because "cause" triggered it, from
-    // "restartFrom" when that says where, and otherwise from the position the subscription has read to. A
-    // completed future holding null instead means "stop restarting" (paused/cancelled/shut down, or history
-    // lost with restarting disabled).
-    private record RestartSignal(@Nullable StartAt restartFrom, Throwable cause) {
+    // Tells a restart attempt to reconnect because "cause" triggered it, from the present when "historyLost"
+    // says the position the subscription has read to is gone, and otherwise from that position. A completed
+    // future holding null instead means "stop restarting" (paused/cancelled/shut down, or history lost with
+    // restarting disabled).
+    private record RestartSignal(boolean historyLost, Throwable cause) {
+        private RestartSignal(Throwable cause) {
+            this(false, cause);
+        }
+
+        private static RestartSignal afterHistoryLost(Throwable cause) {
+            return new RestartSignal(true, cause);
+        }
+    }
+
+    @Override
+    public void addHistoryLossListener(HistoryLossListener listener) {
+        requireNonNull(listener, HistoryLossListener.class.getSimpleName() + " cannot be null");
+        historyLossListeners.add(listener);
+    }
+
+    // Tells the listeners the present before restarting from it. Called outside this model's monitor, since a
+    // listener takes a lock that a subscribe holds while it waits for this monitor. Without an operation time from
+    // the server, restarts from now and tells nobody
+    private StartAt restartPositionAfterHistoryLost(String subscriptionId) {
+        Checkpoint present = runningSubscriptions.containsKey(subscriptionId) ? globalCheckpoint() : null;
+        if (present == null) {
+            return StartAt.now();
+        }
+        historyLossListeners.forEach(listener -> listener.restartingAfterHistoryLoss(subscriptionId, present));
+        return StartAt.checkpoint(present);
     }
 
     // Delivers a change-stream error to whichever restart loop is responsible for this subscription: wakes
@@ -578,6 +606,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     // again or is told to stop. Returns the next failure signal for the caller to retry, or null if done.
     private @Nullable RestartSignal restartOnce(String subscriptionId, RestartSignal signal) {
         CompletableFuture<@Nullable RestartSignal> failureSignal = new CompletableFuture<>();
+        @Nullable StartAt restartFrom = signal.historyLost() ? restartPositionAfterHistoryLost(subscriptionId) : null;
         synchronized (this) {
             InternalSubscription internalSubscription = runningSubscriptions.get(subscriptionId);
             if (internalSubscription == null || shutdown) {
@@ -585,7 +614,6 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                 return null;
             }
             org.springframework.data.mongodb.core.messaging.Subscription oldSpringSubscription = internalSubscription.getSpringSubscription();
-            StartAt restartFrom = signal.restartFrom();
             if (restartFrom != null) {
                 // Only change stream history loss names a position, and it names the present because the
                 // position this subscription had read to is no longer in the oplog. Every other error restarts

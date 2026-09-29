@@ -35,6 +35,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
 import org.occurrent.subscription.internal.BoundedIdCache;
+import org.occurrent.subscription.util.predicate.EveryN;
 
 import java.util.Objects;
 import java.util.StringJoiner;
@@ -268,7 +269,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                     // shouldKeepReplaying, for the same reason: a stop or shutdown this event's own action
                     // triggered must not suppress persisting the position it just reached.
                     .filter(e -> isSafeToPersistFor(subscriptionId))
-                    .filter(returnIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class, CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
+                    // One per catch-up, so an EveryN configured for the whole model counts this subscription's events only
+                    .filter(returnIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class, CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).map(EveryN::forOneSubscription).orElse(__ -> false))
                     .forEach(e -> doIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class,
                             cfg -> cfg.storage().save(subscriptionId, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e)), writeConditionFor(cfg, subscriptionId))));
         }

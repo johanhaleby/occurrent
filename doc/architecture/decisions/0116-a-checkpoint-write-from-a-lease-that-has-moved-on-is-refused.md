@@ -20,6 +20,11 @@ The fourth amendment's `ManualStartSubscriptionModel` refusal is superseded on M
 [ADR 130](0130-a-subscriptions-first-position-race-resolves-by-order-not-by-write-order.md), which resolves
 the race by position order instead of refusing it.
 
+The rule that `fencingToken` answers empty for a consumer that does not hold the lock is amended by
+[ADR 139](0139-a-node-that-gave-up-a-lease-writes-with-the-token-it-held.md). A node that lost, released or
+gave up the lease answers with the token of the last lease it held, since that is the token a handler still
+running from that lease has to write with.
+
 ## Context
 
 `MongoListenerLockService.acquireOrRefreshFor` computes a `version` that increments whenever the lease

@@ -82,6 +82,12 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private final Duration leaseTime;
     private final ScheduledRefresh scheduledRefresh;
     private final ConcurrentMap<CompetingConsumer, Status> competingConsumers;
+    /**
+     * The token of the last lease this instance was granted, per subscription id. Kept after the lease is lost,
+     * released or unregistered, since that token is the one a handler still running from that lease has to write
+     * with. See {@link #fencingToken(String)}.
+     */
+    private final ConcurrentMap<String, Long> lastHeldFencingTokens = new ConcurrentHashMap<>();
     private final Set<CompetingConsumerListener> competingConsumerListeners;
     private final RetryStrategy retryStrategy;
     /**
@@ -248,6 +254,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         boolean oldStatusWasAcquired = oldStatus != null && oldStatus.isLockAcquired();
         logDebug("acquireLease: oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
         competingConsumers.put(competingConsumer, acquired ? Status.lockAcquired(lock.get().version()) : Status.LOCK_NOT_ACQUIRED);
+        lock.ifPresent(l -> lastHeldFencingTokens.merge(subscriptionId, l.version(), Math::max));
         if (!oldStatusWasAcquired && acquired) {
             return new Outcome(true, Notification.GRANTED);
         } else if (oldStatusWasAcquired && !acquired) {
@@ -289,12 +296,14 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     /**
-     * The fencing token for the given subscription. Answers with a value only when exactly one consumer is
-     * registered for {@code subscriptionId} in this instance and that consumer holds the lock, whatever its
-     * status otherwise is (ADR 116). {@code LOCK_RELEASED} counts as not holding, since its token belongs to
-     * the lease it just gave up.
+     * The fencing token for the given subscription. Answers empty while more than one consumer is registered for
+     * {@code subscriptionId} in this instance, whatever their status. Otherwise it answers with the token
+     * of the lease the one registered consumer holds, or, when this instance holds no lease for the subscription
+     * right now, with the token of the last lease it held. A handler that started under a lease and finishes after
+     * this instance lost, released or unregistered it writes with that older token, which a write from the next
+     * holder has already moved past. Empty when this instance never held a lease for the subscription.
      * <p>
-     * Reads the in-memory map only, so this neither blocks nor reaches MongoDB, which a call on the per-event
+     * Reads the in-memory maps only, so this neither blocks nor reaches MongoDB, which a call on the per-event
      * write path requires.
      */
     public OptionalLong fencingToken(String subscriptionId) {
@@ -310,7 +319,11 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 onlyStatus = entry.getValue();
             }
         }
-        return registered == 1 && onlyStatus.isLockAcquired() ? onlyStatus.fencingToken() : OptionalLong.empty();
+        if (registered == 1 && onlyStatus.isLockAcquired()) {
+            return onlyStatus.fencingToken();
+        }
+        Long lastHeld = lastHeldFencingTokens.get(subscriptionId);
+        return lastHeld == null ? OptionalLong.empty() : OptionalLong.of(lastHeld);
     }
 
     public void addListener(CompetingConsumerListener listenerConsumer) {
@@ -329,12 +342,62 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         scheduledRefresh.close();
     }
 
+    /**
+     * One refresh round. A consumer whose refresh fails is logged and left for the next round, and the others are
+     * refreshed regardless, since one lease MongoDB refuses to write must not let every other lease on this instance
+     * expire. What a round changed reaches the listeners through {@link ScheduledRefresh#notifyInBackground}, so a
+     * listener that blocks, which pausing a subscription whose change stream is still opening does, holds up the
+     * notifications behind it but never the next refresh round.
+     */
     private void refreshOrAcquireLease(MongoCollection<BsonDocument> collection) {
         logDebug("In refreshOrAcquireLease with {} competing consumers", competingConsumers.size());
         competingConsumers.forEach((cc, __) -> {
-            Outcome outcome = inConsumerLock(cc, () -> refreshOne(collection, cc));
-            notifyListeners(outcome, cc.subscriptionId, cc.subscriberId);
+            final Outcome outcome;
+            try {
+                outcome = inConsumerLock(cc, () -> refreshOne(collection, cc));
+            } catch (RuntimeException e) {
+                log.warn("Failed to refresh the lease due to {} - {}. The other consumers are refreshed regardless and the next round tries this one again (subscriberId={}, subscriptionId={})",
+                        e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId, e);
+                return;
+            }
+            if (outcome.notification() != Notification.NONE) {
+                scheduledRefresh.notifyInBackground(() -> notifyListenersIfStillTrue(outcome, cc));
+            }
         });
+    }
+
+    /**
+     * Runs later than the round that decided it, on the notifier thread, and by then the consumer may have moved on.
+     * A grant for a consumer that no longer holds the lock, or a prohibition for one that holds it again, is dropped
+     * rather than delivered, since acting on either would leave the subscription paused while this instance holds its
+     * lease, or running while it does not. A listener that throws is logged, and the other listeners are told anyway.
+     */
+    private void notifyListenersIfStillTrue(Outcome outcome, CompetingConsumer cc) {
+        if (!running) {
+            return;
+        }
+        boolean holdsTheLockNow = hasLock(cc.subscriptionId, cc.subscriberId);
+        boolean stillTrue = switch (outcome.notification()) {
+            case GRANTED -> holdsTheLockNow;
+            case PROHIBITED -> !holdsTheLockNow;
+            case NONE -> false;
+        };
+        if (!stillTrue) {
+            logDebug("Dropping {} since the lock status changed before it was delivered (subscriberId={}, subscriptionId={})", outcome.notification(), cc.subscriberId, cc.subscriptionId);
+            return;
+        }
+        for (CompetingConsumerListener listener : competingConsumerListeners) {
+            try {
+                if (outcome.notification() == Notification.GRANTED) {
+                    listener.onConsumeGranted(cc.subscriptionId, cc.subscriberId);
+                } else {
+                    listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId);
+                }
+            } catch (RuntimeException e) {
+                log.warn("Listener {} failed on {} due to {} - {} (subscriberId={}, subscriptionId={})",
+                        listener, outcome.notification(), e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId, e);
+            }
+        }
     }
 
     private Outcome refreshOne(MongoCollection<BsonDocument> collection, CompetingConsumer cc) {
@@ -425,8 +488,9 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * A consumer's status, with its fencing token for the acquired case. The token stays exactly as it was
      * while this status remains {@code LOCK_ACQUIRED}, since a refresh (see {@code refreshOne}) commits
      * without touching the map entry, and a lost commit replaces the whole status with {@code LOCK_NOT_ACQUIRED}
-     * rather than updating the token in place. That staleness is deliberate. The stale token is what a fence
-     * built on {@link #fencingToken(String)} refuses.
+     * rather than updating the token in place. The token itself outlives the status in
+     * {@link #lastHeldFencingTokens}, and that stale token is what a fence built on {@link #fencingToken(String)}
+     * refuses once the next holder has written.
      */
     private record Status(Kind kind, OptionalLong fencingToken) {
         private static final Status LOCK_NOT_ACQUIRED = new Status(Kind.LOCK_NOT_ACQUIRED, OptionalLong.empty());

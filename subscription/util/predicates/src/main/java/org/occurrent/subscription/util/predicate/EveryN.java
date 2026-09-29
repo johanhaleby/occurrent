@@ -23,6 +23,9 @@ import java.util.function.Predicate;
 
 /**
  * A stateful predicate that matches every N event. I.e. if {@code n} is set to 10 then this predicate will return {@code true} for every 10th event.
+ * <p>
+ * One instance keeps one count. A subscription model configured with one instance for all of its subscriptions calls
+ * {@link #forOneSubscription(Predicate)} for each subscription it starts, so every subscription counts its own events.
  */
 public class EveryN implements Predicate<CloudEvent> {
     private final int n;
@@ -48,6 +51,19 @@ public class EveryN implements Predicate<CloudEvent> {
      */
     public static EveryN every(int n) {
         return new EveryN(n);
+    }
+
+    /**
+     * The predicate to use for one subscription, when {@code configured} is shared by every subscription of a model.
+     * An {@link EveryN} gives a new instance with the same {@code n} and a count of its own, since a shared count would
+     * let one subscription use up the matches of another. Any other predicate, a subclass of {@link EveryN} included,
+     * is returned as it is.
+     *
+     * @param configured The predicate a subscription model was configured with.
+     * @return A predicate that counts this subscription's events only, or {@code configured} if it is not an {@link EveryN}.
+     */
+    public static Predicate<CloudEvent> forOneSubscription(Predicate<CloudEvent> configured) {
+        return configured.getClass() == EveryN.class ? new EveryN(((EveryN) configured).n) : configured;
     }
 
     @Override

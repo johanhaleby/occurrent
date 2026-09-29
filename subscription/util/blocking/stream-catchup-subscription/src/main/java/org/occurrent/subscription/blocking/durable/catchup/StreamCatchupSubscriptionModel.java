@@ -35,6 +35,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
 import org.occurrent.subscription.internal.BoundedIdCache;
+import org.occurrent.subscription.util.predicate.EveryN;
 
 import java.time.OffsetDateTime;
 import java.util.*;
@@ -580,7 +581,8 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                     // default write condition is any(). Identity only, not shouldKeepReplaying: a stop or shutdown
                     // this same event's action triggered must not suppress persisting the position it just reached.
                     .filter(e -> isSafeToPersistFor(subscriptionId))
-                    .filter(returnIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
+                    // One per catch-up, so an EveryN configured for the whole model counts this subscription's events only
+                    .filter(returnIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).map(EveryN::forOneSubscription).orElse(__ -> false))
                     .forEach(e -> doIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, cfg -> cfg.storage().save(subscriptionId, positionToPersist.apply(e), writeConditionFor(cfg, subscriptionId))));
         }
     }

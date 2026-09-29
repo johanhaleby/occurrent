@@ -38,6 +38,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
@@ -79,7 +80,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * module.
  */
 @NullMarked
-public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions {
+public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -101,6 +102,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
     private final MongoCollection<Document> eventCollection;
     private final ConcurrentMap<String, InternalSubscription> runningSubscriptions;
+    private final List<HistoryLossListener> historyLossListeners = new CopyOnWriteArrayList<>();
     private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions;
     private final TimeRepresentation timeRepresentation;
     private final ExecutorService cloudEventDispatcher;
@@ -288,7 +290,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             } else if (isChangeStreamHistoryLost(e)) {
                 if (restartSubscriptionsOnChangeStreamHistoryLost) {
                     log.warn("There was not enough oplog to resume subscription {}, will restart subscription from current time.", subscriptionId, e);
-                    currentStartAt.set(StartAt.now());
+                    currentStartAt.set(restartPositionAfterHistoryLost(subscriptionId));
                     throw e;
                 } else {
                     log.error("There was not enough oplog to resume subscription {}, will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.", subscriptionId, e);
@@ -311,6 +313,23 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
                 }
             }
         }
+    }
+
+    // Tells the listeners the present before restarting from it. A listener that throws fails this attempt and
+    // the retry runs it again. Without an operation time from the server, restarts from now and tells nobody
+    private StartAt restartPositionAfterHistoryLost(String subscriptionId) {
+        Checkpoint present = globalCheckpoint();
+        if (present == null) {
+            return StartAt.now();
+        }
+        historyLossListeners.forEach(listener -> listener.restartingAfterHistoryLoss(subscriptionId, present));
+        return StartAt.checkpoint(present);
+    }
+
+    @Override
+    public void addHistoryLossListener(HistoryLossListener listener) {
+        requireNonNull(listener, HistoryLossListener.class.getSimpleName() + " cannot be null");
+        historyLossListeners.add(listener);
     }
 
     private static boolean isCursorNoLongerOpen(Throwable throwable) {

@@ -40,8 +40,9 @@ import static com.mongodb.client.model.Updates.set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * ADR 116's rule is that {@code fencingToken} answers with a token only when exactly one consumer is registered
- * for a subscription in this instance, whatever its status, and that one consumer holds the lock. {@code Status}
+ * {@code fencingToken} is empty while more than one consumer is registered for a subscription in this instance. With
+ * exactly one, it is the token of the lock that consumer holds, or else the token of the last lock this instance held
+ * for that subscription, and empty only if it never held one. {@code Status}
  * is private, so every assertion here goes through {@code fencingToken} itself, the same call a fence built on
  * top of it would make.
  */
@@ -97,21 +98,67 @@ class MongoLeaseFencingTokenTest {
     }
 
     @Test
-    void a_lock_released_consumer_has_no_fencing_token_even_though_it_stays_registered() {
+    void a_released_consumer_keeps_the_token_of_the_lease_it_gave_up() {
         String subscription = "a-subscription";
         Node node = new Node("the-node");
 
         assertThat(node.register(subscription)).isTrue();
-        assertThat(node.fencingToken(subscription))
+        OptionalLong held = node.fencingToken(subscription);
+        assertThat(held)
                 .as("the only consumer registered for this subscription holds the lock")
                 .isPresent();
 
         node.release(subscription);
 
         assertThat(node.fencingToken(subscription))
-                .as("a released consumer stays registered, but LOCK_RELEASED counts as not holding the lock, "
-                        + "since its token belongs to the lease it just gave up")
-                .isEmpty();
+                .as("a handler still running after the release writes with the token of the lease it gave up, "
+                        + "which the next holder's higher token refuses")
+                .isEqualTo(held);
+    }
+
+    @Test
+    void an_unregistered_consumer_keeps_the_token_of_the_lease_it_gave_up() {
+        String subscription = "a-subscription";
+        Node node = new Node("the-node");
+        assertThat(node.register(subscription)).isTrue();
+        OptionalLong held = node.fencingToken(subscription);
+
+        node.unregister(subscription);
+
+        assertThat(node.fencingToken(subscription))
+                .as("a handler still running after the unregister writes with the token of the lease it gave up")
+                .isEqualTo(held);
+    }
+
+    @Test
+    void a_consumer_whose_refresh_finds_the_lease_taken_keeps_the_token_it_held() {
+        String subscription = "a-subscription";
+        Node node = new Node("the-node");
+        Node rival = new Node("the-rival");
+        assertThat(node.register(subscription)).isTrue();
+        OptionalLong held = node.fencingToken(subscription);
+        expireLeaseFor(subscription);
+        assertThat(rival.register(subscription)).isTrue();
+
+        node.refresh();
+
+        assertThat(node.hasLock(subscription)).isFalse();
+        assertThat(node.fencingToken(subscription))
+                .as("the node found out it lost the lease, and a handler still running writes with the token it held")
+                .isEqualTo(held);
+    }
+
+    @Test
+    void a_subscription_this_node_never_held_a_lease_for_has_no_fencing_token() {
+        String subscription = "a-subscription";
+        Node node = new Node("the-node");
+        Node rival = new Node("the-rival");
+        assertThat(rival.register(subscription)).isTrue();
+
+        assertThat(node.register(subscription)).isFalse();
+
+        assertThat(node.fencingToken(subscription)).isEmpty();
+        assertThat(node.fencingToken("never-registered")).isEmpty();
     }
 
     @Test
@@ -199,6 +246,14 @@ class MongoLeaseFencingTokenTest {
 
         private void release(String subscriptionId) {
             support.releaseCompetingConsumer(locks, subscriptionId, subscriberId);
+        }
+
+        private void unregister(String subscriptionId) {
+            support.unregisterCompetingConsumer(locks, subscriptionId, subscriberId);
+        }
+
+        private boolean hasLock(String subscriptionId) {
+            return support.hasLock(subscriptionId, subscriberId);
         }
 
         private OptionalLong fencingToken(String subscriptionId) {

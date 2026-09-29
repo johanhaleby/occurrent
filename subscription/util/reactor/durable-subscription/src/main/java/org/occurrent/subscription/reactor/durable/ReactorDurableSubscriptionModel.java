@@ -47,6 +47,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -267,8 +268,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     // The caller's action with the checkpoint save behind it, which is the whole of what this model adds to a delivery.
     private Function<CloudEvent, Mono<Void>> persistingAction(String subscriptionId, Function<CloudEvent, Mono<Void>> action) {
+        // One per subscription, so an EveryN configured for the whole model counts this subscription's events only
+        Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
         return cloudEvent -> action.apply(cloudEvent)
-                .then(Mono.defer(() -> config.persistCloudEventPositionPredicate.test(cloudEvent)
+                .then(Mono.defer(() -> persistCheckpoint.test(cloudEvent)
                         ? storage.save(subscriptionId, getCheckpointOrThrowIAE(cloudEvent)).then()
                         : Mono.empty()));
     }
