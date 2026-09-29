@@ -244,7 +244,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
     // currentStartAt tracks the last change-stream document read (updated below, even without a delivered
     // CloudEvent), shared with startSubscription's executeWithRetry wrapper so a restart or resume continues
-    // gap-free from there instead of the original StartAt.
+    // gap-free from there instead of the original StartAt. Before the first one it holds the operation time the
+    // stream opened at, when MongoDB's reply had one, so an original StartAt of the present is not resolved again.
     // The try block spans opening the cursor too: a change-stream error (history lost, failover) can surface
     // there just as well as while iterating.
     private void newInternalSubscription(String subscriptionId, List<Bson> pipeline, SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
@@ -258,7 +259,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
                 changeStreamDocuments = changeStreamDocuments.maxAwaitTime(maxAwaitTime.toMillis(), MILLISECONDS);
             }
             SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(NativeMongoSubscriptionModel.class);
-            ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, currentStartAt.get().get(subscriptionModelContext), subscriptionModelContext);
+            StartAt openingPosition = MongoCommons.resolveOpeningPosition(currentStartAt, subscriptionModelContext, this::currentOperationTime);
+            ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, openingPosition, subscriptionModelContext);
             MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAtPosition.cursor();
 
             internalSubscription = new InternalSubscription(cursor, currentStartAt, action, filter, pipeline, subscriptionStartedLatch);
@@ -316,12 +318,13 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     }
 
     // Tells the listeners the present before restarting from it. A listener that throws fails this attempt and
-    // the retry runs it again. Without an operation time from the server, restarts from now and tells nobody
+    // the retry runs it again. Without an operation time in the reply to ping, restarts from now and tells nobody
     private StartAt restartPositionAfterHistoryLost(String subscriptionId) {
-        Checkpoint present = globalCheckpoint();
-        if (present == null) {
+        BsonTimestamp operationTime = currentOperationTime();
+        if (operationTime == null) {
             return StartAt.now();
         }
+        Checkpoint present = new MongoOperationTimeCheckpoint(operationTime);
         historyLossListeners.forEach(listener -> listener.restartingAfterHistoryLoss(subscriptionId, present));
         return StartAt.checkpoint(present);
     }
@@ -330,6 +333,15 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     public void addHistoryLossListener(HistoryLossListener listener) {
         requireNonNull(listener, HistoryLossListener.class.getSimpleName() + " cannot be null");
         historyLossListeners.add(listener);
+    }
+
+    private @Nullable BsonTimestamp currentOperationTime() {
+        Document reply = database.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND);
+        BsonTimestamp operationTime = MongoCommons.operationTimeAfter(reply);
+        if (operationTime == null) {
+            log.warn(MongoCommons.noOperationTimeToPinToMessage(reply));
+        }
+        return operationTime;
     }
 
     private static boolean isCursorNoLongerOpen(Throwable throwable) {
@@ -481,8 +493,12 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * Delivery is <i>at least once</i> across a pause: an event whose handler had not finished when the subscription
      * was paused, and every event another consumer of the same subscription id handled in the meantime, is handed to
      * this handler again on resume. That is deliberate, since wasted work is the cheaper mistake, and it means
-     * handlers must be idempotent. A subscription that had not received anything yet has no position to resume from
-     * and starts at the present instead.
+     * handlers must be idempotent. This model asks MongoDB for its operation time right before the change stream of a
+     * subscription started at the present opens, and records it as that subscription's position. One paused before it
+     * handled any event resumes from that time, so the events written since are delivered too, as long as the oplog
+     * still holds that time. When it no longer does, the resume gets the handling that
+     * {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has no operation time, nothing is
+     * recorded and the resume opens at the present.
      * <p>
      * That is what this call does on its own. A {@code DurableSubscriptionModel} wrapping this model calls
      * {@link #resumeSubscription(String, StartAt)} with a stored checkpoint instead whenever one exists, so a

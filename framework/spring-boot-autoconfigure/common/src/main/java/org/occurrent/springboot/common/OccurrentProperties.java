@@ -352,7 +352,9 @@ public class OccurrentProperties {
 
         /**
          * If there’s not enough history available in the MongoDB oplog to resume a subscription created from a SpringMongoSubscriptionModel, you can configure it to restart the subscription from the current time automatically.
-         * This is only of concern when an application is restarted, and the subscriptions are configured to start from a position in the oplog that is no longer available. It’s enabled by default even though it might not be 100% safe
+         * This matters whenever a subscription opens its change stream from a position the oplog no longer holds. That happens when an application is restarted with subscriptions configured to start from such a position,
+         * and when a subscription is resumed, or its change stream is restarted, after it has been paused or disconnected for longer than the oplog keeps history.
+         * It’s enabled by default even though it might not be 100% safe
          * (meaning that you can miss some events when the subscription is restarted). It’s not 100% safe if you run subscriptions in a different process than the event store, and you have lots of writes happening to the event store.
          * It’s safe if you run the subscription in the same process as the writes to the event store if you make sure that the subscription is started before you accept writes to the event store on startup.
          *
