@@ -127,6 +127,27 @@ class DomainEventFeedBackgroundCatchupFailureTest {
                 });
     }
 
+    // The context closes while the retry waits. close() waits for the background catch-up to end, and the retry reads
+    // the closing flag after its wait, so it gives up rather than replaying into a closing store.
+    @Test
+    void a_background_domain_feed_catch_up_that_waits_to_retry_after_an_interrupt_is_not_retried_once_the_context_closes() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(FailingDomainFeedConfiguration.class, AlwaysInterruptedReaderConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    AtomicInteger reads = context.getBean(AlwaysInterruptedReaderConfiguration.class).reads;
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (reads.get() < 1 && System.nanoTime() < deadline) {
+                        Thread.sleep(2);
+                    }
+
+                    context.close();
+
+                    assertThat(reads).hasValue(1);
+                });
+    }
+
     @Configuration(proxyBeanMethods = false)
     static class FailingReaderConfiguration {
         // Fails the replay outright, rather than parking it: this test is about where the failure ends up, not

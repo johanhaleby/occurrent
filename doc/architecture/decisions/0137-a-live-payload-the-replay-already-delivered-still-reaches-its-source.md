@@ -167,11 +167,11 @@ before the replay starts or finds the history caught up already, so a failure wh
 them. A replay whose every ask was refused does not run. `true` means the catch-up was asked for, not that it has run. A
 later replay can answer it, one that started after the call and has gone live by the time the catch-up's turn comes, and
 the catch-up then replays nothing. It can still be stopped, or refused because another catch-up failed, and a failure of
-its replay makes the handover fail the way any failed catch-up does, unless it failed on an interrupted thread. A
-catch-up whose failure reaches the handover while the thread is interrupted is not recorded as a failed catch-up, since
-a store client can fail its reads once the thread is interrupted, the MongoDB driver among them. Only the interrupt flag
-counts. An `InterruptedException` in the cause chain on a thread that is not interrupted can come from another thread, a
-pool task its shutdown interrupted say, and a later catch-up fails the same way, so that failure is recorded. The
+its replay makes the handover fail the way any failed catch-up does. The reactive engine makes no exception for an
+interrupt. The blocking engine does not record a failure that reaches it while the thread is interrupted, since a store
+client can fail its reads once the thread is interrupted, the MongoDB driver among them. Only the interrupt flag counts.
+An `InterruptedException` in the cause chain on a thread that is not interrupted can come from another thread, a pool
+task its shutdown interrupted say, and a later catch-up fails the same way, so that failure is recorded. The blocking
 handover abandons that replay like a stopped one, the thread stays interrupted, and the handover does not refuse later
 payloads for it. When the interrupt fails the delivery of the buffered payloads, the ones not yet delivered go back into
 the buffer and the handover is not live. Once the last running catch-up returns, the handover is stopped, which answers
@@ -180,19 +180,21 @@ fails the marker write, every payload has been delivered, so the handover stays 
 whole history. The blocking `CatchupThenPushSubscriptionModel` clears the interrupt after such a failure and replays the
 history again on the same thread, since nothing else replays it for that subscription, after waiting 100 ms, then 200
 ms, then 400 ms. A live event the stopped handover dropped from the in-memory event store's write path is read from the
-store by that replay. After 3 retries in a row that read no further into the history than an earlier one, it gives up,
-the handle `subscribe` returned throws the failure, and the catch-up is left for `resumeSubscription(..)` or
-`start(true)` like one a stop interrupted, so a handler that interrupts its own thread at the same event on every replay
-does not apply the history again in an endless loop. Spring Boot retries a `DomainEventFeed` catch-up it runs in the
-background after the same waits, 3 times at most. An interrupt keeps the thread that runs the replay from waiting. When
-that thread is interrupted where the replay would wait, it gives up the asks made on it and logs a warning. When the
-replay fails on an interrupted thread, the thread puts back every ask the replay stands for and logs a warning. The asks
-it puts back, and the asks of other threads when it gives up, stay, and their replay runs on the thread of a later call
-into the handover, such as a catch-up or a live delivery made outside the handover's own code, before that call returns.
-That call can be interrupted too, and then gives up or puts back the asks again. So a `catchUp()` on a thread where the
-view never asked can throw the failure of that replay. Asks left this way run only when a later call comes, so if none
-comes, their replay does not run. A view that waits for a `catchUp()` that replays from a thread it switched to is not
-recognized, so it still waits for a replay that cannot start while the view waits.
+store by that replay. After 3 retries in a row that read no further into the history than an earlier one, it gives up.
+The history ends at the head of the store when the first attempt started to read, so a history that keeps growing cannot
+keep the retries going. When it gives up, the handle `subscribe` returned throws the failure, and the catch-up is left
+for `resumeSubscription(..)` or `start(true)` like one a stop interrupted, so a handler that interrupts its own thread
+at the same event on every replay does not apply the history again in an endless loop. Spring Boot retries a
+`DomainEventFeed` catch-up it runs in the background after the same waits, 3 times at most. An interrupt keeps the
+thread that runs the replay from waiting. When that thread is interrupted where the replay would wait, it gives up the
+asks made on it and logs a warning. When the replay fails on an interrupted thread, the thread puts back every ask the
+replay stands for and logs a warning. The asks it puts back, and the asks of other threads when it gives up, stay, and
+their replay runs on the thread of a later call into the handover, such as a catch-up or a live delivery made outside
+the handover's own code, before that call returns. That call can be interrupted too, and then gives up or puts back the
+asks again. So a `catchUp()` on a thread where the view never asked can throw the failure of that replay. Asks left this
+way run only when a later call comes, so if none comes, their replay does not run. A view that waits for a `catchUp()`
+that replays from a thread it switched to is not recognized, so it still waits for a replay that cannot start while the
+view waits.
 
 The reactive engine delivers one live payload at a time, so it cannot deliver a payload its own code feeds it before
 that code returns. Until [#1148](https://github.com/johanhaleby/occurrent/issues/1148) a call waiting for that

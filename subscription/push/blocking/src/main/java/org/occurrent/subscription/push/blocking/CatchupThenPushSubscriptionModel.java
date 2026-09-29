@@ -72,7 +72,9 @@ import java.util.stream.Stream;
  *       reconcile pass is needed. A catch-up that fails on an interrupted thread is not a failed catch-up. This model
  *       clears the interrupt and replays the history again on the same thread, after waiting 100 ms, then 200 ms, then
  *       400 ms. After 3 such retries in a row that read no further into the history than an earlier attempt, it gives
- *       up, and the handle {@code subscribe} returned throws the failure. The catch-up is then left for
+ *       up, and the handle {@code subscribe} returned throws the failure. The history here ends at the head of the
+ *       store when the first attempt started to read, so events written since do not count as getting further. The
+ *       catch-up is then left for
  *       {@link #resumeSubscription(String)} or {@code start(true)}, like a catch-up that {@link #stop()} interrupted,
  *       and they count the retries from zero again.</li>
  *   <li><strong>Live resume</strong> is not Occurrent's job. This model persists no live position, so what becomes of
@@ -400,7 +402,12 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // the id by then. Without that, a cancel followed by a re-subscribe of the same id lets this replay keep
         // going against the new subscription's entry and then delete it, silently killing the new subscription.
         AtomicReference<Future<Boolean>> self = new AtomicReference<>();
-        // How many events the current attempt has read, so a retry after an interrupt can tell whether it got further.
+        // The head of the store when the first attempt of this launch started to read, and the highest position up to
+        // that head the current attempt has read, so a retry after an interrupt can tell whether it got further into
+        // the history it was launched to replay. Reading further into events written since does not count, since a
+        // history that keeps growing would otherwise make every attempt look like progress, and the retries would
+        // never end.
+        AtomicLong historyHead = new AtomicLong(-1);
         AtomicLong readByAttempt = new AtomicLong();
         BlockingHandover.Source<CloudEvent> source = new BlockingHandover.Source<>() {
             @Override
@@ -410,8 +417,17 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public Stream<CloudEvent> replay() {
+                if (historyHead.get() < 0) {
+                    historyHead.set(reader.currentPosition());
+                }
+                long head = historyHead.get();
                 return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
-                        .peek(event -> readByAttempt.incrementAndGet());
+                        .peek(event -> {
+                            long position = readablePosition(event);
+                            if (position <= head) {
+                                readByAttempt.accumulateAndGet(position, Math::max);
+                            }
+                        });
             }
 
             @Override
@@ -445,7 +461,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
         FutureTask<Boolean> replay = new FutureTask<>(() -> {
             boolean caughtUp;
-            // Attempts in a row that failed on an interrupt and read no further than the furthest one before them.
+            // Attempts in a row that failed on an interrupt and read no further into the history than the furthest one
+            // before them.
             int interruptedFailures = 0;
             long furthestRead = -1;
             try {
@@ -461,8 +478,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                         // The failure came on an interrupted thread, so the handover recorded none and refuses
                         // nothing. Only a replay applies the history for this id, including the live events the
                         // stopped handover drops meanwhile, so it is retried here, where the handle subscribe returned
-                        // still waits for it. An attempt that read further than every one before it starts the count
-                        // again.
+                        // still waits for it. An attempt that read further into the history than every one before it
+                        // starts the count again. The history ends at a head read once, so that happens a bounded
+                        // number of times.
                         if (readByAttempt.get() > furthestRead) {
                             furthestRead = readByAttempt.get();
                             interruptedFailures = 0;

@@ -336,8 +336,9 @@ class ProjectionAnnotationRegistrar {
                     // A domain-feed catch-up that failed on an interrupt after its retries, or when close() ended them.
                     // The feed records no failure for that, so it does not refuse events for good.
                     log.error("The background catch-up of projection {} failed on an interrupt and is not retried "
-                            + "again. Its feed does not refuse events for good, and a later catch-up of the feed "
-                            + "replays the history.", id, e);
+                            + "again. Unless it went live before the failure, it receives no live events until the "
+                            + "application is restarted or something calls catchUpAll() or catchUp(id) on its feed.",
+                            id, e);
                 } else {
                     log.error("The background catch-up of projection {} failed. It will receive no live events until "
                             + "the application is restarted.", id, e);

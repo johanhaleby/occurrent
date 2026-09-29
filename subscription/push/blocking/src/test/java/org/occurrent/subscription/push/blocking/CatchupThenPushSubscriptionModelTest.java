@@ -472,6 +472,36 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(handled).endsWith("h1", "h2", "h3", "h4", "h5");
     }
 
+    // At the newest event the handler writes one more and interrupts its own thread, so every attempt fails one event
+    // further on than the one before it. Those events were written after the first attempt started, so none of that
+    // counts as getting further into the history, and the model gives up after three retries. The handler stops
+    // after 50 events, so a model that kept retrying ends too.
+    @Test
+    void a_retry_after_an_interrupt_that_reads_further_only_into_events_written_since_the_catch_up_started_does_not_count_from_zero_again() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("h1", "Created")));
+        AtomicInteger reads = new AtomicInteger();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(
+                failsWhenInterrupted(store, reads, new AtomicInteger()), feed, null);
+        AtomicInteger written = new AtomicInteger();
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new IllegalStateException("write on an interrupted thread");
+            }
+            String newest = written.get() == 0 ? "h1" : "x" + written.get();
+            if (cloudEvent.getId().equals(newest) && written.get() < 50) {
+                store.write("x", List.of(cloudEvent("x" + written.incrementAndGet(), "Created")));
+                Thread.currentThread().interrupt();
+            }
+        });
+        Throwable thrown = catchThrowable(() -> subscription.waitUntilStarted(Duration.ofSeconds(10)));
+
+        assertThat(reads).hasValue(4);
+        assertThat(thrown).hasMessage("write on an interrupted thread");
+    }
+
     // The handler fails with an InterruptedException from another thread as the cause, while the replay thread is not
     // interrupted. That failure repeats on every replay, so it is not retried, and the handover refuses live events.
     @Test
