@@ -437,11 +437,25 @@ public class NativeMongoSubscriptionModelTest {
 
         @Test
         void a_subscription_made_while_the_model_is_stopped_delivers_nothing_until_started_and_then_each_event_once() {
-            // Given
+            // Given a stopped model over a database that counts MongoDB's replies
+            AtomicInteger answered = new AtomicInteger();
+            MongoDatabase databaseSpy = spy(database);
+            doAnswer(invocation -> {
+                Object reply = invocation.callRealMethod();
+                answered.incrementAndGet();
+                return reply;
+            }).when(databaseSpy).runCommand(any(Bson.class));
+            subscriptionModel.shutdown();
+            subscriptionExecutor = Executors.newCachedThreadPool();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseSpy, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
             subscriptionModel.stop();
             CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
             String subscriptionId = UUID.randomUUID().toString();
-            boolean startedWhileStopped = subscriptionModel.subscribe(subscriptionId, handled::add).waitUntilStarted(Duration.ofMillis(500));
+            Subscription subscription = subscriptionModel.subscribe(subscriptionId, handled::add);
+            // The subscription starts at the operation time MongoDB answers with, so an event written after the answer
+            // is one it receives
+            await().atMost(FIVE_SECONDS).until(() -> answered.get() == 1);
+            boolean startedWhileStopped = subscription.waitUntilStarted(Duration.ofMillis(500));
             NameDefined writtenWhileStopped = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
             mongoEventStore.write("1", 0, serialize(writtenWhileStopped));
             await().during(ONE_SECOND).atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).isEmpty());

@@ -229,22 +229,21 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         }
 
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
+        PresentAtSubscribe presentAtSubscribe = new PresentAtSubscribe(() -> recordThePresent(subscriptionId, currentStartAt));
+        InternalSubscription internalSubscription = new InternalSubscription(currentStartAt, action, pipeline, presentAtSubscribe);
         // Known from here on rather than once its change stream opens, so a pause or a cancel reaches it while MongoDB
-        // cannot be reached, and a wrapper asking which subscriptions this model runs gets the right answer
-        final InternalSubscription internalSubscription;
+        // cannot be reached, and a wrapper asking which subscriptions this model runs gets the right answer. On a
+        // running model the run asks for the present before it opens the change stream.
         if (running) {
-            internalSubscription = new InternalSubscription(currentStartAt, action, pipeline, InternalSubscription.NOTHING_TO_RECORD);
             runningSubscriptions.put(subscriptionId, internalSubscription);
             startSubscription(subscriptionId, internalSubscription, () -> runningSubscriptions.remove(subscriptionId, internalSubscription));
         } else {
             // Opens nothing until start() or a resume does, like a subscription that stop() paused. The present is
             // asked for on the dispatcher, so this returns without waiting for MongoDB, and the change stream waits
             // for the answer before it opens.
-            FutureTask<Void> recordingThePresent = new FutureTask<>(() -> recordThePresent(subscriptionId, currentStartAt), null);
-            internalSubscription = new InternalSubscription(currentStartAt, action, pipeline, recordingThePresent);
             pausedSubscriptions.put(subscriptionId, internalSubscription);
             try {
-                cloudEventDispatcher.execute(recordingThePresent);
+                cloudEventDispatcher.execute(presentAtSubscribe::ask);
             } catch (RuntimeException e) {
                 pausedSubscriptions.remove(subscriptionId, internalSubscription);
                 throw e;
@@ -255,9 +254,10 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         return new NativeMongoSubscription(subscriptionId, internalSubscription.firstStartedLatch);
     }
 
-    // Records the present for a subscription made while the model is stopped, so the events written before start()
-    // opens its change stream are delivered to it. A position that isn't the present is left as it is. Retried like
-    // opening a change stream, so an outage that ends before start() loses nothing.
+    // Records the present for a subscription started at the present, so the events written from then on are delivered
+    // to it whatever pause, stop, resume or start comes before its change stream opens. A position that isn't the
+    // present is left as it is. Retried like opening a change stream, and a pause doesn't end it, so an outage that
+    // ends while the subscription is paused loses nothing. A cancel or a shutdown interrupts it.
     private void recordThePresent(String subscriptionId, AtomicReference<StartAt> currentStartAt) {
         SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(NativeMongoSubscriptionModel.class);
         try {
@@ -266,10 +266,14 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             }, RETRYABLE.and(__ -> !Thread.currentThread().isInterrupted()), retryStrategy).run();
         } catch (RuntimeException e) {
             if (e instanceof MongoInterruptedException || Thread.currentThread().isInterrupted() || shutdown) {
-                log.debug("Stopped reading MongoDB's operation time for subscription {} because it was cancelled or the model shut down.", subscriptionId, e);
+                log.debug("Stopped asking MongoDB for its operation time for subscription {} because it was cancelled or the model shut down.", subscriptionId, e);
             } else {
-                log.warn("Gave up reading MongoDB's operation time for subscription {} while the model is stopped, as its retry strategy says. Its change stream opens at the present once start() or a resume starts it, so the events written before then aren't delivered to it.", subscriptionId, e);
+                log.warn("Gave up asking MongoDB for its operation time for subscription {}, as its retry strategy says. Its change stream doesn't open, as when the strategy gives up opening it, and a pause and a resume ask again.", subscriptionId, e);
             }
+            throw e;
+        } catch (Error e) {
+            log.error("Asking MongoDB for its operation time for subscription {} failed with an error, so its change stream doesn't open.", subscriptionId, e);
+            throw e;
         }
     }
 
@@ -290,6 +294,11 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     // running, so a pause and a resume start it again.
     private void runUntilStopped(String subscriptionId, InternalSubscription internalSubscription) {
         try {
+            // Even when the run is already closed, so a pause doesn't end the question. Outside the retry below, so a
+            // question the strategy gave up on is thrown like an open it gave up on rather than asked again.
+            if (!internalSubscription.presentAtSubscribe.awaitedBy(internalSubscription)) {
+                return;
+            }
             executeWithRetry(() -> newInternalSubscription(subscriptionId, internalSubscription), RETRYABLE.and(__ -> !internalSubscription.isIntentionallyClosed()), retryStrategy).run();
         } catch (RuntimeException e) {
             if (!internalSubscription.isIntentionallyClosed()) {
@@ -314,9 +323,6 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
         Consumer<CloudEvent> action = internalSubscription.action;
         MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = null;
-        if (!internalSubscription.awaitThePresentRecordedAtSubscribe() || internalSubscription.isIntentionallyClosed()) {
-            return;
-        }
         try {
             ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(internalSubscription.pipeline, Document.class);
             if (batchSize != null) {
@@ -463,7 +469,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         running = false;
         runningSubscriptions.keySet().forEach(this::cancelSubscription);
         runningSubscriptions.clear();
-        // Cancelled too, so a pending read of the present doesn't hold up the executor's shutdown below
+        // Cancelled too, so an outstanding question for the present doesn't hold up the executor's shutdown below
         pausedSubscriptions.values().forEach(InternalSubscription::cancel);
         pausedSubscriptions.clear();
         ExecutorShutdown.shutdownSafely(cloudEventDispatcher, 5, TimeUnit.SECONDS);
@@ -515,10 +521,13 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * <p>
      * A subscription made while the model is stopped is paused until this call or a resume starts it. For one given
      * {@link StartAt#now()}, or no position, {@code subscribe(..)} asks MongoDB for its operation time on the
-     * dispatcher and returns without waiting for the answer. The subscription starts at that time, and its change
-     * stream waits for the answer before it opens, so this method waits for it too. While MongoDB can't be reached,
-     * the question is retried with the model's {@code RetryStrategy}. When that strategy gives up, the change stream
-     * opens at the present once it can.
+     * dispatcher and returns without waiting for the answer. The subscription starts at that time, so its position is
+     * fixed when MongoDB answers, shortly after {@code subscribe(..)} returns, and an event written before then isn't
+     * delivered to it. To be sure an event is delivered, call this method and wait for the subscription's
+     * {@link Subscription#waitUntilStarted()} before writing it. The change stream waits for the answer before it
+     * opens, so this method waits for it too. While MongoDB can't be reached, the question is retried with the model's
+     * {@code RetryStrategy}. When that strategy gives up, the change stream doesn't open, as when the strategy gives up
+     * opening it, and this method returns.
      */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
@@ -625,15 +634,17 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * Delivery is <i>at least once</i> across a pause: an event whose handler had not finished when the subscription
      * was paused, and every event another consumer of the same subscription id handled in the meantime, is handed to
      * this handler again on resume. That is deliberate, since wasted work is the cheaper mistake, and it means
-     * handlers must be idempotent. This model asks MongoDB for its operation time right before the change stream of a
-     * subscription started at the present opens, and records it as that subscription's position. One paused before it
-     * handled any event resumes from that time, so the events written since are delivered too, as long as the oplog
-     * still holds that time. When it no longer does, the resume gets the handling that
-     * {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has no operation time, or the
-     * subscription was paused before this model asked for it, nothing is recorded and the resume opens at the present.
+     * handlers must be idempotent. For a subscription started at the present, this model asks MongoDB for its
+     * operation time on the dispatcher once {@code subscribe(..)} has registered it, and records the answer as that
+     * subscription's position before its change stream opens. A pause doesn't stop the question, so one paused before
+     * it handled any event, even before MongoDB answered, resumes from that time, and the events written since are
+     * delivered too, as long as the oplog still holds that time. When it no longer does, the resume gets the handling
+     * that {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has no operation
+     * time, nothing is recorded and the resume opens at the present.
      * <p>
-     * A subscription whose {@code RetryStrategy} gave up opening its change stream still counts as running, and
-     * pausing it and then resuming it starts it again.
+     * A subscription whose {@code RetryStrategy} gave up opening its change stream, or gave up asking MongoDB for its
+     * operation time, still counts as running, and pausing it and then resuming it starts it again. The resume asks
+     * MongoDB for its operation time again when that was what the strategy gave up on.
      * <p>
      * That is what this call does on its own. A {@code DurableSubscriptionModel} wrapping this model calls
      * {@link #resumeSubscription(String, StartAt)} with a stored checkpoint instead whenever one exists, so a
@@ -724,17 +735,74 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         }
     }
 
+    // The question to MongoDB for its operation time that fixes where a subscription started at the present opens.
+    // Asked once for every run of the subscription, on the dispatcher right after subscribe(..) on a stopped model, or
+    // by the first run that gets to it. A pause doesn't stop it, and a cancel or a shutdown interrupts it.
+    private static final class PresentAtSubscribe {
+        private final Runnable question;
+        private volatile FutureTask<Void> asking;
+
+        PresentAtSubscribe(Runnable question) {
+            this.question = question;
+            this.asking = new FutureTask<>(question, null);
+        }
+
+        void ask() {
+            asking.run();
+        }
+
+        void cancel() {
+            asking.cancel(true);
+        }
+
+        // Asks here when nobody has yet, and otherwise waits for the answer, so the change stream never opens later
+        // than the position it records. A run closed meanwhile stops waiting and frees its thread, and the question goes
+        // on without it. False when the run was closed or the question cancelled first. When the retry strategy gave up
+        // on the question, its error is thrown to the first run still open, as when the strategy gives up opening the
+        // change stream, and the next run asks again.
+        boolean awaitedBy(InternalSubscription run) {
+            FutureTask<Void> current = asking;
+            current.run();
+            while (true) {
+                try {
+                    current.get(100, MILLISECONDS);
+                    return true;
+                } catch (TimeoutException e) {
+                    if (run.isIntentionallyClosed()) {
+                        return false;
+                    }
+                } catch (CancellationException e) {
+                    return false;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                } catch (ExecutionException e) {
+                    if (run.isIntentionallyClosed()) {
+                        return false;
+                    }
+                    askAgainAfter(current);
+                    Throwable gaveUpOn = e.getCause();
+                    if (gaveUpOn instanceof RuntimeException runtimeException) {
+                        throw runtimeException;
+                    } else if (gaveUpOn instanceof Error error) {
+                        throw error;
+                    }
+                    throw new IllegalStateException(gaveUpOn);
+                }
+            }
+        }
+
+        private synchronized void askAgainAfter(FutureTask<Void> failed) {
+            if (asking == failed) {
+                asking = new FutureTask<>(question, null);
+            }
+        }
+    }
+
     // One run of a subscription, from a subscribe or a resume until a pause, a cancel or a shutdown closes it. A
     // restart after an error reuses the same run, and a resume starts a new one, so a closed run never opens a change
     // stream again.
     private static class InternalSubscription {
-        static final FutureTask<Void> NOTHING_TO_RECORD = new FutureTask<>(() -> {
-        }, null);
-
-        static {
-            NOTHING_TO_RECORD.run();
-        }
-
         // Kept so a resume reuses the pipeline built when subscribing, rather than deriving the same one again from the
         // same filter.
         private final List<Bson> pipeline;
@@ -743,10 +811,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         final CountDownLatch firstStartedLatch;
         private final CountDownLatch stoppedRestartingLatch = new CountDownLatch(1);
         final AtomicReference<StartAt> currentStartAt;
-        // Shared by every run of the subscription. Records the present for one made while the model is stopped, and
-        // runs once, on the dispatcher right after subscribe(..) or in the first run that opens a change stream,
-        // whichever gets to it first.
-        private final FutureTask<Void> recordingThePresent;
+        // Shared by every run of the subscription
+        final PresentAtSubscribe presentAtSubscribe;
         final Consumer<CloudEvent> action;
         private volatile boolean intentionallyClosed = false;
         // Read and written under this object's lock. The cursor the current attempt delivers from, and a latch released
@@ -754,42 +820,20 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         private @Nullable MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
         private CountDownLatch stoppedLatch = new CountDownLatch(0);
 
-        private InternalSubscription(AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, FutureTask<Void> recordingThePresent) {
-            this(currentStartAt, action, pipeline, recordingThePresent, new CountDownLatch(1));
+        private InternalSubscription(AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe) {
+            this(currentStartAt, action, pipeline, presentAtSubscribe, new CountDownLatch(1));
         }
 
-        private InternalSubscription(AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, FutureTask<Void> recordingThePresent, CountDownLatch firstStartedLatch) {
+        private InternalSubscription(AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe, CountDownLatch firstStartedLatch) {
             this.pipeline = pipeline;
             this.currentStartAt = currentStartAt;
-            this.recordingThePresent = recordingThePresent;
+            this.presentAtSubscribe = presentAtSubscribe;
             this.action = action;
             this.firstStartedLatch = firstStartedLatch;
         }
 
         InternalSubscription resumed() {
-            return new InternalSubscription(currentStartAt, action, pipeline, recordingThePresent, firstStartedLatch);
-        }
-
-        // Runs the read of the present here when the dispatcher hasn't started it yet, and otherwise waits for it, so
-        // the change stream never opens later than the position it records. While MongoDB can't be reached the read
-        // retries, as opening the change stream would. False when the subscription was cancelled meanwhile.
-        boolean awaitThePresentRecordedAtSubscribe() {
-            recordingThePresent.run();
-            try {
-                recordingThePresent.get();
-                return true;
-            } catch (CancellationException e) {
-                return false;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            } catch (ExecutionException e) {
-                // recordThePresent handles every RuntimeException, so only an Error gets here
-                if (e.getCause() instanceof Error error) {
-                    throw error;
-                }
-                throw new IllegalStateException(e.getCause());
-            }
+            return new InternalSubscription(currentStartAt, action, pipeline, presentAtSubscribe, firstStartedLatch);
         }
 
         // False when this was closed while the change stream opened, and the caller then closes the cursor itself
@@ -837,10 +881,11 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             }
         }
 
-        // Unlike a pause, a cancel or a shutdown also stops a pending read of the present, since nothing opens after it
+        // Unlike a pause, a cancel or a shutdown also stops an outstanding question for the present, since nothing
+        // opens after it
         void cancel() {
             close();
-            recordingThePresent.cancel(true);
+            presentAtSubscribe.cancel();
         }
 
         // Marked before closing so the change-stream error this deliberately triggers is recognized as benign
