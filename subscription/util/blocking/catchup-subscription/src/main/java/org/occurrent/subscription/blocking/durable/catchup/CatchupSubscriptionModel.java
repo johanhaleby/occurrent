@@ -276,18 +276,23 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     }
 
     // stopReplay() rather than a child's own stop(), which would reach the shared live delegate once per child. The
-    // children have to be told so a replay already in flight stops delivering.
+    // children have to be told so a replay already in flight stops delivering and is parked.
     @Override
     public void stop() {
         presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::stopReplay);
         getWrappedSubscriptionModel().stop();
     }
 
-    // resumeReplay() for the same reason stop() uses stopReplay().
+    // resumeReplay() for the same reason stop() uses stopReplay(). The parked replays run again only once the live
+    // delegate is started, so each hands over to a delegate that runs, and only when resuming automatically, as the
+    // delegate itself resumes only then.
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
         presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::resumeReplay);
         getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
+        if (resumeSubscriptionsAutomatically) {
+            presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::relaunchParkedReplays);
+        }
     }
 
     // Asks the catch-up children too, because a replay is running before the live delegate has registered the
@@ -335,8 +340,23 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 || getWrappedSubscriptionModel().isPaused(subscriptionId);
     }
 
+    /**
+     * Runs a replay a stop parked, or that was subscribed while this model was stopped, starting this model first if
+     * it is stopped, as resuming a subscription starts the live delegate. Any other subscription goes to the live
+     * delegate.
+     */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
+        AbstractCatchupSubscriptionModel parkedIn = presentCatchupModels().filter(model -> model.hasParkedReplay(subscriptionId)).findFirst().orElse(null);
+        if (parkedIn != null) {
+            if (presentCatchupModels().anyMatch(model -> model.stopped)) {
+                start(false);
+            }
+            Subscription relaunched = parkedIn.relaunchParkedReplay(subscriptionId);
+            if (relaunched != null) {
+                return relaunched;
+            }
+        }
         return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
     }
 

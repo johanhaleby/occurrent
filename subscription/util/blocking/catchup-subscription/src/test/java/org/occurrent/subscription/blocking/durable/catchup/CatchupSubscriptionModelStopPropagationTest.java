@@ -62,11 +62,126 @@ class CatchupSubscriptionModelStopPropagationTest {
 
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
         Subscription subscription = catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), received::add);
-        // The replay never ran a single iteration (stopped was already true), so this hands back a
-        // CancelledSubscription rather than a live one, and that answers false, since nothing here is going to start it.
-        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+        // The replay is parked until the model starts, so it has not started when the wait runs out
+        assertThat(subscription.waitUntilStarted(Duration.ofMillis(500))).isFalse();
 
         assertThat(received).isEmpty();
+    }
+
+    @Test
+    void a_replay_subscribed_while_stopped_is_paused_and_start_true_replays_it_and_hands_over_once() {
+        InMemoryEventStoreQueries events = new InMemoryEventStoreQueries(cloudEvent("1"), cloudEvent("2"), cloudEvent("3"));
+        PermissiveCheckpointAwareSubscriptionModel delegate = new PermissiveCheckpointAwareSubscriptionModel();
+        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(delegate, events);
+        catchupSubscriptionModel.stop();
+
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        Subscription subscription = catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), received::add);
+
+        assertThat(catchupSubscriptionModel.isPaused("someId")).isTrue();
+        assertThat(catchupSubscriptionModel.isRunning("someId")).isFalse();
+        assertThat(catchupSubscriptionModel.isRunning()).isFalse();
+
+        catchupSubscriptionModel.start(true);
+
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        assertThat(received).extracting(CloudEvent::getId).containsExactly("1", "2", "3");
+        assertThat(delegate.subscribeCalls).containsExactly("someId");
+        assertThat(catchupSubscriptionModel.isPaused("someId")).isFalse();
+    }
+
+    @Test
+    void start_false_leaves_a_replay_subscribed_while_stopped_parked_until_it_is_resumed() {
+        InMemoryEventStoreQueries events = new InMemoryEventStoreQueries(cloudEvent("1"), cloudEvent("2"));
+        PermissiveCheckpointAwareSubscriptionModel delegate = new PermissiveCheckpointAwareSubscriptionModel();
+        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(delegate, events);
+        catchupSubscriptionModel.stop();
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), received::add);
+
+        catchupSubscriptionModel.start(false);
+
+        assertThat(catchupSubscriptionModel.isPaused("someId")).isTrue();
+        assertThat(received).isEmpty();
+
+        Subscription resumed = catchupSubscriptionModel.resumeSubscription("someId");
+
+        assertThat(resumed.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        assertThat(received).extracting(CloudEvent::getId).containsExactly("1", "2");
+        assertThat(delegate.subscribeCalls).containsExactly("someId");
+    }
+
+    @Test
+    void resuming_a_replay_subscribed_while_stopped_starts_the_model_and_replays_it() {
+        InMemoryEventStoreQueries events = new InMemoryEventStoreQueries(cloudEvent("1"));
+        PermissiveCheckpointAwareSubscriptionModel delegate = new PermissiveCheckpointAwareSubscriptionModel();
+        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(delegate, events);
+        catchupSubscriptionModel.stop();
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), received::add);
+
+        Subscription resumed = catchupSubscriptionModel.resumeSubscription("someId");
+
+        assertThat(resumed.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        assertThat(received).extracting(CloudEvent::getId).containsExactly("1");
+        assertThat(delegate.startCalls).containsExactly(false);
+    }
+
+    @Test
+    void stop_during_a_replay_parks_it_so_the_model_no_longer_runs_it_and_start_true_replays_it_again() throws InterruptedException {
+        InMemoryEventStoreQueries events = new InMemoryEventStoreQueries(cloudEvent("1"), cloudEvent("2"), cloudEvent("3"));
+        PermissiveCheckpointAwareSubscriptionModel delegate = new PermissiveCheckpointAwareSubscriptionModel();
+        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(delegate, events);
+        CountDownLatch firstEventReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        Subscription subscription = catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), event -> {
+            received.add(event);
+            firstEventReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(firstEventReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        catchupSubscriptionModel.stop();
+
+        try {
+            assertThat(catchupSubscriptionModel.isRunning("someId")).isFalse();
+            assertThat(catchupSubscriptionModel.isRunning()).isFalse();
+            assertThat(catchupSubscriptionModel.isPaused("someId")).isTrue();
+            assertThat(catchupSubscriptionModel.isCatchingUp("someId")).isFalse();
+        } finally {
+            releaseReplay.countDown();
+        }
+        assertThat(subscription.waitUntilStarted(Duration.ofMillis(500))).isFalse();
+        assertThat(received).extracting(CloudEvent::getId).containsExactly("1");
+
+        catchupSubscriptionModel.start(true);
+
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        // The parked replay runs again from where it started, so event 1 is delivered twice
+        assertThat(received).extracting(CloudEvent::getId).containsExactly("1", "1", "2", "3");
+        assertThat(delegate.subscribeCalls).containsExactly("someId");
+    }
+
+    @Test
+    void cancelling_a_parked_replay_means_start_true_does_not_run_it() {
+        InMemoryEventStoreQueries events = new InMemoryEventStoreQueries(cloudEvent("1"));
+        PermissiveCheckpointAwareSubscriptionModel delegate = new PermissiveCheckpointAwareSubscriptionModel();
+        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(delegate, events);
+        catchupSubscriptionModel.stop();
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        Subscription subscription = catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), received::add);
+
+        catchupSubscriptionModel.cancelSubscription("someId");
+
+        assertThat(catchupSubscriptionModel.isPaused("someId")).isFalse();
+
+        catchupSubscriptionModel.start(true);
+
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(1))).isFalse();
+        assertThat(catchupSubscriptionModel.isPaused("someId")).isFalse();
+        assertThat(received).isEmpty();
+        assertThat(delegate.subscribeCalls).isEmpty();
     }
 
     @Test
@@ -204,6 +319,8 @@ class CatchupSubscriptionModelStopPropagationTest {
     // A permissive live delegate (unlike CatchupSubscriptionModelDualModeLifecycleTest's throwing counting fake)
     // since these tests need a real catch-up replay to run to completion and hand over to it.
     private static final class PermissiveCheckpointAwareSubscriptionModel implements CheckpointAwareSubscriptionModel {
+        private final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
+        private final List<Boolean> startCalls = new CopyOnWriteArrayList<>();
 
         @Override
         public @Nullable Checkpoint globalCheckpoint() {
@@ -212,6 +329,7 @@ class CatchupSubscriptionModelStopPropagationTest {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            subscribeCalls.add(subscriptionId);
             return new NoOpSubscription(subscriptionId);
         }
 
@@ -221,6 +339,7 @@ class CatchupSubscriptionModelStopPropagationTest {
 
         @Override
         public void start(boolean resumeSubscriptionsAutomatically) {
+            startCalls.add(resumeSubscriptionsAutomatically);
         }
 
         @Override

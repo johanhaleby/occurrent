@@ -50,8 +50,8 @@ import static java.util.Objects.requireNonNull;
  * subscriptions up behind a leader election or a health check, or in a test that chooses which subscriptions run.
  * <p>
  * The difference from stopping a model is where the withholding happens. A stopped model has already been handed every
- * subscription, so a layer that reads history rather than a live feed, such as a catch-up model, can still deliver
- * events. This model hands the wrapped one nothing at all, so no lock is taken, no history is replayed and no feed is
+ * subscription, so one that does not hold a new subscription paused while it is stopped can still deliver events.
+ * This model hands the wrapped one nothing at all, so no lock is taken, no history is replayed and no feed is
  * opened until a subscription is started.
  * <p>
  * <b>Where a subscription starts from.</b> A subscription that has run before resumes from its stored checkpoint and

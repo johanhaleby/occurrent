@@ -337,11 +337,10 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // was still current but before it finished acting on that, either losing the cancellation or, for a fresh
         // attempt, having its own checkpoint save wiped out by this attempt's late delete a few lines down.
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
-            // endReplayIfStillCurrent gates on stopped/shuttingDown as well as identity, so a stop() that lands
-            // before this point still leaves this attempt's marker in place instead of removing it (mirrors the
-            // pre-#737 behavior for that case), and it is the atomic decision itself: a later attempt can still
-            // have taken over in the narrow window right before this call, and only actually ending this attempt's
-            // ownership here may count as a normal completion rather than being superseded.
+            // endReplayIfStillCurrent checks stopped and shuttingDown as well as whether this attempt is still the
+            // current one, so a stop() before this point parks this attempt's replay instead of handing it over. A
+            // later attempt can have taken over just before this call, and only an attempt that ends its own
+            // ownership here counts as completed rather than superseded.
             final boolean subscriptionsWasCancelledOrShutdown = !endReplayIfStillCurrent(subscriptionId);
 
             // If the delegate is not allowed to subscribe, remove the temporary position written during catch-up now
@@ -394,10 +393,11 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         if (subscriptionsWasCancelledOrShutdown) {
             // Priming startAtToUse is skipped for an explicit cancellation of this exact id, since its get() call
             // saves globalCheckpoint as a side effect, which would recreate the position cancelSubscription's own
-            // deletePositionFromStorage call just deleted. A stop() or shutdown deletes nothing, so priming it for
-            // those still leaves a resumable position for the next restart, same as before this id had per-attempt
-            // identity.
-            if (!wasCancelled()) {
+            // deletePositionFromStorage call just deleted. It is skipped for a replay a stop() parked as well, since
+            // that replay runs again from where it started, and a primed position would make a restart skip the
+            // history it has not read yet. A shutdown deletes nothing, so priming it for a shutdown stores a position
+            // for the next restart to resume from.
+            if (!wasCancelled() && !wasParked()) {
                 doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
                     // Only get position if using storage and no position has been stored
                     if (!cfg.storage().exists(subscriptionId)) {

@@ -190,11 +190,10 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // losing the cancellation or having a fresh attempt's checkpoint save wiped out by this attempt's late
         // delete a few lines down.
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
-            // endReplayIfStillCurrent gates on stopped/shuttingDown as well as identity, so a stop() that lands
-            // before this point still leaves this attempt's marker in place instead of removing it, and it is the
-            // atomic decision itself: a later attempt can still have taken over in the narrow window right before
-            // this call, and only actually ending this attempt's ownership here may count as a normal completion
-            // rather than being superseded.
+            // endReplayIfStillCurrent checks stopped and shuttingDown as well as whether this attempt is still the
+            // current one, so a stop() before this point parks this attempt's replay instead of handing it over. A
+            // later attempt can have taken over just before this call, and only an attempt that ends its own
+            // ownership here counts as completed rather than superseded.
             final boolean subscriptionsWasCancelledOrShutdown = !endReplayIfStillCurrent(subscriptionId);
 
             // Gated on the atomic decision above, not just checked ahead of it: a superseded attempt reaching this
@@ -230,8 +229,9 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             if (subscriptionsWasCancelledOrShutdown) {
                 // Same fix as the blocking stream side. Priming startAtToUse is skipped for an explicit cancellation of
                 // this exact id, since its get() call saves globalCheckpoint as a side effect, which would recreate the
-                // position cancelSubscription's own deletePositionFromStorage call just deleted.
-                if (!wasCancelled()) {
+                // position cancelSubscription's own deletePositionFromStorage call just deleted. Skipped for a replay
+                // a stop() parked too, which runs again from where it started.
+                if (!wasCancelled() && !wasParked()) {
                     doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
                         if (!cfg.storage().exists(subscriptionId)) {
                             startAtToUse.get(generateSubscriptionModelContext());

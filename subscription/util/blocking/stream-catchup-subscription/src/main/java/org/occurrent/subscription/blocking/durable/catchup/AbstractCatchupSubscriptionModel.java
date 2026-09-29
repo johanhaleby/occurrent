@@ -59,6 +59,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // Set by stop(), cleared by start(...). Checked by the replay loops so stop() interrupts an in-flight
     // replay, not just the delegate the replay has not registered with yet.
     protected volatile boolean stopped = false;
+    // Replays subscribed while this model was stopped, and replays a stop() cut short. The live delegate knows none of
+    // them until start(true) or a resume runs the replay again.
+    private final ConcurrentMap<String, ParkedReplay> parkedReplays = new ConcurrentHashMap<>();
     // Identifies which attempt currently owns a subscriptionId, kept separately from runningCatchupSubscriptions
     // (which stays a plain presence marker, its shipped shape) so a cancelled attempt's replay thread, resuming
     // after a later attempt has taken the id over, can tell it is no longer current instead of clobbering the
@@ -127,14 +130,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     @Override
     public void stop() {
-        stopped = true;
+        stopReplay();
         getWrappedSubscriptionModel().stop();
     }
 
+    /**
+     * Starts the live delegate and, with {@code resumeSubscriptionsAutomatically}, runs every parked replay again, as
+     * the delegate resumes what it holds paused. Without it a parked replay waits for {@link #resumeSubscription(String)}.
+     */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        stopped = false;
+        resumeReplay();
         getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
+        if (resumeSubscriptionsAutomatically) {
+            relaunchParkedReplays();
+        }
     }
 
     @Override
@@ -178,12 +188,25 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     @Override
     public boolean isPaused(String subscriptionId) {
-        return pauseRequestedDuringCatchup.containsKey(subscriptionId) || getWrappedSubscriptionModel().isPaused(subscriptionId);
+        return pauseRequestedDuringCatchup.containsKey(subscriptionId) || parkedReplays.containsKey(subscriptionId) || getWrappedSubscriptionModel().isPaused(subscriptionId);
     }
 
+    /**
+     * Runs a parked replay again, and starts this model first if it is stopped, as resuming a subscription starts the
+     * live delegate. Any other subscription goes to the live delegate.
+     */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         pauseRequestedDuringCatchup.remove(subscriptionId);
+        if (hasParkedReplay(subscriptionId)) {
+            if (stopped) {
+                start(false);
+            }
+            Subscription relaunched = relaunchParkedReplay(subscriptionId);
+            if (relaunched != null) {
+                return relaunched;
+            }
+        }
         return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
     }
 
@@ -220,6 +243,30 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     private static final class CatchupAttempt {
         private volatile boolean cancelled = false;
+        // Set by parkIfStillCurrent, under the handover lock, once a stop() has taken this attempt's replay away from
+        // it. What it delivered so far is delivered again when the parked replay runs, so it persists nothing more,
+        // primes nothing, and does not complete the caller's handle, which the parked replay completes.
+        private volatile boolean parked = false;
+        private final AbstractCatchupSubscriptionModel owner;
+        private final Callable<Subscription> catchup;
+        private final CompletableFuture<Subscription> result;
+
+        private CatchupAttempt(AbstractCatchupSubscriptionModel owner, Callable<Subscription> catchup, CompletableFuture<Subscription> result) {
+            this.owner = owner;
+            this.catchup = catchup;
+            this.result = result;
+        }
+
+        private boolean abandoned() {
+            return cancelled || parked;
+        }
+    }
+
+    /**
+     * A replay waiting for this model to run again, with the handle its subscriber holds, so running it again
+     * completes the same handle.
+     */
+    private record ParkedReplay(Callable<Subscription> catchup, CompletableFuture<Subscription> result) {
     }
 
     /**
@@ -235,7 +282,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     protected boolean isSafeToPersistFor(String subscriptionId) {
         CatchupAttempt attempt = CURRENT_ATTEMPT.get();
-        if (attempt.cancelled) {
+        if (attempt.abandoned()) {
             return false;
         }
         CatchupAttempt owner = currentAttempt.get(subscriptionId);
@@ -250,10 +297,19 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * noticed), or simply cancelled outright with nothing yet taking its place, correctly stops instead of running
      * to completion or clobbering the later attempt's bookkeeping. Only meaningful on the virtual thread
      * {@link #startCatchupAsync} started for this attempt.
+     * <p>
+     * A replay that finds this model stopped parks itself before this returns, for the case where it registered after
+     * {@link #stopReplay()} had parked the others.
      */
     protected boolean shouldKeepReplaying(String subscriptionId) {
         CatchupAttempt attempt = CURRENT_ATTEMPT.get();
-        return !shuttingDown && !stopped && !attempt.cancelled && currentAttempt.get(subscriptionId) == attempt;
+        if (stopped && !shuttingDown) {
+            try (HandoverLock ignored = lockHandover(subscriptionId)) {
+                parkIfStillCurrent(subscriptionId, attempt);
+            }
+            return false;
+        }
+        return !shuttingDown && !attempt.abandoned() && currentAttempt.get(subscriptionId) == attempt;
     }
 
     /**
@@ -265,17 +321,75 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * normally, cancelled, or stopped, so an id does not linger in {@link #currentAttempt} for the rest of the
      * model's lifetime once this attempt is done with it. Left alone when a later attempt has already taken the id
      * over, since only that later attempt may remove its own entry.
+     * <p>
+     * A stopped model parks the attempt instead of ending it, so the replay runs again once this model is started or
+     * the subscription resumed. Called with {@code subscriptionId}'s handover lock held.
      */
     protected boolean endReplayIfStillCurrent(String subscriptionId) {
         CatchupAttempt attempt = CURRENT_ATTEMPT.get();
-        if (shuttingDown || stopped) {
+        if (shuttingDown) {
+            return false;
+        }
+        if (stopped) {
+            parkIfStillCurrent(subscriptionId, attempt);
             return false;
         }
         if (currentAttempt.remove(subscriptionId, attempt)) {
             runningCatchupSubscriptions.remove(subscriptionId);
-            return !attempt.cancelled;
+            return !attempt.abandoned();
         }
         return false;
+    }
+
+    /**
+     * Takes {@code subscriptionId}'s replay away from {@code attempt} and parks it, if {@code attempt} is still the
+     * current one. The subscription then counts as paused, not running, until the parked replay runs again. A
+     * cancelled attempt is only ended, since nothing is to run it again. Called with the handover lock held, so a
+     * finishing attempt either hands over before this or finds itself parked.
+     */
+    private void parkIfStillCurrent(String subscriptionId, CatchupAttempt attempt) {
+        if (currentAttempt.remove(subscriptionId, attempt)) {
+            runningCatchupSubscriptions.remove(subscriptionId);
+            if (!attempt.cancelled) {
+                attempt.parked = true;
+                attempt.owner.parkedReplays.put(subscriptionId, new ParkedReplay(attempt.catchup, attempt.result));
+            }
+        }
+    }
+
+    boolean hasParkedReplay(String subscriptionId) {
+        return parkedReplays.containsKey(subscriptionId);
+    }
+    /**
+     * Runs every replay this model has parked again, or parks it once more if this model is stopped by then.
+     */
+    public void relaunchParkedReplays() {
+        for (String subscriptionId : parkedReplays.keySet()) {
+            relaunchParkedReplay(subscriptionId);
+        }
+    }
+
+    /**
+     * Runs {@code subscriptionId}'s parked replay again and returns the handle its subscriber already holds, or
+     * {@code null} when this model has no parked replay for it.
+     */
+    @Nullable Subscription relaunchParkedReplay(String subscriptionId) {
+        final CatchupAttempt attempt;
+        final ParkedReplay parked;
+        // Locked, so a cancelRunningCatchup either finds the replay still parked or finds the attempt that runs it
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            parked = parkedReplays.remove(subscriptionId);
+            if (parked == null) {
+                return null;
+            }
+            // Running it again is resuming it, which undoes a pause asked for before it was parked
+            pauseRequestedDuringCatchup.remove(subscriptionId);
+            attempt = registerOrPark(subscriptionId, parked.catchup(), parked.result());
+        }
+        if (attempt != null) {
+            runOnItsOwnThread(subscriptionId, attempt);
+        }
+        return new CatchupSubscription(subscriptionId, parked.result());
     }
 
     /**
@@ -366,6 +480,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return attempt;
             });
             pauseRequestedDuringCatchup.remove(subscriptionId);
+            // A parked replay never runs again, and waitUntilStarted on its subscriber's handle returns false
+            ParkedReplay parked = parkedReplays.remove(subscriptionId);
+            if (parked != null) {
+                parked.result().cancel(false);
+            }
         } finally {
             if (lock != null) {
                 lock.close();
@@ -385,6 +504,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
+     * Whether this call's own attempt was parked by a stop, so its replay runs again from where it started. Priming a
+     * position on its way out would then make a restart skip the history the replay has not read yet. Only meaningful
+     * on the virtual thread {@link #startCatchupAsync} started for this attempt.
+     */
+    protected boolean wasParked() {
+        return CURRENT_ATTEMPT.get().parked;
+    }
+
+    /**
      * Mark this model as shutting down so any in-flight catch-up stops as soon as possible. Does not touch the shared
      * live delegate; the dispatcher owns that.
      */
@@ -394,19 +522,33 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         catchupListeners.clear();
         currentAttempt.clear();
         pauseRequestedDuringCatchup.clear();
+        parkedReplays.values().forEach(parked -> parked.result().cancel(false));
+        parkedReplays.clear();
     }
 
     /**
-     * Interrupts an in-flight or future replay on this model, without touching the shared live delegate. Lets the
-     * dispatcher stop every inner model's replay while calling the delegate's {@code stop()} exactly once.
+     * Parks the replays in flight on this model, and every replay subscribed until the next start, without touching
+     * the shared live delegate. A parked subscription is paused, not running, and runs its replay again from where it
+     * started once {@link #relaunchParkedReplays()} or {@link #resumeSubscription(String)} runs it.
      */
     public void stopReplay() {
         stopped = true;
+        if (shuttingDown) {
+            return;
+        }
+        for (var entry : currentAttempt.entrySet()) {
+            CatchupAttempt attempt = entry.getValue();
+            if (attempt.owner == this) {
+                try (HandoverLock ignored = lockHandover(entry.getKey())) {
+                    parkIfStillCurrent(entry.getKey(), attempt);
+                }
+            }
+        }
     }
 
     /**
-     * Allows the next replay on this model to run, without touching the shared live delegate. Does not restart a
-     * replay already interrupted by {@link #stopReplay()}, it only permits the next one.
+     * Allows the next replay on this model to run, without touching the shared live delegate. Does not run a replay
+     * {@link #stopReplay()} parked, which {@link #relaunchParkedReplays()} does.
      */
     public void resumeReplay() {
         stopped = false;
@@ -460,48 +602,88 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Registers a fresh attempt as the running catch-up for {@code subscriptionId} and runs {@code catchup} on its
      * own dedicated virtual thread, never reused, which is what lets {@link #shouldKeepReplaying} and
      * {@link #endReplayIfStillCurrent} read the attempt's identity from {@link #CURRENT_ATTEMPT} instead of a
-     * parameter. This is the only place that puts into {@link #runningCatchupSubscriptions}.
+     * parameter. This and {@link #relaunchParkedReplay} are the only places that put into
+     * {@link #runningCatchupSubscriptions}.
+     * <p>
+     * A stopped model parks {@code catchup} instead, without reading anything, and the returned future completes once
+     * the parked replay has run and handed over.
      */
     protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
-        CatchupAttempt attempt = new CatchupAttempt();
+        CompletableFuture<Subscription> result = new CompletableFuture<>();
+        final CatchupAttempt attempt;
         // Locked so this registration cannot land inside a still-finishing earlier attempt's own lockHandover span
         // for the same id. Unlocked, this attempt could start, and its replay could reach a checkpoint save, before
         // the earlier attempt's late checkpoint delete runs, wiping out what this attempt just wrote instead of
         // its own.
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
-            runningCatchupSubscriptions.put(subscriptionId, true);
-            currentAttempt.put(subscriptionId, attempt);
-            // Sent here, inside the same lock that takes ownership of the id and before the thread below starts, so
-            // it always precedes anything this attempt delivers.
-            CatchupListener listener = catchupListeners.get(subscriptionId);
-            if (listener != null) {
-                listener.catchupStarted(attempt);
-            }
+            attempt = registerOrPark(subscriptionId, catchup, result);
         }
+        if (attempt != null) {
+            runOnItsOwnThread(subscriptionId, attempt);
+        }
+        return result;
+    }
+
+    /**
+     * Registers a fresh attempt for {@code catchup} as the running catch-up for {@code subscriptionId}, or parks
+     * {@code catchup} and returns {@code null} while this model is stopped. Called with the handover lock held. A replay
+     * still parked for the id is dropped, and waitUntilStarted on its handle returns false.
+     */
+    private @Nullable CatchupAttempt registerOrPark(String subscriptionId, Callable<Subscription> catchup, CompletableFuture<Subscription> result) {
+        ParkedReplay superseded = parkedReplays.remove(subscriptionId);
+        if (superseded != null && superseded.result() != result) {
+            superseded.result().cancel(false);
+        }
+        if (stopped && !shuttingDown) {
+            parkedReplays.put(subscriptionId, new ParkedReplay(catchup, result));
+            return null;
+        }
+        CatchupAttempt attempt = new CatchupAttempt(this, catchup, result);
+        runningCatchupSubscriptions.put(subscriptionId, true);
+        currentAttempt.put(subscriptionId, attempt);
+        // Sent here, inside the same lock that takes ownership of the id and before the attempt's thread starts, so
+        // it always precedes anything this attempt delivers.
+        CatchupListener listener = catchupListeners.get(subscriptionId);
+        if (listener != null) {
+            listener.catchupStarted(attempt);
+        }
+        return attempt;
+    }
+
+    private void runOnItsOwnThread(String subscriptionId, CatchupAttempt attempt) {
         // catchup itself ends its attempt's ownership on normal completion (via endReplayIfStillCurrent), and
         // deliberately leaves it in place when shouldKeepReplaying already turned false so a cancellation can
         // still be told apart from a completion (see the comment on subscriptionsWasCancelledOrShutdown in the
         // mode-specific classes). Neither path throws, so catching here only ever means the replay itself failed,
         // and is the one place both modes share to stop such a failure from leaving the subscription looking like
         // it is still running or catching up forever.
-        FutureTask<Subscription> task = new FutureTask<>(() -> {
+        //
+        // A parked attempt does not complete the handle. The parked replay completes it once it runs again, and the
+        // flag is final by the time it is read, since parking takes the attempt out of currentAttempt under the
+        // handover lock and a finishing attempt takes that lock too.
+        Thread.ofVirtual().name("occurrent-catchup-" + subscriptionId).start(() -> {
             CURRENT_ATTEMPT.set(attempt);
             try {
-                return catchup.call();
+                Subscription subscription = attempt.catchup.call();
+                if (!attempt.parked) {
+                    attempt.result.complete(subscription);
+                }
             } catch (Throwable failure) {
                 // Conditional on this attempt still being the current one: an attempt already superseded by a later
                 // resubscribe for the same id must not remove the later attempt's running marker, and by the same
                 // reasoning must not clear a pause request the later attempt's caller may have just made either.
-                if (currentAttempt.remove(subscriptionId, attempt)) {
-                    runningCatchupSubscriptions.remove(subscriptionId);
-                    pauseRequestedDuringCatchup.remove(subscriptionId);
+                try (HandoverLock ignored = lockHandover(subscriptionId)) {
+                    if (currentAttempt.remove(subscriptionId, attempt)) {
+                        runningCatchupSubscriptions.remove(subscriptionId);
+                        pauseRequestedDuringCatchup.remove(subscriptionId);
+                    }
                 }
-                throw failure;
+                if (!attempt.parked) {
+                    attempt.result.completeExceptionally(failure);
+                }
             } finally {
                 CURRENT_ATTEMPT.remove();
             }
         });
-        Thread.ofVirtual().name("occurrent-catchup-" + subscriptionId).start(task);
-        return task;
     }
 }

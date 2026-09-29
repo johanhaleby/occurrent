@@ -53,6 +53,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 
 import static java.time.ZoneOffset.UTC;
@@ -66,14 +67,13 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 /**
- * Not every wrapped model waits until it is started to open a subscription. {@link NativeMongoSubscriptionModel}
- * opens its change stream anyway and reports it as paused, so a later resume opens a second one, and a catch-up model
- * starts replaying it. A competing subscription is handed only to a wrapped model that runs, and never while the user
- * has stopped this model.
+ * A subscription made while this model is stopped goes to the wrapped model straight away, which holds it paused, and
+ * it runs once this node is started and wins its lease. The {@link NativeMongoSubscriptionModel}
+ * tests need that model to hold a subscription made while it is stopped paused instead of opening its change stream.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class CompetingConsumerOverAWrappedModelThatDoesNotParkTest {
+class CompetingConsumerOverAStoppedWrappedModelTest {
     @Container
     private static final MongoDBContainer mongo = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
@@ -91,6 +91,8 @@ class CompetingConsumerOverAWrappedModelThatDoesNotParkTest {
         client = MongoClients.create(cs);
         database = requireNonNull(cs.getDatabase());
         template = new MongoTemplate(client, database);
+        // A replay from the beginning of time reads every event in the database, also those an earlier test wrote
+        template.getDb().drop();
         eventStore = new SpringMongoEventStore(template, new EventStoreConfig.Builder().eventStoreCollectionName("events")
                 .transactionConfig(new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(client, database)))
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING).build());
@@ -174,21 +176,112 @@ class CompetingConsumerOverAWrappedModelThatDoesNotParkTest {
         node.stop();
         CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
 
-        assertThatCode(() -> node.subscribe("node", "X", null, StartAtTime.beginningOfTime(), handled::add))
-                .as("subscribing while this model is stopped does not reach the catch-up model")
-                .doesNotThrowAnyException();
+        node.subscribe("node", "X", null, StartAtTime.beginningOfTime(), handled::add);
+        waitForAChangeStreamToOpen();
+        assertThat(handled).as("the catch-up model holds the replay paused while it is stopped").isEmpty();
+        assertThat(node.isPaused("X")).isTrue();
         assertThatCode(() -> node.start(true)).doesNotThrowAnyException();
         rival.unregisterCompetingConsumer("X", "rival");
 
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId)
                 .as("the history is replayed once this node wins the lease")
-                .contains(historic));
+                .containsExactly(historic));
     }
 
-    // Long enough for a change stream that a stopped wrapped model opens anyway to be open before the next event
+    @Test
+    void a_durable_subscription_made_while_this_model_is_stopped_delivers_an_event_written_before_the_start() {
+        SpringMongoSubscriptionModel spring = new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING));
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
+        node = new CompetingConsumerSubscriptionModel(new DurableSubscriptionModel(spring, storage), strategy());
+
+        assertAnEventWrittenBetweenSubscribeAndStartIsDelivered();
+    }
+
+    @Test
+    void a_catch_up_subscription_made_while_this_model_is_stopped_delivers_an_event_written_before_the_start() {
+        SpringMongoSubscriptionModel spring = new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING));
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
+        node = new CompetingConsumerSubscriptionModel(new CatchupSubscriptionModel(new DurableSubscriptionModel(spring, storage), eventStore), strategy());
+
+        assertAnEventWrittenBetweenSubscribeAndStartIsDelivered();
+    }
+
+    // The start position is recorded at subscribe, so an event written before the start is delivered after it
+    private void assertAnEventWrittenBetweenSubscribeAndStartIsDelivered() {
+        node.stop();
+        CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        node.subscribe("node", "X", null, StartAt.subscriptionModelDefault(), handled::add);
+        waitForAChangeStreamToOpen();
+        String beforeStart = writeEvent();
+
+        node.start(true);
+        await().atMost(5, SECONDS).until(() -> node.isRunning("X"));
+        String afterStart = writeEvent();
+
+        await().atMost(8, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).contains(afterStart));
+        assertThat(handled).extracting(CloudEvent::getId).as("event written after subscribe() but before start()").containsExactly(beforeStart, afterStart);
+    }
+
+    @Test
+    void a_stop_during_a_catch_up_replay_lets_a_later_start_run_the_wrapped_model_for_a_new_subscription() {
+        CatchupSubscriptionModel catchup = catchupOverSpringThatIsStoppedDuringTheReplayOfX();
+
+        assertThat(catchup.isRunning()).as("the stopped catch-up model runs nothing").isFalse();
+        assertThatCode(() -> node.start(true)).doesNotThrowAnyException();
+        CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        node.subscribe("node", "Y", null, StartAt.subscriptionModelDefault(), handled::add);
+        await().atMost(5, SECONDS).until(() -> node.isRunning("Y"));
+        waitForAChangeStreamToOpen();
+        String event = writeEvent();
+
+        await().atMost(8, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId)
+                .as("Y, whose lease this node holds, delivers")
+                .containsExactly(event));
+    }
+
+    @Test
+    void a_second_start_after_a_stop_during_a_catch_up_replay_leaves_a_new_subscription_delivering() {
+        catchupOverSpringThatIsStoppedDuringTheReplayOfX();
+        assertThatCode(() -> node.start(true)).doesNotThrowAnyException();
+        CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        node.subscribe("node", "Y", null, StartAt.subscriptionModelDefault(), handled::add);
+
+        assertThatCode(() -> node.start(true)).doesNotThrowAnyException();
+        await().atMost(5, SECONDS).until(() -> node.isRunning("Y"));
+        waitForAChangeStreamToOpen();
+        String event = writeEvent();
+
+        await().atMost(8, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId)
+                .as("Y delivers after a second start(true)")
+                .containsExactly(event));
+    }
+
+    // X replays one historic event through a handler slow enough that the stop comes while the replay still runs
+    private CatchupSubscriptionModel catchupOverSpringThatIsStoppedDuringTheReplayOfX() {
+        writeEvent();
+        SpringMongoSubscriptionModel spring = new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING));
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
+        CatchupSubscriptionModel catchup = new CatchupSubscriptionModel(new DurableSubscriptionModel(spring, storage), eventStore);
+        node = new CompetingConsumerSubscriptionModel(catchup, strategy());
+        CountDownLatch replaying = new CountDownLatch(1);
+        node.subscribe("node", "X", null, StartAtTime.beginningOfTime(), __ -> {
+            replaying.countDown();
+            sleep(Duration.ofSeconds(2));
+        });
+        await().atMost(5, SECONDS).until(() -> replaying.getCount() == 0);
+        node.stop();
+        return catchup;
+    }
+
+    // Long enough for a change stream the wrapped model opens, when it should or when it should not, to be open before
+    // the next event
     private static void waitForAChangeStreamToOpen() {
+        sleep(Duration.ofMillis(1500));
+    }
+
+    private static void sleep(Duration duration) {
         try {
-            Thread.sleep(1500);
+            Thread.sleep(duration.toMillis());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);

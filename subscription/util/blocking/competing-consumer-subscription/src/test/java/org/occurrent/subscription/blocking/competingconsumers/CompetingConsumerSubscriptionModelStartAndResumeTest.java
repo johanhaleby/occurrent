@@ -357,6 +357,62 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         assertThat(model.isRunning("x")).isFalse();
     }
 
+    @Test
+    void a_subscription_made_while_the_model_is_stopped_is_held_paused_by_the_wrapped_model_from_the_subscribe() {
+        strategy.grantOnRegister = true;
+        model.stop();
+
+        subscribe("x");
+
+        assertThat(delegate.isPaused("x")).as("the wrapped model has x, and records where it starts, from the subscribe").isTrue();
+        assertThat(model.isRunning("x")).isFalse();
+        model.start(true);
+        assertThat(delegate.running).as("winning the lease resumes x once").containsExactly("x");
+    }
+
+    @Test
+    void a_start_without_resuming_makes_a_subscription_made_while_the_model_was_stopped_compete_for_its_lease() {
+        strategy.grantOnRegister = true;
+        model.stop();
+        subscribe("x");
+
+        model.start(false);
+
+        assertThat(delegate.running).as("x was never paused, so it competes for its lease and runs once it wins it").containsExactly("x");
+        assertThat(strategy.holders).containsExactly("x");
+    }
+
+    @Test
+    void a_start_without_resuming_makes_a_subscription_waiting_for_its_lease_at_the_stop_compete_again() {
+        strategy.grantOnRegister = false;
+        subscribe("x");
+        model.stop();
+
+        model.start(false);
+        strategy.grant("x");
+
+        assertThat(delegate.running).as("x was waiting, not paused, so it competes again and runs once it wins its lease").containsExactly("x");
+    }
+
+    @Test
+    void a_consumer_recorded_as_running_that_the_wrapped_model_fails_to_resume_is_resumed_by_a_later_grant() {
+        strategy.grantOnRegister = true;
+        // Nothing pauses x when it gives its lease back, so only what this model records for it decides the later grant
+        strategy.tellsTheListenersAboutARelease = false;
+        subscribe("x");
+        // The wrapped model has lost x, as it does for a catch-up replay that failed, while x is recorded as running here
+        delegate.cancelSubscription("x");
+        delegate.throwsOn.add("x");
+        assertThat(catchThrowable(() -> model.resumeSubscription("x"))).isInstanceOf(IllegalStateException.class);
+        assertThat(strategy.calls).as("x gives its lease back and stays registered").endsWith("release x");
+        delegate.throwsOn.clear();
+
+        strategy.grant("x");
+
+        assertThat(delegate.running).as("the later grant tries x again").containsExactly("x");
+        assertThat(strategy.holders).containsExactly("x");
+    }
+
     private void subscribe(String subscriptionId) {
         model.subscribe(SUBSCRIBER_ID, subscriptionId, null, StartAt.subscriptionModelDefault(), __ -> {
         });
@@ -370,10 +426,9 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
     /**
      * Keeps track of which subscriptions deliver and which are paused, and throws when starting any subscription in
-     * {@link #throwsOn}. Like {@code NativeMongoSubscriptionModel}, and unlike {@code SpringMongoSubscriptionModel}, it
-     * does not wait until it is started to deliver a subscription. It delivers it while reporting it as paused, so a
-     * resume delivers it a second time, which {@link #running} then lists twice. Like both MongoDB models, it starts
-     * itself to resume a subscription.
+     * {@link #throwsOn}. Like {@code SpringMongoSubscriptionModel}, it holds a subscription made while it is stopped
+     * paused, and starts itself to resume a subscription. A subscription delivered twice is listed twice in
+     * {@link #running}.
      */
     private static final class RecordingDelegate implements SubscriptionModel {
         private final Set<String> throwsOn = new HashSet<>();
@@ -386,8 +441,9 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             throwIfRefused(subscriptionId);
-            running.add(subscriptionId);
-            if (!started) {
+            if (started) {
+                running.add(subscriptionId);
+            } else {
                 paused.add(subscriptionId);
             }
             return new FakeSubscription(subscriptionId);
@@ -467,7 +523,8 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
      * Grants the lease on register when {@link #grantOnRegister} is set, and tells the listeners on the registering
      * thread, as a lease strategy does for a lease that changed hands. {@link #grant(String)} plays a refresh round
      * granting a lease that another node gave up, which, as with the MongoDB lease strategies, only a registered
-     * consumer can win. Releasing a lease keeps the consumer registered, unregistering does not.
+     * consumer can win. Releasing a lease keeps the consumer registered, unregistering does not. Both tell the listeners
+     * when the consumer held the lease, a release only while {@link #tellsTheListenersAboutARelease} is set.
      */
     private static final class SynchronousLeaseStrategy implements CompetingConsumerStrategy {
         private final List<String> calls = new ArrayList<>();
@@ -477,6 +534,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         private final List<CompetingConsumerListener> listeners = new ArrayList<>();
         private boolean grantOnRegister;
         private boolean registerThrows;
+        private boolean tellsTheListenersAboutARelease = true;
 
         /**
          * A grant the strategy decided before the lease moved on, which reaches the listeners once this node no longer
@@ -522,7 +580,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         @Override
         public void releaseCompetingConsumer(String subscriptionId, String subscriberId) {
             calls.add("release " + subscriptionId);
-            if (holders.remove(subscriptionId)) {
+            if (holders.remove(subscriptionId) && tellsTheListenersAboutARelease) {
                 listeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
             }
         }
