@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Fourteen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
+Sixteen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -51,10 +51,14 @@ Then feeding a push model's `accept(..)` is supported only from the in-memory ev
 Then a projection feed's `goLive()` called while a catch-up of the same projection is replaying now waits for
 that replay to end, where 0.33.0 did not wait, and fails when a catch-up of that projection failed meanwhile. Read
 [section 14](#14-a-projection-feeds-golive-waits-for-a-running-catch-up).
-Finally, a reactor subscription handler, or the code that applies an event to a reactor projection feed, that feeds an
+Then a reactor subscription handler, or the code that applies an event to a reactor projection feed, that feeds an
 event back into its own subscription or feed no longer waits forever. The call is answered once the event is queued,
 and when applying that event fails, the subscription or feed fails for good. Read
 [section 15](#15-feeding-a-reactor-catch-up-from-its-own-handler-no-longer-waits-forever).
+Finally, on `NativeMongoSubscriptionModel`, a subscription made while the model is stopped now starts when `start()`
+opens its change stream. A call that waits for it to start hangs when it runs before `start()` on the thread that calls
+`start()`. Read
+[section 16](#16-a-native-mongodb-subscription-made-while-the-model-is-stopped-starts-with-start).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1199,3 +1203,41 @@ What to do:
 
 There is no recipe for this change. Whether a call runs inside a handler of the subscription it feeds is runtime
 behavior that a rewrite of the source cannot see.
+
+## 16. A native MongoDB subscription made while the model is stopped starts with `start()`
+
+This covers `NativeMongoSubscriptionModel`. In 0.33.0 `subscribe(..)` opened a change stream even when the model was
+stopped. That change stream delivered events while `isPaused(..)` returned `true`, and `start()` opened a second one
+next to it, so every event written after `start()` arrived twice.
+
+Now a subscription made while the model is stopped opens no change stream until `start()` or `resumeSubscription(..)`
+starts it. That changes when a wait for it returns.
+
+### A wait for the subscription to start waits for `start()`
+
+`waitUntilStarted()` on the `Subscription` that `subscribe(..)` returns now returns once `start()` or
+`resumeSubscription(..)` has opened its change stream. In 0.33.0 it returned once the change stream that `subscribe(..)`
+opened was open. `SpringMongoSubscriptionModel` already waited this way in 0.33.0.
+
+So any call that waits for the subscription to start hangs when it runs between `stop()` and `start()` on the thread
+that later calls `start()`. That thread waits until it is interrupted. Many DSL and runner calls wait by default, for
+example the Kotlin subscription DSL's `subscribe(..)`, `ProjectionRunner.project(..)` and `SagaRunner.run(..)`.
+
+What to do:
+
+- Call `start()` before anything waits for the subscription to start, or subscribe from another thread.
+- Where a call takes a `waitUntilStarted` flag, passing `false` makes it return without waiting. Call
+  `waitUntilStarted()` on the `Subscription` it returns once `start()` has returned.
+- `waitUntilStarted(Duration)` returns `false` once the timeout has passed, so a wait with a timeout ends on its own.
+
+With `StartAt.now()`, without a `StartAt`, or with a dynamic `StartAt` answering the present, the subscription starts
+at MongoDB's operation time, which `subscribe(..)` asks for on the model's executor without waiting for the answer. So
+where it starts is fixed when MongoDB answers, shortly after `subscribe(..)` returns, and an event written before then
+isn't delivered to it. To be sure an event is delivered, call `start()` and wait for `waitUntilStarted()` on the
+subscription before writing it. `start()` waits for the answer when it opens the change stream at it. While MongoDB
+can't be reached, the question is retried with the model's `RetryStrategy`, as opening the change stream is. When the
+strategy gives up, the give-up can keep the change stream from opening, and pausing and resuming the subscription after
+that starts it again.
+
+There is no recipe for this change. Whether the model is stopped when `subscribe(..)` runs is runtime behavior that a
+rewrite of the source cannot see.

@@ -43,6 +43,7 @@ public record NativeMongoSubscription(String subscriptionId, CountDownLatch subs
         try {
             return subscriptionStartedLatch.await(safeTimeout.timeout(), safeTimeout.timeUnit());
         } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             throw new RuntimeException(e);
         }
     }

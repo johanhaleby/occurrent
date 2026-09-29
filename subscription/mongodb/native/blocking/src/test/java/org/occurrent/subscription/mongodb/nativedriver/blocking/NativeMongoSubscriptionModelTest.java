@@ -45,6 +45,7 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -67,6 +68,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static com.mongodb.client.model.Filters.and;
@@ -418,19 +421,231 @@ public class NativeMongoSubscriptionModelTest {
                 CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
 
                 // When
-                Throwable thrown = catchThrowable(() -> model.subscribe(UUID.randomUUID().toString(), StartAt.now(), handled::add));
+                AtomicReference<Subscription> subscription = new AtomicReference<>();
+                Throwable thrown = catchThrowable(() -> subscription.set(model.subscribe(UUID.randomUUID().toString(), StartAt.now(), handled::add)));
                 await().atMost(5, SECONDS).until(() -> refusedOperationTimeRequests.get() > 0);
                 unreachable.set(false);
 
                 // Then
                 assertThat(thrown).isNull();
-                await().atMost(10, SECONDS).until(() -> model.subscriptionIds().size() == 1);
+                assertThat(subscription.get().waitUntilStarted(Duration.ofSeconds(10))).isTrue();
                 NameDefined writtenOnceReachable = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
                 mongoEventStore.write("1", 0, serialize(writtenOnceReachable));
                 await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).contains(writtenOnceReachable.eventId()));
             } finally {
                 model.shutdown();
             }
+        }
+
+        @Test
+        void a_subscription_made_while_the_model_is_stopped_delivers_nothing_until_started_and_then_each_event_once() {
+            // Given a stopped model over a database that counts MongoDB's replies
+            AtomicInteger answered = new AtomicInteger();
+            MongoDatabase databaseSpy = spy(database);
+            doAnswer(invocation -> {
+                Object reply = invocation.callRealMethod();
+                answered.incrementAndGet();
+                return reply;
+            }).when(databaseSpy).runCommand(any(Bson.class));
+            subscriptionModel.shutdown();
+            subscriptionExecutor = Executors.newCachedThreadPool();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseSpy, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            Subscription subscription = subscriptionModel.subscribe(subscriptionId, handled::add);
+            // The subscription starts at the operation time MongoDB answers with, so an event written after the answer
+            // is one it receives
+            await().atMost(FIVE_SECONDS).until(() -> answered.get() == 1);
+            boolean startedWhileStopped = subscription.waitUntilStarted(Duration.ofMillis(500));
+            NameDefined writtenWhileStopped = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenWhileStopped));
+            await().during(ONE_SECOND).atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).isEmpty());
+            boolean pausedWhileStopped = subscriptionModel.isPaused(subscriptionId);
+
+            // When
+            subscriptionModel.start();
+            NameDefined writtenAfterStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2");
+            mongoEventStore.write("2", 0, serialize(writtenAfterStart));
+
+            // Then
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).contains(writtenAfterStart.eventId()));
+            await().during(ONE_SECOND).atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenWhileStopped.eventId(), writtenAfterStart.eventId()));
+            assertAll(
+                    () -> assertThat(startedWhileStopped).isFalse(),
+                    () -> assertThat(pausedWhileStopped).isTrue()
+            );
+        }
+
+        @Test
+        void the_subscription_made_while_the_model_is_stopped_answers_that_it_started_once_start_opens_its_change_stream() {
+            // Given
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            Subscription subscription = subscriptionModel.subscribe(UUID.randomUUID().toString(), handled::add);
+
+            // When
+            subscriptionModel.start();
+            NameDefined writtenAfterStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenAfterStart));
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).contains(writtenAfterStart.eventId()));
+
+            // Then
+            assertThat(subscription.waitUntilStarted(Duration.ofSeconds(2))).isTrue();
+        }
+
+        @Test
+        void start_resumes_the_subscriptions_that_stop_paused_through_resumeSubscription() {
+            // Given a subclass that records what resumeSubscription(..) is called for
+            CopyOnWriteArrayList<String> resumedThroughTheOverride = new CopyOnWriteArrayList<>();
+            ExecutorService executor = Executors.newCachedThreadPool();
+            NativeMongoSubscriptionModel model = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, executor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2)) {
+                @Override
+                public Subscription resumeSubscription(String subscriptionId) {
+                    resumedThroughTheOverride.add(subscriptionId);
+                    return super.resumeSubscription(subscriptionId);
+                }
+            };
+            try {
+                String subscriptionId = UUID.randomUUID().toString();
+                model.subscribe(subscriptionId, __ -> {
+                }).waitUntilStarted(Duration.ofSeconds(5));
+                model.stop();
+
+                // When
+                model.start();
+
+                // Then
+                assertThat(resumedThroughTheOverride).containsExactly(subscriptionId);
+                assertThat(model.isRunning(subscriptionId)).isTrue();
+            } finally {
+                model.shutdown();
+            }
+        }
+
+        @Test
+        void start_waits_on_the_subscription_that_resumeSubscription_returns() {
+            // Given a subclass whose resumeSubscription(..) returns a subscription that records each wait on it
+            CopyOnWriteArrayList<String> waitedOn = new CopyOnWriteArrayList<>();
+            ExecutorService executor = Executors.newCachedThreadPool();
+            NativeMongoSubscriptionModel model = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, executor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2)) {
+                @Override
+                public Subscription resumeSubscription(String subscriptionId) {
+                    Subscription resumed = super.resumeSubscription(subscriptionId);
+                    return new Subscription() {
+                        @Override
+                        public String id() {
+                            return resumed.id();
+                        }
+
+                        @Override
+                        public boolean waitUntilStarted(Duration timeout) {
+                            waitedOn.add(resumed.id());
+                            return resumed.waitUntilStarted(timeout);
+                        }
+                    };
+                }
+            };
+            try {
+                model.stop();
+                String subscriptionId = UUID.randomUUID().toString();
+                model.subscribe(subscriptionId, __ -> {
+                });
+
+                // When
+                model.start();
+
+                // Then
+                assertThat(waitedOn).contains(subscriptionId);
+            } finally {
+                model.shutdown();
+            }
+        }
+
+        @Test
+        void start_resumes_every_other_subscription_when_a_resume_throws_and_then_throws_the_first_failure_with_the_rest_suppressed() {
+            // Given a subclass whose first two resumes throw
+            AtomicInteger resumes = new AtomicInteger();
+            ExecutorService executor = Executors.newCachedThreadPool();
+            NativeMongoSubscriptionModel model = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, executor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2)) {
+                @Override
+                public Subscription resumeSubscription(String subscriptionId) {
+                    int resume = resumes.incrementAndGet();
+                    if (resume <= 2) {
+                        throw new IllegalStateException("resume " + resume + " failed");
+                    }
+                    return super.resumeSubscription(subscriptionId);
+                }
+            };
+            try {
+                model.stop();
+                List<String> subscriptionIds = Stream.generate(() -> UUID.randomUUID().toString()).limit(4).toList();
+                subscriptionIds.forEach(subscriptionId -> model.subscribe(subscriptionId, __ -> {
+                }));
+
+                // When
+                Throwable thrown = catchThrowable(model::start);
+
+                // Then
+                assertAll(
+                        () -> assertThat(thrown).hasMessage("resume 1 failed"),
+                        () -> assertThat(thrown.getSuppressed()).extracting(Throwable::getMessage).containsExactly("resume 2 failed"),
+                        () -> assertThat(subscriptionIds).filteredOn(model::isRunning).hasSize(2),
+                        () -> assertThat(subscriptionIds).filteredOn(model::isPaused).hasSize(2)
+                );
+            } finally {
+                model.shutdown();
+            }
+        }
+
+        @Test
+        void start_leaves_out_a_subscription_that_resuming_an_earlier_one_already_resumed() {
+            // Given a subclass whose first resume also resumes every other paused subscription
+            AtomicBoolean firstResume = new AtomicBoolean(true);
+            ExecutorService executor = Executors.newCachedThreadPool();
+            NativeMongoSubscriptionModel model = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, executor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2)) {
+                @Override
+                public Subscription resumeSubscription(String subscriptionId) {
+                    if (firstResume.getAndSet(false)) {
+                        subscriptionIds().stream().filter(this::isPaused).filter(other -> !other.equals(subscriptionId)).toList().forEach(super::resumeSubscription);
+                    }
+                    return super.resumeSubscription(subscriptionId);
+                }
+            };
+            try {
+                model.stop();
+                List<String> subscriptionIds = Stream.generate(() -> UUID.randomUUID().toString()).limit(3).toList();
+                subscriptionIds.forEach(subscriptionId -> model.subscribe(subscriptionId, __ -> {
+                }));
+
+                // When
+                Throwable thrown = catchThrowable(model::start);
+
+                // Then
+                assertAll(
+                        () -> assertThat(thrown).isNull(),
+                        () -> assertThat(subscriptionIds).allMatch(model::isRunning)
+                );
+            } finally {
+                model.shutdown();
+            }
+        }
+
+        @Test
+        void an_interrupted_wait_for_a_subscription_to_start_leaves_the_thread_interrupted() {
+            // Given a subscription made while the model is stopped, so it does not start until the model does
+            subscriptionModel.stop();
+            Subscription notStarted = subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> {
+            });
+            Thread.currentThread().interrupt();
+
+            // When
+            Throwable thrown = catchThrowable(() -> notStarted.waitUntilStarted(Duration.ofSeconds(2)));
+
+            // Then: Thread.interrupted() also clears the flag, so it isn't still set when the next test runs
+            boolean stillInterrupted = Thread.interrupted();
+            assertThat(stillInterrupted).isTrue();
+            assertThat(thrown).hasCauseInstanceOf(InterruptedException.class);
         }
     }
 

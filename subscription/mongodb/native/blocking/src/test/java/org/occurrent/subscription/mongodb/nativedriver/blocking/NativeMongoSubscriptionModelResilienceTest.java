@@ -19,12 +19,15 @@ package org.occurrent.subscription.mongodb.nativedriver.blocking;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoInterruptedException;
 import com.mongodb.MongoSocketReadException;
+import com.mongodb.MongoTimeoutException;
 import com.mongodb.ServerAddress;
 import com.mongodb.client.*;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.awaitility.core.ConditionTimeoutException;
 import org.bson.*;
 import org.bson.conversions.Bson;
 import org.junit.jupiter.api.*;
@@ -35,12 +38,16 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -54,18 +61,30 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.mockito.ArgumentMatchers.*;
@@ -99,6 +118,7 @@ public class NativeMongoSubscriptionModelResilienceTest {
     private MongoDatabase database;
     private MongoCollection<Document> realEventCollection;
     private NativeMongoSubscriptionModel subscriptionModel;
+    private final List<FirstReplyHeld> heldReplies = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void createEventStore() {
@@ -115,6 +135,8 @@ public class NativeMongoSubscriptionModelResilienceTest {
 
     @AfterEach
     void shutdown() {
+        // Nothing interrupts a held reply, so the model's shutdown would otherwise wait for it
+        heldReplies.forEach(FirstReplyHeld::release);
         if (subscriptionModel != null) {
             subscriptionModel.shutdown();
         }
@@ -146,18 +168,250 @@ public class NativeMongoSubscriptionModelResilienceTest {
     private MongoCollection<Document> collectionThatFailsDuringIteration(RuntimeException exception) {
         MongoChangeStreamCursor<ChangeStreamDocument<Document>> throwingCursor = mock(MongoChangeStreamCursor.class);
         doThrow(exception).when(throwingCursor).forEachRemaining(any());
-        ChangeStreamIterable<Document> throwingIterable = mock(ChangeStreamIterable.class);
-        when(throwingIterable.cursor()).thenReturn(throwingCursor);
+        ChangeStreamIterable<Document> throwingIterable = iterableOf(throwingCursor);
         MongoCollection<Document> throwingCollection = mock(MongoCollection.class);
         when(throwingCollection.watch(anyList(), eq(Document.class))).thenReturn(throwingIterable);
         return throwingCollection;
     }
 
+    // Returns itself from the calls that set where the change stream opens, as the driver's iterable does, so the
+    // model reaches the cursor rather than failing on a null iterable first
+    @SuppressWarnings("unchecked")
+    private static ChangeStreamIterable<Document> iterableOf(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor) {
+        ChangeStreamIterable<Document> iterable = mock(ChangeStreamIterable.class, RETURNS_SELF);
+        when(iterable.cursor()).thenReturn(cursor);
+        return iterable;
+    }
+
+    /**
+     * Wraps {@code realEventCollection} so that the first change stream fails with a failover-like error as soon as
+     * it is iterated, while every later {@code watch(...)} call behaves like the real collection and is counted in
+     * {@code reopened}. {@code failed} counts down when the model closes the first one's cursor, which it does after it
+     * has decided to restart and before the backoff starts. A test that acts right after that, with a backoff much
+     * longer than the time it takes to act, acts during the backoff.
+     */
+    @SuppressWarnings("unchecked")
+    private MongoCollection<Document> collectionThatFailsDuringIterationOnce(CountDownLatch failed, AtomicInteger reopened) {
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> throwingCursor = mock(MongoChangeStreamCursor.class);
+        doThrow(failoverLikeException()).when(throwingCursor).forEachRemaining(any());
+        doAnswer(invocation -> {
+            failed.countDown();
+            return null;
+        }).when(throwingCursor).close();
+        ChangeStreamIterable<Document> throwingIterable = iterableOf(throwingCursor);
+        MongoCollection<Document> collection = mock(MongoCollection.class);
+        when(collection.watch(anyList(), eq(Document.class)))
+                .thenReturn(throwingIterable)
+                .thenAnswer(invocation -> {
+                    reopened.incrementAndGet();
+                    return realEventCollection.watch((List<? extends Bson>) invocation.getArgument(0), Document.class);
+                });
+        return collection;
+    }
+
+    /**
+     * Wraps {@code realEventCollection} so that every {@code watch(...)} call throws what {@code failure} supplies
+     * while {@code failing} is set, counting each one in {@code refused}, and behaves like the real collection
+     * otherwise.
+     */
+    @SuppressWarnings("unchecked")
+    private MongoCollection<Document> collectionThatFailsWhile(AtomicBoolean failing, AtomicInteger refused, Supplier<RuntimeException> failure) {
+        MongoCollection<Document> collection = mock(MongoCollection.class);
+        when(collection.watch(anyList(), eq(Document.class))).thenAnswer(invocation -> {
+            if (failing.get()) {
+                refused.incrementAndGet();
+                throw failure.get();
+            }
+            return realEventCollection.watch((List<? extends Bson>) invocation.getArgument(0), Document.class);
+        });
+        return collection;
+    }
+
+    /**
+     * Wraps {@code realEventCollection} so that a change stream asked to open before the operation time in
+     * {@code oldestKept} fails with lost history, the way MongoDB answers once its oplog no longer reaches back that
+     * far. Every other change stream behaves like the real collection's.
+     */
+    @SuppressWarnings("unchecked")
+    private MongoCollection<Document> collectionWhoseHistoryStartsAt(AtomicReference<BsonTimestamp> oldestKept) {
+        MongoCollection<Document> collection = mock(MongoCollection.class);
+        when(collection.watch(anyList(), eq(Document.class))).thenAnswer(invocation -> {
+            ChangeStreamIterable<Document> iterable = spy(realEventCollection.watch((List<? extends Bson>) invocation.getArgument(0), Document.class));
+            doAnswer(startAt -> {
+                BsonTimestamp operationTime = startAt.getArgument(0);
+                BsonTimestamp oldest = oldestKept.get();
+                if (oldest != null && operationTime.compareTo(oldest) < 0) {
+                    throw changeStreamHistoryLostException();
+                }
+                return startAt.callRealMethod();
+            }).when(iterable).startAtOperationTime(any(BsonTimestamp.class));
+            return iterable;
+        });
+        return collection;
+    }
+
+    /**
+     * Wraps {@code database} so that {@code runCommand(..)} fails with a {@code MongoTimeoutException}, counted in
+     * {@code refused}, while {@code unreachable} is set, and behaves like the real database otherwise, counting each
+     * reply in {@code answered}.
+     */
+    private MongoDatabase databaseThatCannotBeReachedWhile(AtomicBoolean unreachable, AtomicInteger refused, AtomicInteger answered) {
+        MongoDatabase unreachableDatabase = spy(database);
+        doAnswer(invocation -> {
+            if (unreachable.get()) {
+                refused.incrementAndGet();
+                throw new MongoTimeoutException("MongoDB cannot be reached");
+            }
+            Object reply = invocation.callRealMethod();
+            answered.incrementAndGet();
+            return reply;
+        }).when(unreachableDatabase).runCommand(any(Bson.class));
+        return unreachableDatabase;
+    }
+
+    /**
+     * Waits until {@code condition} holds or {@code timeout} passes, whichever comes first. The assertions that follow
+     * say whether the model did what was waited for.
+     */
+    private static void waitAtMostFor(Duration timeout, Callable<Boolean> condition) {
+        try {
+            await().atMost(timeout).until(condition);
+        } catch (ConditionTimeoutException ignored) {
+            // The assertions that follow fail with what the model did instead
+        }
+    }
+
+    private FirstReplyHeld firstReplyHeld() {
+        FirstReplyHeld held = new FirstReplyHeld();
+        heldReplies.add(held);
+        return held;
+    }
+
+    /**
+     * Holds back MongoDB's reply to the first {@code runCommand(..)} on the database {@link #wrap(MongoDatabase)}
+     * returns until {@link #release()}, so a test can act between MongoDB answering and the model getting the answer.
+     * An interrupt ends the wait with a {@code MongoInterruptedException}, like the driver's own waits. Every later
+     * call gets its reply straight away.
+     */
+    private static final class FirstReplyHeld {
+        private final AtomicBoolean first = new AtomicBoolean(true);
+        private final CountDownLatch answered = new CountDownLatch(1);
+        private final CountDownLatch released = new CountDownLatch(1);
+        private final AtomicInteger waiting = new AtomicInteger();
+
+        MongoDatabase wrap(MongoDatabase database) {
+            MongoDatabase held = spy(database);
+            doAnswer(invocation -> {
+                Object reply = invocation.callRealMethod();
+                if (first.getAndSet(false)) {
+                    waiting.incrementAndGet();
+                    answered.countDown();
+                    try {
+                        released.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new MongoInterruptedException("Interrupted while the reply was held back", e);
+                    } finally {
+                        waiting.decrementAndGet();
+                    }
+                }
+                return reply;
+            }).when(held).runCommand(any(Bson.class));
+            return held;
+        }
+
+        void awaitAnswered() {
+            await().atMost(FIVE_SECONDS).until(() -> answered.getCount() == 0);
+        }
+
+        void release() {
+            released.countDown();
+        }
+
+        int waiting() {
+            return waiting.get();
+        }
+    }
+
     private static MongoCommandException changeStreamHistoryLostException() {
+        return new MongoCommandException(changeStreamHistoryLostResponse(), new ServerAddress());
+    }
+
+    private static BsonDocument changeStreamHistoryLostResponse() {
         List<BsonElement> elements = new ArrayList<>();
         elements.add(new BsonElement("code", new BsonInt32(286)));
         elements.add(new BsonElement("codeName", new BsonString("ChangeStreamHistoryLost")));
-        return new MongoCommandException(new BsonDocument(elements), new ServerAddress());
+        return new BsonDocument(elements);
+    }
+
+    /**
+     * Wraps a cursor whose change stream fails with lost history as soon as it is iterated. The model reads the
+     * error code only after it has checked that the subscription wasn't closed, so {@code checkingErrorCode} counts
+     * down once the model has decided the failure is its own, and the error code isn't returned until the model
+     * closes the cursor.
+     */
+    @SuppressWarnings("unchecked")
+    private MongoCollection<Document> collectionThatLosesHistoryUntilItsCursorIsClosed(CountDownLatch checkingErrorCode) {
+        CountDownLatch closed = new CountDownLatch(1);
+        MongoCommandException historyLost = new MongoCommandException(changeStreamHistoryLostResponse(), new ServerAddress()) {
+            @Override
+            public int getErrorCode() {
+                checkingErrorCode.countDown();
+                try {
+                    closed.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.getErrorCode();
+            }
+        };
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = mock(MongoChangeStreamCursor.class);
+        doThrow(historyLost).when(cursor).forEachRemaining(any());
+        doAnswer(invocation -> {
+            closed.countDown();
+            return null;
+        }).when(cursor).close();
+        ChangeStreamIterable<Document> iterable = iterableOf(cursor);
+        MongoCollection<Document> collection = mock(MongoCollection.class);
+        when(collection.watch(anyList(), eq(Document.class))).thenReturn(iterable);
+        return collection;
+    }
+
+    /**
+     * Wraps {@code realEventCollection} so that the first change stream hands {@code batch} to the model one document
+     * at a time and ignores being closed, as the driver's own cursor does for the documents it has already fetched.
+     * Every later {@code watch(...)} call behaves like the real collection.
+     */
+    @SuppressWarnings("unchecked")
+    private MongoCollection<Document> collectionThatHasFetched(List<ChangeStreamDocument<Document>> batch) {
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = mock(MongoChangeStreamCursor.class);
+        doAnswer(invocation -> {
+            java.util.function.Consumer<ChangeStreamDocument<Document>> consumer = invocation.getArgument(0);
+            batch.forEach(consumer);
+            return null;
+        }).when(cursor).forEachRemaining(any());
+        ChangeStreamIterable<Document> iterable = iterableOf(cursor);
+        MongoCollection<Document> collection = mock(MongoCollection.class);
+        when(collection.watch(anyList(), eq(Document.class)))
+                .thenReturn(iterable)
+                .thenAnswer(invocation -> realEventCollection.watch((List<? extends Bson>) invocation.getArgument(0), Document.class));
+        return collection;
+    }
+
+    // Real change-stream documents for events written to the real collection, with real resume tokens
+    private List<ChangeStreamDocument<Document>> changeStreamDocumentsFor(List<CloudEvent> events) {
+        try (MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = realEventCollection.watch(Document.class).cursor()) {
+            mongoEventStore.write("fetched", 0, events);
+            List<ChangeStreamDocument<Document>> documents = new ArrayList<>();
+            await().atMost(FIVE_SECONDS).until(() -> {
+                ChangeStreamDocument<Document> document = cursor.tryNext();
+                if (document != null) {
+                    documents.add(document);
+                }
+                return documents.size() == events.size();
+            });
+            return documents;
+        }
     }
 
     /**
@@ -171,6 +425,29 @@ public class NativeMongoSubscriptionModelResilienceTest {
     @Nested
     @DisplayName("ChangeStreamHistoryLost")
     class ChangeStreamHistoryLostTest {
+
+        @Test
+        void a_subscription_made_while_the_model_is_stopped_whose_history_is_lost_before_start_gets_the_history_lost_handling() {
+            // Given a subscription made while the model is stopped
+            AtomicReference<BsonTimestamp> oldestKept = new AtomicReference<>();
+            FirstReplyHeld operationTimeAtSubscribe = firstReplyHeld();
+            operationTimeAtSubscribe.release();
+            subscriptionModel = new NativeMongoSubscriptionModel(operationTimeAtSubscribe.wrap(database), collectionWhoseHistoryStartsAt(oldestKept), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(exponentialBackoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS), 2)));
+            subscriptionModel.stop();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
+            operationTimeAtSubscribe.awaitAnswered();
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+
+            // When the oplog no longer holds anything written before start()
+            oldestKept.set(requireNonNull(MongoCommons.operationTimeAfter(database.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND))));
+            subscriptionModel.start();
+
+            // Then
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId));
+        }
 
         @Test
         void restarts_subscription_from_now_when_configured_to_do_so() {
@@ -231,6 +508,131 @@ public class NativeMongoSubscriptionModelResilienceTest {
             assertThat(started).isFalse();
             await().atMost(Duration.ofSeconds(1)).during(Duration.ofMillis(500)).untilAsserted(() -> assertThat(state).isEmpty());
             assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
+        }
+
+        @Test
+        void a_pause_does_not_wait_for_a_subscription_whose_history_was_lost_just_before_it() throws InterruptedException {
+            // Given a subscription the model is about to forget because its history was lost
+            CountDownLatch checkingErrorCode = new CountDownLatch(1);
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatLosesHistoryUntilItsCursorIsClosed(checkingErrorCode), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
+            assertThat(checkingErrorCode.await(10, SECONDS)).isTrue();
+
+            // When
+            long pauseStarted = System.nanoTime();
+            subscriptionModel.pauseSubscription(subscriptionId);
+            Duration pausing = Duration.ofNanos(System.nanoTime() - pauseStarted);
+
+            // Then
+            assertThat(pausing).isLessThan(Duration.ofMillis(500));
+            assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue();
+        }
+
+        @Test
+        void start_returns_when_a_subscription_it_resumes_loses_its_history_before_start_waits_for_it() {
+            // Given a dispatcher that runs a subscription on the thread that starts it, so the model has forgotten the
+            // subscription whose history was lost by the time the resume inside start() returns
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsOnce(changeStreamHistoryLostException()), TimeRepresentation.RFC_3339_STRING, new CallerRunsExecutorService(),
+                    NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            subscriptionModel.stop();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
+
+            // When
+            Throwable thrown = catchThrowable(subscriptionModel::start);
+
+            // Then
+            assertThat(thrown).isNull();
+            assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId);
+        }
+    }
+
+    // Runs each task on the calling thread
+    private static class CallerRunsExecutorService extends AbstractExecutorService {
+        private volatile boolean shutdown;
+
+        @Override
+        public void execute(Runnable command) {
+            command.run();
+        }
+
+        @Override
+        public void shutdown() {
+            shutdown = true;
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            shutdown = true;
+            return List.of();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return shutdown;
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return shutdown;
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) {
+            return shutdown;
+        }
+    }
+
+    @Nested
+    @DisplayName("Pause while delivering")
+    class PauseWhileDeliveringTest {
+
+        @Test
+        void events_the_change_stream_fetched_before_a_pause_are_delivered_after_the_resume_rather_than_the_pause() throws InterruptedException {
+            // Given three events fetched in one batch, and a handler still busy with the first one when the pause comes
+            List<CloudEvent> events = new ArrayList<>();
+            for (String eventId : List.of("e1", "e2", "e3")) {
+                events.addAll(serialize(new NameDefined(eventId, LocalDateTime.now(), "name", eventId)));
+            }
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatHasFetched(changeStreamDocumentsFor(events)), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            CountDownLatch handlingFirst = new CountDownLatch(1);
+            CountDownLatch finishFirst = new CountDownLatch(1);
+            AtomicBoolean pauseReturned = new AtomicBoolean();
+            AtomicBoolean resumed = new AtomicBoolean();
+            CopyOnWriteArrayList<String> deliveredAfterPause = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<String> deliveredAfterResume = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, cloudEvent -> {
+                if (resumed.get()) {
+                    deliveredAfterResume.add(cloudEvent.getId());
+                } else if (pauseReturned.get()) {
+                    deliveredAfterPause.add(cloudEvent.getId());
+                } else if (handlingFirst.getCount() == 1) {
+                    handlingFirst.countDown();
+                    try {
+                        finishFirst.await(10, SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            });
+            assertThat(handlingFirst.await(10, SECONDS)).isTrue();
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+            pauseReturned.set(true);
+            finishFirst.countDown();
+
+            // Then
+            await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(deliveredAfterPause).isEmpty());
+            resumed.set(true);
+            subscriptionModel.resumeSubscription(subscriptionId);
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(deliveredAfterResume).containsExactly("e2", "e3"));
         }
     }
 
@@ -317,6 +719,37 @@ public class NativeMongoSubscriptionModelResilienceTest {
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(4));
             assertThat(state).extracting(CloudEvent::getType)
                     .containsExactly(NameDefined.class.getName(), NameWasChanged.class.getName(), NameWasChanged.class.getName(), NameWasChanged.class.getName());
+        }
+
+        @Test
+        void a_resume_at_a_given_position_keeps_that_position_when_mongodb_answers_the_request_for_its_operation_time_afterwards() {
+            // Given a subscription resumed at a given position while its request for MongoDB's operation time has been
+            // answered, but not yet returned
+            FirstReplyHeld operationTimeAtSubscribe = firstReplyHeld();
+            subscriptionModel = new NativeMongoSubscriptionModel(operationTimeAtSubscribe.wrap(database), realEventCollection, TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, handled::add);
+            operationTimeAtSubscribe.awaitAnswered();
+            NameDefined writtenBeforeResumeAt = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBeforeResumeAt));
+            BsonTimestamp resumeAt = MongoCommons.operationTimeAfter(database.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND));
+            subscriptionModel.pauseSubscription(subscriptionId);
+            assertThat(subscriptionModel.resumeSubscription(subscriptionId, StartAt.checkpoint(new MongoOperationTimeCheckpoint(resumeAt))).waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+            // When the answer returns, and the subscription is then paused and resumed without a position
+            operationTimeAtSubscribe.release();
+            await().atMost(FIVE_SECONDS).until(() -> operationTimeAtSubscribe.waiting() == 0);
+            await().pollDelay(Duration.ofMillis(500)).atMost(FIVE_SECONDS).until(() -> true);
+            subscriptionModel.pauseSubscription(subscriptionId);
+            boolean resumed = subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(5));
+            NameDefined writtenAfterResume = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2");
+            mongoEventStore.write("2", 0, serialize(writtenAfterResume));
+
+            // Then
+            assertThat(resumed).isTrue();
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenAfterResume.eventId()));
         }
     }
 
@@ -457,6 +890,615 @@ public class NativeMongoSubscriptionModelResilienceTest {
             // Then: the healthy subscription keeps delivering, and the refused one still hasn't retried.
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(healthyState).hasSize(2));
             assertThat(refusedInvocations.get()).isEqualTo(1);
+        }
+    }
+
+    @Nested
+    @DisplayName("Pause, cancel and start while a change stream cannot open")
+    class WhileAChangeStreamCannotOpenTest {
+
+        private final CopyOnWriteArrayList<Throwable> uncaught = new CopyOnWriteArrayList<>();
+
+        private ExecutorService dispatcherRecordingUncaughtExceptions() {
+            return Executors.newCachedThreadPool(this::threadRecordingUncaughtExceptions);
+        }
+
+        private Thread threadRecordingUncaughtExceptions(Runnable runnable) {
+            Thread thread = new Thread(runnable);
+            thread.setUncaughtExceptionHandler((t, throwable) -> uncaught.add(throwable));
+            return thread;
+        }
+
+        @Test
+        void a_subscription_paused_while_waiting_to_restart_stays_paused() throws InterruptedException {
+            // Given a one second backoff to pause in
+            CountDownLatch failed = new CountDownLatch(1);
+            AtomicInteger reopened = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsDuringIterationOnce(failed, reopened), TimeRepresentation.RFC_3339_STRING, dispatcherRecordingUncaughtExceptions(),
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofSeconds(1))));
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, state::add);
+            assertThat(failed.await(10, SECONDS)).isTrue();
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+
+            // Then
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+            await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
+                assertThat(reopened).hasValue(0);
+                assertThat(state).isEmpty();
+            });
+            assertThat(uncaught).describedAs("errors thrown on the dispatcher thread").isEmpty();
+            assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue();
+            assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
+        }
+
+        @Test
+        void a_subscription_cancelled_while_waiting_to_restart_stays_cancelled() throws InterruptedException {
+            // Given a one second backoff to cancel in
+            CountDownLatch failed = new CountDownLatch(1);
+            AtomicInteger reopened = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsDuringIterationOnce(failed, reopened), TimeRepresentation.RFC_3339_STRING, dispatcherRecordingUncaughtExceptions(),
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofSeconds(1))));
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, state::add);
+            assertThat(failed.await(10, SECONDS)).isTrue();
+
+            // When
+            subscriptionModel.cancelSubscription(subscriptionId);
+
+            // Then
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+            await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
+                assertThat(reopened).hasValue(0);
+                assertThat(state).isEmpty();
+            });
+            assertThat(uncaught).describedAs("errors thrown on the dispatcher thread").isEmpty();
+            assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId);
+        }
+
+        @Test
+        void a_subscription_made_while_the_model_is_stopped_receives_the_events_written_once_mongodb_can_be_reached_again_before_start() {
+            // Given
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            AtomicInteger answered = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseThatCannotBeReachedWhile(unreachable, refused, answered), realEventCollection, TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), handled::add);
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() > 0);
+
+            // When MongoDB can be reached again, and an event is written, before start()
+            unreachable.set(false);
+            waitAtMostFor(FIVE_SECONDS, () -> answered.get() > 0);
+            NameDefined writtenBeforeStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBeforeStart));
+            subscriptionModel.start();
+
+            // Then
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenBeforeStart.eventId()));
+        }
+
+        @Test
+        void a_subscription_stopped_before_mongodb_answered_the_request_for_its_operation_time_receives_the_events_written_once_mongodb_can_be_reached_again_before_start() {
+            // Given a subscription made on a running model while MongoDB can't be reached, and then stopped
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            AtomicInteger answered = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseThatCannotBeReachedWhile(unreachable, refused, answered), realEventCollection, TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), handled::add);
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() > 0);
+            subscriptionModel.stop();
+
+            // When MongoDB can be reached again, and an event is written, before start()
+            unreachable.set(false);
+            waitAtMostFor(FIVE_SECONDS, () -> answered.get() > 0);
+            NameDefined writtenBeforeStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBeforeStart));
+            subscriptionModel.start();
+
+            // Then
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenBeforeStart.eventId()));
+        }
+
+        @Test
+        void a_subscription_made_while_the_model_is_stopped_whose_retry_strategy_gives_up_on_mongodb_does_not_start_at_a_later_position() {
+            // Given
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseThatCannotBeReachedWhile(unreachable, refused, new AtomicInteger()), realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcherRecordingUncaughtExceptions(),
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100)).maxAttempts(2)));
+            subscriptionModel.stop();
+            String subscriptionId = UUID.randomUUID().toString();
+            Subscription subscription = subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 2);
+            unreachable.set(false);
+
+            // When
+            CompletableFuture<Void> starting = CompletableFuture.runAsync(subscriptionModel::start);
+
+            // Then
+            assertThat(starting).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(subscription.waitUntilStarted(Duration.ZERO)).isFalse();
+            assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(uncaught).singleElement().isInstanceOf(MongoTimeoutException.class));
+        }
+
+        @Test
+        void a_subscription_made_while_the_model_is_stopped_whose_retry_strategy_gave_up_on_mongodb_opens_when_resumed_at_a_given_position() {
+            // Given a subscription whose retry strategy gave up on MongoDB before anything started it
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseThatCannotBeReachedWhile(unreachable, refused, new AtomicInteger()), realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcherRecordingUncaughtExceptions(),
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100)).maxAttempts(2)));
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, handled::add);
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 2);
+            unreachable.set(false);
+            BsonTimestamp resumeAt = MongoCommons.getServerOperationTime(database.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND));
+            NameDefined writtenAfterResumeAt = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenAfterResumeAt));
+
+            // When
+            boolean resumed = subscriptionModel.resumeSubscription(subscriptionId, StartAt.checkpoint(new MongoOperationTimeCheckpoint(resumeAt))).waitUntilStarted(Duration.ofSeconds(5));
+
+            // Then
+            assertThat(resumed).isTrue();
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenAfterResumeAt.eventId()));
+            assertThat(uncaught).describedAs("errors thrown on the dispatcher thread").isEmpty();
+        }
+
+        @Test
+        void a_subscription_made_while_the_model_is_stopped_whose_retry_strategy_gave_up_on_mongodb_asks_again_when_resumed_at_the_present_after_opening_at_a_given_position() {
+            // Given a subscription whose retry strategy gave up on MongoDB before anything started it, resumed at a given
+            // position and then paused
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseThatCannotBeReachedWhile(unreachable, refused, new AtomicInteger()), realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcherRecordingUncaughtExceptions(),
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100)).maxAttempts(2)));
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, handled::add);
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 2);
+            unreachable.set(false);
+            BsonTimestamp resumeAt = MongoCommons.getServerOperationTime(database.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND));
+            assertThat(subscriptionModel.resumeSubscription(subscriptionId, StartAt.checkpoint(new MongoOperationTimeCheckpoint(resumeAt))).waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+            subscriptionModel.pauseSubscription(subscriptionId);
+
+            // When
+            boolean resumed = subscriptionModel.resumeSubscription(subscriptionId, StartAt.now()).waitUntilStarted(Duration.ofSeconds(5));
+            NameDefined writtenAfterResume = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenAfterResume));
+
+            // Then
+            assertThat(resumed).isTrue();
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenAfterResume.eventId()));
+            assertThat(uncaught).describedAs("errors thrown on the dispatcher thread").isEmpty();
+        }
+
+        @Test
+        void a_subscription_whose_retry_strategy_gave_up_on_mongodb_asks_again_when_paused_and_resumed() {
+            // Given a subscription that start() didn't open because its retry strategy gave up on MongoDB
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseThatCannotBeReachedWhile(unreachable, refused, new AtomicInteger()), realEventCollection, TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100)).maxAttempts(2)));
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, handled::add);
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 2);
+            unreachable.set(false);
+            subscriptionModel.start();
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+            boolean resumed = subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(5));
+            NameDefined writtenAfterResume = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenAfterResume));
+
+            // Then
+            assertThat(resumed).isTrue();
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenAfterResume.eventId()));
+        }
+
+        @Test
+        void a_subscription_whose_retry_strategy_gave_up_on_mongodb_while_it_was_paused_asks_again_when_resumed() {
+            // Given a subscription paused while it asks MongoDB for its operation time, whose retry strategy then gives up
+            ThreadPoolExecutor dispatcher = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 60, SECONDS, new SynchronousQueue<>(), this::threadRecordingUncaughtExceptions);
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseThatCannotBeReachedWhile(unreachable, refused, new AtomicInteger()), realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcher,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(200)).maxAttempts(3)));
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, handled::add);
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 1);
+            subscriptionModel.pauseSubscription(subscriptionId);
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 3 && dispatcher.getActiveCount() == 0);
+            unreachable.set(false);
+
+            // When
+            boolean resumed = subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(5));
+            NameDefined writtenAfterResume = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenAfterResume));
+
+            // Then
+            assertThat(resumed).isTrue();
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenAfterResume.eventId()));
+            assertThat(uncaught).describedAs("errors thrown on the dispatcher thread").isEmpty();
+        }
+
+        @Test
+        void a_subscription_made_while_the_model_is_stopped_whose_retry_strategy_gave_up_on_mongodb_while_it_was_paused_asks_again_when_resumed() {
+            // Given a subscription that start() resumed and a pause paused while it asks MongoDB for its operation time on
+            // the dispatcher, whose retry strategy then gives up
+            ThreadPoolExecutor dispatcher = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 60, SECONDS, new SynchronousQueue<>(), this::threadRecordingUncaughtExceptions);
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseThatCannotBeReachedWhile(unreachable, refused, new AtomicInteger()), realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcher,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(200)).maxAttempts(3)));
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, handled::add);
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 1);
+            CompletableFuture<Void> starting = CompletableFuture.runAsync(subscriptionModel::start);
+            await().atMost(FIVE_SECONDS).until(() -> subscriptionModel.isRunning(subscriptionId));
+            subscriptionModel.pauseSubscription(subscriptionId);
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 3 && dispatcher.getActiveCount() == 0);
+            unreachable.set(false);
+
+            // When
+            boolean resumed = subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(5));
+            NameDefined writtenAfterResume = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenAfterResume));
+
+            // Then
+            assertThat(resumed).isTrue();
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenAfterResume.eventId()));
+            assertThat(starting).succeedsWithin(Duration.ofSeconds(5));
+            assertThat(uncaught).describedAs("errors thrown on the dispatcher thread").isEmpty();
+        }
+
+        @Test
+        void cancelling_a_subscription_leaves_another_one_on_the_same_fork_join_pool_thread_asking_mongodb_for_its_operation_time() {
+            cancellingOneSubscriptionLeavesAnotherOnTheSameThreadAsking(new ForkJoinPool(1, ForkJoinPool.defaultForkJoinWorkerThreadFactory, (thread, throwable) -> uncaught.add(throwable), false));
+        }
+
+        // A ThreadPoolExecutor clears a thread's interrupt between tasks, so this passes even when the cancel interrupts
+        @Test
+        void cancelling_a_subscription_leaves_another_one_on_the_same_thread_pool_executor_thread_asking_mongodb_for_its_operation_time() {
+            cancellingOneSubscriptionLeavesAnotherOnTheSameThreadAsking(Executors.newSingleThreadExecutor(this::threadRecordingUncaughtExceptions));
+        }
+
+        private void cancellingOneSubscriptionLeavesAnotherOnTheSameThreadAsking(ExecutorService dispatcher) {
+            // Given a second subscription waiting for the only dispatcher thread, which the first one asks MongoDB on
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseThatCannotBeReachedWhile(unreachable, refused, new AtomicInteger()), realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcher,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            subscriptionModel.subscribe("cancelled", __ -> {
+            });
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 1);
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            Subscription waiting = subscriptionModel.subscribe("waiting", handled::add);
+
+            // When the first is cancelled, and MongoDB refuses the second a few times before it can be reached
+            subscriptionModel.cancelSubscription("cancelled");
+            int refusedAtCancel = refused.get();
+            waitAtMostFor(Duration.ofSeconds(2), () -> refused.get() >= refusedAtCancel + 3);
+            unreachable.set(false);
+            boolean started = waiting.waitUntilStarted(Duration.ofSeconds(5));
+            NameDefined writtenOnceReachable = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenOnceReachable));
+
+            // Then
+            assertThat(started).isTrue();
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenOnceReachable.eventId()));
+            assertThat(uncaught).describedAs("errors thrown on the dispatcher thread").isEmpty();
+        }
+
+        @Test
+        void a_subscription_is_known_and_can_be_paused_and_cancelled_before_its_change_stream_opens() {
+            // Given
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsWhile(unreachable, refused, () -> new MongoTimeoutException("MongoDB cannot be reached")), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            CopyOnWriteArrayList<CloudEvent> pausedState = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<CloudEvent> cancelledState = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe("paused", pausedState::add);
+            subscriptionModel.subscribe("cancelled", cancelledState::add);
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 2);
+            boolean runningBeforeItOpened = subscriptionModel.isRunning("paused");
+
+            // When
+            Throwable pauseRefusal = catchThrowable(() -> subscriptionModel.pauseSubscription("paused"));
+            subscriptionModel.cancelSubscription("cancelled");
+            unreachable.set(false);
+
+            // Then
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+            await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
+                assertThat(pausedState).isEmpty();
+                assertThat(cancelledState).isEmpty();
+            });
+            assertThat(runningBeforeItOpened).isTrue();
+            assertThat(pauseRefusal).isNull();
+            assertThat(subscriptionModel.isPaused("paused")).isTrue();
+            assertThat(subscriptionModel.subscriptionIds()).containsExactly("paused");
+        }
+
+        @Test
+        void the_subscription_paused_before_its_change_stream_opened_answers_that_it_started_once_a_resume_opens_it() {
+            // Given
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsWhile(unreachable, refused, () -> new MongoTimeoutException("MongoDB cannot be reached")), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            Subscription subscription = subscriptionModel.subscribe("a", __ -> {
+            });
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 1);
+            subscriptionModel.pauseSubscription("a");
+            unreachable.set(false);
+
+            // When
+            boolean resumed = subscriptionModel.resumeSubscription("a").waitUntilStarted(Duration.ofSeconds(10));
+
+            // Then
+            assertThat(resumed).isTrue();
+            assertThat(subscription.waitUntilStarted(Duration.ofSeconds(2))).isTrue();
+        }
+
+        @Test
+        void start_does_not_hold_up_other_calls_while_a_change_stream_cannot_open() {
+            // Given
+            AtomicBoolean unreachable = new AtomicBoolean();
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsWhile(unreachable, refused, () -> new MongoTimeoutException("MongoDB cannot be reached")), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            subscriptionModel.subscribe("a", __ -> {
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.subscribe("b", __ -> {
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.stop();
+            unreachable.set(true);
+            CompletableFuture<Void> start = CompletableFuture.runAsync(() -> subscriptionModel.start());
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 2);
+
+            try {
+                // When
+                CompletableFuture<Void> cancel = CompletableFuture.runAsync(() -> subscriptionModel.cancelSubscription("b"));
+
+                // Then
+                assertThat(cancel).succeedsWithin(Duration.ofSeconds(2));
+                assertThat(CompletableFuture.supplyAsync(subscriptionModel::subscriptionIds)).succeedsWithin(Duration.ofSeconds(2)).isEqualTo(Set.of("a"));
+                assertThat(start).isNotDone();
+            } finally {
+                // Lets a start that holds the model's lock return when an assertion above fails, so shutdown() can run
+                unreachable.set(false);
+            }
+            assertThat(start).succeedsWithin(Duration.ofSeconds(10));
+        }
+
+        @Test
+        void start_returns_when_change_stream_history_is_lost_and_not_configured_to_restart() {
+            // Given
+            AtomicBoolean historyLost = new AtomicBoolean();
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsWhile(historyLost, refused, NativeMongoSubscriptionModelResilienceTest::changeStreamHistoryLostException), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(false).retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            subscriptionModel.subscribe("a", __ -> {
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.stop();
+            historyLost.set(true);
+
+            // When
+            CompletableFuture<Void> start = CompletableFuture.runAsync(() -> subscriptionModel.start());
+
+            // Then
+            assertThat(start).succeedsWithin(Duration.ofSeconds(10));
+            assertThat(subscriptionModel.subscriptionIds()).isEmpty();
+        }
+
+        @Test
+        void start_returns_when_the_retry_strategy_gives_up_and_the_subscription_stays_running() {
+            // Given
+            AtomicBoolean unreachable = new AtomicBoolean();
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(database, collectionThatFailsWhile(unreachable, refused, () -> new MongoTimeoutException("MongoDB cannot be reached")), TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100)).maxAttempts(2)));
+            subscriptionModel.subscribe("a", __ -> {
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.stop();
+            unreachable.set(true);
+
+            // When
+            CompletableFuture<Void> start = CompletableFuture.runAsync(() -> subscriptionModel.start());
+
+            // Then
+            assertThat(start).succeedsWithin(Duration.ofSeconds(10));
+            assertThat(refused).hasValue(2);
+            assertThat(subscriptionModel.isRunning("a")).isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("Subscribing while the model is stopped")
+    class SubscribeWhileStoppedTest {
+
+        private NativeMongoSubscriptionModel stoppedModelOver(MongoDatabase database) {
+            NativeMongoSubscriptionModel model = new NativeMongoSubscriptionModel(database, realEventCollection, TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            model.stop();
+            return model;
+        }
+
+        @Test
+        void subscribe_returns_without_waiting_for_mongodb_to_answer_the_request_for_its_operation_time() {
+            // Given
+            FirstReplyHeld operationTimeAtSubscribe = firstReplyHeld();
+            subscriptionModel = stoppedModelOver(operationTimeAtSubscribe.wrap(database));
+            String subscriptionId = UUID.randomUUID().toString();
+
+            // When
+            Throwable thrown = catchThrowable(() -> Assertions.assertTimeoutPreemptively(Duration.ofSeconds(1), () -> subscriptionModel.subscribe(subscriptionId, __ -> {
+            })));
+
+            // Then
+            assertThat(thrown).isNull();
+            assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue();
+        }
+
+        @Test
+        void start_opens_the_change_stream_at_the_operation_time_asked_for_at_subscribe_when_the_answer_arrives_after_start() {
+            // Given a subscription whose request for MongoDB's operation time has been answered, but not yet returned
+            FirstReplyHeld operationTimeAtSubscribe = firstReplyHeld();
+            subscriptionModel = stoppedModelOver(operationTimeAtSubscribe.wrap(database));
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), handled::add);
+            operationTimeAtSubscribe.awaitAnswered();
+            NameDefined writtenBeforeStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBeforeStart));
+
+            // When start() gets there before the answer
+            CompletableFuture<Void> starting = CompletableFuture.runAsync(subscriptionModel::start);
+            await().pollDelay(Duration.ofMillis(500)).atMost(FIVE_SECONDS).until(() -> true);
+            operationTimeAtSubscribe.release();
+
+            // Then
+            assertThat(starting).succeedsWithin(Duration.ofSeconds(5));
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenBeforeStart.eventId()));
+        }
+
+        @Test
+        void start_opens_the_change_stream_of_a_dynamic_position_answering_the_present_at_the_operation_time_asked_for_at_subscribe() {
+            // Given a subscription at a dynamic position whose request for MongoDB's operation time has been answered,
+            // but not yet returned
+            CopyOnWriteArrayList<Throwable> uncaught = new CopyOnWriteArrayList<>();
+            ExecutorService dispatcher = Executors.newCachedThreadPool(runnable -> {
+                Thread thread = new Thread(runnable);
+                thread.setUncaughtExceptionHandler((t, throwable) -> uncaught.add(throwable));
+                return thread;
+            });
+            FirstReplyHeld operationTimeAtSubscribe = firstReplyHeld();
+            subscriptionModel = new NativeMongoSubscriptionModel(operationTimeAtSubscribe.wrap(database), realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcher,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), StartAt.dynamic(StartAt::now), handled::add);
+            operationTimeAtSubscribe.awaitAnswered();
+            NameDefined writtenBeforeStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBeforeStart));
+
+            // When start() gets there before the answer
+            CompletableFuture<Void> starting = CompletableFuture.runAsync(subscriptionModel::start);
+            await().pollDelay(Duration.ofMillis(500)).atMost(FIVE_SECONDS).until(() -> true);
+            operationTimeAtSubscribe.release();
+
+            // Then
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenBeforeStart.eventId()));
+            assertThat(uncaught).describedAs("errors thrown on the dispatcher thread").isEmpty();
+            assertThat(starting).succeedsWithin(Duration.ofSeconds(5));
+        }
+
+        @Test
+        void a_subscription_paused_while_its_change_stream_waits_for_the_operation_time_resumes_at_it() {
+            // Given a subscription that start() resumed while its request for MongoDB's operation time is outstanding
+            FirstReplyHeld operationTimeAtSubscribe = firstReplyHeld();
+            subscriptionModel = stoppedModelOver(operationTimeAtSubscribe.wrap(database));
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, handled::add);
+            operationTimeAtSubscribe.awaitAnswered();
+            NameDefined writtenBeforeStart = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenBeforeStart));
+            CompletableFuture<Void> starting = CompletableFuture.runAsync(subscriptionModel::start);
+            await().atMost(FIVE_SECONDS).until(() -> subscriptionModel.isRunning(subscriptionId));
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+            operationTimeAtSubscribe.release();
+            subscriptionModel.resumeSubscription(subscriptionId);
+
+            // Then
+            assertThat(starting).succeedsWithin(Duration.ofSeconds(5));
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenBeforeStart.eventId()));
+        }
+
+        @Test
+        void a_pause_frees_the_dispatcher_thread_of_a_change_stream_waiting_for_the_operation_time() {
+            // Given a subscription that start() resumed while its request for MongoDB's operation time is outstanding
+            ThreadPoolExecutor dispatcher = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 60, SECONDS, new SynchronousQueue<>());
+            FirstReplyHeld operationTimeAtSubscribe = firstReplyHeld();
+            subscriptionModel = new NativeMongoSubscriptionModel(operationTimeAtSubscribe.wrap(database), realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcher,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            subscriptionModel.stop();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
+            operationTimeAtSubscribe.awaitAnswered();
+            CompletableFuture.runAsync(subscriptionModel::start);
+            await().atMost(FIVE_SECONDS).until(() -> subscriptionModel.isRunning(subscriptionId));
+
+            // When paused, resumed and paused again before the answer arrives
+            subscriptionModel.pauseSubscription(subscriptionId);
+            subscriptionModel.resumeSubscription(subscriptionId);
+            subscriptionModel.pauseSubscription(subscriptionId);
+
+            // Then only the thread the request is outstanding on stays busy
+            await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(dispatcher.getActiveCount()).isOne());
+        }
+
+        @Test
+        void cancelling_a_subscription_stops_its_outstanding_request_for_the_operation_time() {
+            // Given a subscription whose request MongoDB keeps refusing
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = stoppedModelOver(databaseThatCannotBeReachedWhile(unreachable, refused, new AtomicInteger()));
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 2);
+
+            // When
+            subscriptionModel.cancelSubscription(subscriptionId);
+            int refusedAtCancel = refused.get();
+            waitAtMostFor(Duration.ofSeconds(1), () -> refused.get() > refusedAtCancel + 1);
+
+            // Then no attempt starts after the one under way when it was cancelled
+            assertThat(refused.get()).isLessThanOrEqualTo(refusedAtCancel + 1);
+        }
+
+        @Test
+        void shutdown_stops_an_outstanding_request_for_the_operation_time_instead_of_waiting_for_it() {
+            // Given a subscription whose request MongoDB keeps refusing
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = stoppedModelOver(databaseThatCannotBeReachedWhile(unreachable, refused, new AtomicInteger()));
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> {
+            });
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 2);
+
+            // When
+            long before = System.nanoTime();
+            subscriptionModel.shutdown();
+            Duration shutdownTook = Duration.ofNanos(System.nanoTime() - before);
+
+            // Then
+            assertThat(shutdownTook).isLessThan(Duration.ofSeconds(2));
         }
     }
 
