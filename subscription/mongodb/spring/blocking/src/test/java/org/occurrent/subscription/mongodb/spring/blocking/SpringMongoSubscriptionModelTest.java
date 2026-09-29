@@ -16,6 +16,8 @@
 
 package org.occurrent.subscription.mongodb.spring.blocking;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.UnsynchronizedAppenderBase;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.*;
 import com.mongodb.client.*;
@@ -46,6 +48,7 @@ import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.occurrent.time.TimeConversion;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
@@ -56,12 +59,15 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CompletableFuture;
@@ -887,6 +893,109 @@ public class SpringMongoSubscriptionModelTest {
                 await().atMost(10, SECONDS).untilAsserted(() -> assertThat(state).extracting(CloudEvent::getId).contains(writtenOnceResumed.eventId()));
             } finally {
                 givesUpAfterTwoAttempts.shutdown();
+            }
+        }
+
+        @Timeout(value = 30, unit = SECONDS)
+        @Test
+        void start_returns_when_a_restart_loop_from_before_a_pause_gives_up_after_the_one_for_the_resumed_subscription() throws InterruptedException {
+            // Given
+            SpringMongoSubscriptionModel givesUpAfterOneAttempt = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig(eventCollectionName, timeRepresentation)
+                    .retryStrategy(RetryStrategy.fixed(Duration.ofMillis(10)).maxAttempts(1)));
+            HoldsTheFirstGiveUp holdsTheFirstGiveUp = new HoldsTheFirstGiveUp();
+            ch.qos.logback.classic.Logger modelLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
+            modelLogger.addAppender(holdsTheFirstGiveUp);
+            try {
+                unreachable.set(true);
+                givesUpAfterOneAttempt.subscribe("gives-up", StartAt.now(), __ -> {
+                });
+                assertThat(holdsTheFirstGiveUp.held.await(10, SECONDS)).isTrue();
+                givesUpAfterOneAttempt.pauseSubscription("gives-up");
+
+                // When
+                CompletableFuture<Void> start = CompletableFuture.runAsync(() -> givesUpAfterOneAttempt.start(true));
+                await().pollDelay(Duration.ZERO).pollInterval(Duration.ofMillis(1)).atMost(10, SECONDS)
+                        .until(() -> stoppedRestartingOf(givesUpAfterOneAttempt).containsKey("gives-up"));
+                holdsTheFirstGiveUp.release.countDown();
+
+                // Then
+                assertThat(start).succeedsWithin(Duration.ofSeconds(10));
+            } finally {
+                holdsTheFirstGiveUp.release.countDown();
+                modelLogger.detachAppender(holdsTheFirstGiveUp);
+                givesUpAfterOneAttempt.shutdown();
+            }
+        }
+
+        @Timeout(value = 60, unit = SECONDS)
+        @Test
+        void start_returns_and_the_subscription_delivers_after_pauses_and_resumes_race_restarts_that_give_up() throws InterruptedException {
+            // Given
+            SpringMongoSubscriptionModel givesUpAfterThreeAttempts = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig(eventCollectionName, timeRepresentation)
+                    .retryStrategy(RetryStrategy.fixed(Duration.ofMillis(5)).maxAttempts(3)));
+            long seed = System.nanoTime();
+            Random random = new Random(seed);
+            try {
+                unreachable.set(true);
+                CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+                givesUpAfterThreeAttempts.subscribe("racing", StartAt.now(), state::add);
+
+                // When
+                long end = System.nanoTime() + SECONDS.toNanos(5);
+                while (System.nanoTime() < end) {
+                    Thread.sleep(random.nextInt(20));
+                    givesUpAfterThreeAttempts.pauseSubscription("racing");
+                    if (random.nextBoolean()) {
+                        givesUpAfterThreeAttempts.resumeSubscription("racing");
+                    } else {
+                        givesUpAfterThreeAttempts.resumeSubscription("racing", StartAt.now());
+                    }
+                    if (random.nextInt(10) == 0) {
+                        givesUpAfterThreeAttempts.stop();
+                        assertThat(CompletableFuture.runAsync(() -> givesUpAfterThreeAttempts.start(true))).describedAs("start with seed %d", seed).succeedsWithin(Duration.ofSeconds(10));
+                    }
+                }
+                unreachable.set(false);
+                givesUpAfterThreeAttempts.stop();
+
+                // Then
+                assertThat(CompletableFuture.runAsync(() -> givesUpAfterThreeAttempts.start(true))).describedAs("start with seed %d", seed).succeedsWithin(Duration.ofSeconds(10));
+                assertThat(givesUpAfterThreeAttempts.isRunning("racing")).isTrue();
+                NameDefined writtenOnceReachable = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+                mongoEventStore.write("1", 0, serialize(writtenOnceReachable));
+                await().atMost(10, SECONDS).untilAsserted(() -> assertThat(state).describedAs("delivered with seed %d", seed).extracting(CloudEvent::getId).contains(writtenOnceReachable.eventId()));
+            } finally {
+                givesUpAfterThreeAttempts.shutdown();
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        private static Map<String, ?> stoppedRestartingOf(SpringMongoSubscriptionModel model) throws ReflectiveOperationException {
+            Field stoppedRestarting = SpringMongoSubscriptionModel.class.getDeclaredField("stoppedRestarting");
+            stoppedRestarting.setAccessible(true);
+            return (Map<String, ?>) stoppedRestarting.get(model);
+        }
+    }
+
+    // Holds the restart loop that logs giving up first, before it records that, until released
+    private static final class HoldsTheFirstGiveUp extends UnsynchronizedAppenderBase<ILoggingEvent> {
+        private final AtomicBoolean first = new AtomicBoolean(true);
+        private final CountDownLatch held = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        private HoldsTheFirstGiveUp() {
+            start();
+        }
+
+        @Override
+        protected void append(ILoggingEvent event) {
+            if (event.getFormattedMessage().startsWith("Giving up restarting subscription") && first.compareAndSet(true, false)) {
+                held.countDown();
+                try {
+                    release.await(20, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
     }
