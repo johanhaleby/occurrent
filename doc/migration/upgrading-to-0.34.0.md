@@ -57,8 +57,7 @@ and when applying that event fails, the subscription or feed fails for good. Rea
 [section 15](#15-feeding-a-reactor-catch-up-from-its-own-handler-no-longer-waits-forever).
 Finally, on `NativeMongoSubscriptionModel`, a subscription made while the model is stopped now starts when `start()`
 opens its change stream. A call that waits for it to start hangs when it runs before `start()` on the thread that calls
-`start()`, and when MongoDB can't be reached during `subscribe(..)`, a `StartAt.now()` it was given means the moment
-it starts. Read
+`start()`. Read
 [section 16](#16-a-native-mongodb-subscription-made-while-the-model-is-stopped-starts-with-start).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
@@ -1212,8 +1211,7 @@ stopped. That change stream delivered events while `isPaused(..)` returned `true
 next to it, so every event written after `start()` arrived twice.
 
 Now a subscription made while the model is stopped opens no change stream until `start()` or `resumeSubscription(..)`
-starts it. That changes when a wait for it returns, and, when MongoDB can't be reached during `subscribe(..)`, where a
-`StartAt.now()` it was given starts.
+starts it. That changes when a wait for it returns.
 
 ### A wait for the subscription to start waits for `start()`
 
@@ -1232,18 +1230,10 @@ What to do:
   `waitUntilStarted()` on the `Subscription` it returns once `start()` has returned.
 - `waitUntilStarted(Duration)` returns `false` once the timeout has passed, so a wait with a timeout ends on its own.
 
-### `StartAt.now()` when MongoDB can't be reached during `subscribe(..)`
-
-A subscription made while the model is stopped with `StartAt.now()`, or without a `StartAt`, receives the events
-written after `subscribe(..)` ran, because `subscribe(..)` reads MongoDB's operation time before it returns.
-
-When MongoDB can't be reached, reading it waits as long as the client's server selection timeout, 30 seconds by
-default, and then `subscribe(..)` logs a warning and returns. The change stream then opens at the present once
-`start()` or `resumeSubscription(..)` starts it, so the events written before then are not delivered to it. In 0.33.0
-`subscribe(..)` returned straight away, and its change stream opened at the present once MongoDB could be reached.
-
-When the subscription needs those events, call `start()` before `subscribe(..)`. The subscription then opens its
-change stream as soon as MongoDB can be reached, as in 0.33.0.
+With `StartAt.now()`, or without a `StartAt`, the subscription starts at MongoDB's operation time, which
+`subscribe(..)` asks for on the model's executor without waiting for the answer. Its change stream waits for that answer
+before it opens, so `start()` waits for it too, and while MongoDB can't be reached the question is retried with the
+model's `RetryStrategy`, as opening the change stream is.
 
 There is no recipe for this change. Whether the model is stopped when `subscribe(..)` runs is runtime behavior that a
 rewrite of the source cannot see.
