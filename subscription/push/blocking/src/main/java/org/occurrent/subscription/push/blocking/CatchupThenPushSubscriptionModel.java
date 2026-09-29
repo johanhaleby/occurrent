@@ -72,11 +72,19 @@ import java.util.stream.Stream;
  *       reconcile pass is needed. A catch-up that fails on an interrupted thread is not a failed catch-up. This model
  *       clears the interrupt and replays the history again on the same thread, after waiting 100 ms, then 200 ms, then
  *       400 ms. After 3 such retries in a row that read no further into the history than an earlier attempt, it gives
- *       up, and the handle {@code subscribe} returned throws the failure. The history here ends at the head of the
- *       store when the first attempt started to read, so events written since do not count as getting further. The
- *       catch-up is then left for
+ *       up, and the handle {@code subscribe} returned throws the failure. The catch-up is then left for
  *       {@link #resumeSubscription(String)} or {@code start(true)}, like a catch-up that {@link #stop()} interrupted,
- *       and they count the retries from zero again.</li>
+ *       and they count the retries from zero again.
+ *       <p>
+ *       The history here ends at the head of the store as the first attempt that reaches the replay reads it, so
+ *       events written since do not count as getting further. When an attempt fails before the replay, while it
+ *       checks whether the catch-up already completed or while it reads the head, the next attempt reads the head
+ *       instead.
+ *       <p>
+ *       How far an attempt got is taken from the position of the events
+ *       {@link PositionOrderedReader#readInPositionOrder} returns, so those events must have a position, as the event
+ *       store conformance tests require. An event without a position, from a reader that rebuilds each CloudEvent for
+ *       example, never counts as getting further, so with such a reader the retries stop after the third.</li>
  *   <li><strong>Live resume</strong> is not Occurrent's job. This model persists no live position, so what becomes of
  *       an event nothing handled depends on what feeds the {@link PushSubscriptionModel}.
  *       <ul>
@@ -402,11 +410,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // the id by then. Without that, a cancel followed by a re-subscribe of the same id lets this replay keep
         // going against the new subscription's entry and then delete it, silently killing the new subscription.
         AtomicReference<Future<Boolean>> self = new AtomicReference<>();
-        // The head of the store when the first attempt of this launch started to read, and the highest position up to
-        // that head the current attempt has read, so a retry after an interrupt can tell whether it got further into
-        // the history it was launched to replay. Reading further into events written since does not count, since a
-        // history that keeps growing would otherwise make every attempt look like progress, and the retries would
-        // never end.
+        // The head of the store as the first attempt of this launch that reaches the replay reads it, and the highest
+        // position up to that head the current attempt has read, so a retry after an interrupt can tell whether it got
+        // further into the history it was launched to replay. Reading further into events written since does not
+        // count, since a history that keeps growing would otherwise make every attempt look like progress, and the
+        // retries would never end.
         AtomicLong historyHead = new AtomicLong(-1);
         AtomicLong readByAttempt = new AtomicLong();
         BlockingHandover.Source<CloudEvent> source = new BlockingHandover.Source<>() {

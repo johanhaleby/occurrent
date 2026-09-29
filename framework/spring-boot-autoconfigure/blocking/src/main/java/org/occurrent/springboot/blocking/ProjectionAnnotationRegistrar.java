@@ -337,7 +337,8 @@ class ProjectionAnnotationRegistrar {
                     // The feed records no failure for that, so it does not refuse events for good.
                     log.error("The background catch-up of projection {} failed on an interrupt and is not retried "
                             + "again. Unless it went live before the failure, it receives no live events until the "
-                            + "application is restarted or something calls catchUpAll() or catchUp(id) on its feed.",
+                            + "application is restarted or something calls catchUpAll(), catchUp(id) or goLive(id) on "
+                            + "its feed.",
                             id, e);
                 } else {
                     log.error("The background catch-up of projection {} failed. It will receive no live events until "
