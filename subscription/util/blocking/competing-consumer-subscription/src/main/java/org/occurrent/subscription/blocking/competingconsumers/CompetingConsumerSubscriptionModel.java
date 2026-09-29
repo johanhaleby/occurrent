@@ -97,7 +97,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException If this subscription model instance already has a subscription with this id.
      */
-    public Subscription subscribe(String subscriberId, String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public synchronized Subscription subscribe(String subscriberId, String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(subscriberId, "SubscriberId cannot be null");
         Objects.requireNonNull(subscriptionId, "SubscriptionId cannot be null");
         if (isSubscriptionIdInUse(subscriptionId)) {
@@ -384,15 +384,24 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
         SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId);
         final CompetingConsumerSubscription competingConsumerSubscription;
-        if (competingConsumerStrategy.registerCompetingConsumer(subscriptionId, subscriberId)) {
+        if (stoppedByUser.get()) {
+            logDebug("Subscription model is stopped, recording CompetingConsumer as paused without competing for the lease (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+            // A stopped node competes for nothing, since a lease it won would lock every other node out of a
+            // subscription it does not serve. Recorded as paused by the user, as stop() records a running consumer,
+            // so start(true) or a resume makes it compete. The wrapped model parks the subscription while it is
+            // stopped, but a resume since stop() may have started it again, so the subscription is paused there if it
+            // runs.
+            Subscription subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
+            if (delegate.isRunning(subscriptionId)) {
+                delegate.pauseSubscription(subscriptionId);
+            }
+            competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
+            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Paused(true)));
+        } else if (competingConsumerStrategy.registerCompetingConsumer(subscriptionId, subscriberId)) {
             logDebug("Successfully registered CompetingConsumer subscription (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             Subscription subscription = giveTheLeaseBackIfItThrows(subscriptionIdAndSubscriberId, null, () -> delegate.subscribe(subscriptionId, filter, startAt, action));
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
-            // Winning the lock while stopped records the consumer as paused rather than running, the same way every
-            // other subscription model registers into its paused collection when it is not running. The delegate has
-            // already parked the subscription itself, so there is nothing to pause here, only state to agree with.
-            CompetingConsumerState state = stoppedByUser.get() ? new CompetingConsumerState.Paused(true) : new CompetingConsumerState.Running();
-            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, state));
+            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Running()));
         } else {
             logDebug("CompetingConsumer already registered, overriding to Waiting (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Waiting(() -> {

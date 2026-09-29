@@ -234,6 +234,47 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     }
 
     @Test
+    void a_subscription_made_while_the_model_is_stopped_takes_no_lease_until_the_model_is_started() {
+        strategy.grantOnRegister = true;
+        model.stop();
+
+        subscribe("x");
+
+        assertThat(strategy.holders).as("a stopped node holds no lease, so another node can take x").isEmpty();
+        assertThat(delegate.running).isEmpty();
+        assertThat(model.isPaused("x")).isTrue();
+        model.start(true);
+        assertThat(delegate.running).as("x competes for its lease once the model is started").containsExactly("x");
+        assertThat(strategy.holders).containsExactly("x");
+    }
+
+    @Test
+    void a_subscription_made_while_the_model_is_stopped_stays_paused_after_a_resume_of_another_started_the_wrapped_model() {
+        strategy.grantOnRegister = true;
+        subscribe("y");
+        model.stop();
+        model.resumeSubscription("y");
+
+        subscribe("x");
+
+        assertThat(delegate.running).as("x delivers nothing while the model is stopped").containsExactly("y");
+        assertThat(strategy.holders).containsExactly("y");
+    }
+
+    @Test
+    void a_subscription_made_while_the_model_is_stopped_and_another_node_holds_its_lease_starts_once_this_node_wins_it_after_a_start() {
+        strategy.grantOnRegister = false;
+        model.stop();
+        subscribe("x");
+        model.start(true);
+
+        strategy.grant("x");
+
+        assertThat(delegate.running).containsExactly("x");
+        assertThat(strategy.holders).containsExactly("x");
+    }
+
+    @Test
     void a_custom_lease_strategy_that_throws_on_one_leased_consumer_does_not_keep_another_from_resuming() {
         strategy.grantOnRegister = true;
         subscribe("a");

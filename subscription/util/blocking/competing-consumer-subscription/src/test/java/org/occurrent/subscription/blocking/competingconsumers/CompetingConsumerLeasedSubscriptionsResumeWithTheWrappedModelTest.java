@@ -62,7 +62,7 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
  * A subscription that won its lease while the wrapped model was not started yet sits paused in the wrapped model,
  * although this model records it as running. Starting this model resumes it, and so does a grant that starts the
  * wrapped model, since this node holds its lease. A stop, on the other hand, stops this model whether the wrapped model
- * was started or not.
+ * was started or not, and a subscription made while this model is stopped takes no lease until it is started.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -148,6 +148,23 @@ class CompetingConsumerLeasedSubscriptionsResumeWithTheWrappedModelTest {
         await().during(5, SECONDS).atMost(7, SECONDS).untilAsserted(() -> assertThat(handledByX).extracting(CloudEvent::getId)
                 .as("X delivers nothing after the user stopped the model, although the lease is free")
                 .doesNotContain(eventId));
+    }
+
+    @Test
+    void a_subscription_made_while_this_model_is_stopped_takes_no_lease_until_the_model_is_started() {
+        node = new CompetingConsumerSubscriptionModel(new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING)), strategy());
+        node.stop();
+        CopyOnWriteArrayList<CloudEvent> handledByX = new CopyOnWriteArrayList<>();
+        node.subscribe("node", "X", null, StartAt.subscriptionModelDefault(), handledByX::add);
+
+        rival = strategy();
+        assertThat(rival.registerCompetingConsumer("X", "rival")).as("another node can take the lease while this node is stopped").isTrue();
+        rival.unregisterCompetingConsumer("X", "rival");
+        node.start();
+
+        await("X competes for its lease once the model is started").atMost(6, SECONDS).until(() -> node.isRunning("X"));
+        String eventId = writeEvent();
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(handledByX).extracting(CloudEvent::getId).contains(eventId));
     }
 
     private SpringMongoLeaseCompetingConsumerStrategy strategy() {
