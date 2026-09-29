@@ -222,15 +222,50 @@ public class SpringMongoSubscriptionModelResilienceTest {
             });
             mongoEventStore.write("2", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(1), "name2", "name2")));
 
-            // Then: the healthy subscription keeps delivering. The refused subscription's underlying change stream
-            // is never torn down by this exclusion (only the unbounded restart loop is skipped, see
-            // registerNewSpringSubscription), so its still-open cursor keeps handing it new documents as they
-            // arrive, unlike the native model where a refusal aborts the whole cursor iteration. Each of those
-            // deliveries is refused again on its own merits, one invocation per write rather than a retry storm:
-            // exactly two here, matching the two writes, not the many attempts an excluded-from-retry backoff
-            // would produce within five seconds.
+            // Then the healthy subscription keeps delivering, and the refused one, whose change stream the refusal
+            // stopped, is not handed the second event
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(healthyState).hasSize(2));
-            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(refusedInvocations.get()).isEqualTo(2));
+            assertThat(refusedInvocations.get()).isEqualTo(1);
+        }
+
+        @Test
+        void a_refused_write_stops_delivery_until_a_pause_and_a_resume_redeliver_from_the_refused_event() {
+            // Given
+            subscriptionModel = newSubscriptionModel();
+            String subscriptionId = UUID.randomUUID().toString();
+            LocalDateTime now = LocalDateTime.now();
+            // Delivered first, so the position a resume continues from is the seed's rather than the present
+            NameDefined seedEvent = new NameDefined(UUID.randomUUID().toString(), now, "seed", "seed");
+            NameDefined refusedEvent = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(1), "refused", "refused");
+            NameDefined laterEvent = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "later", "later");
+            AtomicInteger refusals = new AtomicInteger();
+            CopyOnWriteArrayList<String> handled = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(subscriptionId, event -> {
+                if (event.getId().equals(refusedEvent.eventId()) && refusals.getAndIncrement() == 0) {
+                    throw refusal(subscriptionId);
+                }
+                handled.add(event.getId());
+            }).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+            mongoEventStore.write("1", 0, serialize(seedEvent));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(handled).hasSize(1));
+
+            // When
+            mongoEventStore.write("2", 0, serialize(refusedEvent));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(refusals).hasValue(1));
+            mongoEventStore.write("3", 0, serialize(laterEvent));
+
+            // Then
+            await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(handled)
+                    .as("the event written after the refusal is not handed to the handler while the subscription waits to be paused")
+                    .containsExactly(seedEvent.eventId()));
+            assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+
+            // The pause and the resume the competing consumer model makes once the lease is lost and won back
+            subscriptionModel.pauseSubscription(subscriptionId);
+            subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(handled)
+                    .containsExactly(seedEvent.eventId(), refusedEvent.eventId(), laterEvent.eventId()));
         }
     }
 

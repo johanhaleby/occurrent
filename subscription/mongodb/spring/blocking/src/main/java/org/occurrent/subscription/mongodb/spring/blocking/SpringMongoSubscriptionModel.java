@@ -548,8 +548,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
             if (throwable instanceof CheckpointWriteConditionNotFulfilledException) {
                 // Stays known and running, so a pause and a resume start it again. Logged at error level because
                 // nothing else would say why the node went quiet.
+                // Spring reads the next document after a listener throws, so the change stream is stopped here, and
                 // reportFailure with a null signal ends this subscription's restart loop, or never starts one,
                 // instead of running it unbounded.
+                stopAfterRefusedCheckpointWrite(subscriptionId, registration);
                 log.error("Checkpoint write for subscription {} was refused: {}. This node's lease has moved to another one, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it, and a resume redelivers the event once this node holds the lease again.", subscriptionId, throwable.getMessage(), throwable);
                 reportFailure(subscriptionId, failureSignal, registration, null);
             } else if (throwable instanceof DataAccessException) {
@@ -588,6 +590,18 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
             }
         }));
         return requireNonNull(registration.get());
+    }
+
+    // "refused" is read under the lock, which the caller registering it holds until it has stored it. Stopped only
+    // while the subscription still runs it, because after a pause and a resume it runs one that hasn't been refused.
+    // Removing it cancels the task and closes its cursor without waiting for the thread that delivers, which is the
+    // thread calling this.
+    private synchronized void stopAfterRefusedCheckpointWrite(String subscriptionId, AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> refused) {
+        org.springframework.data.mongodb.core.messaging.Subscription refusedSubscription = refused.get();
+        InternalSubscription running = runningSubscriptions.get(subscriptionId);
+        if (refusedSubscription != null && running != null && running.getSpringSubscription() == refusedSubscription) {
+            messageListenerContainer.remove(refusedSubscription);
+        }
     }
 
     // "failed" is read under the lock, which the caller registering it holds until it has stored it. Recorded only
