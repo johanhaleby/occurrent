@@ -347,6 +347,42 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
+        void a_subscription_registered_before_start_receives_each_event_once() {
+            // Given
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            notAutoStarted.subscribe(UUID.randomUUID().toString(), StartAt.now(), state::add);
+
+            // When
+            notAutoStarted.start(true);
+            NameDefined first = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            NameDefined second = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2");
+            mongoEventStore.write("1", 0, serialize(first));
+            mongoEventStore.write("2", 0, serialize(second));
+
+            // Then
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(state).extracting(CloudEvent::getId).contains(second.eventId()));
+            await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(3)).untilAsserted(() ->
+                    assertThat(state).extracting(CloudEvent::getId).containsExactly(first.eventId(), second.eventId()));
+        }
+
+        @Test
+        void a_subscription_registered_before_start_stays_paused_when_the_model_starts_without_resuming() {
+            // Given
+            String subscriptionId = UUID.randomUUID().toString();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            notAutoStarted.subscribe(subscriptionId, StartAt.now(), state::add);
+
+            // When
+            notAutoStarted.start(false);
+            NameDefined writtenWhilePaused = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenWhilePaused));
+
+            // Then
+            assertThat(notAutoStarted.isPaused(subscriptionId)).isTrue();
+            await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(state).isEmpty());
+        }
+
+        @Test
         void the_default_still_auto_starts() {
             assertAll(
                     () -> assertThat(subscriptionModel.isRunning()).isTrue(),

@@ -396,16 +396,18 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
             internalSubscription.currentStartAt().set(repositionTo);
         }
 
+        messageListenerContainer.remove(internalSubscription.getSpringSubscription());
         if (!messageListenerContainer.isRunning()) {
             logDebug("Subscription was not running, will start (subscriptionId={})", subscriptionId);
-            messageListenerContainer.start();
+            startMessageListenerContainer();
         }
 
         org.springframework.data.mongodb.core.messaging.Subscription newSubscription = registerNewSpringSubscription(subscriptionId, internalSubscription.newChangeStreamRequest(), null);
         InternalSubscription newInternalSubscription = internalSubscription.copy(newSubscription);
         runningSubscriptions.put(subscriptionId, newInternalSubscription);
         logDebug("Subscription {} resumed", subscriptionId);
-        return new SpringMongoSubscription(subscriptionId, newSubscription);
+        // The handle this model keeps, since a restart points that one at the replacement change stream
+        return newInternalSubscription.occurrentSubscription();
     }
 
     /**
@@ -451,7 +453,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
             if (shutdown) {
                 return;
             }
-            messageListenerContainer.start();
+            startMessageListenerContainer();
             if (resumeSubscriptionsAutomatically) {
                 // Snapshot the keys before iterating: resumeSubscription moves each id out of pausedSubscriptions as it
                 // goes, and forEach over a map that its own callback mutates can visit an entry that has already
@@ -462,6 +464,13 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         // Waited for outside the lock, which the restart loop needs to reopen a change stream that failed to open,
         // and which pause and cancel need while a change stream is still opening
         resumed.forEach(this::waitUntilStartedOrNoLongerRunning);
+    }
+
+    // A subscription registered while the container was stopped is still registered with it, and starting the
+    // container would open that change stream too while this model holds the subscription as paused
+    private void startMessageListenerContainer() {
+        pausedSubscriptions.values().forEach(paused -> messageListenerContainer.remove(paused.getSpringSubscription()));
+        messageListenerContainer.start();
     }
 
     // Stops waiting once the subscription has been paused, cancelled or shut down, since nothing starts it after that
