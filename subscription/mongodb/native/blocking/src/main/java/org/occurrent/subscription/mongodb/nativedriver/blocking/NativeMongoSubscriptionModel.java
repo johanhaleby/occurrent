@@ -270,13 +270,17 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             if (cancelled.getAsBoolean() || shutdown || e instanceof MongoInterruptedException || Thread.currentThread().isInterrupted()) {
                 log.debug("Stopped asking MongoDB for its operation time for subscription {} because it was cancelled or the model shut down.", subscriptionId, e);
             } else {
-                log.warn("Gave up asking MongoDB for its operation time for subscription {}, as its retry strategy says. Its change stream doesn't open, as when the strategy gives up opening it, and a pause and a resume ask again.", subscriptionId, e);
+                log.warn("Gave up asking MongoDB for its operation time for subscription {}, as its retry strategy says. The first change stream that waits for the answer doesn't open, as when the strategy gives up opening it, and then a pause and a resume ask again.", subscriptionId, e);
             }
             throw e;
         } catch (Error e) {
             log.error("Asking MongoDB for its operation time for subscription {} failed with an error, so its change stream doesn't open.", subscriptionId, e);
             throw e;
         }
+    }
+
+    private static boolean needsThePresent(StartAt position) {
+        return position.isDynamic() || MongoCommons.opensAtThePresent(position);
     }
 
     // Called once the subscription is registered, so forget(..) on the dispatcher thread always finds the run it removes
@@ -297,8 +301,10 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     private void runUntilStopped(String subscriptionId, InternalSubscription internalSubscription) {
         try {
             // Even when the run is already closed, so a pause doesn't end the question. Outside the retry below, so a
-            // question the strategy gave up on is thrown like an open it gave up on rather than asked again.
-            if (!internalSubscription.presentAtSubscribe.awaitedBy(internalSubscription)) {
+            // question the strategy gave up on is thrown like an open it gave up on rather than asked again. A position
+            // that is fixed and isn't the present needs no answer, such as one a resume was given, so the run doesn't
+            // wait for the question or throw its give-up. A dynamic one is only known once resolved, so it waits.
+            if (needsThePresent(internalSubscription.currentStartAt.get()) && !internalSubscription.presentAtSubscribe.awaitedBy(internalSubscription)) {
                 return;
             }
             executeWithRetry(() -> newInternalSubscription(subscriptionId, internalSubscription), RETRYABLE.and(__ -> !internalSubscription.isIntentionallyClosed()), retryStrategy).run();
@@ -646,9 +652,13 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * time, nothing is recorded and the resume opens at the present.
      * <p>
      * A subscription whose {@code RetryStrategy} gave up opening its change stream, or gave up asking MongoDB for its
-     * operation time, still counts as running, and pausing it and then resuming it starts it again. The resume asks
-     * MongoDB for its operation time again when that was what the strategy gave up on, including when it gave up while
-     * the subscription was paused.
+     * operation time, still counts as running, and pausing it and then resuming it starts it again. A give-up on the
+     * operation time is thrown on the dispatcher by the first change stream that waits for the answer, which then
+     * doesn't open, and a pause and a resume after that ask again. For a subscription made while the model was stopped,
+     * that is the change stream {@code start()} or the first resume opens. When the strategy gives up while the
+     * subscription is paused, after its change stream already waited for the answer, the resume asks again straight
+     * away. A resume given a position that isn't the present, through {@link #resumeSubscription(String, StartAt)},
+     * doesn't wait for the answer.
      * <p>
      * That is what this call does on its own. A {@code DurableSubscriptionModel} wrapping this model calls
      * {@link #resumeSubscription(String, StartAt)} with a stored checkpoint instead whenever one exists, so a

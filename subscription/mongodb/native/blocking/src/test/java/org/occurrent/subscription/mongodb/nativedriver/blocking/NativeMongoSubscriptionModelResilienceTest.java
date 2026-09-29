@@ -46,6 +46,7 @@ import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -998,6 +999,32 @@ public class NativeMongoSubscriptionModelResilienceTest {
             assertThat(subscription.waitUntilStarted(Duration.ZERO)).isFalse();
             assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
             await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(uncaught).singleElement().isInstanceOf(MongoTimeoutException.class));
+        }
+
+        @Test
+        void a_subscription_made_while_the_model_is_stopped_whose_retry_strategy_gave_up_on_mongodb_opens_when_resumed_at_a_given_position() {
+            // Given a subscription whose retry strategy gave up on MongoDB before anything started it
+            AtomicBoolean unreachable = new AtomicBoolean(true);
+            AtomicInteger refused = new AtomicInteger();
+            subscriptionModel = new NativeMongoSubscriptionModel(databaseThatCannotBeReachedWhile(unreachable, refused, new AtomicInteger()), realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcherRecordingUncaughtExceptions(),
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100)).maxAttempts(2)));
+            subscriptionModel.stop();
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, handled::add);
+            await().atMost(FIVE_SECONDS).until(() -> refused.get() >= 2);
+            unreachable.set(false);
+            BsonTimestamp resumeAt = MongoCommons.getServerOperationTime(database.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND));
+            NameDefined writtenAfterResumeAt = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            mongoEventStore.write("1", 0, serialize(writtenAfterResumeAt));
+
+            // When
+            boolean resumed = subscriptionModel.resumeSubscription(subscriptionId, StartAt.checkpoint(new MongoOperationTimeCheckpoint(resumeAt))).waitUntilStarted(Duration.ofSeconds(5));
+
+            // Then
+            assertThat(resumed).isTrue();
+            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenAfterResumeAt.eventId()));
+            assertThat(uncaught).describedAs("errors thrown on the dispatcher thread").isEmpty();
         }
 
         @Test
