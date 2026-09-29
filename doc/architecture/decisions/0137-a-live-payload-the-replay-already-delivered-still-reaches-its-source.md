@@ -157,14 +157,45 @@ calls per thread, so during a replay, a call the view hands to another thread wa
 while the view waits for the call. The reactive engine recognizes a call the view blocks on, on the thread the engine
 called the view on, and a `Mono` the view returns as part of its own, whichever thread that runs on. There, only a view
 that blocks on the call from a thread it switched to, while a replay holds live delivery back, waits for a replay that
-cannot end while the view blocks. On the blocking engine a view that waits for a `catchUp()` that replays waits for a
-replay that cannot start before the view's code returns. The reactive engine answers a `catchUp()` it recognizes this
-way `true` without waiting, whether it has anything to replay or not, and its replay does not start before the view's
-code returns. There `true` means the catch-up was asked for, not that it has run. A later replay can answer it, one that
-started after the call and has gone live by the time the catch-up's turn comes, and the catch-up then replays nothing.
-It can still be stopped, or refused because another catch-up failed, and a failure of its replay makes the handover fail
-the way any failed catch-up does. A view that blocks on a `catchUp()` that replays from a thread it switched to is not
-recognized, so it still waits for a replay that cannot start while the view blocks.
+cannot end while the view blocks. Both engines answer a `catchUp()` they recognize this way `true` without waiting,
+whether it has anything to replay or not, and its replay does not start before the view's code returns. The blocking
+engine runs that replay once the view's code has returned, on the thread that asked first, before the call into the
+handover that ran the view's code on that thread returns. An ask from any thread before that replay takes its turn asks
+for the same replay, so a call on another thread can return before the replay has run. That replay stops only for a stop
+that came after every ask it stands for. A catch-up failure refuses only the asks made before it, and only when it comes
+before the replay starts or finds the history caught up already, so a failure while the replay runs refuses none of
+them. A replay whose every ask was refused does not run. `true` means the catch-up was asked for, not that it has run. A
+later replay can answer it, one that started after the call and has gone live by the time the catch-up's turn comes, and
+the catch-up then replays nothing. It can still be stopped, or refused because another catch-up failed, and a failure of
+its replay makes the handover fail the way any failed catch-up does. The reactive engine makes no exception for an
+interrupt. The blocking engine does not record a failure that reaches it while the thread is interrupted, since a store
+client can fail its reads once the thread is interrupted, the MongoDB driver among them. Only the interrupt flag counts.
+An `InterruptedException` in the cause chain on a thread that is not interrupted can come from another thread, a pool
+task its shutdown interrupted say, and a later catch-up fails the same way, so that failure is recorded. The blocking
+handover abandons that replay like a stopped one, the thread stays interrupted, and the handover does not refuse later
+payloads for it. When the interrupt fails the delivery of the buffered payloads, the ones not yet delivered go back into
+the buffer and the handover is not live. Once the last running catch-up returns, the handover is stopped, which answers
+each payload a caller waits on as not applied and keeps the rest for the drain after the next replay. When the interrupt
+fails the marker write, every payload has been delivered, so the handover stays live and the next catch-up replays the
+whole history. The blocking `CatchupThenPushSubscriptionModel` clears the interrupt after such a failure and replays the
+history again on the same thread, since nothing else replays it for that subscription, after waiting 100 ms, then 200
+ms, then 400 ms. A live event the stopped handover dropped from the in-memory event store's write path is read from the
+store by that replay. After 3 retries in a row that read no further into the history than an earlier one, it gives up.
+The history ends at the head of the store as the first attempt that reaches the replay reads it, so a history that keeps
+growing cannot keep the retries going. When an attempt fails before the replay, while it checks whether the catch-up
+already completed or while it reads the head, the next attempt reads the head instead. When the model gives up, the
+handle `subscribe` returned throws the failure, and the catch-up is left for `resumeSubscription(..)` or `start(true)`
+like one a stop interrupted, so a handler that interrupts its own thread at the same event on every replay does not
+apply the history again in an endless loop. Spring Boot retries a `DomainEventFeed` catch-up it runs in the background
+after the same waits, 3 times at most. An interrupt keeps the thread that runs the replay from waiting. When that thread
+is interrupted where the replay would wait, it gives up the asks made on it and logs a warning. When the replay fails on
+an interrupted thread, the thread puts back every ask the replay stands for and logs a warning. The asks it puts back,
+and the asks of other threads when it gives up, stay, and their replay runs on the thread of a later call into the
+handover, such as a catch-up or a live delivery made outside the handover's own code, before that call returns. That
+call can be interrupted too, and then gives up or puts back the asks again. So a `catchUp()` on a thread where the view
+never asked can throw the failure of that replay. Asks left this way run only when a later call comes, so if none comes,
+their replay does not run. A view that waits for a `catchUp()` that replays from a thread it switched to is not
+recognized, so it still waits for a replay that cannot start while the view waits.
 
 The reactive engine delivers one live payload at a time, so it cannot deliver a payload its own code feeds it before
 that code returns. Until [#1148](https://github.com/johanhaleby/occurrent/issues/1148) a call waiting for that

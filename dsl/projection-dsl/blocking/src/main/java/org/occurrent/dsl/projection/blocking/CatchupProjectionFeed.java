@@ -35,6 +35,7 @@ import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.internal.HandoverMessages;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -79,8 +80,9 @@ public final class CatchupProjectionFeed<E> {
     private final String id;
 
     private final BlockingHandover<Delivered<E>, String> handover;
-    // Read by the replay once per event, so stopCatchUp() takes effect at the next event rather than at the end.
-    private volatile boolean stopped = false;
+    // Counts stopCatchUp() calls. A replay stops at its next event once a stop arrives after its catch-up was asked
+    // for, so an ask from the view's own code cannot undo a stop the running replay has not seen yet.
+    private final AtomicLong stops = new AtomicLong();
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -96,7 +98,7 @@ public final class CatchupProjectionFeed<E> {
         this.eventId = eventId;
         this.catchupMarker = catchupMarker;
         this.handover = BlockingHandover.create(
-                this::deliver, delivered -> eventKey(delivered.event()), options, "projection feed");
+                this::deliver, delivered -> eventKey(delivered.event()), options, "projection feed", id);
     }
 
     /**
@@ -244,8 +246,9 @@ public final class CatchupProjectionFeed<E> {
     }
 
     // Package-private, beside isReadyForLiveDelivery() and for the same reason: the handover owns this state, so
-    // asking it beats tracking a second copy. False until this feed's own catch-up throws and true forever after,
-    // which is what makes it safe to read after catching the refusal rather than at the moment it was thrown.
+    // asking it beats tracking a second copy. False until this feed's own catch-up throws for a cause other than an
+    // interrupt and true forever after, which is what makes it safe to read after catching the refusal rather than at
+    // the moment it was thrown.
     boolean refusesPermanently() {
         return handover.refusesPermanently();
     }
@@ -257,11 +260,52 @@ public final class CatchupProjectionFeed<E> {
      * <p>
      * Runs on the calling thread. A caller that wants it off that thread runs it on a thread it owns, and calls
      * {@link #stopCatchUp()} to bring it back down.
+     * <p>
+     * A catch-up whose failure reaches this feed on an interrupted thread throws that failure but is not recorded as a
+     * failed catch-up, since a store client can fail its reads once the thread is interrupted, the MongoDB driver
+     * among them. This feed does not refuse later events for it, and leaves the thread interrupted. Only the thread's
+     * interrupt flag counts, so a failure on a thread that is not interrupted is recorded even with an
+     * {@link InterruptedException} as its cause. A replay it cut short is abandoned like a stopped one, and a later
+     * {@code catchUp()} replays the history it did not finish. When the interrupt fails the delivery of the events
+     * buffered during the replay, this feed is not live afterwards, and the events it had not delivered are handled
+     * as they are when a catch-up is stopped before this feed goes live. When it fails the marker write, every event
+     * has been delivered and this feed stays live, and a later {@code catchUp()} replays the whole history again.
+     * <p>
+     * A call the view makes while this feed is calling it, from its fold or from a callback such as
+     * {@code replayStarted()}, returns without waiting for the replay, since that replay cannot start before the view's
+     * code returns. Returning then means the catch-up was asked for, not that it has run. The replay runs once the
+     * view's code has returned, on the thread that asked first, and before the feed call that ran the view's code on
+     * that thread returns, such as the {@link #accept(Object)} that delivered the event, unless an interrupt makes that
+     * thread give up or leave it as described below. A call from another thread that asks before that replay starts
+     * asks for the same replay, and can return before it has run. A view that hands the call to another thread and
+     * waits for it is not recognized, and waits for a replay that cannot start while it waits.
+     * <p>
+     * That replay can still be stopped by a {@link #stopCatchUp()} called after every call that asked for it, or
+     * refused because another catch-up on this feed failed after every such call and before the replay started or found
+     * the history caught up already. Another catch-up that fails while the replay runs does not refuse it. The view's
+     * code is not told, though a stopped replay calls {@code replayStarted()} and {@code replayAbandoned()} on a replay
+     * aware view like any other stopped replay. When the replay fails, this feed refuses every later event, the same as
+     * after any other failed catch-up, unless it failed on an interrupted thread. A {@code catchUp()} or
+     * {@link #goLive()} that runs the replay throws the failure, and an {@link #accept(Object)} that runs it logs the
+     * failure instead of throwing it.
+     * <p>
+     * An interrupt keeps the thread that runs such a replay from waiting. When that thread is interrupted where the
+     * replay would wait for another fold or replay, it gives up the calls made on it and logs a warning. When the
+     * replay fails on an interrupted thread, as above, the thread puts back every call the replay stands for and logs a
+     * warning, and throws nothing for that failure. The calls it puts back, and the calls on other threads when it
+     * gives up, stay asked for. A later call takes them over when it is a {@code catchUp()}, {@link #goLive()}, or
+     * {@link #accept(Object)} that folds its event live, made outside the view's code on any thread. Before that call
+     * returns or throws, their replay has run, been refused, or been given up or put back again. A call on another
+     * thread that finds them taken over returns without waiting for that replay. The call that takes them over can be
+     * on a thread where the view never asked, and a {@code catchUp()} or {@link #goLive()} throws the failure of that
+     * replay. Calls left this way replay only when such a call comes, so if none comes, the replay does not run.
+     * <p>
+     * A view that calls this for an event a replay delivers asks for another catch-up each time a replay delivers that
+     * event again. Each of those catch-ups replays again unless it finds the catch-up marker written, so a feed built
+     * without a {@link CheckpointStorage} for that marker replays without end.
      */
     public void catchUp() {
-        // Cleared here rather than only in the handover, so a feed stopped once can catch up again instead of
-        // stopping instantly on the first replayed event.
-        stopped = false;
+        long stopsWhenAsked = stops.get();
         handover.catchUp(new BlockingHandover.Source<>() {
             @Override
             public boolean isAlreadyCaughtUp() {
@@ -277,7 +321,7 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public boolean keepReplaying() {
-                return !stopped;
+                return stops.get() == stopsWhenAsked;
             }
 
             @Override
@@ -357,11 +401,18 @@ public final class CatchupProjectionFeed<E> {
      * a partial replay is never recorded as a finished one and the next {@link #catchUp()} replays the whole history
      * again. A stop is not a failure: the feed stays usable rather than rejecting every later event.
      * <p>
-     * What the stop does with the live events depends on where the feed stood when the replay started. One that had
-     * not gone live drains nothing and does not go live, and {@link #accept(Object)} throws both for an event waiting
-     * on the replay and for one fed after the stop, so the broker delivers them again. One replaying after a
-     * {@link #goLive()} delivers what it held while the replay ran and goes on delivering, since those events were
-     * accepted by a feed that was already live.
+     * It stops a catch-up asked for before it, whether its replay has started or not, and none asked for after it,
+     * also when the view asks for one while the replay it stops is still running. The replay looks for a stop before
+     * each event and once more after the last one, also when the history is empty. A stop after that last look is not
+     * noticed, for example one that comes while a view that buffers during a replay writes that buffer in
+     * {@code replayCompleted()}. Neither is a stop before a catch-up that finds the marker already written, since that
+     * catch-up replays nothing. A catch-up that misses the stop goes live.
+     * <p>
+     * What a stop the replay notices does with the live events depends on where the feed stood when the replay
+     * started. One that had not gone live drains nothing and does not go live, and {@link #accept(Object)} throws both
+     * for an event waiting on the replay and for one fed after the stop, so the broker delivers them again. One
+     * replaying after a {@link #goLive()} delivers what it held while the replay ran and goes on delivering, since
+     * those events were accepted by a feed that was already live.
      * <p>
      * A feed with no catch-up running that has not gone live stops the same way, so an event fed before a catch-up
      * that a shutting-down application never starts does not wait for it.
@@ -371,7 +422,7 @@ public final class CatchupProjectionFeed<E> {
      * wrote the event through receives it twice, which at-least-once delivery allows.
      */
     public void stopCatchUp() {
-        stopped = true;
+        stops.incrementAndGet();
         handover.stopIfNotCatchingUp();
     }
 

@@ -196,7 +196,9 @@ public final class DomainEventFeed<E> {
      * Whether the registered projection's catch-up has permanently failed, so every later
      * {@link #acceptCloudEvent(CloudEvent)} on this registration refuses the event and will go on refusing.
      * {@code false} until a {@link #catchUpAll()}, {@link #catchUp(String)} or {@link #goLive(String)} attempt has
-     * thrown, and never {@code false} again after that, since the failure it records is never cleared.
+     * thrown a failure on a thread that was not interrupted, and never {@code false} again after that, since the
+     * failure it records is never cleared. {@link CatchupProjectionFeed#catchUp()} says why an interrupted thread is
+     * the exception.
      * <p>
      * Distinct from {@link #isReadyForLiveDelivery()}, which is also {@code false} while a replay that is going to
      * succeed is still running. A listener deciding whether to stop consuming for good needs to tell those two
@@ -420,7 +422,12 @@ public final class DomainEventFeed<E> {
      * A failure here is terminal for this feed, so let it reach the caller and do not start the application. The
      * projection rejects every later event afterwards. Unlike a subscription model, the feed does not drop it: the
      * application asked for this projection, so running on without it is worse than not running. Fix the cause and
-     * build a new feed.
+     * build a new feed. The exception is a failure on an interrupted thread, which reaches the caller too but is not
+     * recorded, so the projection does not reject later events for it and a later call replays the history.
+     * <p>
+     * A call the projection makes while this feed is calling it returns once the catch-up has been asked for, without
+     * waiting for the replay. {@link CatchupProjectionFeed#catchUp()} says which calls those are, and what a call for
+     * an event a replay delivers again leads to.
      * <p>
      * Named for when a feed could carry several projections. It carries one, so this and {@link #catchUp(String)} do
      * the same thing whenever the id matches.
@@ -435,6 +442,10 @@ public final class DomainEventFeed<E> {
     /**
      * Run the one-time catch-up of the projection registered under {@code id}. Use this over {@link #catchUpAll()}
      * when the caller knows which projection it means and wants a mismatch to fail rather than pass silently.
+     * <p>
+     * A call the projection makes while this feed is calling it returns once the catch-up has been asked for, without
+     * waiting for the replay. {@link CatchupProjectionFeed#catchUp()} says which calls those are, and what a call for
+     * an event a replay delivers again leads to.
      *
      * @throws IllegalArgumentException if no projection with that id is registered on this feed
      */
