@@ -42,6 +42,7 @@ import java.net.URI;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -64,7 +65,7 @@ class DomainEventFeedBackgroundCatchupFailureTest {
     void a_background_domain_feed_catch_up_that_fails_does_not_fail_the_context_and_the_failure_lands_in_background_catchup_failures() {
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(FailingDomainFeedConfiguration.class)
+                .withUserConfiguration(FailingDomainFeedConfiguration.class, FailingReaderConfiguration.class)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
 
@@ -81,6 +82,130 @@ class DomainEventFeedBackgroundCatchupFailureTest {
                     // failure list for emptiness.
                     assertThat(status.isCaughtUp("domain-feed-push-background-failing")).isFalse();
                 });
+    }
+
+    // The first two reads interrupt the thread and throw, as the MongoDB driver does when an interrupt reaches its
+    // connection pool lock. The feed records no failure for that, so the registrar retries the catch-up with the
+    // interrupt cleared, and the third read works.
+    @Test
+    void a_background_domain_feed_catch_up_that_fails_on_an_interrupt_is_retried_until_it_catches_up() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(FailingDomainFeedConfiguration.class, InterruptedReaderConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+
+                    PushCatchupStatus status = context.getBean(PushCatchupStatus.class);
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (!status.isCaughtUp("domain-feed-push-background-failing") && System.nanoTime() < deadline) {
+                        Thread.sleep(10);
+                    }
+                    assertThat(status.isCaughtUp("domain-feed-push-background-failing")).isTrue();
+                    assertThat(context.getBean(InterruptedReaderConfiguration.class).reads).hasValue(3);
+                });
+    }
+
+    // Every read interrupts the thread and throws. After 3 retries the failure is recorded, and since the feed recorded
+    // none, it does not refuse events for good.
+    @Test
+    void a_background_domain_feed_catch_up_that_keeps_failing_on_an_interrupt_is_given_up_after_three_retries() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(FailingDomainFeedConfiguration.class, AlwaysInterruptedReaderConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+
+                    PushCatchupStatus status = context.getBean(PushCatchupStatus.class);
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (!(status.of("domain-feed-push-background-failing") instanceof PushCatchupStatus.Failed) && System.nanoTime() < deadline) {
+                        Thread.sleep(10);
+                    }
+                    assertThat(status.of("domain-feed-push-background-failing")).isInstanceOfSatisfying(PushCatchupStatus.Failed.class, failed ->
+                            assertThat(failed.cause()).hasMessage("read on an interrupted thread"));
+                    assertThat(context.getBean(AlwaysInterruptedReaderConfiguration.class).reads).hasValue(4);
+                    assertThat(context.getBean(DomainEventFeed.class).refusesPermanently()).isFalse();
+                });
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class FailingReaderConfiguration {
+        // Fails the replay outright, rather than parking it: this test is about where the failure ends up, not
+        // about timing.
+        @Bean
+        PositionOrderedReader failingReader() {
+            return new PositionOrderedReader() {
+                @Override
+                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    throw new RuntimeException("replay boom");
+                }
+
+                @Override
+                public long currentPosition() {
+                    return 1;
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class InterruptedReaderConfiguration {
+        final AtomicInteger reads = new AtomicInteger();
+
+        @Bean
+        PositionOrderedReader interruptedReader() {
+            return new PositionOrderedReader() {
+                @Override
+                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    if (reads.incrementAndGet() <= 2) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("read on an interrupted thread");
+                    }
+                    return Stream.empty();
+                }
+
+                @Override
+                public long currentPosition() {
+                    return 0;
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class AlwaysInterruptedReaderConfiguration {
+        final AtomicInteger reads = new AtomicInteger();
+
+        @Bean
+        PositionOrderedReader alwaysInterruptedReader() {
+            return new PositionOrderedReader() {
+                @Override
+                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    reads.incrementAndGet();
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("read on an interrupted thread");
+                }
+
+                @Override
+                public long currentPosition() {
+                    return 0;
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+        }
     }
 
     @Configuration(proxyBeanMethods = false)
@@ -118,26 +243,8 @@ class DomainEventFeedBackgroundCatchupFailureTest {
             };
         }
 
-        // Fails the replay outright, rather than parking it: this test is about where the failure ends up, not
-        // about timing.
         @Bean
-        DomainEventFeed<TestEvent> domainEventFeed(CloudEventConverter<TestEvent> converter) {
-            PositionOrderedReader reader = new PositionOrderedReader() {
-                @Override
-                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
-                    throw new RuntimeException("replay boom");
-                }
-
-                @Override
-                public long currentPosition() {
-                    return 1;
-                }
-
-                @Override
-                public boolean writesPosition() {
-                    return true;
-                }
-            };
+        DomainEventFeed<TestEvent> domainEventFeed(CloudEventConverter<TestEvent> converter, PositionOrderedReader reader) {
             return new DomainEventFeed<>(reader, converter, TestEvent::id);
         }
 

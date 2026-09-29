@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -3317,9 +3318,12 @@ class BlockingHandoverTest {
         Thread firstThread = new Thread(first, "first");
         Thread secondThread = new Thread(second, "second");
         firstThread.start();
-        secondThread.start();
 
         try {
+            // Started once the first thread has asked, so L1 is in the log before L2. The handover orders the two
+            // live folds in no way, and started together either thread can log first.
+            awaitOrFail(firstAsked);
+            secondThread.start();
             assertThat(first).succeedsWithin(Duration.ofSeconds(5));
             assertThat(handover.refusesPermanently()).isFalse();
             release.countDown();
@@ -3370,23 +3374,126 @@ class BlockingHandoverTest {
         assertThat(asked.markCaughtUpCallCount()).isEqualTo(1);
     }
 
-    // A client can clear the interrupt before it throws, as one that wraps an InterruptedException without putting the
-    // interrupt back does. The cause still says an interrupt made it fail.
+    // An InterruptedException can come from another thread, a pool task its shutdown interrupted say, while the thread
+    // running the catch-up is not interrupted. The view fails the same way on every replay, so the failure is recorded.
     @Test
-    void a_catch_up_failure_caused_by_an_interrupt_is_not_recorded_and_puts_the_interrupt_back() {
-        List<String> log = new CopyOnWriteArrayList<>();
-        BlockingHandover<String, String> handover = BlockingHandover.create(log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
-        FakeSource interruptedRead = source(List.of("R1"), false);
-        interruptedRead.replayFailure = new IllegalStateException("read interrupted", new InterruptedException());
+    void a_catch_up_failure_with_an_interrupted_exception_as_its_cause_on_a_thread_that_is_not_interrupted_is_recorded() {
+        AtomicInteger folds = new AtomicInteger();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            folds.incrementAndGet();
+            if (payload.equals("R1")) {
+                throw new IllegalStateException("remote call failed",
+                        new ExecutionException(new InterruptedException("worker interrupted by pool shutdown")));
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
 
-        Throwable thrown = catchThrowable(() -> handover.catchUp(interruptedRead));
+        Throwable thrown = catchThrowable(() -> handover.catchUp(source(List.of("R0", "R1"), false)));
         boolean interruptedAfter = Thread.interrupted();
 
-        assertThat(thrown).isSameAs(interruptedRead.replayFailure);
+        assertThat(thrown).hasRootCauseInstanceOf(InterruptedException.class);
+        assertThat(handover.refusesPermanently()).isTrue();
+        assertThat(interruptedAfter).isFalse();
+        assertThat(folds).hasValue(2);
+    }
+
+    // The first payload of the drain interrupts its thread, so the view fails the next one. The payloads the drain did
+    // not deliver go back into the buffer and the handover is not live, so none of them is dropped and no later
+    // payload is delivered ahead of them.
+    @Test
+    void a_drain_that_fails_on_an_interrupt_keeps_the_payloads_it_did_not_deliver_for_the_next_catch_up() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new IllegalStateException("write on an interrupted thread");
+            }
+            log.add(payload);
+            if (payload.equals("L1")) {
+                Thread.currentThread().interrupt();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        assertThat(handover.acceptReportingDelivery("L1")).isTrue();
+        assertThat(handover.acceptReportingDelivery("L2")).isTrue();
+        assertThat(handover.acceptReportingDelivery("L3")).isTrue();
+
+        Throwable thrown = catchThrowable(() -> handover.catchUp(source(List.of(), false)));
+        boolean interruptedAfter = Thread.interrupted();
+
+        assertThat(thrown).hasMessage("write on an interrupted thread");
         assertThat(interruptedAfter).isTrue();
         assertThat(handover.refusesPermanently()).isFalse();
-        assertThat(handover.catchUp(source(List.of("R1"), false))).isTrue();
-        assertThat(log).containsExactly("R1");
+        assertThat(handover.isReadyForLiveDelivery()).isFalse();
+        assertThat(handover.acceptIfLive("L4")).isFalse();
+        assertThat(handover.catchUp(source(List.of(), false))).isTrue();
+        assertThat(log).containsExactly("L1", "L2", "L3");
+        assertThat(handover.acceptIfLive("L4")).isTrue();
+        assertThat(log).containsExactly("L1", "L2", "L3", "L4");
+    }
+
+    // A caller of accept(..) waits for its payload. The drain the interrupt failed did not apply L2, so its caller is
+    // answered as when a catch-up is stopped before the handover goes live, and offers it again.
+    @Test
+    void a_drain_that_fails_on_an_interrupt_answers_a_waiting_caller_it_did_not_deliver_to_as_stopped() throws InterruptedException {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(payload -> {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new IllegalStateException("write on an interrupted thread");
+            }
+            log.add(payload);
+            if (payload.equals("L1")) {
+                Thread.currentThread().interrupt();
+            }
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        AtomicReference<Throwable> firstFailure = new AtomicReference<>();
+        AtomicReference<Throwable> secondFailure = new AtomicReference<>();
+        Thread first = new Thread(() -> firstFailure.set(catchThrowable(() -> handover.accept("L1"))), "first");
+        Thread second = new Thread(() -> secondFailure.set(catchThrowable(() -> handover.accept("L2"))), "second");
+        first.start();
+        awaitWaiting(first);
+        second.start();
+        awaitWaiting(second);
+
+        Throwable thrown = catchThrowable(() -> handover.catchUp(source(List.of(), false)));
+        boolean interruptedAfter = Thread.interrupted();
+        first.join(5_000);
+        second.join(5_000);
+
+        assertThat(thrown).hasMessage("write on an interrupted thread");
+        assertThat(interruptedAfter).isTrue();
+        assertThat(firstFailure.get()).isNull();
+        assertThat(secondFailure.get()).isInstanceOf(BlockingHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied(NOUN));
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(handover.isReadyForLiveDelivery()).isFalse();
+        assertThat(handover.catchUp(source(List.of(), false))).isTrue();
+        handover.accept("L2");
+        assertThat(log).containsExactly("L1", "L2");
+    }
+
+    // Every payload is delivered before the marker is written, so a marker write that fails on an interrupt leaves the
+    // handover live. With no marker written, the next catch-up replays the whole history again.
+    @Test
+    void a_marker_write_that_fails_on_an_interrupt_leaves_the_handover_live_and_the_next_catch_up_replays_again() {
+        List<String> log = new CopyOnWriteArrayList<>();
+        BlockingHandover<String, String> handover = BlockingHandover.create(log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        FakeSource interruptedMarker = source(List.of("R1"), false);
+        AtomicBoolean interruptOnce = new AtomicBoolean(true);
+        interruptedMarker.onMarkCaughtUp = () -> {
+            if (interruptOnce.getAndSet(false)) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("marker write on an interrupted thread");
+            }
+        };
+
+        Throwable thrown = catchThrowable(() -> handover.catchUp(interruptedMarker));
+        boolean interruptedAfter = Thread.interrupted();
+
+        assertThat(thrown).hasMessage("marker write on an interrupted thread");
+        assertThat(interruptedAfter).isTrue();
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(handover.isReadyForLiveDelivery()).isTrue();
+        assertThat(handover.catchUp(interruptedMarker)).isTrue();
+        assertThat(log).containsExactly("R1", "R1");
+        assertThat(interruptedMarker.markCaughtUpCallCount()).isEqualTo(2);
     }
 
     // Clients throw an InterruptedIOException for a timeout too, one that no interrupt caused, so it fails the catch-up

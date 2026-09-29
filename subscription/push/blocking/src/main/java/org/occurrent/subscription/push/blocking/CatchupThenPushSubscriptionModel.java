@@ -47,7 +47,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -69,10 +69,12 @@ import java.util.stream.Stream;
  *       feed, and a full buffer refuses it. The overlap is de-duplicated by the
  *       CloudEvent id and source together (not by a position watermark: Occurrent positions can commit late and have permanent gaps, so a watermark would
  *       drop a late-committing low-position event, see ADR 62). Because buffering starts before the head is read, no
- *       reconcile pass is needed. A catch-up that fails on an interrupted thread, or because of an interrupt, is not a
- *       failed catch-up. This model replays the history again on a new thread, up to 3 times for a subscription, and
- *       after that leaves it for {@link #resumeSubscription(String)} or {@code start(true)}, like a catch-up that
- *       {@link #stop()} interrupted.</li>
+ *       reconcile pass is needed. A catch-up that fails on an interrupted thread is not a failed catch-up. This model
+ *       clears the interrupt and replays the history again on the same thread, after waiting 100 ms, then 200 ms, then
+ *       400 ms. After 3 such retries in a row that read no further into the history than an earlier attempt, it gives
+ *       up, and the handle {@code subscribe} returned throws the failure. The catch-up is then left for
+ *       {@link #resumeSubscription(String)} or {@code start(true)}, like a catch-up that {@link #stop()} interrupted,
+ *       and they count the retries from zero again.</li>
  *   <li><strong>Live resume</strong> is not Occurrent's job. This model persists no live position, so what becomes of
  *       an event nothing handled depends on what feeds the {@link PushSubscriptionModel}.
  *       <ul>
@@ -180,9 +182,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // Whether the store being unreadable has already been reported, cleared by the next read that works.
     private final AtomicBoolean retentionReadFailureLogged = new AtomicBoolean();
 
-    // How often a replay that failed on an interrupt relaunches itself before it is left for resumeSubscription or
-    // start(true).
-    private static final int MAX_RELAUNCHES_AFTER_INTERRUPTED_FAILURE = 3;
+    // How often in a row a replay that failed on an interrupt is retried when no attempt reads further into the
+    // history than the ones before it, and how long it waits before the first of those retries. Each one waits twice
+    // as long as the one before it.
+    private static final int MAX_RETRIES_AFTER_INTERRUPTED_FAILURE = 3;
+    private static final Duration FIRST_RETRY_DELAY_AFTER_INTERRUPTED_FAILURE = Duration.ofMillis(100);
 
     // Long enough that a replay noticing the shutdown at its next event always makes it, short enough that a parked
     // fold cannot hold a closing context open. Matches how SagaSubscription bounds its own poller shutdown.
@@ -217,9 +221,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // How to launch a subscription's replay again, kept only while there is a replay worth launching. Removed once one
     // finishes (nothing left to replay), once one fails (it is refusing, not stopped, and restarting it would turn a
     // loud refusal into a restart loop), and on cancel or shutdown. What is left is exactly the replays a stop
-    // interrupted and those that failed on an interrupt, which start(true) and resumeSubscription bring back. Without
-    // this a stop during a replay was permanent, because the replay is the only thing that reaches the handover
-    // (ADR 104).
+    // interrupted and those given up after failing on an interrupt, which start(true) and resumeSubscription bring
+    // back. Without this a stop during a replay was permanent, because the replay is the only thing that reaches the
+    // handover (ADR 104).
     private final ConcurrentMap<String, Supplier<Future<Boolean>>> interruptibleReplays = new ConcurrentHashMap<>();
     // The handover backing each subscription id currently registered here, so isReadyForLiveDelivery(String) can ask
     // the one component that actually owns the buffer rather than track readiness separately. Populated once, in
@@ -344,10 +348,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // evict the new subscription's launcher out from under it, silently leaving that subscription un-relaunchable
         // by a later stop() plus start(true).
         AtomicReference<Supplier<Future<Boolean>>> ownLaunch = new AtomicReference<>();
-        // Counts the replays of this subscription that failed on an interrupt, which bounds how often one relaunches
-        // itself.
-        AtomicInteger interruptedFailures = new AtomicInteger();
-        Supplier<Future<Boolean>> launch = () -> launchReplay(subscriptionId, handover, replayFilter, ownLaunch, interruptedFailures);
+        Supplier<Future<Boolean>> launch = () -> launchReplay(subscriptionId, handover, replayFilter, ownLaunch);
         ownLaunch.set(launch);
         Future<Boolean> replay;
         // Held across the live-feed registration and everything this subscribe installs, so a cancelSubscription
@@ -370,7 +371,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * straight to the {@link BlockingHandover} this subscription's catch-up owns. See
      * {@link BlockingHandover#isReadyForLiveDelivery()} for exactly what that answers and why. In short, {@code true}
      * only once the catch-up has reached live, {@code false} while replaying or buffering ahead of its own drain, and
-     * {@code false} forever after a catch-up failure that no interrupt caused.
+     * {@code false} forever after a catch-up failure on a thread that was not interrupted.
      * <p>
      * A CloudEvent-level broker bridge that feeds the live {@link PushSubscriptionModel} this model wraps through
      * {@link PushSubscriptionModel#acceptRedeliverable(io.cloudevents.CloudEvent)} needs no call to this method to
@@ -392,13 +393,15 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     // Starts one replay for subscriptionId and returns its handle. Called by subscribe, and again by start(true) or
-    // resumeSubscription for a replay that a stop interrupted, or by a replay that failed on an interrupt.
+    // resumeSubscription for a replay that a stop interrupted or that was given up after failing on an interrupt.
     private Future<Boolean> launchReplay(String subscriptionId, BlockingHandover<CloudEvent, CloudEventKey> handover, Filter replayFilter,
-                                          AtomicReference<Supplier<Future<Boolean>>> ownLaunch, AtomicInteger interruptedFailures) {
+                                          AtomicReference<Supplier<Future<Boolean>>> ownLaunch) {
         // The task needs to name itself to forget(), so the entry it removes is its own rather than whatever holds
         // the id by then. Without that, a cancel followed by a re-subscribe of the same id lets this replay keep
         // going against the new subscription's entry and then delete it, silently killing the new subscription.
         AtomicReference<Future<Boolean>> self = new AtomicReference<>();
+        // How many events the current attempt has read, so a retry after an interrupt can tell whether it got further.
+        AtomicLong readByAttempt = new AtomicLong();
         BlockingHandover.Source<CloudEvent> source = new BlockingHandover.Source<>() {
             @Override
             public boolean isAlreadyCaughtUp() {
@@ -407,7 +410,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public Stream<CloudEvent> replay() {
-                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning());
+                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
+                        .peek(event -> readByAttempt.incrementAndGet());
             }
 
             @Override
@@ -440,16 +444,46 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         };
 
         FutureTask<Boolean> replay = new FutureTask<>(() -> {
-            final boolean caughtUp;
+            boolean caughtUp;
+            // Attempts in a row that failed on an interrupt and read no further than the furthest one before them.
+            int interruptedFailures = 0;
+            long furthestRead = -1;
             try {
-                caughtUp = handover.catchUp(source);
+                while (true) {
+                    readByAttempt.set(0);
+                    try {
+                        caughtUp = handover.catchUp(source);
+                        break;
+                    } catch (Throwable e) {
+                        if (handover.refusesPermanently()) {
+                            throw e;
+                        }
+                        // The failure came on an interrupted thread, so the handover recorded none and refuses
+                        // nothing. Only a replay applies the history for this id, including the live events the
+                        // stopped handover drops meanwhile, so it is retried here, where the handle subscribe returned
+                        // still waits for it. An attempt that read further than every one before it starts the count
+                        // again.
+                        if (readByAttempt.get() > furthestRead) {
+                            furthestRead = readByAttempt.get();
+                            interruptedFailures = 0;
+                        }
+                        interruptedFailures++;
+                        switch (afterInterruptedFailure(subscriptionId, self.get(), ownLaunch.get(),
+                                interruptedFailures, e)) {
+                            case RETRY -> {
+                            }
+                            case LEFT -> {
+                                return false;
+                            }
+                            case GIVEN_UP -> throw e;
+                        }
+                    }
+                }
             } catch (Throwable e) {
                 if (!handover.refusesPermanently()) {
-                    // An interrupt caused this failure, so the handover recorded none and refuses nothing. Only a
-                    // replay applies the history for this id, including the live events the stopped handover drops
-                    // meanwhile, so the launcher is kept and the replay is relaunched on a new thread.
-                    relaunchAfterInterruptedFailure(subscriptionId, self.get(), ownLaunch.get(), interruptedFailures, e);
-                    return false;
+                    // Given up after failing on an interrupt too often. afterInterruptedFailure forgot the entry and
+                    // kept the launcher, so resumeSubscription or start(true) replays again.
+                    throw e;
                 }
                 // Throwable rather than RuntimeException and Error, because a handler written in Kotlin can throw a
                 // checked exception without declaring it, and a replay that ended on one ended just as surely. One
@@ -571,36 +605,46 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         return launch.get();
     }
 
-    // The relaunched replay's entry replaces the failed one's in a single put, so isCatchingUp(id), which reads the
-    // map without this monitor, never answers false in between. Under a stop or a shutdown it is not relaunched
-    // here, and start(true) or resumeSubscription relaunches it as it does a replay a stop interrupted. Otherwise it
-    // is relaunched even after a start(false), since nothing stopped it. Nor is it relaunched when a
-    // cancelSubscription(id), maybe followed by a subscribe(id, ...), has taken the id or the launcher from this
-    // replay.
+    private enum AfterInterruptedFailure {RETRY, LEFT, GIVEN_UP}
+
+    // Waits before the retry, twice as long each time, so an interrupt that keeps coming does not spin the thread. The
+    // retry runs on the same thread with the interrupt cleared. It is left, with the launcher kept, under a stop or a
+    // shutdown, so start(true) or resumeSubscription replays it as it does a replay a stop interrupted, and when a
+    // cancelSubscription(id), maybe followed by a subscribe(id, ...), has taken the id or the launcher from it.
     //
-    // Bounded, because a handler that interrupts its own thread on every replay would otherwise relaunch it in a loop
-    // that applies the history again each time. A replay that fails on an interrupt that often is left like a stopped
-    // one, for resumeSubscription or start(true).
-    private synchronized void relaunchAfterInterruptedFailure(String subscriptionId, @Nullable Future<Boolean> replay,
-                                                              @Nullable Supplier<Future<Boolean>> launch,
-                                                              AtomicInteger interruptedFailures, Throwable failure) {
-        boolean stillOwned = replay != null && replayingSubscriptions.get(subscriptionId) == replay
-                && launch != null && interruptibleReplays.get(subscriptionId) == launch;
-        if (!stillOwned || stopped || shuttingDown) {
-            forget(subscriptionId, replay);
-            return;
+    // Bounded, because a handler that interrupts its own thread at the same event on every replay would otherwise
+    // apply the history again and again. After that many failures in a row it is given up, with the launcher kept, so
+    // the handle subscribe returned throws the failure and resumeSubscription or start(true) replays again.
+    private AfterInterruptedFailure afterInterruptedFailure(String subscriptionId, @Nullable Future<Boolean> replay,
+                                                            @Nullable Supplier<Future<Boolean>> launch, int failures,
+                                                            Throwable failure) {
+        boolean retry = failures <= MAX_RETRIES_AFTER_INTERRUPTED_FAILURE;
+        if (retry) {
+            Duration delay = FIRST_RETRY_DELAY_AFTER_INTERRUPTED_FAILURE.multipliedBy(1L << (failures - 1));
+            log.warn("The catch-up of subscription {} failed on an interrupt and is retried in {} ms.",
+                    subscriptionId, delay.toMillis(), failure);
+            Thread.interrupted();
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException e) {
+                // Cleared by the throw, so the retry still runs on a thread that is not interrupted.
+            }
         }
-        int failures = interruptedFailures.incrementAndGet();
-        if (failures > MAX_RELAUNCHES_AFTER_INTERRUPTED_FAILURE) {
-            log.error("The catch-up of subscription {} failed on an interrupt {} times and is not relaunched again. "
-                    + "Live events are dropped or refused until resumeSubscription or start(true) replays "
-                    + "the history.", subscriptionId, failures, failure);
+        synchronized (this) {
+            boolean owned = replay != null && replayingSubscriptions.get(subscriptionId) == replay
+                    && launch != null && interruptibleReplays.get(subscriptionId) == launch;
+            if (owned && retry && !stopped && !shuttingDown) {
+                return AfterInterruptedFailure.RETRY;
+            }
             forget(subscriptionId, replay);
-            return;
+            if (!owned || stopped || shuttingDown) {
+                return AfterInterruptedFailure.LEFT;
+            }
         }
-        log.warn("The catch-up of subscription {} failed on an interrupt and is relaunched on a thread that is not "
-                + "interrupted.", subscriptionId, failure);
-        launch.get();
+        log.error("The catch-up of subscription {} failed on an interrupt {} times in a row without reading further "
+                + "into the history, and is not retried again. Live events are not applied until "
+                + "resumeSubscription or start(true) replays the history.", subscriptionId, failures, failure);
+        return AfterInterruptedFailure.GIVEN_UP;
     }
 
     // Removes this replay's own entry, never one a later subscribe put there under the same id.

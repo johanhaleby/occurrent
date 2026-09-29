@@ -94,6 +94,11 @@ class ProjectionAnnotationRegistrar {
     // Long enough for a replay to notice the stop at its next event, short enough that a parked fold cannot hold a
     // closing context open.
     private static final Duration SHUTDOWN_CATCHUP_TIMEOUT = Duration.ofSeconds(5);
+    // How often a background domain-feed catch-up that failed on an interrupt is retried, and how long it waits before
+    // the first retry. Each retry waits twice as long as the one before it. The same values as
+    // CatchupThenPushSubscriptionModel uses.
+    private static final int MAX_RETRIES_AFTER_INTERRUPTED_FAILURE = 3;
+    private static final Duration FIRST_RETRY_DELAY_AFTER_INTERRUPTED_FAILURE = Duration.ofMillis(100);
 
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
@@ -296,7 +301,8 @@ class ProjectionAnnotationRegistrar {
                 // that wants the replay off its own thread can run catchUpAll() on a thread it owns. This is that
                 // caller: the registrar is what knows the startupMode, so it is what decides the threading.
                 runInBackground("occurrent-domain-feed-catchup", pending.id(),
-                        recordingProgress(pending.id(), () -> pending.feed().catchUpAll()), pending.feed()::stopCatchUp);
+                        recordingProgress(pending.id(), retryingAfterInterruptedFailure(pending.id(), pending.feed(),
+                                pending.feed()::catchUpAll)), pending.feed()::stopCatchUp, true);
             }
         }
     }
@@ -307,7 +313,9 @@ class ProjectionAnnotationRegistrar {
     // Answers whether the thread was started, so a caller that has to report what it started can tell a catch-up
     // close() refused at launch from one that is running. It cannot answer more than that, because startAll() returns
     // before the task has run.
-    private boolean runInBackground(String threadName, String id, Runnable work, Runnable stop) {
+    // A domainFeed failure is logged here with the state it puts the feed in. A push model logs its own catch-up
+    // failure with what recovers the subscription, so for one of those this logs only that the catch-up failed.
+    private boolean runInBackground(String threadName, String id, Runnable work, Runnable stop, boolean domainFeed) {
         FutureTask<Void> task = new FutureTask<>(() -> {
             try {
                 // Read again here, and not only before the thread was started, because stopCatchUp() only takes effect
@@ -322,8 +330,18 @@ class ProjectionAnnotationRegistrar {
                 // Throwable rather than RuntimeException and Error, because a projection written in Kotlin can throw a
                 // checked exception from its fold without declaring it. Nobody joins this task except close(), so one
                 // that got past here was recorded nowhere: no log, and a status that still read as catching up.
-                log.error("The background catch-up of projection {} failed. It has folded no history and will receive "
-                        + "no live events until the application is restarted.", id, e);
+                if (!domainFeed) {
+                    log.error("The background catch-up of projection {} failed.", id, e);
+                } else if (Thread.currentThread().isInterrupted()) {
+                    // A domain-feed catch-up that failed on an interrupt after its retries, or when close() ended them.
+                    // The feed records no failure for that, so it does not refuse events for good.
+                    log.error("The background catch-up of projection {} failed on an interrupt and is not retried "
+                            + "again. Its feed does not refuse events for good, and a later catch-up of the feed "
+                            + "replays the history.", id, e);
+                } else {
+                    log.error("The background catch-up of projection {} failed. It will receive no live events until "
+                            + "the application is restarted.", id, e);
+                }
                 // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the
                 // post processor directly has no reason to, and losing the record is better than losing the log too.
                 withPushCatchupStatus(status -> status.recordFailure(id, e));
@@ -356,6 +374,41 @@ class ProjectionAnnotationRegistrar {
         if (status != null) {
             action.accept(status);
         }
+    }
+
+    // A domain-feed catch-up that fails on an interrupt records no failure, so the feed can replay again. Nothing else
+    // runs a background catch-up again, so it is retried here, with the interrupt cleared, after waiting 100 ms,
+    // then 200 ms, then 400 ms. After that the failure goes to runInBackground with the thread interrupted again,
+    // which is how it tells this case from a failure the feed records. A close() ends the retries the same way.
+    private Runnable retryingAfterInterruptedFailure(String id, DomainEventFeed<?> feed, Runnable catchUp) {
+        return () -> {
+            for (int failures = 1; ; failures++) {
+                try {
+                    catchUp.run();
+                    return;
+                } catch (Throwable e) {
+                    if (closing || feed.refusesPermanently() || failures > MAX_RETRIES_AFTER_INTERRUPTED_FAILURE
+                            || !Thread.currentThread().isInterrupted()) {
+                        throw e;
+                    }
+                    Duration delay = FIRST_RETRY_DELAY_AFTER_INTERRUPTED_FAILURE.multipliedBy(1L << (failures - 1));
+                    log.warn("The background catch-up of projection {} failed on an interrupt and is retried in {} ms.",
+                            id, delay.toMillis(), e);
+                    Thread.interrupted();
+                    try {
+                        Thread.sleep(delay);
+                    } catch (InterruptedException interrupted) {
+                        // Cleared by the throw, so the retry still runs on a thread that is not interrupted.
+                    }
+                    // Read again after the wait, because close() stops only a replay that is running, and a retry
+                    // started after it would replay the whole history into a closing store.
+                    if (closing) {
+                        Thread.currentThread().interrupt();
+                        throw e;
+                    }
+                }
+            }
+        };
     }
 
     // Wrap a domain-feed replay so an application can see where it is. A DomainEventFeed is not a subscription model,
@@ -715,7 +768,7 @@ class ProjectionAnnotationRegistrar {
                 // Nobody is left to see this replay fail, so join it on a thread of this registrar's own purely to
                 // record the failure. Stopping it is close()'s job through the model, so this needs no stop of its own.
                 runInBackground("occurrent-push-catchup-watch", id, subscription::waitUntilStarted, () -> {
-                });
+                }, false);
             }
             return;
         }
@@ -735,7 +788,7 @@ class ProjectionAnnotationRegistrar {
                 // Answer ignored. This watches a replay the project() above already started, so a watcher close()
                 // refused says nothing about whether the projection itself started.
                 runInBackground("occurrent-push-catchup-watch", id, deferred::waitUntilStarted, () -> {
-                });
+                }, false);
             }
             return true;
         });
@@ -820,7 +873,9 @@ class ProjectionAnnotationRegistrar {
                     // Same treatment as auto mode, or startAll() would block for a full replay on a projection that
                     // asked for BACKGROUND. Reported as started once the replay thread is running, which is what
                     // BACKGROUND asks for, and not reported at all when close() refused that thread.
-                    return runInBackground("occurrent-domain-feed-catchup", id, recordingProgress(id, () -> feed.catchUp(id)), feed::stopCatchUp);
+                    return runInBackground("occurrent-domain-feed-catchup", id,
+                            recordingProgress(id, retryingAfterInterruptedFailure(id, feed, () -> feed.catchUp(id))),
+                            feed::stopCatchUp, true);
                 }
             });
         }

@@ -43,7 +43,9 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -366,17 +368,146 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     // The handler interrupts its own thread, and the store then fails its next read on that thread, as the MongoDB
-    // driver does. The handover records no failure for that, so the model relaunches the replay on a thread no
-    // interrupt has reached. The event written while the first replay ran reaches the handler once, from the
-    // relaunched replay, which reads it from the store.
+    // driver does. The handover records no failure for that, so the model clears the interrupt and replays again, and
+    // the handle subscribe returned waits for that replay. The event written while the first replay ran reaches the
+    // handler once, from the retry, which reads it from the store.
     @Test
-    void a_catch_up_that_fails_on_an_interrupt_is_relaunched_and_replays_what_the_failed_one_dropped() throws Exception {
+    void a_catch_up_that_fails_on_an_interrupt_is_retried_and_its_handle_waits_for_the_retry() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         InMemoryEventStore store = new InMemoryEventStore(feed::accept);
         store.write("s1", List.of(cloudEvent("h1", "Created"), cloudEvent("h2", "Created")));
-        PositionOrderedReader failsWhenInterrupted = new PositionOrderedReader() {
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(
+                failsWhenInterrupted(store, new AtomicInteger(), new AtomicInteger()), feed, null);
+        AtomicInteger folds = new AtomicInteger();
+        List<String> handled = new CopyOnWriteArrayList<>();
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            handled.add(cloudEvent.getId());
+            if (folds.incrementAndGet() == 1) {
+                store.write("s2", List.of(cloudEvent("written", "Created")));
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        assertThat(model.isCatchingUp("sub")).isFalse();
+        assertThat(handled).containsExactly("h1", "h1", "h2", "written");
+        store.write("s3", List.of(cloudEvent("live", "Created")));
+        assertThat(handled).endsWith("live");
+    }
+
+    // Every read fails on an interrupt, so no attempt reads further than the one before it. After three retries the
+    // model gives up and the handle throws the failure, so a handler that interrupts its own thread on every replay
+    // does not apply the history in a loop. The handover defers live events without failing, so the source redelivers
+    // them.
+    @Test
+    void a_catch_up_that_keeps_failing_on_an_interrupt_is_given_up_after_three_retries_and_its_handle_throws() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("h1", "Created")));
+        AtomicInteger reads = new AtomicInteger();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(
+                failsWhenInterrupted(store, reads, new AtomicInteger(Integer.MAX_VALUE)), feed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        });
+        Throwable thrown = catchThrowable(() -> subscription.waitUntilStarted(Duration.ofSeconds(5)));
+
+        assertThat(thrown).hasMessage("read on an interrupted thread");
+        assertThat(reads).hasValue(4);
+        assertThat(model.isCatchingUp("sub")).isFalse();
+        assertThat(feed.acceptRedeliverable(cloudEvent("1", "Created"))).isEqualTo(RoutingOutcome.DEFERRED);
+    }
+
+    // Resuming a catch-up the model gave up on counts its retries from zero, so the one interrupt after the resume is
+    // retried rather than ending it again.
+    @Test
+    void resuming_a_catch_up_given_up_after_failing_on_an_interrupt_counts_its_retries_from_zero() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("h1", "Created")));
+        AtomicInteger reads = new AtomicInteger();
+        AtomicInteger interruptedReadsLeft = new AtomicInteger(4);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(
+                failsWhenInterrupted(store, reads, interruptedReadsLeft), feed, null);
+        List<String> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> handled.add(cloudEvent.getId()));
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while ((reads.get() < 4 || model.isCatchingUp("sub")) && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        interruptedReadsLeft.set(1);
+
+        assertThat(model.resumeSubscription("sub").waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        assertThat(reads).hasValue(6);
+        assertThat(handled).containsExactly("h1");
+        assertThat(model.isReadyForLiveDelivery("sub")).isTrue();
+    }
+
+    // Each attempt interrupts its thread one event further into the history than the one before it, so every retry
+    // counts from zero again and the fifth attempt replays the whole history.
+    @Test
+    void a_retry_after_an_interrupt_that_reads_further_than_every_attempt_before_it_counts_from_zero_again() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("h1", "Created"), cloudEvent("h2", "Created"), cloudEvent("h3", "Created"),
+                cloudEvent("h4", "Created"), cloudEvent("h5", "Created")));
+        AtomicInteger reads = new AtomicInteger();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(
+                failsWhenInterrupted(store, reads, new AtomicInteger()), feed, null);
+        List<String> handled = new CopyOnWriteArrayList<>();
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            handled.add(cloudEvent.getId());
+            if (reads.get() <= 4 && cloudEvent.getId().equals("h" + reads.get())) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        AtomicBoolean started = new AtomicBoolean();
+        Throwable thrown = catchThrowable(() -> started.set(subscription.waitUntilStarted(Duration.ofSeconds(10))));
+
+        assertThat(thrown).isNull();
+        assertThat(started).isTrue();
+        assertThat(reads).hasValue(5);
+        assertThat(handled).endsWith("h1", "h2", "h3", "h4", "h5");
+    }
+
+    // The handler fails with an InterruptedException from another thread as the cause, while the replay thread is not
+    // interrupted. That failure repeats on every replay, so it is not retried, and the handover refuses live events.
+    @Test
+    void a_catch_up_failure_with_an_interrupted_exception_as_its_cause_on_a_thread_that_is_not_interrupted_is_not_retried() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("h1", "Created"), cloudEvent("h2", "Created")));
+        AtomicInteger reads = new AtomicInteger();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(
+                failsWhenInterrupted(store, reads, new AtomicInteger()), feed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            if (cloudEvent.getId().equals("h2")) {
+                throw new IllegalStateException("remote call failed",
+                        new ExecutionException(new InterruptedException("worker interrupted by pool shutdown")));
+            }
+        });
+        Throwable thrown = catchThrowable(() -> subscription.waitUntilStarted(Duration.ofSeconds(5)));
+
+        assertThat(thrown).hasMessage("remote call failed");
+        assertThat(reads).hasValue(1);
+        assertThat(feed.acceptRedeliverable(cloudEvent("1", "Created"))).isEqualTo(RoutingOutcome.REFUSED);
+    }
+
+    // Counts the reads. The first interruptedReads of them interrupt the thread and throw, as the MongoDB driver does
+    // when its connection pool lock is interrupted, and every read on an interrupted thread throws.
+    private static PositionOrderedReader failsWhenInterrupted(InMemoryEventStore store, AtomicInteger reads,
+                                                              AtomicInteger interruptedReads) {
+        return new PositionOrderedReader() {
             @Override
             public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                reads.incrementAndGet();
+                if (interruptedReads.getAndDecrement() > 0) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("read on an interrupted thread");
+                }
                 return store.readInPositionOrder(filter, range).map(cloudEvent -> {
                     if (Thread.currentThread().isInterrupted()) {
                         throw new IllegalStateException("read on an interrupted thread");
@@ -395,66 +526,6 @@ class CatchupThenPushSubscriptionModelTest {
                 return store.writesPosition();
             }
         };
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failsWhenInterrupted, feed, null);
-        AtomicInteger folds = new AtomicInteger();
-        List<String> handled = new CopyOnWriteArrayList<>();
-
-        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
-            handled.add(cloudEvent.getId());
-            if (folds.incrementAndGet() == 1) {
-                store.write("s2", List.of(cloudEvent("written", "Created")));
-                Thread.currentThread().interrupt();
-            }
-        });
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (model.isCatchingUp("sub") && System.nanoTime() < deadline) {
-            Thread.sleep(10);
-        }
-
-        assertThat(handled).containsExactly("h1", "h1", "h2", "written");
-        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
-        store.write("s3", List.of(cloudEvent("live", "Created")));
-        assertThat(handled).endsWith("live");
-    }
-
-    // A replay that fails on an interrupt every time relaunches itself three times and is then left like a stopped
-    // one, so a handler that interrupts its own thread on every replay does not apply the history in a loop. The
-    // handover refuses live events without failing, so the source redelivers them, and resuming replays again.
-    @Test
-    void a_catch_up_that_keeps_failing_on_an_interrupt_is_left_for_resume_subscription_after_three_relaunches() throws Exception {
-        PushSubscriptionModel feed = new PushSubscriptionModel();
-        AtomicInteger reads = new AtomicInteger();
-        PositionOrderedReader alwaysInterrupted = new PositionOrderedReader() {
-            @Override
-            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
-                reads.incrementAndGet();
-                throw new IllegalStateException("read interrupted", new InterruptedException());
-            }
-
-            @Override
-            public long currentPosition() {
-                return 0;
-            }
-
-            @Override
-            public boolean writesPosition() {
-                return true;
-            }
-        };
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(alwaysInterrupted, feed, null);
-
-        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
-        });
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (model.isCatchingUp("sub") && System.nanoTime() < deadline) {
-            Thread.sleep(10);
-        }
-
-        assertThat(model.isCatchingUp("sub")).isFalse();
-        assertThat(reads).hasValue(4);
-        assertThat(feed.acceptRedeliverable(cloudEvent("1", "Created"))).isEqualTo(RoutingOutcome.DEFERRED);
-        assertThat(model.resumeSubscription("sub").waitUntilStarted(Duration.ofSeconds(5))).isFalse();
-        assertThat(reads).hasValue(5);
     }
 
     /**

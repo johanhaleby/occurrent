@@ -261,11 +261,15 @@ public final class CatchupProjectionFeed<E> {
      * Runs on the calling thread. A caller that wants it off that thread runs it on a thread it owns, and calls
      * {@link #stopCatchUp()} to bring it back down.
      * <p>
-     * A catch-up that fails on an interrupted thread, or because an interrupt made a read fail, throws that failure but
-     * is not recorded as a failed catch-up, since a store client can fail its reads once the thread is interrupted, the
-     * MongoDB driver among them. This feed does not refuse later events for it, and leaves the thread interrupted.
-     * A replay it cut short is abandoned like a stopped one, and a later {@code catchUp()} replays the history it did
-     * not finish.
+     * A catch-up whose failure reaches this feed on an interrupted thread throws that failure but is not recorded as a
+     * failed catch-up, since a store client can fail its reads once the thread is interrupted, the MongoDB driver
+     * among them. This feed does not refuse later events for it, and leaves the thread interrupted. Only the thread's
+     * interrupt flag counts, so a failure on a thread that is not interrupted is recorded even with an
+     * {@link InterruptedException} as its cause. A replay it cut short is abandoned like a stopped one, and a later
+     * {@code catchUp()} replays the history it did not finish. When the interrupt fails the delivery of the events
+     * buffered during the replay, this feed is not live afterwards, and the events it had not delivered are handled
+     * as they are when a catch-up is stopped before this feed goes live. When it fails the marker write, every event
+     * has been delivered and this feed stays live, and a later {@code catchUp()} replays the whole history again.
      * <p>
      * A call the view makes while this feed is calling it, from its fold or from a callback such as
      * {@code replayStarted()}, returns without waiting for the replay, since that replay cannot start before the view's
@@ -281,9 +285,9 @@ public final class CatchupProjectionFeed<E> {
      * the history caught up already. Another catch-up that fails while the replay runs does not refuse it. The view's
      * code is not told, though a stopped replay calls {@code replayStarted()} and {@code replayAbandoned()} on a replay
      * aware view like any other stopped replay. When the replay fails, this feed refuses every later event, the same as
-     * after any other failed catch-up, unless an interrupt caused the failure. A {@code catchUp()} or {@link #goLive()}
-     * that runs the replay throws the failure, and an {@link #accept(Object)} that runs it logs the failure instead of
-     * throwing it.
+     * after any other failed catch-up, unless it failed on an interrupted thread. A {@code catchUp()} or
+     * {@link #goLive()} that runs the replay throws the failure, and an {@link #accept(Object)} that runs it logs the
+     * failure instead of throwing it.
      * <p>
      * An interrupt keeps the thread that runs such a replay from waiting. When that thread is interrupted where the
      * replay would wait for another fold or replay, it gives up the calls made on it and logs a warning. When the
