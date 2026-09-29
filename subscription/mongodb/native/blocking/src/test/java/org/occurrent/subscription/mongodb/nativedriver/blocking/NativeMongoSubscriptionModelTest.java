@@ -454,29 +454,11 @@ public class NativeMongoSubscriptionModelTest {
 
             // Then
             await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).contains(writtenAfterStart.eventId()));
-            await().during(ONE_SECOND).atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsOnlyOnce(writtenAfterStart.eventId()));
+            await().during(ONE_SECOND).atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenWhileStopped.eventId(), writtenAfterStart.eventId()));
             assertAll(
                     () -> assertThat(startedWhileStopped).isFalse(),
-                    () -> assertThat(pausedWhileStopped).isTrue(),
-                    () -> assertThat(handled).extracting(CloudEvent::getId).doesNotContain(writtenWhileStopped.eventId())
+                    () -> assertThat(pausedWhileStopped).isTrue()
             );
-        }
-
-        @Test
-        void a_subscription_made_while_the_model_is_stopped_at_the_global_checkpoint_receives_the_events_written_before_start() {
-            // Given
-            subscriptionModel.stop();
-            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
-            StartAt whenSubscribed = StartAt.checkpoint(requireNonNull(subscriptionModel.globalCheckpoint()));
-            subscriptionModel.subscribe(UUID.randomUUID().toString(), whenSubscribed, handled::add);
-            NameDefined writtenWhileStopped = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
-            mongoEventStore.write("1", 0, serialize(writtenWhileStopped));
-
-            // When
-            subscriptionModel.start();
-
-            // Then
-            await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenWhileStopped.eventId()));
         }
 
         @Test

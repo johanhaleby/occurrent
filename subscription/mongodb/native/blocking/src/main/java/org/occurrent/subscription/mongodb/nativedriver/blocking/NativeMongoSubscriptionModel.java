@@ -203,11 +203,40 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     }
 
     @Override
-    public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        // Checked on the caller's thread rather than on the dispatcher thread. A checkpoint this model cannot parse used
+        // to fail down in newInternalSubscription, where the retry wrapper re-threw it forever and the caller was left
+        // holding a subscription whose latch never counted down. A dynamic position is a no-op in there, for a reason
+        // checkStartPosition documents.
+        MongoCommons.checkStartPosition(startAt, new SubscriptionModelContext(NativeMongoSubscriptionModel.class));
 
+        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
+        Registered registered = register(subscriptionId, filter, currentStartAt, action);
+        if (registered.paused()) {
+            recordThePresent(subscriptionId, currentStartAt);
+        }
+        return registered.subscription();
+    }
+
+    private record Registered(Subscription subscription, boolean paused) {
+    }
+
+    // A subscription made while the model is stopped opens its change stream when start() or a resume does, so a
+    // position at the present is read here and the events written before start() are delivered to it. Read after it's
+    // registered and outside the lock, since it waits for MongoDB and a pause or a cancel must not wait with it. When
+    // start() opens its change stream first, the position start() records is kept.
+    private void recordThePresent(String subscriptionId, AtomicReference<StartAt> currentStartAt) {
+        try {
+            MongoCommons.resolveOpeningPosition(currentStartAt, new SubscriptionModelContext(NativeMongoSubscriptionModel.class), this::currentOperationTime);
+        } catch (RuntimeException e) {
+            log.warn("Couldn't read MongoDB's operation time for subscription {} while the model is stopped. Its change stream opens at the present once start() or a resume starts it, so the events written before then aren't delivered to it.", subscriptionId, e);
+        }
+    }
+
+    private synchronized Registered register(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action) {
         if (isKnown(subscriptionId)) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
         }
@@ -217,29 +246,25 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         // caller holding a subscription that never delivered while the retry wrapper re-threw the same
         // IllegalArgumentException forever. SpringMongoSubscriptionModel always refused it here.
         List<Bson> pipeline = createPipeline(timeRepresentation, filter);
-        // The start position, for the same reason and with the same history. A checkpoint this model cannot parse used
-        // to fail down in newInternalSubscription on the dispatcher thread, where the retry wrapper re-threw it forever
-        // and the caller was left holding a subscription whose latch never counted down. A dynamic position is a no-op
-        // in there, for a reason checkStartPosition documents.
-        MongoCommons.checkStartPosition(startAt, new SubscriptionModelContext(NativeMongoSubscriptionModel.class));
 
         if (shutdown || cloudEventDispatcher.isShutdown() || cloudEventDispatcher.isTerminated()) {
             throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");
         }
 
-        InternalSubscription internalSubscription = new InternalSubscription(new AtomicReference<>(startAt), action, pipeline);
+        InternalSubscription internalSubscription = new InternalSubscription(currentStartAt, action, pipeline);
         // Known from here on rather than once its change stream opens, so a pause or a cancel reaches it while MongoDB
         // cannot be reached, and a wrapper asking which subscriptions this model runs gets the right answer
-        if (running) {
-            runningSubscriptions.put(subscriptionId, internalSubscription);
-            startSubscription(subscriptionId, internalSubscription, () -> runningSubscriptions.remove(subscriptionId, internalSubscription));
-        } else {
+        boolean paused = !running;
+        if (paused) {
             // Opens nothing until start() or a resume does, like a subscription that stop() paused
             pausedSubscriptions.put(subscriptionId, internalSubscription);
+        } else {
+            runningSubscriptions.put(subscriptionId, internalSubscription);
+            startSubscription(subscriptionId, internalSubscription, () -> runningSubscriptions.remove(subscriptionId, internalSubscription));
         }
         // Follows every run of the subscription, so it answers true once start() or a resume opens the change stream of
         // one subscribed while the model was stopped, or paused before its change stream opened
-        return new NativeMongoSubscription(subscriptionId, internalSubscription.firstStartedLatch);
+        return new Registered(new NativeMongoSubscription(subscriptionId, internalSubscription.firstStartedLatch), paused);
     }
 
     // Called once the subscription is registered, so forget(..) on the dispatcher thread always finds the run it removes
@@ -468,15 +493,18 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * <p>
      * The wait for a subscription ends early when it's paused or cancelled, when the model shuts down, or when its
      * change stream won't open at all, because its {@code RetryStrategy} gave up or its change stream history was lost
-     * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off. A subscription that isn't running once
-     * {@code resumeSubscription(..)} returns, such as when an override doesn't call the super method, isn't waited for.
-     * A subscription that an override already resumed or cancelled while resuming an earlier one is left out.
+     * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off. Until one of those happens, a returned
+     * {@code Subscription} that never answers that it has started keeps this method waiting. A subscription that isn't
+     * running once {@code resumeSubscription(..)} returns, such as when an override doesn't call the super method,
+     * isn't waited for. A subscription that an override already resumed or cancelled while resuming an earlier one is
+     * left out.
      * <p>
      * When a resume or a wait throws, every other subscription is still resumed and waited for, and then this method
      * throws the first exception with the others added as suppressed.
      * <p>
-     * A subscription made while the model is stopped is paused until this call or a resume starts it, and a
-     * {@link StartAt#now()} it was given means the moment it starts.
+     * A subscription made while the model is stopped is paused until this call or a resume starts it. A
+     * {@link StartAt#now()} it was given means when {@code subscribe(..)} ran, or the moment it starts when MongoDB
+     * couldn't be reached then.
      */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
