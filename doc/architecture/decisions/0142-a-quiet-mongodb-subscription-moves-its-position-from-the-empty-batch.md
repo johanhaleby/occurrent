@@ -42,9 +42,28 @@ resume was given.
 
 **`pauseSubscription(..)` waits up to a second for an action that is running, and not for a read.** A read that
 returns nothing waits on the server for up to `maxAwaitTime`, and closing the cursor does not end it sooner. The wait
-also covers handing a quiet position to a listener. Once the pause has returned, the run starts no action, and a
-document the read returns after that is left to the resume. `stop()` closes every subscription before it waits for
-any of them. A pause called from inside the action does not wait, since the action cannot return while it waits.
+also covers handing a quiet position to a listener. A pause called from inside the action does not wait, since the
+action cannot return while it waits.
+
+- Once a pause or a cancel has closed the run, no attempt of the action starts on it, a retry included. An attempt
+  that started before can still be running when they return, since a cancel doesn't wait and a pause waits a second
+  at most. A document the read returns after the close is left to the resume.
+- `stop()` closes every subscription before it waits, and waits one second for all of them together.
+- An interrupt doesn't end the wait. The subscription is paused when `pauseSubscription(..)` or `stop()` returns, and
+  the interrupt is set on the thread again. `stop()` pauses every subscription even when one pause throws, and then
+  throws the first failure.
+
+**A run that has been closed never changes the position a later run opens at, and stores no checkpoint after a
+cancel.** A pause, a cancel and a stop close a run, and a resume or a start makes a new run of the same subscription.
+
+- An action that returns after its run was closed still moves the position while no new run exists, so a plain
+  resume goes on after the event. Once a resume has made the new run, the closed run's write is refused, and a
+  subscription resumed at an earlier position receives the event again.
+- `DurableSubscriptionModel` deletes the checkpoint in a cancel under the same lock as the checkpoint write for an
+  event, so an action that returns after the cancel stores nothing.
+- One write is left. A `DurableSubscriptionModel` action that returns after a pause and a resume still saves its
+  checkpoint, since the model can't tell which run called it. That checkpoint is of an event whose action has
+  returned, so a subscription that restarts from it can receive events again but skips none.
 
 **A model tells the quiet position to a listener through the new `QuietPositionReportingSubscriptions`.** The model
 asks each listener before a read whether it wants the position, and the listener answers with a consumer or with
@@ -57,13 +76,18 @@ writes the position under a condition reads that condition when it is asked, whi
   was asked. A cancel followed by a new subscribe of the same id is another registration.
 - It saves at most once per interval per subscription. The interval starts at `subscribe(..)` and starts again with
   every checkpoint saved for an event and with every attempt to save a quiet position, so a subscription that
-  receives events gets no extra write. The default is one minute, `saveQuietPositionEvery(Duration)` changes it and
-  `neverSaveQuietPosition()` turns the save off.
+  stores a checkpoint for an event at least once per interval gets no extra write. The default is one minute,
+  `saveQuietPositionEvery(Duration)` changes it and `neverSaveQuietPosition()` turns the save off.
+- It saves nothing while the last event delivered is one the persist predicate declined to store, since the quiet
+  position comes after that event. Before the first event it saves only with an `EveryN` predicate, which is what
+  `DurableSubscriptionModelConfig(int)` makes. A predicate of another class, such as one that always answers `false`,
+  first has to store a checkpoint for an event.
 - It writes with the same `CheckpointWriteCondition` as a checkpoint for an event, read before the read that
   returned the position.
 - The save holds the lock per subscription id that `subscribe(..)`, `resumeSubscription(..)`, `cancelSubscription(..)`
   and the save after lost history also take. So a save is never written after a cancel has deleted the checkpoint, or
-  after a new subscribe of the id has replaced the registration. The checkpoint write for an event takes no lock.
+  after a new subscribe of the id has replaced the registration. The checkpoint write for an event takes only a lock
+  of its own for each subscribe, which a cancel also takes before it deletes the checkpoint.
 - A write the condition refuses is thrown to the wrapped model, which ends delivery for that subscription on that
   node, as it does when the write for an event is refused. Any other failure is logged as a warning and tried again
   after the interval, since nothing is lost by a quiet position that was not saved.
@@ -84,6 +108,8 @@ A quiet position is stored only when all of these hold:
    it held ([ADR 139](0139-a-node-that-gave-up-a-lease-writes-with-the-token-it-held.md)). The store refuses that
    write once the node that holds the lease now has written a checkpoint of its own, and accepts it before then.
 3. The interval has passed since the last checkpoint write or attempt for that subscription.
+4. The persist predicate stored the last event delivered, or no event has been delivered and the predicate is an
+   `EveryN`.
 
 A pause that comes while a quiet position is being written waits up to a second for the write, as it does for an
 action. A write that takes longer can finish after the pause has returned, and after another node has taken the lease.
@@ -114,7 +140,8 @@ doubles the change streams, and the token of the second one says nothing about w
 ## Consequences
 
 A quiet subscription behind a `DurableSubscriptionModel` costs one checkpoint write per interval. Keep the interval
-well below the oplog window.
+well below the oplog window. A subscription whose persist predicate is not an `EveryN` gets no quiet position saved
+until the predicate has stored a checkpoint for an event.
 
 A subscription that matches nothing resumes and restarts from a position the oplog still has, as long as the process
 is down, or the subscription paused, for less than the oplog window. Longer than that still ends in lost history.
@@ -130,10 +157,10 @@ These change for `SpringMongoSubscriptionModel`, and each was a defect:
   subscribed again.
 - The executor the model makes by default, or for `useVirtualThreads()`, is made per model and shut down with it.
 - A subscription at the present made while the model is stopped receives the events written before `start()`.
-- No action starts after `pauseSubscription(..)` or `cancelSubscription(..)` has returned, and an event the change
-  stream has already returned by then is left to the resume. `pauseSubscription(..)` and `stop()` also wait up to a
-  second for an action that is running. Before, they did not wait for the action, and an event could be delivered
-  after they had returned.
+- No attempt of the action starts after `pauseSubscription(..)` or `cancelSubscription(..)` has returned, a retry
+  included, and an event the change stream has already returned by then is left to the resume. `pauseSubscription(..)`
+  also waits up to a second for an action that is running, and `stop()` one second for all of them. Before, they did
+  not wait for the action, and an event could be delivered after they had returned.
 
 `SpringMongoSubscription` no longer wraps a Spring Data `Subscription`. Its `protected` constructor is gone, and
 neither it nor `SpringMongoSubscriptionModel` has an `equals` and `hashCode` of its own. `SpringMongoSubscriptionModel.subscribe(..)` after `shutdown()` throws

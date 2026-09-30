@@ -1352,16 +1352,25 @@ are delivered now, which is more than the action received before.
 
 In 0.33.0, `pauseSubscription(..)` and `stop()` did not wait for an action that was running, and the model could hand
 the action an event the change stream had already read after `pauseSubscription(..)` or `cancelSubscription(..)` had
-returned. Now no action starts once they have returned, and that event is delivered after the resume instead.
+returned. Now no attempt of the action starts once they have returned, a retry included, and that event is delivered
+after the resume instead.
 
-`pauseSubscription(..)` and `stop()` wait up to a second for an action that is running. An action that takes longer
-can still be running when they return. A pause called from inside the action does not wait.
+`pauseSubscription(..)` waits up to a second for an action that is running, and `stop()` waits one second for all of
+them together. An action that takes longer can still be running when they return. A pause called from inside the
+action does not wait. An interrupt doesn't end the wait, so the subscription is paused when they return, and the
+interrupt is set on the thread again.
 
 ### A quiet subscription's checkpoint is written once a minute
 
 A `DurableSubscriptionModel` over `SpringMongoSubscriptionModel` or `NativeMongoSubscriptionModel` now saves the
 position of a subscription that has had no checkpoint saved for a minute. It uses the same `CheckpointStorage` and the
-same write condition as for an event. A subscription that receives events gets no extra write.
+same write condition as for an event. A subscription that stores a checkpoint for an event at least once a minute
+gets no extra write.
+
+The save follows your persist predicate. Nothing is saved while the last event delivered is one the predicate
+declined to store, since the saved position would come after that event. With a predicate other than `EveryN`, such
+as your own lambda, nothing is saved until the predicate has stored a checkpoint for an event, so a predicate that
+always returns `false` never gets a position saved.
 
 Change the interval with `saveQuietPositionEvery(Duration)` on `DurableSubscriptionModelConfig`, and keep it well
 below the oplog window. `neverSaveQuietPosition()` turns the save off, and the stored checkpoint of a subscription
