@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Sixteen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
+Seventeen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -55,10 +55,13 @@ Then a reactor subscription handler, or the code that applies an event to a reac
 event back into its own subscription or feed no longer waits forever. The call is answered once the event is queued,
 and when applying that event fails, the subscription or feed fails for good. Read
 [section 15](#15-feeding-a-reactor-catch-up-from-its-own-handler-no-longer-waits-forever).
-Finally, on `NativeMongoSubscriptionModel`, a subscription made while the model is stopped now starts when `start()`
+Then, on `NativeMongoSubscriptionModel`, a subscription made while the model is stopped now starts when `start()`
 opens its change stream. A call that waits for it to start hangs when it runs before `start()` on the thread that calls
 `start()`. Read
 [section 16](#16-a-native-mongodb-subscription-made-while-the-model-is-stopped-starts-with-start).
+Finally, a blocking catch-up subscription from `StartAtTime.offsetDateTime(..)` now also delivers the events stored at
+the time you give, so passing the time of the last event you handled delivers that event again. Read
+[section 17](#17-startattimeoffsetdatetime-includes-the-events-stored-at-that-time).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1241,3 +1244,21 @@ that starts it again.
 
 There is no recipe for this change. Whether the model is stopped when `subscribe(..)` runs is runtime behavior that a
 rewrite of the source cannot see.
+
+## 17. `StartAtTime.offsetDateTime(..)` includes the events stored at that time
+
+This covers the blocking `CatchupSubscriptionModel` and `StreamCatchupSubscriptionModel`. In 0.33.0 a subscription
+from `StartAtTime.offsetDateTime(time)` replayed the events stored after `time`. Now it replays the events stored at
+`time` as well.
+
+The same goes for the time position a replay stores. Several events can share that time down to the millisecond, and in
+0.33.0 a restart read only the events after it, so the other events stored in that millisecond were never delivered.
+
+What to do:
+
+- If you pass the time of the last event you handled, to resume where you left off, that event is now delivered again.
+  Make the handler safe to run twice on it, or skip it by its id.
+- Adding a millisecond to that time instead skips every other event stored in the same millisecond, which is the loss
+  this change fixes.
+
+There is no recipe for this change. The time you pass is a runtime value that a rewrite of the source cannot see.
