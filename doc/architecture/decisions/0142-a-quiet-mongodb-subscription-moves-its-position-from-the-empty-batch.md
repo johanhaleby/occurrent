@@ -47,23 +47,40 @@ action cannot return while it waits.
 
 - Once a pause or a cancel has closed the run, no attempt of the action starts on it, a retry included. An attempt
   that started before can still be running when they return, since a cancel doesn't wait and a pause waits a second
-  at most. A document the read returns after the close is left to the resume.
+  at most. A document the read returns after the close is left to the resume. A retry that finds the run closed
+  ends without calling the `RetryStrategy`'s `onError`, `onRetryableError` or `onAfterRetry` for the attempt it
+  skipped, since the action did not fail.
 - `stop()` closes every subscription before it waits, and waits one second for all of them together.
 - An interrupt doesn't end the wait. The subscription is paused when `pauseSubscription(..)` or `stop()` returns, and
   the interrupt is set on the thread again. `stop()` pauses every subscription even when one pause throws, and then
   throws the first failure.
 
-**A run that has been closed never changes the position a later run opens at, and stores no checkpoint after a
-cancel.** A pause, a cancel and a stop close a run, and a resume or a start makes a new run of the same subscription.
+**A run that has been closed never changes the position a later run of the subscription opens at, and never
+stores a checkpoint that a later run, or a later subscribe of the same id, starts from, with one exception in
+`DurableSubscriptionModel` that can deliver an event again but skips none.** A pause, a cancel and a stop close a run,
+and a resume or a start makes a new run of the same subscription.
 
 - An action that returns after its run was closed still moves the position while no new run exists, so a plain
   resume goes on after the event. Once a resume has made the new run, the closed run's write is refused, and a
   subscription resumed at an earlier position receives the event again.
 - `DurableSubscriptionModel` deletes the checkpoint in a cancel under the same lock as the checkpoint write for an
   event, so an action that returns after the cancel stores nothing.
-- One write is left. A `DurableSubscriptionModel` action that returns after a pause and a resume still saves its
-  checkpoint, since the model can't tell which run called it. That checkpoint is of an event whose action has
-  returned, so a subscription that restarts from it can receive events again but skips none.
+- After lost history the model asks MongoDB for the present, and `DurableSubscriptionModel` stores it as the
+  checkpoint to restart from. A resume, or a cancel and a new subscribe of the id, can come while the model asks.
+  `HistoryLossListener` is therefore also given a `BooleanSupplier` that returns `false` once either has come, and
+  `DurableSubscriptionModel` calls it under the lock that `resumeSubscription(..)` and `cancelSubscription(..)` take.
+  Once the new run or registration exists, the closed run stores nothing. Before, it could store a present later
+  than where the new run started, and a crash then restarted the subscription past events the new run had not
+  delivered.
+- A pause alone leaves that `BooleanSupplier` returning `true`. Without the stored restart position, the resume would
+  open at the position MongoDB no longer has and restart from the present again, skipping the events written during
+  the pause.
+- The exception is a checkpoint written after the pause has stopped waiting and a resume has come. A
+  `DurableSubscriptionModel` action that returns that late still saves the checkpoint of its event, and a quiet
+  position whose save starts that late is still saved. The model can't tell which run the action or the save belongs
+  to. Every event up to either position has had its action return, so a subscription that restarts from one can
+  receive events again but skips none. Closing it needs the wrapped model to give the checkpoint write for an event
+  the same `BooleanSupplier`, which is a change to the public subscribe API.
 
 **A model tells the quiet position to a listener through the new `QuietPositionReportingSubscriptions`.** The model
 asks each listener before a read whether it wants the position, and the listener answers with a consumer or with

@@ -1353,7 +1353,8 @@ are delivered now, which is more than the action received before.
 In 0.33.0, `pauseSubscription(..)` and `stop()` did not wait for an action that was running, and the model could hand
 the action an event the change stream had already read after `pauseSubscription(..)` or `cancelSubscription(..)` had
 returned. Now no attempt of the action starts once they have returned, a retry included, and that event is delivered
-after the resume instead.
+after the resume instead. The `RetryStrategy`'s `onError` isn't called for a retry that was skipped this way, since
+the action didn't fail.
 
 `pauseSubscription(..)` waits up to a second for an action that is running, and `stop()` waits one second for all of
 them together. An action that takes longer can still be running when they return. A pause called from inside the
