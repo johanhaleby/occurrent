@@ -44,7 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 
-class CatchupThenPushSubscriptionModelReportingCancelTest {
+class CatchupThenPushSubscriptionModelCancelCompletionTest {
 
     /**
      * The cancel is not deferred to whoever subscribes to what the method returns. The returned signal only reports
@@ -58,7 +58,7 @@ class CatchupThenPushSubscriptionModelReportingCancelTest {
         caughtUp(model, marker);
 
         // When
-        model.cancelSubscriptionReportingCompletion("sub");
+        model.cancelSubscription("sub");
 
         // Then
         assertThat(model.isRunning("sub")).as("subscription running right after the call, with nothing subscribed to the returned Mono").isFalse();
@@ -80,7 +80,7 @@ class CatchupThenPushSubscriptionModelReportingCancelTest {
 
         try {
             // When
-            CompletableFuture<Void> cancelled = model.cancelSubscriptionReportingCompletion("sub").toFuture();
+            CompletableFuture<Void> cancelled = model.cancelSubscription("sub").toFuture();
             assertThat(deleteEntered.await(5, TimeUnit.SECONDS)).as("the delete has reached the storage").isTrue();
 
             // Then
@@ -114,7 +114,7 @@ class CatchupThenPushSubscriptionModelReportingCancelTest {
 
         try {
             // When
-            CompletableFuture<Void> cancelled = model.cancelSubscriptionReportingCompletion("sub").toFuture();
+            CompletableFuture<Void> cancelled = model.cancelSubscription("sub").toFuture();
 
             // Then
             assertThat(cancelled.isDone()).as("cancel reported as complete while the marker write that was running is still in flight").isFalse();
@@ -137,7 +137,7 @@ class CatchupThenPushSubscriptionModelReportingCancelTest {
         caughtUp(model, marker);
 
         // When
-        Mono<Void> firstCancel = model.cancelSubscriptionReportingCompletion("sub");
+        Mono<Void> firstCancel = model.cancelSubscription("sub");
 
         // Then
         Throwable failure = catchThrowable(() -> firstCancel.block(Duration.ofSeconds(5)));
@@ -146,7 +146,7 @@ class CatchupThenPushSubscriptionModelReportingCancelTest {
         assertThat(hasMarker(marker)).as("catch-up marker in storage after the delete failed").isTrue();
 
         // When
-        model.cancelSubscriptionReportingCompletion("sub").block(Duration.ofSeconds(5));
+        model.cancelSubscription("sub").block(Duration.ofSeconds(5));
 
         // Then
         assertThat(hasMarker(marker)).as("catch-up marker in storage after the second cancel completed").isFalse();
@@ -169,7 +169,7 @@ class CatchupThenPushSubscriptionModelReportingCancelTest {
         caughtUp(dyingProcess, durable);
 
         // When
-        CompletableFuture<Void> cancelledBeforeTheCrash = dyingProcess.cancelSubscriptionReportingCompletion("sub").toFuture();
+        CompletableFuture<Void> cancelledBeforeTheCrash = dyingProcess.cancelSubscription("sub").toFuture();
         assertThat(deleteEntered.await(5, TimeUnit.SECONDS)).as("the delete was started before the process ended").isTrue();
 
         // Then
@@ -179,7 +179,7 @@ class CatchupThenPushSubscriptionModelReportingCancelTest {
         // When
         PushSubscriptionModel restartedFeed = new PushSubscriptionModel();
         CatchupThenPushSubscriptionModel restartedProcess = new CatchupThenPushSubscriptionModel(history, restartedFeed, durable);
-        restartedProcess.cancelSubscriptionReportingCompletion("sub").toFuture().get(5, TimeUnit.SECONDS);
+        restartedProcess.cancelSubscription("sub").toFuture().get(5, TimeUnit.SECONDS);
 
         // Then
         assertThat(hasMarker(durable)).as("catch-up marker in the durable storage after the restarted process completed the cancel").isFalse();
@@ -223,7 +223,7 @@ class CatchupThenPushSubscriptionModelReportingCancelTest {
         return new PositionOrderedReader() {
             @Override
             public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
-                return Flux.fromArray(ids).map(CatchupThenPushSubscriptionModelReportingCancelTest::event);
+                return Flux.fromArray(ids).map(CatchupThenPushSubscriptionModelCancelCompletionTest::event);
             }
 
             @Override

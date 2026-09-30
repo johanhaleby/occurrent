@@ -40,12 +40,20 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
 
     final List<String> subscribedIds = new CopyOnWriteArrayList<>();
     final List<StartAt> startedAt = new CopyOnWriteArrayList<>();
+    /**
+     * The actions it was handed, so a test can run an event through one the way the wrapped model would.
+     */
+    final List<Function<CloudEvent, Mono<Void>>> actions = new CopyOnWriteArrayList<>();
     final RecordingSubscriptionModel feed;
     /**
      * A stopped named model parks a registration and opens its feed when it is started, which is what makes a start
      * position of {@code now} mean "wherever the feed has reached by then" rather than "where this registered".
      */
     boolean running = true;
+    /**
+     * What {@link #cancelSubscription(String)} answers, so a test can hold the wrapped model's cancel open.
+     */
+    Mono<Void> cancelled = Mono.empty();
 
     NamedRecordingSubscriptionModel(String globalCheckpoint) {
         this.feed = new RecordingSubscriptionModel(globalCheckpoint);
@@ -65,6 +73,7 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
                                   Function<CloudEvent, Mono<Void>> action) {
         subscribedIds.add(subscriptionId);
+        actions.add(action);
         // What the durable model hands a named model is the whole of what decides where the subscription begins on
         // this path, since this model resolves nothing further.
         startedAt.add(startAt);
@@ -82,7 +91,8 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
     }
 
     @Override
-    public void cancelSubscription(String subscriptionId) {
+    public Mono<Void> cancelSubscription(String subscriptionId) {
+        return cancelled;
     }
 
     @Override

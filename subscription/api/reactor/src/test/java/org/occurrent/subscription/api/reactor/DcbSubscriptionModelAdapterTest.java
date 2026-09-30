@@ -225,8 +225,9 @@ class DcbSubscriptionModelAdapterTest {
         }
 
         @Override
-        public void cancelSubscription(String subscriptionId) {
+        public Mono<Void> cancelSubscription(String subscriptionId) {
             cancelledSubscriptionIds.add(subscriptionId);
+            return Mono.empty();
         }
     }
 
@@ -245,7 +246,7 @@ class DcbSubscriptionModelAdapterTest {
         }
 
         @Override
-        public void cancelSubscription(String subscriptionId) {
+        public Mono<Void> cancelSubscription(String subscriptionId) {
             throw new UnsupportedOperationException("Not used by this test");
         }
     }

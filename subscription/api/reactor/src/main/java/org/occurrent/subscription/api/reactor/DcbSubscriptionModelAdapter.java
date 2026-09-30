@@ -81,12 +81,12 @@ final class DcbSubscriptionModelAdapter implements DcbSubscriptionModel {
     }
 
     @Override
-    public void cancelSubscription(String subscriptionId) {
+    public Mono<Void> cancelSubscription(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         if (!(delegate instanceof SubscriptionModelLifeCycle lifeCycle)) {
             throw new IllegalStateException("Cancelling named DCB subscriptions requires the underlying " + FluxSubscriptionModel.class.getSimpleName() +
                     " to also implement " + SubscriptionModelLifeCycle.class.getSimpleName() + ", but " + delegate.getClass().getName() + " does not.");
         }
-        lifeCycle.cancelSubscription(subscriptionId);
+        return lifeCycle.cancelSubscription(subscriptionId);
     }
 }

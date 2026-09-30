@@ -71,9 +71,9 @@ import java.util.function.Supplier;
  * marker, so subscribing the same id again replays the history. The delete runs after the cancel returns, and one that
  * fails does not change that answer in this process, since this model then trusts no marker for the id until a delete
  * succeeds or a new catch-up writes one. A process that ends before the delete succeeds keeps the marker, so the
- * history is skipped after a restart. {@link #cancelSubscriptionReportingCompletion(String)} cancels the same way and
- * returns a {@link Mono} that completes once the marker is deleted, so wait for it when a restart must not skip the
- * history. No live position is persisted, so resuming the
+ * history is skipped after a restart. The {@link Mono} that {@code cancelSubscription(..)} returns completes once the
+ * marker is deleted, so wait for it when a restart must not skip the history. No live position is persisted, so
+ * resuming the
  * live feed is the job of whatever feeds the {@link PushSubscriptionModel}. Only stream and capability-agnostic
  * subscription filters can be replayed.
  * <p>
@@ -653,19 +653,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     /**
-     * Cancels the subscription and deletes its catch-up marker, without waiting for the delete. A process that ends
-     * before the delete succeeds keeps the marker, and after a restart the same id then skips its history. Call
-     * {@link #cancelSubscriptionReportingCompletion(String)} and wait for it when that must not happen.
-     */
-    @Override
-    public void cancelSubscription(String subscriptionId) {
-        cancelSubscriptionReportingCompletion(subscriptionId);
-    }
-
-    /**
-     * Cancels the subscription the way {@link #cancelSubscription(String)} does, and returns a {@link Mono} that
-     * completes once the catch-up marker is deleted from the {@link CheckpointStorage} and fails when deleting it
-     * fails. Once it completes, subscribing the same id replays the history, in this process and after a restart.
+     * Cancels the subscription and deletes its catch-up marker from the {@link CheckpointStorage}. The returned
+     * {@link Mono} completes once the marker is deleted and fails when deleting it fails. Once it completes,
+     * subscribing the same id replays the history, in this process and after a restart.
      * <p>
      * The cancel happens when you call this, whether or not anything subscribes to the returned {@code Mono}. When the
      * delete fails, the subscription stays cancelled and the marker stays stored, so call this again. Do the same after
@@ -677,7 +667,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * @param subscriptionId The id of the subscription to cancel.
      * @return A {@code Mono} that completes once the catch-up marker is deleted.
      */
-    public synchronized Mono<Void> cancelSubscriptionReportingCompletion(String subscriptionId) {
+    @Override
+    public synchronized Mono<Void> cancelSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         // Dropping the ownership entry is what stops a replay in flight, since shouldKeepReplaying reads it. All of
         // it under the monitor, so a subscribe running at the same time installs everything or nothing.
@@ -687,9 +678,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // A cancel is not a stop, so nothing is kept to launch again. This is also the recovery from a failed
         // catch-up, freeing the id and releasing the registration that was refusing (ADR 104).
         interruptibleReplays.remove(subscriptionId);
-        liveFeed.cancelSubscription(subscriptionId);
+        Mono<Void> liveFeedCancelled = liveFeed.cancelSubscription(subscriptionId);
         if (catchupMarker == null) {
-            return Mono.empty();
+            return liveFeedCancelled;
         }
         // Started here rather than by whoever subscribes, so the delete runs even when nobody waits for it. Cached,
         // so a caller that waits does not delete a second time. A subscribe after the cancel reads the marker only
@@ -698,7 +689,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         Mono<Void> delete = deleteMarker(subscriptionId, catchupMarker);
         delete.subscribe(unused -> {
         }, error -> log.warn("Could not delete the catch-up marker of cancelled subscription {}. Subscribing it again in this process replays its history, but after a restart the marker makes it skip its history unless the subscription is cancelled again first.", subscriptionId, error));
-        return delete;
+        return Mono.when(liveFeedCancelled, delete);
     }
 
     /**

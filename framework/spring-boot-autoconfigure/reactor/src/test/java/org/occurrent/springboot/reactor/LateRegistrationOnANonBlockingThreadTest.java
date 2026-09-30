@@ -1315,8 +1315,9 @@ class LateRegistrationOnANonBlockingThreadTest {
         }
 
         @Override
-        public void cancelSubscription(String subscriptionId) {
+        public Mono<Void> cancelSubscription(String subscriptionId) {
             actions.remove(subscriptionId);
+            return Mono.empty();
         }
 
         @Override

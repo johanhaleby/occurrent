@@ -17,6 +17,7 @@
 package org.occurrent.subscription.api.reactor;
 
 import org.jspecify.annotations.NullMarked;
+import reactor.core.publisher.Mono;
 
 /**
  * The capability to cancel an individual subscription by id. Split out from {@link SubscriptionModelLifeCycle} because
@@ -28,12 +29,24 @@ public interface CancellableSubscriptions extends SubscriptionModelCapability {
 
     /**
      * Cancel a subscription so it receives no further events, and release its id for reuse. Cancelling an id that is
-     * unknown or already cancelled is a no-op.
+     * unknown or already cancelled stops nothing, and still deletes what a store holds for that id, as described
+     * below.
      * <p>
-     * A model that stores a checkpoint also discards it here, so the subscription cannot later resume from the
-     * position it reached.
+     * The cancel takes effect when this method is called, whether or not anything subscribes to the returned
+     * {@code Mono}. A caller that ignores the return value therefore gets the same cancel as before this method
+     * returned anything, with the store cleanup running in the background.
+     * <p>
+     * A model that stores a checkpoint, a catch-up marker, or anything else a later subscribe under the same id would
+     * resume from also deletes it here. The returned {@code Mono} completes once every such delete for this id has
+     * succeeded, in this model and in every model it wraps, and fails when one of them fails. Once it completes, a
+     * later subscribe under the same id starts from its own {@code StartAt}. It is cached, so subscribing to it more
+     * than once waits for the same deletes rather than running them again.
+     * <p>
+     * A failed {@code Mono}, or a process that ended before it completed, can leave that state stored. Calling this
+     * method again for the same id deletes it, also in a new process that never subscribed that id.
      *
      * @param subscriptionId The id of the subscription to cancel.
+     * @return A {@code Mono} that completes once the store cleanup for this id has succeeded.
      */
-    void cancelSubscription(String subscriptionId);
+    Mono<Void> cancelSubscription(String subscriptionId);
 }

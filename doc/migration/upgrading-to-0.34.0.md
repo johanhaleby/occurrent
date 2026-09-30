@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Eighteen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
+Nineteen things are worth reading, four of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -62,10 +62,13 @@ opens its change stream. A call that waits for it to start hangs when it runs be
 Then a blocking catch-up subscription from `StartAtTime.offsetDateTime(..)` now also delivers the events stored at
 the time you give, so passing the time of the last event you handled delivers that event again. Read
 [section 17](#17-startattimeoffsetdatetime-includes-the-events-stored-at-that-time).
-Finally, `CompetingConsumerSubscriptionModel.start(..)` and `resumeSubscription(..)` no longer throw what the lease
+Then `CompetingConsumerSubscriptionModel.start(..)` and `resumeSubscription(..)` no longer throw what the lease
 strategy or the wrapped model threw for a competing subscription. They log it and return, and the subscription is tried
 again on a thread of its own. Read
 [section 18](#18-a-competing-consumers-start-and-resumesubscription-log-a-failure-and-return).
+Finally, the reactor `cancelSubscription(..)` returns a `Mono<Void>`, which is a fourth compile-time break for a class
+that implements it. Read
+[section 19](#19-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1288,3 +1291,47 @@ you called again.
 
 There is no recipe for this change. Whether the lease strategy or the wrapped model throws is runtime behavior that a
 rewrite of the source cannot see.
+
+## 19. A reactor `cancelSubscription(..)` returns a `Mono` that completes once the stored state is deleted
+
+This covers the reactor `CancellableSubscriptions`, which every reactor `SubscriptionModel` extends, the reactor
+`DcbSubscriptionModel`, and the reactor `DcbSubscriptions.cancel(..)`. In 0.33.0 `cancelSubscription(..)` returned
+nothing, and a model that stores a checkpoint or a catch-up marker deleted it in the background. A process that ended
+before that delete succeeded kept the checkpoint or the marker. After a restart the same id then resumed from the
+cancelled subscription's position, or skipped its history.
+
+Now it returns `Mono<Void>`. The cancel still takes effect when you call the method, whether or not anything subscribes
+to the `Mono`. The `Mono` completes once the state stored for that id is deleted, in the model you called and in every
+model it wraps, and it fails when a delete fails.
+
+What to do:
+
+1. A call that ignores the result compiles and behaves as before. Recompile code built against 0.33.0, since the return
+   type is part of the method's compiled signature.
+2. When a later subscribe with the same id has to start from its own `StartAt`, also after a restart, wait for the
+   `Mono`, for example with `cancelSubscription(id).block()` or by chaining on it. When it fails, or the process ended
+   before it completed, call `cancelSubscription(id)` again. That works in a new process that never subscribed the id.
+3. A class that implements either interface stops compiling. Return `Mono<Void>`. An implementation that cancels
+   synchronously and stores nothing returns `Mono.empty()`.
+4. An implementation that deletes stored state asynchronously starts the delete when the method is called, returns a
+   `Mono` that completes once the delete has, and caches it, so a second subscriber does not delete again.
+5. A model that wraps another returns a `Mono` that also waits for the `Mono` from the wrapped model's
+   `cancelSubscription(..)`.
+
+`UpgradeToOccurrent_0_34` changes a Java implementation of either interface that returns `void` to return `Mono<Void>`.
+Each `return` without a value becomes `return Mono.empty()`, and a body that can run off its end gets
+`return Mono.empty()` as its last statement. That is the whole change for step 3. Steps 4 and 5 stay by hand, since the
+recipe cannot tell a delete that runs in the background from code that finishes before the method returns.
+
+The recipe does not change a Kotlin implementation. A Java body that ends in an `if` whose branches all return gets a
+`return Mono.empty()` the compiler reports as unreachable, so delete that line.
+
+`ReactorDurableSubscriptionModel` now deletes the checkpoint only after every checkpoint write the cancelled
+subscription had already started, and a write it had not started by then never runs. A subscribe in the same process
+reads and writes the checkpoint only after a delete that a cancel of the same id started has ended. So a subscribe
+right after a cancel no longer resumes from the cancelled subscription's position.
+
+A reactor catch-up model cancelled before its replay handed the subscription over to the wrapped model now passes the
+cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has. A wrapped model
+you wrote yourself can therefore get `cancelSubscription(..)` for an id it was never given in this process. It stops
+nothing then, and deletes what it stores for that id, as `CancellableSubscriptions` describes.

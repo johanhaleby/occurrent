@@ -109,7 +109,8 @@ class SubscriptionModelCapabilityTest {
         }
 
         @Override
-        public void cancelSubscription(String subscriptionId) {
+        public Mono<Void> cancelSubscription(String subscriptionId) {
+            return Mono.empty();
         }
 
         @Override

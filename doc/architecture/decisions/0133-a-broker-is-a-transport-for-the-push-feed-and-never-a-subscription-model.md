@@ -1477,29 +1477,45 @@ delete of its marker succeeds or a new marker is written for it. A `subscribe(..
 again and reads the history whether or not that works.
 
 A process that ends between a reactor `cancelSubscription(..)` returning and its delete succeeding keeps the marker,
-and after a restart a subscription made with that id goes straight to live delivery.
-`CancellableSubscriptions.cancelSubscription(String)` returns `void`, so its caller has nothing to wait for. The reactor
-`CatchupThenPushSubscriptionModel` therefore also has `cancelSubscriptionReportingCompletion(String)`. It cancels the
-same way when it is called, whether or not anything subscribes to what it returns, and returns a `Mono<Void>` that
-completes once the delete has succeeded and fails when the delete fails. A caller that waits for it knows the marker is
-gone, which is what the blocking `cancelSubscription(..)` returning tells its caller. A process that ends before the
-`Mono` completes never told its caller the cancel was done, and calling the method again after the restart deletes the
-marker, also for an id the new process has never subscribed.
+and after a restart a subscription made with that id goes straight to live delivery. So the reactor
+`CancellableSubscriptions.cancelSubscription(String)` now returns a `Mono<Void>` where it returned `void`. The cancel
+still takes effect when the method is called, whether or not anything subscribes to the `Mono`, so a caller that ignores
+it gets the same cancel as before. The `Mono` completes once the delete has succeeded and fails when the delete fails.
+A caller that waits for it knows the marker is gone, which is what the blocking `cancelSubscription(..)` returning tells
+its caller. A process that ends before the `Mono` completes never told its caller the cancel was done, and calling the
+method again after the restart deletes the marker, also for an id the new process has never subscribed.
 
 The reactor model cancels before it deletes, the other way round from the blocking model. When the delete fails, the
 reactor subscription stays cancelled with its marker stored, and calling the method again deletes the marker. Deleting first
 would mean keeping the replay from writing a new marker while the delete runs, which the blocking model gets from the
 id's lock, and the caller learns about a failed delete either way.
 
-The method is on `CatchupThenPushSubscriptionModel`, not on `CancellableSubscriptions`. `ReactorDurableSubscriptionModel`
-deletes its stored position after `cancelSubscription(..)` returns in the same way, so it has the same gap across a
-restart. A default on `CancellableSubscriptions` that only calls `cancelSubscription(..)` would report completion before
-either model had deleted anything, and a correct one needs every reactor model that wraps another to pass the call on.
-When the durable model gets a cancel that reports completion, the method moves to `CancellableSubscriptions`.
+The `Mono` is on `CancellableSubscriptions` rather than on a second method of `CatchupThenPushSubscriptionModel`.
+`ReactorDurableSubscriptionModel` deleted its stored position after `cancelSubscription(..)` returned in the same way,
+so it had the same gap across a restart. A caller can also hold a model that wraps the catch-up model rather than the
+catch-up model itself, and a second method would reach that caller only if every wrapping model had a copy of it too.
+Every reactor model that wraps another now returns a `Mono` that completes once its own delete and the wrapped model's
+cancel have both completed.
 
-`cancelSubscription(..)` itself keeps the gap, since it returns `void` and does not wait. Closing it there means every
-reactor cancel returning a `Mono<Void>`, a breaking change to `CancellableSubscriptions` that is not part of this
-amendment. Until then, a caller that must not skip the history after a restart calls
-`cancelSubscriptionReportingCompletion(..)` and waits for it.
+The durable model's `Mono` completes once the stored position is deleted. A position save that the cancelled
+subscription sent just before the cancel can reach the store after a delete sent just after it, and put the position
+back. So the delete runs after every position write the cancelled subscription had already started, and a write it had
+not started by then never runs, even when the wrapped model runs an event through the action after the cancel. A
+`subscribe(..)` for that id in the same process reads and writes the position only after that delete has ended, whether
+or not anything waited for the `Mono`, so it does not start from the position of the subscription that was cancelled.
+
+A reactor catch-up model that is cancelled before its replay handed the id over to the wrapped model now passes the
+cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has, since the wrapped
+model can hold what an earlier process stored for that id.
+
+Once the `Mono` from `cancelSubscription(id)` completes, no store holds a marker or a position for that id that a later
+`subscribe(..)` would resume from. A process that ended before the `Mono` completed finishes the cancel by calling
+`cancelSubscription(id)` again.
+
+That costs a breaking change to a released interface. A class that implements `CancellableSubscriptions` or the reactor
+`DcbSubscriptionModel` has to return `Mono<Void>`, and code compiled against 0.33.0 that calls the method has to be
+recompiled. `UpgradeToOccurrent_0_34` changes a Java implementation that returns `void`, and one that deletes stored
+state in the background has to be changed by hand. The second method I rejected kept the interface as it was, but it
+left `cancelSubscription(..)` itself with the gap, and every wrapping model would have had two cancel methods.
 
 A caller no longer deletes the checkpoint by hand to have an id read its history again, since a cancel does it.

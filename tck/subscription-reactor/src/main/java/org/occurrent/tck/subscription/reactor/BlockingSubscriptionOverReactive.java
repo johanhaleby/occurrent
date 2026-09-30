@@ -182,7 +182,8 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
 
     @Override
     public void cancelSubscription(String subscriptionId) {
-        subscriptionModel.cancelSubscription(subscriptionId);
+        // Waited for, so what the reactive model stored for this id is gone when this blocking call returns
+        subscriptionModel.cancelSubscription(subscriptionId).block();
     }
 
     @Override
