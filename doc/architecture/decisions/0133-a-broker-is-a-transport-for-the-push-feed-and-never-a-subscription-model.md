@@ -1502,18 +1502,24 @@ subscription sent just before the cancel can reach the store after a delete sent
 back. So the delete runs after every position write the cancelled subscription had already started, and a write it had
 not started by then never runs, even when the wrapped model runs an event through the action after the cancel. A
 `subscribe(..)` for that id in the same process reads and writes the position only after that delete has ended, whether
-or not anything waited for the `Mono`, so it does not start from the position of the subscription that was cancelled.
+or not anything waited for the `Mono`, so it does not start from the position of the subscription that was cancelled
+unless the delete failed.
+It resolves a dynamic `StartAt` only after the delete too, since `ResumeStartPositions.replayThenResume(..)` and the
+Spring Boot starter's `BEGINNING` start read the stored position themselves to choose between replaying and resuming.
 The cancel stops the position writes of the subscription it removes and no others. A `subscribe(..)` of the same id
 that was still reading its start position when the cancel came reads it again after the delete, and the positions it
 saves after that are kept.
 
-In 0.33.0 neither the cancel nor a later `subscribe(..)` waited for the store, so a store that never answers a save or a
-delete would now hold up both for good. Each wait therefore ends after `cancelWaitsForStorageAtMost(..)` on
-`ReactorDurableSubscriptionModelConfig`, 10 seconds by default. The delete goes ahead when a write takes longer, a
-`subscribe(..)` stops waiting when the delete takes longer, and the `Mono` fails with a `TimeoutException` in both cases,
-since the position can still be stored. Calling off the write instead would not help, because a store can still apply
-a write after its caller stopped waiting for it. The bound is a setting, because how long a write can take depends on
-the store.
+None of these waits has a time limit. A store can apply a write or a delete after its caller stopped waiting for it,
+so a delete that went ahead of a slow save could still have the save put the position back, and a `subscribe(..)` that
+stopped waiting for a slow delete could still have the delete remove the position it went on to save. Calling off the
+write or the delete would not help either, for the same reason. So the model waits until the store answers.
+
+That has one cost next to 0.33.0, where neither the cancel nor a later `subscribe(..)` waited for the store. On a store
+whose writes hang but whose reads answer, a `subscribe(..)` of the id right after the cancel now waits until the store
+answers those writes, where 0.33.0 started it straight away. Only a caller that waits on the cancel's `Mono` or
+subscribes the same id again waits at all, and a store that answers no reads held up a `subscribe(..)` in 0.33.0 too,
+since a `subscribe(..)` reads the stored position before the subscription starts.
 
 A reactor catch-up model that is cancelled before its replay handed the id over to the wrapped model now passes the
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has, since the wrapped

@@ -1327,7 +1327,7 @@ type and nothing else. What the recipe does with a body depends on how the body 
 | ends by calling `cancelSubscription(..)` on the model it wraps, or on its superclass | returns that call |
 | is empty, or ends in a statement such as a method call or an assignment | adds `return Mono.empty()` at the end |
 | ends in a `return` or a `throw` | keeps the body in the method |
-| ends in anything else, an `if`, a loop, a `try` or a `switch` for example | moves the body unchanged into a new private `void` method named `doCancelSubscription`, then calls it and returns `Mono.empty()`. The name becomes `doCancelSubscription2`, and so on, when the class can already call a method with that name without a qualifier, one it has or inherits, one of an enclosing class, or a statically imported one |
+| ends in anything else, an `if`, a loop, a `try` or a `switch` for example | moves the body unchanged into a new private `void` method named `doCancelSubscription`, then calls it and returns `Mono.empty()`. The name becomes `doCancelSubscription2`, and so on, when the class can already call a method with that name without a qualifier, one it has or inherits, one of an enclosing class, or a statically imported one. A class with a supertype the recipe cannot see gets `cancelSubscriptionBodyBeforeOccurrent0340` instead, numbered the same way, since that supertype can have a public `doCancelSubscription(String)` the class never calls, and a private method with the same name and parameters does not compile |
 
 Where the body stays in the method, each `return` without a value becomes `return Mono.empty()`. That is the whole
 change for step 3, and for step 5 when the wrapped model's cancel is the last statement.
@@ -1339,16 +1339,18 @@ finishes before the method returns. The recipe does not change a Kotlin implemen
 reference that implements `CancellableSubscriptions`.
 
 `ReactorDurableSubscriptionModel` now deletes the checkpoint only after every checkpoint write the cancelled
-subscription had already started, and a write it had not started by then never runs. A subscribe in the same process
-reads and writes the checkpoint only after a delete that a cancel of the same id started has ended. So a subscribe
-right after a cancel no longer resumes from the cancelled subscription's position. A subscribe that was still reading
-its start position when the cancel came reads it again after the delete, and the checkpoints it writes after that are
-kept.
+subscription had already started has ended, and a write it had not started by then never runs. A subscribe in the same
+process reads and writes the checkpoint only after a delete that a cancel of the same id started has ended. It resolves
+a `StartAt.dynamic(..)` only then as well, so one that reads the checkpoint itself, such as
+`ResumeStartPositions.replayThenResume(..)` or the Spring Boot starter's `BEGINNING` start with the default
+`ResumeBehavior`, also reads it only after the delete. So once the delete has succeeded, a subscribe right after the
+cancel no longer resumes from the cancelled subscription's position. A subscribe that was still reading its start
+position when the cancel came reads it again after the delete, and the checkpoints it writes after that are kept.
 
-Each of those waits lasts at most `cancelWaitsForStorageAtMost(..)` on `ReactorDurableSubscriptionModelConfig`, 10
-seconds by default. The delete goes ahead when a write takes longer, and a subscribe stops waiting when the delete takes
-longer. The `Mono` then fails with a `TimeoutException`, since the checkpoint can still be stored, so call
-`cancelSubscription(id)` again once the store answers.
+None of these waits has a time limit, because a store can still apply a write after the model stopped waiting for it. A
+save could then bring the cancelled checkpoint back after the delete, and a delete could remove the checkpoint the next
+subscription wrote. The cost is that on a store whose writes hang but whose reads answer, a subscribe right after a
+cancel waits until the store answers those writes, where 0.33.0 started it straight away.
 
 A reactor catch-up model cancelled before its replay handed the subscription over to the wrapped model now passes the
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has. A wrapped model

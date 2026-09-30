@@ -15,6 +15,7 @@
  */
 package org.occurrent.rewrite;
 
+import org.jspecify.annotations.Nullable;
 import org.openrewrite.Cursor;
 import org.openrewrite.ExecutionContext;
 import org.openrewrite.InMemoryExecutionContext;
@@ -34,6 +35,7 @@ import org.openrewrite.java.tree.JavaType;
 import org.openrewrite.java.tree.Space;
 import org.openrewrite.java.tree.Statement;
 import org.openrewrite.java.tree.TextComment;
+import org.openrewrite.java.tree.TypeTree;
 import org.openrewrite.java.tree.TypeUtils;
 import org.openrewrite.marker.Markers;
 
@@ -61,7 +63,10 @@ import java.util.UUID;
  *     {@code Mono.empty()}. Whether such a body can run off its end takes the compiler's own analysis to decide, and
  *     moving it keeps the result compiling either way. The new method is named {@code doCancelSubscription}, or
  *     {@code doCancelSubscription2} and so on when code in the class can already call a method of that name without
- *     a qualifier.</li>
+ *     a qualifier. A class with a supertype the parser cannot see gets
+ *     {@code cancelSubscriptionBodyBeforeOccurrent0340} instead, numbered the same way, since that supertype can have
+ *     a public {@code doCancelSubscription(String)} that nothing in the class calls, and a private method of the same
+ *     name and parameters would not compile.</li>
  * </ul>
  * A body ending in a {@code return} or a {@code throw} stays in place too. Each {@code return;} of a body that stays in
  * place becomes {@code return Mono.empty();}. A declaration with no body, abstract or in an interface that extends
@@ -79,6 +84,8 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
     private static final String TARGET = "reactorCancelSubscriptionReturningVoid";
     private static final String HELPERS = "reactorCancelSubscriptionHelpers";
     private static final String HELPER_NAME = "doCancelSubscription";
+    // For an owner with a supertype this parser cannot see, since any method that type declares can then have the name
+    private static final String HELPER_NAME_BESIDE_AN_UNSEEN_SUPERTYPE = "cancelSubscriptionBodyBeforeOccurrent0340";
     private static final String RETURN_THE_WRAPPED_CANCEL = " TODO: return the Mono of the cancelSubscription call this method makes, so that the Mono returned here waits for its cleanup";
 
     // Parsed with a stub of Mono because this parser does not see the classpath of the source being migrated
@@ -109,7 +116,8 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                "model's or the superclass's `cancelSubscription(String)` returns that call. A body ending in a " +
                "statement that completes whenever it is reached gets `return Mono.empty();` at its end, and any other body that " +
                "does not end in a `return` or a `throw` moves into a new private `void` method that the method calls before returning " +
-               "`Mono.empty()`, named so that it hides no method the class could already call. A declaration " +
+               "`Mono.empty()`, named so that it hides no method the class could already call, and so that no " +
+               "method of a supertype the parser cannot see plausibly has the name. A declaration " +
                "with no body only changes its return type. A wrapped `cancelSubscription(String)` call that is not " +
                "returned gets a `TODO` " +
                "comment. An implementation that deletes stored state asynchronously still has to return a `Mono` " +
@@ -288,9 +296,14 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
             // A method added to the owner hides every method of the same name that code in the owner calls without a
             // qualifier, one an enclosing class has or a static import brings in for example. Such a call would then run
             // the new method or stop compiling, so the name is one none of them use.
+            //
+            // A supertype of the owner this parser cannot see can have a method of any name that nothing here calls, and
+            // a private method of the same name and parameters would narrow its access and stop compiling. The name is
+            // then one that no code written by hand plausibly has.
             private String helperName(Cursor owner, Iterable<J.MethodDeclaration> chosen) {
                 Set<String> taken = new HashSet<>();
-                for (Cursor enclosing = owner; enclosing != null; enclosing = enclosing.getParent()) {
+                boolean everySupertypeOfTheOwnerSeen = memberNames(owner.getValue(), taken);
+                for (Cursor enclosing = owner.getParent(); enclosing != null; enclosing = enclosing.getParent()) {
                     if (enclosing.getValue() instanceof J.ClassDeclaration || enclosing.getValue() instanceof J.NewClass) {
                         memberNames(enclosing.getValue(), taken);
                     }
@@ -311,14 +324,16 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                     }
                 }.visit((J) owner.getValue(), taken);
                 chosen.forEach(helper -> taken.add(helper.getSimpleName()));
-                String name = HELPER_NAME;
+                String base = everySupertypeOfTheOwnerSeen ? HELPER_NAME : HELPER_NAME_BESIDE_AN_UNSEEN_SUPERTYPE;
+                String name = base;
                 for (int suffix = 2; taken.contains(name); suffix++) {
-                    name = HELPER_NAME + suffix;
+                    name = base + suffix;
                 }
                 return name;
             }
 
-            private void memberNames(Object classOrAnonymousClass, Set<String> names) {
+            // Answers whether this parser could see every supertype, and so every method name the class inherits
+            private boolean memberNames(Object classOrAnonymousClass, Set<String> names) {
                 J.Block body = classOrAnonymousClass instanceof J.ClassDeclaration cd ? cd.getBody() : ((J.NewClass) classOrAnonymousClass).getBody();
                 JavaType type = classOrAnonymousClass instanceof J.ClassDeclaration cd ? cd.getType() : ((J.NewClass) classOrAnonymousClass).getType();
                 if (body != null) {
@@ -326,7 +341,28 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                             .filter(J.MethodDeclaration.class::isInstance)
                             .forEach(statement -> names.add(((J.MethodDeclaration) statement).getSimpleName()));
                 }
-                inheritedMethodNames(TypeUtils.asFullyQualified(type), names, new HashSet<>());
+                boolean namedSupertypesSeen = namedSupertypes(classOrAnonymousClass).stream().allMatch(this::seen);
+                return inheritedMethodNames(type, names, new HashSet<>()) && namedSupertypesSeen;
+            }
+
+            // What the declaration names after extends and implements, or after new for an anonymous class
+            private List<TypeTree> namedSupertypes(Object classOrAnonymousClass) {
+                List<TypeTree> named = new ArrayList<>();
+                if (classOrAnonymousClass instanceof J.ClassDeclaration cd) {
+                    if (cd.getExtends() != null) {
+                        named.add(cd.getExtends());
+                    }
+                    if (cd.getImplements() != null) {
+                        named.addAll(cd.getImplements());
+                    }
+                } else if (((J.NewClass) classOrAnonymousClass).getClazz() != null) {
+                    named.add(((J.NewClass) classOrAnonymousClass).getClazz());
+                }
+                return named;
+            }
+
+            private boolean seen(TypeTree typeTree) {
+                return typeTree.getType() != null && !(typeTree.getType() instanceof JavaType.Unknown);
             }
 
             private void staticallyImportedNames(J.Import anImport, Set<String> names) {
@@ -335,16 +371,24 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                     names.add(name);
                     return;
                 }
-                inheritedMethodNames(TypeUtils.asFullyQualified(anImport.getQualid().getTarget().getType()), names, new HashSet<>());
+                inheritedMethodNames(anImport.getQualid().getTarget().getType(), names, new HashSet<>());
             }
 
-            private void inheritedMethodNames(JavaType.FullyQualified type, Set<String> names, Set<String> visited) {
-                if (type == null || !visited.add(type.getFullyQualifiedName())) {
-                    return;
+            // Answers false when a type in the hierarchy is one this parser cannot see, whose methods it cannot name
+            private boolean inheritedMethodNames(@Nullable JavaType type, Set<String> names, Set<String> visited) {
+                if (type instanceof JavaType.Unknown) {
+                    return false;
                 }
-                type.getMethods().forEach(method -> names.add(method.getName()));
-                inheritedMethodNames(type.getSupertype(), names, visited);
-                type.getInterfaces().forEach(anInterface -> inheritedMethodNames(anInterface, names, visited));
+                JavaType.FullyQualified fullyQualified = TypeUtils.asFullyQualified(type);
+                if (fullyQualified == null || !visited.add(fullyQualified.getFullyQualifiedName())) {
+                    return true;
+                }
+                fullyQualified.getMethods().forEach(method -> names.add(method.getName()));
+                boolean seen = inheritedMethodNames(fullyQualified.getSupertype(), names, visited);
+                for (JavaType.FullyQualified anInterface : fullyQualified.getInterfaces()) {
+                    seen &= inheritedMethodNames(anInterface, names, visited);
+                }
+                return seen;
             }
 
             // The method as it was, with its body, parameters and throws clause, made private and renamed

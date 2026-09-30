@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.openrewrite.java.JavaParser;
 import org.openrewrite.test.RecipeSpec;
 import org.openrewrite.test.RewriteTest;
+import org.openrewrite.test.TypeValidation;
 
 import javax.tools.DiagnosticCollector;
 import javax.tools.JavaCompiler;
@@ -721,6 +722,73 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
                 }
                 """
         );
+    }
+
+    // The parser sees no source or class of LegacyModel, which has a public method of the name the moved body gets when
+    // every supertype can be seen
+    @Test
+    void namesTheVoidMethodSoItCannotClashWithOneASupertypeTheParserCannotSeeMayHave() {
+        String unseenSupertype = """
+                package com.legacy;
+
+                public abstract class LegacyModel {
+                    public void doCancelSubscription(String subscriptionId) {
+                    }
+                }
+                """;
+        String after = """
+                package com.example;
+
+                import com.legacy.LegacyModel;
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                class Model extends LegacyModel implements CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    @Override
+                    public Mono<Void> cancelSubscription(String subscriptionId) {
+                        cancelSubscriptionBodyBeforeOccurrent0340(subscriptionId);
+                        return Mono.empty();
+                    }
+
+                    private void cancelSubscriptionBodyBeforeOccurrent0340(String subscriptionId) {
+                        if (ids.remove(subscriptionId)) {
+                            ids.clear();
+                        }
+                    }
+                }
+                """;
+        rewriteRun(
+                spec -> spec.typeValidationOptions(TypeValidation.none()),
+                java(
+                        """
+                        package com.example;
+
+                        import com.legacy.LegacyModel;
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                        import java.util.HashSet;
+                        import java.util.Set;
+
+                        class Model extends LegacyModel implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @Override
+                            public void cancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    ids.clear();
+                                }
+                            }
+                        }
+                        """,
+                        after
+                )
+        );
+        assertCompiles(after, unseenSupertype);
     }
 
     @Test
@@ -1457,11 +1525,12 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
         }
     }
 
-    // rewriteRun never compiles the result, so this compiles it against stubs of the 0.34.0 interfaces
-    private static Path assertCompiles(String source) {
+    // rewriteRun never compiles the result, so this compiles it against stubs of the 0.34.0 interfaces, and alongside
+    // any source the parser was not given
+    private static Path assertCompiles(String source, String... alongside) {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-        List<JavaFileObject> sources = Stream.of(MONO, CANCELLABLE_SUBSCRIPTIONS, DCB_SUBSCRIPTION_MODEL, source)
+        List<JavaFileObject> sources = Stream.concat(Stream.of(MONO, CANCELLABLE_SUBSCRIPTIONS, DCB_SUBSCRIPTION_MODEL, source), Stream.of(alongside))
                 .map(MigrateReactorCancelSubscriptionReturnTypeTest::inMemory)
                 .toList();
         try {
