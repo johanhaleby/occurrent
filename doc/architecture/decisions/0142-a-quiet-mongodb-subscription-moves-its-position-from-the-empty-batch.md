@@ -75,6 +75,10 @@ and a resume or a start makes a new run of the same subscription.
 - A pause alone leaves that `BooleanSupplier` returning `true`. Without the stored restart position, the resume would
   open at the position MongoDB no longer has and restart from the present again, skipping the events written during
   the pause.
+- Whether a quiet position may be saved depends on whether the persist predicate stored the last event delivered.
+  `DurableSubscriptionModel` numbers the deliveries of every run of a subscribe, and only the latest one decides it.
+  An action that returns after a resume has delivered later events doesn't change it, so it can't let the resumed run
+  save a quiet position past an event the predicate declined.
 - The exception is a checkpoint written after the pause has stopped waiting and a resume has come. A
   `DurableSubscriptionModel` action that returns that late still saves the checkpoint of its event, and a quiet
   position whose save starts that late is still saved. The model can't tell which run the action or the save belongs
@@ -104,7 +108,9 @@ writes the position under a condition reads that condition when it is asked, whi
 - The save holds the lock per subscription id that `subscribe(..)`, `resumeSubscription(..)`, `cancelSubscription(..)`
   and the save after lost history also take. So a save is never written after a cancel has deleted the checkpoint, or
   after a new subscribe of the id has replaced the registration. The checkpoint write for an event takes only a lock
-  of its own for each subscribe, which a cancel also takes before it deletes the checkpoint.
+  of its own for each subscribe, which a cancel also takes before it deletes the checkpoint. The lock is one per id,
+  and exists only while a call holds it or waits for it, so a checkpoint store that hangs during a save makes only
+  calls for that id wait.
 - A write the condition refuses is thrown to the wrapped model, which ends delivery for that subscription on that
   node, as it does when the write for an event is refused. Any other failure is logged as a warning and tried again
   after the interval, since nothing is lost by a quiet position that was not saved.

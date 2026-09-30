@@ -1361,6 +1361,12 @@ them together. An action that takes longer can still be running when they return
 action does not wait. An interrupt doesn't end the wait, so the subscription is paused when they return, and the
 interrupt is set on the thread again.
 
+Neither waits for a read that is waiting on the server, in `SpringMongoSubscriptionModel` or in
+`NativeMongoSubscriptionModel`, so the thread of a paused subscription can stay busy for up to `maxAwaitTime` after
+they return. A resume or a start right after that needs a thread of its own. If you pass an executor with a fixed
+number of threads, give it more threads than you have subscriptions, or that resume or start waits for a free thread
+or is rejected.
+
 ### A quiet subscription's checkpoint is written once a minute
 
 A `DurableSubscriptionModel` over `SpringMongoSubscriptionModel` or `NativeMongoSubscriptionModel` now saves the
