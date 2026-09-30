@@ -492,6 +492,29 @@ class DcbCatchupSubscriptionModelTest {
                 .isInstanceOf(CancelledSubscription.class);
     }
 
+    @Test
+    void every_n_counts_on_across_the_windows_of_one_catch_up() {
+        for (int i = 0; i < 6; i++) {
+            appendTagged("name:1", nameDefined("e" + i));
+        }
+        CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
+        CheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                saved.add(checkpoint.asString());
+                return super.save(subscriptionId, checkpoint, condition);
+            }
+        };
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")),
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(3)).dcbCatchupPositionWindowSize(2));
+
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(received).hasSize(6));
+        assertThat(saved).as("every third event of six, read in windows of two").contains(GlobalCheckpoint.of(3).asString(), GlobalCheckpoint.of(6).asString());
+    }
+
     private static void awaitLatch(CountDownLatch latch) {
         try {
             latch.await();

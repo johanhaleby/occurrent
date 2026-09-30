@@ -144,6 +144,19 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
 
     @Override
     public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, false);
+    }
+
+    /**
+     * Holds the subscription paused as a subscription made while this model is stopped. It is given the events fed to
+     * this model once {@link #resumeSubscription(String)} or {@link #start(boolean) start(true)} resumes it.
+     */
+    @Override
+    public synchronized Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, true);
+    }
+
+    private Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         if (shutdown) {
             throw new IllegalStateException("Cannot subscribe when shutdown");
         } else if (subscriptionId == null) {
@@ -166,7 +179,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
         InMemorySubscription subscription = new InMemorySubscription(subscriptionId, queueSupplier.get(), action, matcher, retryStrategy);
         subscriptions.put(subscriptionId, subscription);
 
-        if (!running) {
+        if (!running || holdPaused) {
             pausedSubscriptions.put(subscriptionId, true);
         }
         cloudEventDispatcher.execute(subscription);

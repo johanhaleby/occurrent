@@ -38,11 +38,14 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
 
 /**
  * No-Mongo regression guard: {@link CatchupSubscriptionModel#stop()}/{@code start(boolean)}, {@code isRunning} and
@@ -161,6 +164,70 @@ class CatchupSubscriptionModelStopPropagationTest {
         // The parked replay runs again from where it started, so event 1 is delivered twice
         assertThat(received).extracting(CloudEvent::getId).containsExactly("1", "1", "2", "3");
         assertThat(delegate.subscribeCalls).containsExactly("someId");
+    }
+
+    @Test
+    void a_replay_run_again_while_the_stopped_one_is_still_in_the_action_waits_for_it() throws InterruptedException {
+        InMemoryEventStoreQueries events = new InMemoryEventStoreQueries(cloudEvent("1"), cloudEvent("2"), cloudEvent("3"));
+        PermissiveCheckpointAwareSubscriptionModel delegate = new PermissiveCheckpointAwareSubscriptionModel();
+        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(delegate, events);
+        CountDownLatch firstEventReached = new CountDownLatch(1);
+        CountDownLatch releaseFirstEvent = new CountDownLatch(1);
+        AtomicInteger inAction = new AtomicInteger();
+        AtomicInteger mostInActionAtOnce = new AtomicInteger();
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        Subscription subscription = catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), event -> {
+            mostInActionAtOnce.accumulateAndGet(inAction.incrementAndGet(), Math::max);
+            try {
+                received.add(event);
+                if (received.size() == 1) {
+                    firstEventReached.countDown();
+                    awaitLatch(releaseFirstEvent);
+                }
+            } finally {
+                inAction.decrementAndGet();
+            }
+        });
+        assertThat(firstEventReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        catchupSubscriptionModel.stop();
+        catchupSubscriptionModel.start(true);
+        // Long enough for a replay run again straight away to reach the action
+        Thread.sleep(300);
+        releaseFirstEvent.countDown();
+
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        assertThat(mostInActionAtOnce.get()).as("calls to the action running at once").isEqualTo(1);
+        assertThat(received).extracting(CloudEvent::getId).containsExactly("1", "1", "2", "3");
+    }
+
+    @Test
+    void cancelling_a_replay_that_waits_for_an_action_that_does_not_return_ends_it() throws InterruptedException {
+        InMemoryEventStoreQueries events = new InMemoryEventStoreQueries(cloudEvent("1"), cloudEvent("2"));
+        PermissiveCheckpointAwareSubscriptionModel delegate = new PermissiveCheckpointAwareSubscriptionModel();
+        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(delegate, events);
+        CountDownLatch firstEventReached = new CountDownLatch(1);
+        CountDownLatch releaseFirstEvent = new CountDownLatch(1);
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        Subscription subscription = catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), event -> {
+            received.add(event);
+            firstEventReached.countDown();
+            awaitLatch(releaseFirstEvent);
+        });
+        assertThat(firstEventReached.await(5, TimeUnit.SECONDS)).isTrue();
+        try {
+            catchupSubscriptionModel.stop();
+            catchupSubscriptionModel.start(true);
+
+            catchupSubscriptionModel.cancelSubscription("someId");
+
+            await().atMost(2, SECONDS).untilAsserted(() -> assertThat(catchupSubscriptionModel.isRunning("someId")).as("the replay run again has ended").isFalse());
+            assertThat(subscription.waitUntilStarted(Duration.ofMillis(200))).isFalse();
+        } finally {
+            releaseFirstEvent.countDown();
+        }
+        assertThat(received).extracting(CloudEvent::getId).containsExactly("1");
+        assertThat(delegate.subscribeCalls).isEmpty();
     }
 
     @Test

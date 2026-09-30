@@ -208,6 +208,20 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
     @Override
     public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, false);
+    }
+
+    /**
+     * Holds the subscription paused as a subscription made while this model is stopped, so its change stream opens on
+     * {@link #resumeSubscription(String)} or {@link #start(boolean) start(true)}. A subscription started at the present
+     * is delivered the events written from this call on.
+     */
+    @Override
+    public synchronized Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, true);
+    }
+
+    private Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
@@ -237,7 +251,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         // Known from here on rather than once its change stream opens, so a pause or a cancel reaches it while MongoDB
         // cannot be reached, and a wrapper asking which subscriptions this model runs gets the right answer. On a
         // running model a run that opens at the present asks for it first.
-        if (running) {
+        if (running && !holdPaused) {
             runningSubscriptions.put(subscriptionId, internalSubscription);
             startSubscription(subscriptionId, internalSubscription, () -> runningSubscriptions.remove(subscriptionId, internalSubscription));
         } else {

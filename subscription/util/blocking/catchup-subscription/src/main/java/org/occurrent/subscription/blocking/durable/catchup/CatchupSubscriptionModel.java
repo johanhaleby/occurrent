@@ -235,6 +235,16 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         return route(filter, startAt).subscribe(subscriptionId, filter, startAt, action);
     }
 
+    /**
+     * Holds the subscription paused in the catch-up model it is routed to, as {@link SubscriptionModel#subscribePaused}
+     * describes.
+     */
+    @Override
+    public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        Objects.requireNonNull(startAt, "Start at supplier cannot be null");
+        return route(filter, startAt).subscribePaused(subscriptionId, filter, startAt, action);
+    }
+
     // Route to the DCB, stream, or capability-agnostic catch-up model. A single-mode model has only one inner model and
     // always routes there. A dual-mode model routes by filter type first, since a global position start is ambiguous
     // between the position-ordered replays. An AgnosticSubscriptionFilter routes to the unscoped agnostic model so both

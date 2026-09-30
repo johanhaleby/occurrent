@@ -71,13 +71,12 @@ import static java.util.Objects.requireNonNull;
  * straight away or on a later grant.
  * <br>
  * <br>
- * A competing subscription made while this model is stopped goes to the wrapped model straight away, which holds it
- * paused. It starts from the position the wrapped model gives a subscription made while that model is stopped. For a
+ * A competing subscription made while this model is stopped goes to the wrapped model straight away, through
+ * {@link SubscriptionModel#subscribePaused}, which holds it paused whether or not the wrapped model runs. It starts from
+ * the position the wrapped model gives a subscription made while that model is stopped. For a
  * {@code DurableSubscriptionModel} with no stored position, that is the position when {@code subscribe(..)} was called,
  * so an event written before {@link #start(boolean)} is delivered. The subscription competes for its lease once this
- * model is started, with or without resuming subscriptions automatically, and winning the lease resumes it. When a
- * resume since {@link #stop()} has started the wrapped model again, the subscription goes to the wrapped model only
- * once this node wins its lease, and starts from the position at that time.
+ * model is started, with or without resuming subscriptions automatically, and winning the lease resumes it.
  * <br>
  * <br>
  * The wrapped model is started, without resuming what it holds paused, before a subscription whose lease this node
@@ -407,16 +406,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             // A stopped node competes for nothing, since a lease it won would lock every other node out of a
             // subscription it does not serve. The next start() makes it compete, as does a resume, and winning the
             // lease resumes it in the wrapped model.
-            final @Nullable Subscription subscription;
-            if (delegate.isRunning()) {
-                // A resume since stop() started the wrapped model, which would run the subscription straight away,
-                // so it is subscribed there once this node wins the lease instead
-                subscription = null;
-            } else {
-                // The stopped wrapped model holds the subscription paused. One that decides the start position at
-                // subscribe, such as DurableSubscriptionModel, then delivers an event written before start()
-                subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
-            }
+            // Held paused in the wrapped model also when a resume since stop() has started it again. One that decides
+            // the start position at subscribe, such as DurableSubscriptionModel, then delivers an event written before
+            // this node wins the lease.
+            Subscription subscription = delegate.subscribePaused(subscriptionId, filter, startAt, action);
             competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, waiting));
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
         } else if (competingConsumerStrategy.registerCompetingConsumer(subscriptionId, subscriberId)) {

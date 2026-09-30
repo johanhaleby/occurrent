@@ -36,14 +36,31 @@ threw `SubscriptionAlreadyRunningException` for the subscription whose replay wa
 ## Decision
 
 **Every subscription model that `CompetingConsumerSubscriptionModel` wraps holds a subscription made while it is
-stopped paused.** It registers the subscription, decides its start position as it would while running, delivers
-nothing, returns `false` from `isRunning(id)` and `true` from `isPaused(id)`, and runs it once when it is started.
-Its own `isRunning()` says whether it runs.
+stopped paused.** It registers the subscription, delivers nothing, returns `false` from `isRunning(id)` and `true` from
+`isPaused(id)`, and runs it once when it is started. Its own `isRunning()` says whether it runs.
+
+Where such a subscription starts is up to each model:
+
+| Model | Where a subscription made while it is stopped starts, for `StartAt.now()` or the model default |
+|---|---|
+| `DurableSubscriptionModel` | The position it records in `subscribe(..)` when it has none stored |
+| `NativeMongoSubscriptionModel` | The operation time MongoDB answers with, asked for when `subscribe(..)` is called |
+| `SpringMongoSubscriptionModel` | Wherever the change stream is when it opens, after `start()` or a resume |
+| `InMemorySubscriptionModel` | The first event fed to it after it is resumed |
+| The blocking catch-up models | The replay's own start position, and the live model's for a subscription with no replay |
+
+**`SubscriptionModel.subscribePaused(..)` holds a new subscription paused the same way, whether or not the model
+runs.** `SpringMongoSubscriptionModel`, `NativeMongoSubscriptionModel`, `InMemorySubscriptionModel`,
+`DurableSubscriptionModel` and the blocking catch-up models implement it. The default implementation calls
+`subscribe(..)` while the model is stopped and throws `UnsupportedOperationException` while it runs, since pausing a
+subscription after subscribing it could deliver an event first.
 
 **`CompetingConsumerSubscriptionModel` hands a subscription made while it is stopped to the wrapped model in
-`subscribe(..)`, and does not register it with the lease strategy.** A lease won while stopped would lock every other
-node out of a subscription this node does not serve. `start()` makes it compete for the lease whether or not it resumes
-subscriptions automatically, since nobody paused it, and winning the lease resumes it in the wrapped model.
+`subscribe(..)`, through `subscribePaused(..)`, and does not register it with the lease strategy.** The wrapped model
+then holds it paused also when a `resumeSubscription(..)` since `stop()` has started it again, or when its own `stop()`
+threw. A lease won while stopped would lock every other node out of a subscription this node does not serve. `start()`
+makes it compete for the lease whether or not it resumes subscriptions automatically, since nobody paused it, and
+winning the lease resumes it in the wrapped model.
 
 **The blocking catch-up model keeps a replay it cannot run, instead of ending it.** That covers a replay subscribed
 while the model is stopped and one that `stop()` cuts short. The model keeps the replay together with the handle its
@@ -61,9 +78,12 @@ events it delivered before the stop are delivered again.
 The blocking catch-up model runs a kept replay again only on `start(true)` or a resume, where the reactor catch-up
 models in ADR 98 run it on any `start(..)`.
 
-When a `resumeSubscription(..)` since `stop()` has started the wrapped model again, `CompetingConsumerSubscriptionModel`
-cannot hand it a subscription made in the meantime without it running straight away. That subscription goes to the
-wrapped model once the node wins its lease, and starts from the position at that time.
+A subscription made on a stopped `CompetingConsumerSubscriptionModel` over a bare `SpringMongoSubscriptionModel`, with
+`StartAt.now()` or the model default, starts where the change stream is once the node wins the lease. An event written
+between `subscribe(..)` and then is not delivered to it. Over a `DurableSubscriptionModel` it is, since that model
+records the position in `subscribe(..)`.
 
 A subscription model of your own that you wrap in a `CompetingConsumerSubscriptionModel` has to hold a subscription
 made while it is stopped paused. One that delivers it straight away delivers it on a node that holds no lease for it.
+Unless it implements `subscribePaused(..)`, a subscription made while the competing consumer model is stopped and the
+wrapped model runs is refused with `UnsupportedOperationException`.

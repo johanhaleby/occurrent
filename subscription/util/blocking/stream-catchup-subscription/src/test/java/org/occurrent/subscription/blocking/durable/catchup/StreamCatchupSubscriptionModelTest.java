@@ -216,6 +216,58 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     @Test
+    void every_n_counts_on_across_the_windows_of_one_catch_up_by_position() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        for (int i = 0; i < 6; i++) {
+            write(eventStore, nameDefined("event" + i));
+        }
+        CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String id, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                saved.add(checkpoint.asString());
+                return super.save(id, checkpoint, condition);
+            }
+        };
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(3)).dcbCatchupPositionWindowSize(2));
+
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(received).hasSize(6));
+        assertThat(saved).as("every third event of six, read in windows of two").contains(GlobalCheckpoint.of(3).asString(), GlobalCheckpoint.of(6).asString());
+    }
+
+    @Test
+    void every_n_counts_on_from_the_replay_into_the_events_written_while_it_ran() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("history"));
+        CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String id, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                saved.add(checkpoint.asString());
+                return super.save(id, checkpoint, condition);
+            }
+        };
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(2)));
+
+        subscription.subscribe("subscription", StartAtTime.beginningOfTime(), cloudEvent -> {
+            received.add(cloudEvent);
+            // Written from inside the replay, so the catch-up reads it in a window of its own after the replay
+            if (received.size() == 1) {
+                write(eventStore, nameDefined("writtenDuringTheReplay"));
+            }
+        }).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(received).hasSize(2));
+        assertThat(saved).as("the second event, read in a window after the replay").contains(TimeBasedCheckpoint.from(received.get(1).getTime()).asString());
+    }
+
+    @Test
     void beginning_of_time_maps_to_position_zero_when_the_store_writes_position() {
         PositionOnlyInMemoryEventStore eventStore = new PositionOnlyInMemoryEventStore(inMemorySubscriptionModel);
         assertThat(eventStore.writesPosition()).isTrue();
@@ -345,11 +397,11 @@ class StreamCatchupSubscriptionModelTest {
         AtomicBoolean runningMarkedBeforeCatchupRuns = new AtomicBoolean(false);
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100)) {
             @Override
-            protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
+            protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup, boolean holdPaused) {
                 return super.startCatchupAsync(subscriptionId, () -> {
                     runningMarkedBeforeCatchupRuns.set(runningCatchupSubscriptions.containsKey(subscriptionId));
                     return catchup.call();
-                });
+                }, holdPaused);
             }
         };
 

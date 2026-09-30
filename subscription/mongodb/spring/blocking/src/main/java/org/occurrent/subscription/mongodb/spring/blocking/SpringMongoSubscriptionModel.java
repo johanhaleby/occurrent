@@ -197,6 +197,21 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
     @Override
     public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, false);
+    }
+
+    /**
+     * Holds the subscription paused as a subscription made while this model is stopped, so its change stream opens on
+     * {@link #resumeSubscription(String)} or {@link #start(boolean) start(true)}. A {@link StartAt#now()} or
+     * {@link StartAt#subscriptionModelDefault()} position is decided when the change stream opens, as for a
+     * subscription made while this model is stopped.
+     */
+    @Override
+    public synchronized Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, true);
+    }
+
+    private Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, "StartAt cannot be null");
@@ -261,10 +276,14 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         };
 
         Supplier<ChangeStreamRequest<Document>> requestBuilder = () -> new OpensWhenStartedChangeStreamRequest(listener, eventCollection, requestOptionsSupplier);
-        final org.springframework.data.mongodb.core.messaging.Subscription subscription = registerNewSpringSubscription(subscriptionId, requestBuilder.get(), null);
+        boolean opensNow = messageListenerContainer.isRunning() && !holdPaused;
+        // A running container opens every request registered with it, so one held paused there is registered on resume
+        final org.springframework.data.mongodb.core.messaging.Subscription subscription = !messageListenerContainer.isRunning() || opensNow
+                ? registerNewSpringSubscription(subscriptionId, requestBuilder.get(), null)
+                : new NotYetRegistered();
         SpringMongoSubscription springMongoSubscription = new SpringMongoSubscription(subscriptionId, subscription);
         logDebug("MessageListenerContainer running (subscriptionId={}): {}", subscriptionId, messageListenerContainer.isRunning());
-        if (messageListenerContainer.isRunning()) {
+        if (opensNow) {
             runningSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, currentStartAt, requestBuilder));
         } else {
             pausedSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, currentStartAt, requestBuilder));
@@ -780,6 +799,24 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     // Holds the spring subscription, the position the subscription has read to, and the change stream request
     // builder that reads it, so a subscription can be paused (by removing it) and resumed (by starting a new
     // one from that position).
+    // Stands in for the change stream of a subscription held paused on a running container until a resume registers one
+    private static final class NotYetRegistered implements org.springframework.data.mongodb.core.messaging.Subscription {
+        @Override
+        public boolean isActive() {
+            return false;
+        }
+
+        @Override
+        public boolean await(Duration timeout) throws InterruptedException {
+            Thread.sleep(timeout);
+            return false;
+        }
+
+        @Override
+        public void cancel() {
+        }
+    }
+
     private record InternalSubscription(SpringMongoSubscription occurrentSubscription, AtomicReference<StartAt> currentStartAt, Supplier<ChangeStreamRequest<Document>> changeStreamRequestBuilder) {
 
         // Keeps the same currentStartAt reference, so the resumed subscription continues from where the paused

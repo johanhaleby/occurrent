@@ -41,6 +41,7 @@ import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.concurrent.Future;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -89,21 +90,21 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    protected Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
         final StartAt firstStartAt;
         if (startAt.isDefault()) {
             // Resume from the stored position if there is one, otherwise subscribe live (with the DCB query post-filter).
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
             if (checkpoint == null) {
-                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action);
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action, holdPaused);
             } else {
                 firstStartAt = StartAt.checkpoint(checkpoint);
             }
         } else if (startAt.isDynamic()) {
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
-                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action);
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action, holdPaused);
             } else {
                 firstStartAt = startAtGeneratedByDynamic;
             }
@@ -114,10 +115,10 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // A non-DCB position means the catch-up already handed over and the live subscription stored a change-stream
         // token (or the caller asked to start live directly). Subscribe live, still applying the DCB query post-filter.
         if (!isDcbCatchupPosition(firstStartAt)) {
-            return subscribeLiveWithoutCatchup(subscriptionId, filter, firstStartAt, action);
+            return subscribeLiveWithoutCatchup(subscriptionId, filter, firstStartAt, action, holdPaused);
         }
 
-        Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId, () -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
+        Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId, () -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt), holdPaused);
         return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
     }
 
@@ -132,9 +133,9 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
      * claimed. Distinct from {@link #startLiveDcbSubscription}'s own use inside a finishing attempt's handover,
      * which has already gone through that lock and that decision and must not cancel itself.
      */
-    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         cancelRunningCatchup(subscriptionId);
-        return startLiveDcbSubscription(subscriptionId, filter, startAt, action, null);
+        return subscribeInTheWrappedModel(subscriptionId, filter, startAt, dcbLiveConsumer(action, null), holdPaused);
     }
 
     private Consumer<CloudEvent> dcbLiveConsumer(Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache) {
@@ -168,6 +169,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // Position is monotonic and server-assigned, so this needs no count and no time sort. Anything written
         // after the reconciliation loop stabilises is newer than the live resume position and arrives live.
         BoundedIdCache<CatchupEventKey> catchupPhaseCache = new BoundedIdCache<>(config.cacheSize);
+        Predicate<CloudEvent> persistDuringCatchup = persistDuringCatchupForOneAttempt();
         PositionCatchupPipeline.Reader dcbReader = new PositionCatchupPipeline.Reader() {
             @Override
             public long currentHead() {
@@ -181,7 +183,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         };
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(dcbReader, windowSize);
         pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId),
-                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache), catchupPhaseCache,
+                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup), catchupPhaseCache,
                 () -> historyRead(subscriptionId));
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
@@ -249,9 +251,10 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
     /**
      * Delivers catch-up events to {@code action}, optionally deduping against {@code cache}, and persists the DCB
-     * subscription position for events matching the catch-up persist predicate.
+     * subscription position for events matching {@code persistDuringCatchup}, the attempt's own predicate, so its count
+     * runs on across windows.
      */
-    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache) {
+    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache, Predicate<CloudEvent> persistDuringCatchup) {
         // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
         // resource-backed read does not leak its cursor.
         try (cloudEvents) {
@@ -269,11 +272,16 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                     // shouldKeepReplaying, for the same reason: a stop or shutdown this event's own action
                     // triggered must not suppress persisting the position it just reached.
                     .filter(e -> isSafeToPersistFor(subscriptionId))
-                    // One per catch-up, so an EveryN configured for the whole model counts this subscription's events only
-                    .filter(returnIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class, CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).map(EveryN::forOneSubscription).orElse(__ -> false))
+                    .filter(persistDuringCatchup)
                     .forEach(e -> doIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class,
                             cfg -> cfg.storage().save(subscriptionId, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e)), writeConditionFor(cfg, subscriptionId))));
         }
+    }
+
+    // One per catch-up attempt, shared by all its windows, so an EveryN configured for the whole model counts this
+    // attempt's events only and still fires when n is larger than a window
+    private Predicate<CloudEvent> persistDuringCatchupForOneAttempt() {
+        return returnIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class, CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).map(EveryN::forOneSubscription).orElse(__ -> false);
     }
 
     // firstStartAt is already resolved (non-dynamic) by the time this runs, so the context class used to call get()

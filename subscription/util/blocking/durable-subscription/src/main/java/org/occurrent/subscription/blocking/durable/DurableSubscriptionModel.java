@@ -209,6 +209,19 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      */
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, false);
+    }
+
+    /**
+     * Records the start position as {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)} does, and has
+     * the wrapped model hold the subscription paused, so it starts from the recorded position once it is resumed.
+     */
+    @Override
+    public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, true);
+    }
+
+    private Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
         // Held for the whole method, not just the opt-out branch, so subscribe, resumeSubscription and
@@ -228,7 +241,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 boolean alreadyMarked = notCheckpointedSubscriptions.contains(subscriptionId);
                 notCheckpointedSubscriptions.add(subscriptionId);
                 try {
-                    Subscription optedOut = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+                    Subscription optedOut = holdPaused
+                            ? getWrappedSubscriptionModel().subscribePaused(subscriptionId, filter, startAt, action)
+                            : getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
                     checkpointedSubscriptions.remove(subscriptionId);
                     return optedOut;
                 } catch (Throwable t) {
@@ -241,17 +256,19 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
             // One per subscription, so an EveryN configured for the whole model counts this subscription's events only
             Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
-            Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
-                        // Read before the action runs, so the write uses the token of the lease this event was
-                        // delivered under, even if this node lost that lease and won a newer one meanwhile
-                        CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
-                        action.accept(cloudEvent);
-                        if (persistCheckpoint.test(cloudEvent)) {
-                            Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
-                            storage.save(subscriptionId, checkpoint, writeCondition);
-                        }
-                    }
-            );
+            Consumer<CloudEvent> checkpointingAction = cloudEvent -> {
+                // Read before the action runs, so the write uses the token of the lease this event was
+                // delivered under, even if this node lost that lease and won a newer one meanwhile
+                CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
+                action.accept(cloudEvent);
+                if (persistCheckpoint.test(cloudEvent)) {
+                    Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
+                    storage.save(subscriptionId, checkpoint, writeCondition);
+                }
+            };
+            Subscription subscription = holdPaused
+                    ? subscriptionModel.subscribePaused(subscriptionId, filter, startAtToUse, checkpointingAction)
+                    : subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, checkpointingAction);
             // Cleared only now, after the delegate accepted this managed subscription, not before: a previous
             // subscribe may have left this id opted out and still active, and a duplicate id the delegate refuses
             // must leave that active subscription's marker alone rather than losing it to this failed attempt.

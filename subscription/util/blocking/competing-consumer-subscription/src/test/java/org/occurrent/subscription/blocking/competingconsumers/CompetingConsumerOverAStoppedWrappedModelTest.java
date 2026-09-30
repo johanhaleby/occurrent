@@ -193,6 +193,7 @@ class CompetingConsumerOverAStoppedWrappedModelTest {
         SpringMongoSubscriptionModel spring = new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING));
         SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
         node = new CompetingConsumerSubscriptionModel(new DurableSubscriptionModel(spring, storage), strategy());
+        node.stop();
 
         assertAnEventWrittenBetweenSubscribeAndStartIsDelivered();
     }
@@ -202,13 +203,52 @@ class CompetingConsumerOverAStoppedWrappedModelTest {
         SpringMongoSubscriptionModel spring = new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING));
         SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
         node = new CompetingConsumerSubscriptionModel(new CatchupSubscriptionModel(new DurableSubscriptionModel(spring, storage), eventStore), strategy());
+        node.stop();
 
         assertAnEventWrittenBetweenSubscribeAndStartIsDelivered();
     }
 
+    @Test
+    void a_durable_subscription_made_while_this_model_is_stopped_after_a_resume_delivers_an_event_written_before_the_start() {
+        SpringMongoSubscriptionModel spring = new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING));
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
+        node = new CompetingConsumerSubscriptionModel(new DurableSubscriptionModel(spring, storage), strategy());
+        stopAndResumeAnotherSubscription();
+
+        assertAnEventWrittenBetweenSubscribeAndStartIsDelivered();
+    }
+
+    @Test
+    void a_catch_up_subscription_made_while_this_model_is_stopped_after_a_resume_delivers_an_event_written_before_the_start() {
+        SpringMongoSubscriptionModel spring = new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING));
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
+        node = new CompetingConsumerSubscriptionModel(new CatchupSubscriptionModel(new DurableSubscriptionModel(spring, storage), eventStore), strategy());
+        stopAndResumeAnotherSubscription();
+
+        assertAnEventWrittenBetweenSubscribeAndStartIsDelivered();
+    }
+
+    @Test
+    void a_native_subscription_made_while_this_model_is_stopped_after_a_resume_delivers_an_event_written_before_the_start() {
+        node = new CompetingConsumerSubscriptionModel(nativeModel(), strategy());
+        stopAndResumeAnotherSubscription();
+
+        assertAnEventWrittenBetweenSubscribeAndStartIsDelivered();
+    }
+
+    // This model ends up stopped with the wrapped model running, since resuming Y started it again
+    private void stopAndResumeAnotherSubscription() {
+        node.subscribe("node", "Y", null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+        await().atMost(5, SECONDS).until(() -> node.isRunning("Y"));
+        node.stop();
+        node.resumeSubscription("Y");
+        await().atMost(5, SECONDS).until(() -> node.isRunning("Y"));
+        assertThat(node.getWrappedSubscriptionModel().isRunning()).as("the wrapped model runs Y").isTrue();
+    }
+
     // The start position is recorded at subscribe, so an event written before the start is delivered after it
     private void assertAnEventWrittenBetweenSubscribeAndStartIsDelivered() {
-        node.stop();
         CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
         node.subscribe("node", "X", null, StartAt.subscriptionModelDefault(), handled::add);
         waitForAChangeStreamToOpen();

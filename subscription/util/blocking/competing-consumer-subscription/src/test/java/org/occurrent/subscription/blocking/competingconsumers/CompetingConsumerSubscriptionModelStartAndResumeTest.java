@@ -371,6 +371,38 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     }
 
     @Test
+    void a_subscription_made_while_the_model_is_stopped_is_held_paused_by_a_wrapped_model_that_a_resume_started_again() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        model.stop();
+        model.resumeSubscription("x");
+        assertThat(delegate.isRunning()).as("resuming x started the wrapped model again").isTrue();
+
+        subscribe("y");
+
+        assertThat(delegate.isPaused("y")).as("the wrapped model has y, and records where it starts, from the subscribe").isTrue();
+        assertThat(delegate.running).as("y delivers nothing before this node wins its lease").containsExactly("x");
+        model.start(true);
+        assertThat(delegate.running).as("winning the lease resumes y once").containsExactly("x", "y");
+    }
+
+    @Test
+    void a_subscription_made_after_a_stop_the_wrapped_model_failed_is_held_paused_by_it() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        delegate.stopThrows = true;
+        assertThat(catchThrowable(model::stop)).isInstanceOf(IllegalStateException.class);
+        assertThat(delegate.isRunning()).as("the wrapped model still runs").isTrue();
+
+        subscribe("y");
+
+        assertThat(delegate.isPaused("y")).as("the wrapped model has y, and records where it starts, from the subscribe").isTrue();
+        assertThat(delegate.running).as("y delivers nothing before this node wins its lease").doesNotContain("y");
+        model.start(false);
+        assertThat(delegate.running).as("winning the lease resumes y once").containsExactly("x", "y");
+    }
+
+    @Test
     void a_start_without_resuming_makes_a_subscription_made_while_the_model_was_stopped_compete_for_its_lease() {
         strategy.grantOnRegister = true;
         model.stop();
@@ -427,7 +459,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     /**
      * Keeps track of which subscriptions deliver and which are paused, and throws when starting any subscription in
      * {@link #throwsOn}. Like {@code SpringMongoSubscriptionModel}, it holds a subscription made while it is stopped
-     * paused, and starts itself to resume a subscription. A subscription delivered twice is listed twice in
+     * paused, as well as one made with {@code subscribePaused}, and starts itself to resume a subscription. A subscription delivered twice is listed twice in
      * {@link #running}.
      */
     private static final class RecordingDelegate implements SubscriptionModel {
@@ -446,6 +478,13 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
             } else {
                 paused.add(subscriptionId);
             }
+            return new FakeSubscription(subscriptionId);
+        }
+
+        @Override
+        public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            throwIfRefused(subscriptionId);
+            paused.add(subscriptionId);
             return new FakeSubscription(subscriptionId);
         }
 

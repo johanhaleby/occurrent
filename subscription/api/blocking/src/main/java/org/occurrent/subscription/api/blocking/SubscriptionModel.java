@@ -16,6 +16,14 @@
 
 package org.occurrent.subscription.api.blocking;
 
+import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionFilter;
+
+import java.util.function.Consumer;
+
 /**
  * Common interface for blocking subscription models. The purpose of a subscription is to read events from an event store
  * and react to these events.
@@ -25,5 +33,25 @@ package org.occurrent.subscription.api.blocking;
  * <p>
  * A blocking subscription model also you to create and manage subscriptions that'll use blocking IO.
  */
+@NullMarked
 public interface SubscriptionModel extends Subscribable, SubscriptionModelLifeCycle {
+
+    /**
+     * Subscribes as {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)} does, but holds the subscription
+     * paused whether or not this model is running, as a stopped model holds a subscription made while it is stopped.
+     * It starts from the position such a subscription starts from, and delivers nothing until
+     * {@link #resumeSubscription(String)} or {@link #start(boolean) start(true)} resumes it.
+     * <p>
+     * The default implementation calls {@code subscribe(..)} while this model is stopped and throws
+     * {@link UnsupportedOperationException} while it is running, since pausing a subscription after subscribing it
+     * could deliver an event before the pause.
+     *
+     * @throws UnsupportedOperationException if this model is running and cannot hold a new subscription paused
+     */
+    default Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        if (isRunning()) {
+            throw new UnsupportedOperationException(getClass().getName() + " cannot hold subscription " + subscriptionId + " paused while it is running.");
+        }
+        return subscribe(subscriptionId, filter, startAt, action);
+    }
 }
