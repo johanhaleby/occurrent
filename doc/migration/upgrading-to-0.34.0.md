@@ -1309,9 +1309,9 @@ next event, and a `DurableSubscriptionModel` over it then stored a position past
 lost.
 
 Now the model restarts the change stream from the event before it and delivers the failing event again. The default
-`RetryStrategy` never gives up, so this only concerns a strategy with `maxAttempts(..)` or a `retryIf(..)` predicate.
-With such a strategy the restart gives up too, the give-up is logged as an error, and the subscription delivers
-nothing more until you pause and resume it.
+`RetryStrategy` never gives up, so this only concerns `RetryStrategy.none()`, which gives up at the first failure, or
+a strategy with `maxAttempts(..)` or a `retryIf(..)` predicate. With such a strategy the restart gives up too, the
+give-up is logged as an error, and the subscription delivers nothing more until you pause and resume it.
 
 If you relied on the skip to get past an event the action cannot handle, catch the exception in the action and decide
 there what to do with the event.
@@ -1335,7 +1335,8 @@ so two instances are equal only when they are the same object.
 ### The default executor belongs to the model
 
 Each `SpringMongoSubscriptionModel` now makes its own executor when you pass none, also for `useVirtualThreads()`, and
-shuts it down in `shutdown()`. In 0.33.0 the default executor was never shut down. An executor you pass with
+shuts it down in `shutdown()`. An action that is running then gets five seconds to return before it is interrupted.
+In 0.33.0 the default executor was never shut down. An executor you pass with
 `SpringMongoSubscriptionModelConfig.executor(..)` is still yours to shut down.
 
 `subscribe(..)` on a model that is shut down throws `IllegalStateException`.
@@ -1346,6 +1347,15 @@ A subscription at `StartAt.now()`, or with the model default, made while the mod
 with `autoStartup(false)`, now starts at the operation time MongoDB answers with when `subscribe(..)` asks. In 0.33.0
 it started where the change stream was when `start()` opened it, so the events written in between were skipped. They
 are delivered now, which is more than the action received before.
+
+### A pause waits for an action that is running, and no new one starts after it
+
+In 0.33.0, `pauseSubscription(..)` and `stop()` did not wait for an action that was running, and the model could hand
+the action an event the change stream had already read after `pauseSubscription(..)` or `cancelSubscription(..)` had
+returned. Now no action starts once they have returned, and that event is delivered after the resume instead.
+
+`pauseSubscription(..)` and `stop()` wait up to a second for an action that is running. An action that takes longer
+can still be running when they return. A pause called from inside the action does not wait.
 
 ### A quiet subscription's checkpoint is written once a minute
 

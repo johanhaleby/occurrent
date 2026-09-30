@@ -103,10 +103,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // Striped rather than one lock object per id, since subscriptionId is caller-supplied to public methods
     // (cancelSubscription, resumeSubscription) and an unknown or made-up id must not grow this without bound. A
     // fixed number of locks bounds memory for good and needs no lifecycle bookkeeping to remove an entry once its
-    // holder is gone, at the cost of occasional cross-id serialization when two ids hash to the same stripe. These
-    // are startup and reconfiguration calls rather than the event path, so that cost is ordinarily microseconds,
-    // but if the delegate or checkpoint storage hangs inside one id's call, every other id sharing its stripe
-    // blocks too until it returns.
+    // holder is gone, at the cost of occasional cross-id serialization when two ids hash to the same stripe. The
+    // checkpoint write for an event takes no lock. A quiet position save takes one on the wrapped model's read
+    // thread, at most once per interval for an id, and the other callers are startup and reconfiguration calls, so
+    // that cost is ordinarily microseconds. But if the delegate or checkpoint storage hangs inside one id's call,
+    // every other id sharing its stripe blocks too until it returns, a quiet save for such an id included.
     private static final int SUBSCRIPTION_ID_LOCK_STRIPES = 1024;
     private final Object[] subscriptionIdLocks = new Object[SUBSCRIPTION_ID_LOCK_STRIPES];
 
@@ -276,12 +277,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
         // Held for the whole method, not just the opt-out branch, so subscribe, resumeSubscription and
         // cancelSubscription for the same id stay serialized against notCheckpointedSubscriptions (see the field
-        // comment above). SpringMongoSubscriptionModel evaluates the returned StartAt synchronously on the first
-        // subscribe, so this lock covers that checkpoint read and write too, and it evaluates the StartAt again on
-        // a later restartOnce, serialized against its own cancelSubscription by one shared monitor instead
-        // (#subscribe, #restartOnce, #cancelSubscription). NativeMongoSubscriptionModel always defers the
-        // evaluation to its dispatcher executor, even on the first subscribe, with no such serialization, so its
-        // cancelSubscription can race a checkpoint write.
+        // comment above). The blocking MongoDB models evaluate the returned StartAt on their executor each time
+        // they open a change stream, outside this lock, so a cancelSubscription can run while it reads the
+        // checkpoint or writes the first position.
         synchronized (lockFor(subscriptionId)) {
             StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
             if (startAtToUse == null) {

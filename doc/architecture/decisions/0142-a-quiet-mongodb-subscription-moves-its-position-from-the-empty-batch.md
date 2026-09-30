@@ -40,6 +40,12 @@ cursor's resume token.** The position is the one a pause and a resume, or a rest
 moves only while the run that read it is still open, so a run that a pause has closed cannot replace the position a
 resume was given.
 
+**`pauseSubscription(..)` waits up to a second for an action that is running, and not for a read.** A read that
+returns nothing waits on the server for up to `maxAwaitTime`, and closing the cursor does not end it sooner. The wait
+also covers handing a quiet position to a listener. Once the pause has returned, the run starts no action, and a
+document the read returns after that is left to the resume. `stop()` closes every subscription before it waits for
+any of them. A pause called from inside the action does not wait, since the action cannot return while it waits.
+
 **A model tells the quiet position to a listener through the new `QuietPositionReportingSubscriptions`.** The model
 asks each listener before a read whether it wants the position, and the listener answers with a consumer or with
 nothing. After a read that returned no document, the model calls the consumers with the position. A listener that
@@ -54,7 +60,10 @@ writes the position under a condition reads that condition when it is asked, whi
   receives events gets no extra write. The default is one minute, `saveQuietPositionEvery(Duration)` changes it and
   `neverSaveQuietPosition()` turns the save off.
 - It writes with the same `CheckpointWriteCondition` as a checkpoint for an event, read before the read that
-  returned the position, and under the same lock per subscription id.
+  returned the position.
+- The save holds the lock per subscription id that `subscribe(..)`, `resumeSubscription(..)`, `cancelSubscription(..)`
+  and the save after lost history also take. So a save is never written after a cancel has deleted the checkpoint, or
+  after a new subscribe of the id has replaced the registration. The checkpoint write for an event takes no lock.
 - A write the condition refuses is thrown to the wrapped model, which ends delivery for that subscription on that
   node, as it does when the write for an event is refused. Any other failure is logged as a warning and tried again
   after the interval, since nothing is lost by a quiet position that was not saved.
@@ -72,13 +81,16 @@ A quiet position is stored only when all of these hold:
    closed when the position was taken. The same thread runs the action for a document before it reads again, so the
    action has returned for every matching event before that position.
 2. The write condition was read before that read, so a node whose lease moved during the read writes with the token
-   it held, and the store refuses it ([ADR 139](0139-a-node-that-gave-up-a-lease-writes-with-the-token-it-held.md)).
+   it held ([ADR 139](0139-a-node-that-gave-up-a-lease-writes-with-the-token-it-held.md)). The store refuses that
+   write once the node that holds the lease now has written a checkpoint of its own, and accepts it before then.
 3. The interval has passed since the last checkpoint write or attempt for that subscription.
 
-A run can take a position and lose the subscription to a pause before it has written it. With a fencing token the
-store refuses that write once another node holds the lease. Without one, the write can replace a newer checkpoint
-with the older quiet position, and the subscription then receives again the events between the two. It never moves the
-stored position past an event whose action has not returned.
+A pause that comes while a quiet position is being written waits up to a second for the write, as it does for an
+action. A write that takes longer can finish after the pause has returned, and after another node has taken the lease.
+With a fencing token the store refuses it once that node has written a checkpoint, and accepts it before then. Without
+a token, the write can replace a newer checkpoint with the older quiet position. Either way the stored position never
+moves past an event whose action has not returned, so a subscription that resumes from it can receive events again
+but skips none.
 
 The resume token of an empty batch can come before an event written at the same cluster time as the last event the
 change stream read. A subscription that opens at it can then receive that event a second time. That is a duplicate,
@@ -92,9 +104,9 @@ is once a second with the driver's default.
 Asking MongoDB for its operation time on a timer, and saving that, needs no access to the cursor. The operation time
 can be later than what the change stream has delivered, so a subscription restarted from it can miss an event.
 
-Holding the run's lock while the checkpoint is written would close the gap described above. A checkpoint store that
-hangs would then block a pause or a cancel of that subscription, and a pause is what takes a subscription away from a
-node that lost its lease.
+Waiting for a quiet position's write for as long as it takes would close the gap described above. A checkpoint store
+that hangs would then block a pause of that subscription, and a pause is what takes a subscription away from a node
+that lost its lease.
 
 Keeping `MessageListenerContainer` and opening a second change stream per subscription only for its resume token
 doubles the change streams, and the token of the second one says nothing about what the first has delivered.
@@ -118,13 +130,18 @@ These change for `SpringMongoSubscriptionModel`, and each was a defect:
   subscribed again.
 - The executor the model makes by default, or for `useVirtualThreads()`, is made per model and shut down with it.
 - A subscription at the present made while the model is stopped receives the events written before `start()`.
-- An event the change stream has already returned when a pause or a cancel comes is left to the resume, rather than
-  delivered to the paused or cancelled subscription. Before, it could be delivered after `pauseSubscription(..)` or
-  `cancelSubscription(..)` had returned, which for a competing consumer can mean after this node gave up the lease.
+- No action starts after `pauseSubscription(..)` or `cancelSubscription(..)` has returned, and an event the change
+  stream has already returned by then is left to the resume. `pauseSubscription(..)` and `stop()` also wait up to a
+  second for an action that is running. Before, they did not wait for the action, and an event could be delivered
+  after they had returned.
 
 `SpringMongoSubscription` no longer wraps a Spring Data `Subscription`. Its `protected` constructor is gone, and
 neither it nor `SpringMongoSubscriptionModel` has an `equals` and `hashCode` of its own. `SpringMongoSubscriptionModel.subscribe(..)` after `shutdown()` throws
 `IllegalStateException`.
+
+`NativeMongoSubscriptionModel.pauseSubscription(..)` and `stop()` no longer wait for a read that returns nothing.
+Before, each pause waited up to a second for it, so stopping a model with many quiet subscriptions took up to a second
+per subscription.
 
 `NativeMongoSubscriptionModel` restarts a change stream whose cursor the driver reports as no longer open when the
 model did not close it. Before, the subscription ended without a log line above debug and stayed listed as running.
