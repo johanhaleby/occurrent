@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Seventeen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
+Eighteen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -59,9 +59,13 @@ Then, on `NativeMongoSubscriptionModel`, a subscription made while the model is 
 opens its change stream. A call that waits for it to start hangs when it runs before `start()` on the thread that calls
 `start()`. Read
 [section 16](#16-a-native-mongodb-subscription-made-while-the-model-is-stopped-starts-with-start).
-Finally, a blocking catch-up subscription from `StartAtTime.offsetDateTime(..)` now also delivers the events stored at
+Then a blocking catch-up subscription from `StartAtTime.offsetDateTime(..)` now also delivers the events stored at
 the time you give, so passing the time of the last event you handled delivers that event again. Read
 [section 17](#17-startattimeoffsetdatetime-includes-the-events-stored-at-that-time).
+Finally, `CompetingConsumerSubscriptionModel.start(..)` and `resumeSubscription(..)` no longer throw what the lease
+strategy or the wrapped model threw for a competing subscription. They log it and return, and the subscription is tried
+again on a thread of its own. Read
+[section 18](#18-a-competing-consumers-start-and-resumesubscription-log-a-failure-and-return).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1262,3 +1266,25 @@ What to do:
   this change fixes.
 
 There is no recipe for this change. The time you pass is a runtime value that a rewrite of the source cannot see.
+
+## 18. A competing consumer's `start(..)` and `resumeSubscription(..)` log a failure and return
+
+This covers `CompetingConsumerSubscriptionModel`. In 0.33.0 `start(..)` and `resumeSubscription(..)` threw when the
+lease strategy or the wrapped model threw for a competing subscription, for example when MongoDB could not be reached
+while `start(..)` registered a subscription for its lease. The subscription then stayed where the failure left it until
+you called again.
+
+1. Both now log the failure as a warning and return. A thread of its own tries the subscription again, with the backoff
+   the MongoDB lease strategies use by default, until it is registered for its lease and runs only while this node
+   holds it. Every fifth try that fails is logged as a warning.
+2. `start(..)` still throws the first failure of a subscription that does not compete, since nothing tries that one
+   again. `stop()`, `pauseSubscription(..)` and `cancelSubscription(..)` still throw what failed.
+3. Remove code that caught the exception from `start(..)` or `resumeSubscription(..)` to call again. The thread does
+   that now.
+4. To find out whether a subscription runs, call `isRunning(id)`. It asks the wrapped model, which runs the
+   subscription only on the node that holds its lease. `isPaused(id)` returns `true` for a subscription that
+   `pauseSubscription(..)`, `stop()` or the loss of its lease paused. A subscription for which both return `false` is
+   waiting for its lease, or is still being tried again.
+
+There is no recipe for this change. Whether the lease strategy or the wrapped model throws is runtime behavior that a
+rewrite of the source cannot see.
