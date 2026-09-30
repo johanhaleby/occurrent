@@ -119,4 +119,35 @@
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-test</id>
+                        <configuration>
+                            <excludes>
+                                <exclude>**/*OnOneCarrierThreadTest.java</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                    <!-- A JVM of its own whose virtual threads share one carrier thread -->
+                    <execution>
+                        <id>one-carrier-thread</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <includes>
+                                <include>**/*OnOneCarrierThreadTest.java</include>
+                            </includes>
+                            <argLine>-Djdk.virtualThreadScheduler.parallelism=1 -Djdk.virtualThreadScheduler.maxPoolSize=1</argLine>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>

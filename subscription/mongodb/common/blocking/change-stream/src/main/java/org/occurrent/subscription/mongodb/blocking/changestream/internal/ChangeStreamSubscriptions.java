@@ -55,7 +55,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -65,8 +64,12 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -76,7 +79,6 @@ import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
@@ -86,7 +88,12 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * way in both.
  * <p>
  * Every method that changes which subscriptions are known is called with the model's monitor held, the one
- * {@link #ChangeStreamSubscriptions the constructor} is given. The threads that read the change streams never take it.
+ * {@link #ChangeStreamSubscriptions the constructor} is given, except {@link #start(boolean)}, {@link #stop()} and
+ * {@link #shutdown()}, which take it themselves. The threads that read the change streams never take it. Nothing
+ * waits for an action to return, or for the executor to shut down, while it holds the monitor or a lock of this class,
+ * since a virtual thread that waits in a monitor keeps its carrier thread on JDK 21 to 23. So a pause returns the wait
+ * for the running action to the model, which runs it once it has let go of its monitor. A pause, a cancel and a
+ * shutdown still close the cursor with the monitor held.
  */
 @NullMarked
 public final class ChangeStreamSubscriptions {
@@ -161,11 +168,15 @@ public final class ChangeStreamSubscriptions {
 
     private volatile boolean shutdown = false;
     private volatile boolean running;
-    // Set by stop() while it pauses every subscription, so they share one wait for a running action. Read and written
-    // under the model's monitor, which stop() and pauseSubscription(..) both hold
-    private @Nullable Long stopWaitsUntil;
+    // Set by stop() while it pauses every subscription, so it waits for their running actions together once it has let
+    // go of the model's monitor. Read and written under that monitor
+    private @Nullable Map<String, InternalSubscription> pausedByAStop;
 
     private static final Duration WAIT_FOR_A_RUNNING_ACTION = Duration.ofSeconds(1);
+    // How often a resume the executor rejected is handed to it again. It warns on every fifth rejection, which is every
+    // ten seconds once the backoff has reached two
+    private static final RetryStrategy.Retry HAND_TO_THE_EXECUTOR_AGAIN = RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0);
+    private static final int REJECTIONS_BETWEEN_WARNINGS = 5;
 
     private final Predicate<Throwable> NOT_SHUTDOWN = __ -> !shutdown;
     // A refused checkpoint write must never be retried, on either retry loop below. The call sites already pass
@@ -509,8 +520,8 @@ public final class ChangeStreamSubscriptions {
     }
 
     // Only while the subscription is still on this run. A pause and a resume in the meantime started a new run, which
-    // has not lost anything. Runs on the executor thread without the model's monitor, because a pause holds that
-    // monitor while it waits for the action to return.
+    // has not lost anything. Runs on the executor thread without the model's monitor, which the threads that read the
+    // change streams never take.
     private void forget(String subscriptionId, InternalSubscription internalSubscription) {
         runningSubscriptions.remove(subscriptionId, internalSubscription);
     }
@@ -545,33 +556,42 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
+    /**
+     * Takes the model's monitor itself while it cancels every subscription, and shuts the executor down without it.
+     */
     public void shutdown() {
-        shutdown = true;
-        running = false;
-        runningSubscriptions.keySet().forEach(model::cancelSubscription);
-        runningSubscriptions.clear();
-        // Cancelled too, so a question for the present still waiting for an executor thread isn't asked while the
-        // executor shuts down below
-        pausedSubscriptions.values().forEach(InternalSubscription::cancel);
-        pausedSubscriptions.clear();
+        synchronized (monitor) {
+            shutdown = true;
+            running = false;
+            runningSubscriptions.keySet().forEach(model::cancelSubscription);
+            runningSubscriptions.clear();
+            // Cancelled too, so a question for the present still waiting for an executor thread isn't asked while the
+            // executor shuts down below
+            pausedSubscriptions.values().forEach(InternalSubscription::cancel);
+            pausedSubscriptions.clear();
+        }
         model.shutdownExecutor();
     }
 
+    /**
+     * Takes the model's monitor itself while it pauses every subscription, and waits for their running actions without
+     * it.
+     */
     public void stop() {
-        if (!shutdown) {
+        List<RuntimeException> failures = new ArrayList<>();
+        Map<String, InternalSubscription> paused;
+        synchronized (monitor) {
+            if (shutdown) {
+                return;
+            }
             running = false;
             // A copy of the keys, since pauseSubscription moves each id from runningSubscriptions to
             // pausedSubscriptions as it goes, and forEach over a map that its own callback changes can visit an entry
-            // that has already moved, or miss one that has not. Every run is closed before the first pause waits, so
-            // the actions still running end side by side rather than one after the other.
-            List<String> subscriptionIds = new ArrayList<>(runningSubscriptions.keySet());
-            subscriptionIds.stream().map(runningSubscriptions::get).filter(Objects::nonNull).forEach(InternalSubscription::close);
-            // One second for all of them together rather than one each. Every id is paused even when an earlier
-            // pause throws, and the first failure is thrown once they all are
-            List<RuntimeException> failures = new ArrayList<>();
-            stopWaitsUntil = System.nanoTime() + WAIT_FOR_A_RUNNING_ACTION.toNanos();
+            // that has already moved, or miss one that has not. Every id is paused even when an earlier pause throws,
+            // and the first failure is thrown once they all are
+            pausedByAStop = new LinkedHashMap<>();
             try {
-                for (String subscriptionId : subscriptionIds) {
+                for (String subscriptionId : new ArrayList<>(runningSubscriptions.keySet())) {
                     try {
                         model.pauseSubscription(subscriptionId);
                     } catch (RuntimeException e) {
@@ -579,13 +599,17 @@ public final class ChangeStreamSubscriptions {
                     }
                 }
             } finally {
-                stopWaitsUntil = null;
+                paused = pausedByAStop;
+                pausedByAStop = null;
             }
-            if (!failures.isEmpty()) {
-                RuntimeException first = failures.getFirst();
-                failures.subList(1, failures.size()).forEach(first::addSuppressed);
-                throw first;
-            }
+        }
+        // One second for all of them together rather than one each
+        long waitsUntil = System.nanoTime() + WAIT_FOR_A_RUNNING_ACTION.toNanos();
+        paused.forEach((subscriptionId, internalSubscription) -> waitForTheActionOf(subscriptionId, internalSubscription, waitsUntil));
+        if (!failures.isEmpty()) {
+            RuntimeException first = failures.getFirst();
+            failures.subList(1, failures.size()).forEach(first::addSuppressed);
+            throw first;
         }
     }
 
@@ -708,15 +732,61 @@ public final class ChangeStreamSubscriptions {
         InternalSubscription resumed = internalSubscription.replacedBy(repositionTo);
         pausedSubscriptions.remove(subscriptionId);
         runningSubscriptions.put(subscriptionId, resumed);
-        startSubscription(subscriptionId, resumed, () -> {
-            runningSubscriptions.remove(subscriptionId, resumed);
-            pausedSubscriptions.put(subscriptionId, internalSubscription);
-        });
+        try {
+            model.execute(() -> runUntilStopped(subscriptionId, resumed));
+        } catch (RejectedExecutionException e) {
+            if (model.executorIsShutDown()) {
+                pausedAgain(subscriptionId, internalSubscription, resumed);
+                throw e;
+            }
+            log.warn("The executor has no thread for resumed subscription {}, so it is handed to the executor again until it takes it. The subscription counts as running meanwhile.", subscriptionId, e);
+            Thread.ofVirtual().name("occurrent-resume-" + subscriptionId).start(() -> handToTheExecutorAgain(subscriptionId, resumed));
+        } catch (RuntimeException e) {
+            pausedAgain(subscriptionId, internalSubscription, resumed);
+            throw e;
+        }
 
         return model.subscription(subscriptionId, resumed.startedLatch);
     }
 
-    public void pauseSubscription(String subscriptionId) {
+    private void pausedAgain(String subscriptionId, InternalSubscription paused, InternalSubscription resumed) {
+        runningSubscriptions.remove(subscriptionId, resumed);
+        pausedSubscriptions.put(subscriptionId, paused);
+    }
+
+    // With a backoff, until the executor takes the run, a pause or a cancel closes it, or the model or the executor
+    // shuts down. A resume can come from a lease handover or from start(true), which nothing repeats, so a rejection
+    // thrown to its caller would leave the subscription paused for good. A run the executor never took stops
+    // start(true) from waiting for it
+    private void handToTheExecutorAgain(String subscriptionId, InternalSubscription resumed) {
+        AtomicBoolean taken = new AtomicBoolean();
+        try {
+            HAND_TO_THE_EXECUTOR_AGAIN.onError((info, e) -> {
+                if (info.getAttemptNumber() % REJECTIONS_BETWEEN_WARNINGS == 0) {
+                    log.warn("The executor still has no thread for resumed subscription {} after {} tries, so it is handed to the executor again.", subscriptionId, info.getAttemptNumber(), e);
+                }
+            }).execute(() -> {
+                if (!resumed.isIntentionallyClosed() && !shutdown) {
+                    model.execute(() -> runUntilStopped(subscriptionId, resumed));
+                    taken.set(true);
+                }
+            }, e -> e instanceof RejectedExecutionException && !resumed.isIntentionallyClosed() && !shutdown && !model.executorIsShutDown());
+        } catch (RuntimeException e) {
+            log.debug("Stopped handing resumed subscription {} to the executor, since it was paused or cancelled, or the model or the executor shut down.", subscriptionId, e);
+        } finally {
+            if (!taken.get()) {
+                resumed.stoppedRestarting();
+            }
+        }
+    }
+
+    /**
+     * Pauses a subscription, and returns the wait for its action when that is running. The model runs the wait once it
+     * has let go of its monitor, so a call for another subscription doesn't wait for the paused one's action. The wait
+     * returns once the action has, or after a second, and at once when called from inside the action. While
+     * {@link #stop()} pauses, the wait returns at once and stop() waits for all the actions together.
+     */
+    public Runnable pauseSubscription(String subscriptionId) {
         if (shutdown) {
             throw new IllegalStateException(SubscriptionModel.class.getSimpleName() + " is shutdown");
         }
@@ -728,17 +798,28 @@ public final class ChangeStreamSubscriptions {
         }
 
         InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
-        if (internalSubscription != null) {
-            // Paused whatever the wait ends in, so the subscription is never missing from both maps
-            try {
-                internalSubscription.close();
-                Long waitsUntil = stopWaitsUntil;
-                if (!internalSubscription.waitUntilNotDelivering(waitsUntil == null ? System.nanoTime() + WAIT_FOR_A_RUNNING_ACTION.toNanos() : waitsUntil)) {
-                    log.debug("The action of subscription {} was still running when the pause stopped waiting for it.", subscriptionId);
-                }
-            } finally {
-                pausedSubscriptions.put(subscriptionId, internalSubscription);
-            }
+        if (internalSubscription == null) {
+            return () -> {
+            };
+        }
+        // Paused whatever closing it ends in, so the subscription is never missing from both maps
+        try {
+            internalSubscription.close();
+        } finally {
+            pausedSubscriptions.put(subscriptionId, internalSubscription);
+        }
+        Map<String, InternalSubscription> stopping = pausedByAStop;
+        if (stopping != null) {
+            stopping.put(subscriptionId, internalSubscription);
+            return () -> {
+            };
+        }
+        return () -> waitForTheActionOf(subscriptionId, internalSubscription, System.nanoTime() + WAIT_FOR_A_RUNNING_ACTION.toNanos());
+    }
+
+    private void waitForTheActionOf(String subscriptionId, InternalSubscription internalSubscription, long waitsUntil) {
+        if (!internalSubscription.waitUntilNotDelivering(waitsUntil)) {
+            log.debug("The action of subscription {} was still running when the pause stopped waiting for it.", subscriptionId);
         }
     }
 
@@ -847,12 +928,15 @@ public final class ChangeStreamSubscriptions {
         final PresentAtSubscribe presentAtSubscribe;
         final Consumer<CloudEvent> action;
         private volatile boolean intentionallyClosed = false;
-        // Set under this object's lock once a resume has created the next run of the subscription
+        // Not a monitor, since a pause waits on it for the action to return
+        private final ReentrantLock lock = new ReentrantLock();
+        private final Condition stoppedDelivering = lock.newCondition();
+        // Set under lock once a resume has created the next run of the subscription
         private boolean replaced;
-        // Set under this object's lock by a cancel or a shutdown
+        // Set under lock by a cancel or a shutdown
         private boolean cancelled;
-        // Read and written under this object's lock. The cursor the current attempt delivers from, and the thread
-        // running the action or handing over a quiet position right now.
+        // Read and written under lock. The cursor the current attempt delivers from, and the thread running the action
+        // or handing over a quiet position right now.
         private @Nullable MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
         private @Nullable Thread delivering;
 
@@ -871,57 +955,92 @@ public final class ChangeStreamSubscriptions {
 
         // Under the same lock as movedUnlessReplacedTo, so an action of this run that returns after the pause waited
         // for it cannot move the position once the run that replaces it exists
-        synchronized InternalSubscription replacedBy(@Nullable StartAt repositionTo) {
-            replaced = true;
-            if (repositionTo != null) {
-                currentStartAt.set(repositionTo);
+        InternalSubscription replacedBy(@Nullable StartAt repositionTo) {
+            lock.lock();
+            try {
+                replaced = true;
+                if (repositionTo != null) {
+                    currentStartAt.set(repositionTo);
+                }
+                return new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStartedLatch);
+            } finally {
+                lock.unlock();
             }
-            return new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStartedLatch);
         }
 
         // False when this was closed while the change stream opened, and the caller then closes the cursor itself
-        synchronized boolean opened(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor) {
-            if (intentionallyClosed) {
-                return false;
+        boolean opened(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor) {
+            lock.lock();
+            try {
+                if (intentionallyClosed) {
+                    return false;
+                }
+                this.cursor = cursor;
+                return true;
+            } finally {
+                lock.unlock();
             }
-            this.cursor = cursor;
-            return true;
         }
 
         // False when this run was closed, and what the read returned is then left to a resume. Under the same lock as
         // close(), so a pause that saw nothing being delivered is never followed by a delivery on this run.
-        synchronized boolean startDelivering() {
-            if (intentionallyClosed) {
-                return false;
+        boolean startDelivering() {
+            lock.lock();
+            try {
+                if (intentionallyClosed) {
+                    return false;
+                }
+                delivering = Thread.currentThread();
+                return true;
+            } finally {
+                lock.unlock();
             }
-            delivering = Thread.currentThread();
-            return true;
         }
 
-        synchronized void stoppedDelivering() {
-            delivering = null;
-            notifyAll();
+        void stoppedDelivering() {
+            lock.lock();
+            try {
+                delivering = null;
+                stoppedDelivering.signalAll();
+            } finally {
+                lock.unlock();
+            }
         }
 
         // False once a resume has created the next run or a cancel has ended the subscription. A pause alone leaves it
         // true, since the subscription is still on this run until it is resumed
-        synchronized boolean isCurrent() {
-            return !replaced && !cancelled;
+        boolean isCurrent() {
+            lock.lock();
+            try {
+                return !replaced && !cancelled;
+            } finally {
+                lock.unlock();
+            }
         }
 
-        synchronized void movedUnlessReplacedTo(StartAt position) {
-            if (!replaced) {
-                currentStartAt.set(position);
+        void movedUnlessReplacedTo(StartAt position) {
+            lock.lock();
+            try {
+                if (!replaced) {
+                    currentStartAt.set(position);
+                }
+            } finally {
+                lock.unlock();
             }
         }
 
         // False when this run was closed, and the position is then left as it is
-        synchronized boolean movedWhileOpenTo(StartAt position) {
-            if (intentionallyClosed) {
-                return false;
+        boolean movedWhileOpenTo(StartAt position) {
+            lock.lock();
+            try {
+                if (intentionallyClosed) {
+                    return false;
+                }
+                currentStartAt.set(position);
+                return true;
+            } finally {
+                lock.unlock();
             }
-            currentStartAt.set(position);
-            return true;
         }
 
         void started() {
@@ -929,8 +1048,13 @@ public final class ChangeStreamSubscriptions {
             firstStartedLatch.countDown();
         }
 
-        synchronized void stopped() {
-            cursor = null;
+        void stopped() {
+            lock.lock();
+            try {
+                cursor = null;
+            } finally {
+                lock.unlock();
+            }
         }
 
         void stoppedRestarting() {
@@ -949,25 +1073,27 @@ public final class ChangeStreamSubscriptions {
         // maxAwaitTime has passed and then delivers nothing since this run is closed. Not when the action itself
         // pauses, since it cannot return while it waits. An interrupt doesn't end the wait, since the pause must finish
         // moving the subscription, and is set again on the thread afterwards
-        synchronized boolean waitUntilNotDelivering(long deadlineNanos) {
-            if (delivering == Thread.currentThread()) {
-                return true;
-            }
+        boolean waitUntilNotDelivering(long deadlineNanos) {
             boolean interrupted = false;
+            lock.lock();
             try {
+                if (delivering == Thread.currentThread()) {
+                    return true;
+                }
                 while (delivering != null) {
                     long remaining = deadlineNanos - System.nanoTime();
                     if (remaining <= 0) {
                         return false;
                     }
                     try {
-                        NANOSECONDS.timedWait(this, remaining);
+                        stoppedDelivering.awaitNanos(remaining);
                     } catch (InterruptedException e) {
                         interrupted = true;
                     }
                 }
                 return true;
             } finally {
+                lock.unlock();
                 if (interrupted) {
                     Thread.currentThread().interrupt();
                 }
@@ -977,8 +1103,11 @@ public final class ChangeStreamSubscriptions {
         // Unlike a pause, a cancel or a shutdown also stops an outstanding question for the present, since nothing
         // opens after it
         void cancel() {
-            synchronized (this) {
+            lock.lock();
+            try {
                 cancelled = true;
+            } finally {
+                lock.unlock();
             }
             close();
             presentAtSubscribe.cancel();
@@ -988,9 +1117,12 @@ public final class ChangeStreamSubscriptions {
         // (pause/cancel/shutdown) rather than an unexpected failure that should restart the subscription.
         void close() {
             MongoChangeStreamCursor<ChangeStreamDocument<Document>> openCursor;
-            synchronized (this) {
+            lock.lock();
+            try {
                 intentionallyClosed = true;
                 openCursor = cursor;
+            } finally {
+                lock.unlock();
             }
             if (openCursor == null) {
                 return;

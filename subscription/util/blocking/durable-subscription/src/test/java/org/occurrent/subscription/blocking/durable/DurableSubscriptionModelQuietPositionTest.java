@@ -16,32 +16,20 @@
 
 package org.occurrent.subscription.blocking.durable;
 
-import io.cloudevents.CloudEvent;
-import io.cloudevents.core.builder.CloudEventBuilder;
-import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
-import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
-import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
-import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
-import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.OptionalLong;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -121,23 +109,22 @@ class DurableSubscriptionModelQuietPositionTest {
     }
 
     @Test
-    void a_persist_predicate_that_never_stores_means_the_quiet_position_is_never_saved() throws InterruptedException {
+    void a_persist_predicate_that_never_stores_has_the_quiet_position_saved_until_its_first_event() throws InterruptedException {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(__ -> false).saveQuietPositionEvery(INTERVAL));
         model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
         });
-        Checkpoint storedAtTheSubscribe = storage.read("id");
         Thread.sleep(INTERVAL.toMillis() + 50);
 
         // When
         boolean savedBeforeAnyEvent = wrapped.readNothing("id", QUIET);
         wrapped.deliver("id", new StringBasedCheckpoint("event"));
         Thread.sleep(INTERVAL.toMillis() + 50);
-        boolean savedAfterAnEvent = wrapped.readNothing("id", QUIET);
+        boolean savedAfterADeclinedEvent = wrapped.readNothing("id", new StringBasedCheckpoint("quiet-2"));
 
         // Then
-        assertThat(List.of(savedBeforeAnyEvent, savedAfterAnEvent)).containsExactly(false, false);
-        assertThat(storage.read("id")).isEqualTo(storedAtTheSubscribe);
+        assertThat(List.of(savedBeforeAnyEvent, savedAfterADeclinedEvent)).containsExactly(true, false);
+        assertThat(storage.read("id")).isEqualTo(QUIET);
     }
 
     @Test
@@ -162,7 +149,7 @@ class DurableSubscriptionModelQuietPositionTest {
     }
 
     @Test
-    void a_persist_predicate_other_than_every_n_has_the_quiet_position_saved_only_once_it_has_stored_an_event() throws InterruptedException {
+    void a_persist_predicate_other_than_every_n_has_the_quiet_position_saved_before_its_first_event() throws InterruptedException {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(__ -> true).saveQuietPositionEvery(INTERVAL));
         model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
@@ -173,11 +160,11 @@ class DurableSubscriptionModelQuietPositionTest {
         boolean savedBeforeAnyEvent = wrapped.readNothing("id", QUIET);
         wrapped.deliver("id", new StringBasedCheckpoint("event"));
         Thread.sleep(INTERVAL.toMillis() + 50);
-        boolean savedAfterAStoredEvent = wrapped.readNothing("id", QUIET);
+        boolean savedAfterAStoredEvent = wrapped.readNothing("id", new StringBasedCheckpoint("quiet-2"));
 
         // Then
-        assertThat(List.of(savedBeforeAnyEvent, savedAfterAStoredEvent)).containsExactly(false, true);
-        assertThat(storage.read("id")).isEqualTo(QUIET);
+        assertThat(List.of(savedBeforeAnyEvent, savedAfterAStoredEvent)).containsExactly(true, true);
+        assertThat(storage.read("id")).isEqualTo(new StringBasedCheckpoint("quiet-2"));
     }
 
     @Test
@@ -358,102 +345,6 @@ class DurableSubscriptionModelQuietPositionTest {
             }
             conditions.add(condition);
             return super.save(subscriptionId, checkpoint, condition);
-        }
-    }
-
-    private static final class QuietPositionReportingModel implements CheckpointAwareSubscriptionModel, QuietPositionReportingSubscriptions {
-        final List<QuietPositionListener> listeners = new ArrayList<>();
-        final Map<String, Consumer<CloudEvent>> actions = new HashMap<>();
-
-        // A read that returned no event. True when a listener wanted the quiet position
-        boolean readNothing(String subscriptionId, Checkpoint quietPosition) {
-            Consumer<Checkpoint> saver = beforeReading(subscriptionId);
-            if (saver == null) {
-                return false;
-            }
-            saver.accept(quietPosition);
-            return true;
-        }
-
-        @Nullable Consumer<Checkpoint> beforeReading(String subscriptionId) {
-            return listeners.isEmpty() ? null : listeners.getFirst().beforeReading(subscriptionId);
-        }
-
-        void deliver(String subscriptionId, Checkpoint position) {
-            CloudEvent cloudEvent = CloudEventBuilder.v1().withId(UUID.randomUUID().toString()).withSource(URI.create("urn:test")).withType("type").build();
-            actions.get(subscriptionId).accept(new CheckpointAwareCloudEvent(cloudEvent, position));
-        }
-
-        @Override
-        public void addQuietPositionListener(QuietPositionListener listener) {
-            listeners.add(listener);
-        }
-
-        @Override
-        public void removeQuietPositionListener(QuietPositionListener listener) {
-            listeners.remove(listener);
-        }
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            actions.put(subscriptionId, action);
-            return new Subscription() {
-                @Override
-                public String id() {
-                    return subscriptionId;
-                }
-
-                @Override
-                public boolean waitUntilStarted(Duration timeout) {
-                    return true;
-                }
-            };
-        }
-
-        @Override
-        public @Nullable Checkpoint globalCheckpoint() {
-            return null;
-        }
-
-        @Override
-        public void shutdown() {
-        }
-
-        @Override
-        public void stop() {
-        }
-
-        @Override
-        public void start(boolean resumeSubscriptionsAutomatically) {
-        }
-
-        @Override
-        public boolean isRunning() {
-            return true;
-        }
-
-        @Override
-        public boolean isRunning(String subscriptionId) {
-            return actions.containsKey(subscriptionId);
-        }
-
-        @Override
-        public boolean isPaused(String subscriptionId) {
-            return false;
-        }
-
-        @Override
-        public Subscription resumeSubscription(String subscriptionId) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public void pauseSubscription(String subscriptionId) {
-        }
-
-        @Override
-        public void cancelSubscription(String subscriptionId) {
-            actions.remove(subscriptionId);
         }
     }
 }

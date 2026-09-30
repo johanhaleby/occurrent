@@ -43,6 +43,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -105,14 +106,19 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // One lock per id, which exists while a call holds or waits for it. Per id, so a checkpoint store that hangs in
     // one id's call blocks only calls for that id. Removed once no call needs it, so an unknown or made-up id passed
     // to cancelSubscription or resumeSubscription leaves nothing behind. The checkpoint write for an event takes none
-    // of these, only the lock of its own CheckpointRegistration, which a cancel of that id also takes
+    // of these, only the lock of its own CheckpointRegistration, which a cancel of that id also takes. Neither is a
+    // monitor, since a virtual thread that waits for the checkpoint store while it holds one keeps its carrier thread
+    // on JDK 21 to 23
     private final ConcurrentMap<String, IdLock> idLocks = new ConcurrentHashMap<>();
 
     private <T> T underLockFor(String subscriptionId, Supplier<T> call) {
-        IdLock lock = idLocks.compute(subscriptionId, (__, held) -> held == null ? new IdLock() : held.oneMoreCaller());
+        IdLock idLock = idLocks.compute(subscriptionId, (__, held) -> held == null ? new IdLock() : held.oneMoreCaller());
         try {
-            synchronized (lock) {
+            idLock.lock.lock();
+            try {
                 return call.get();
+            } finally {
+                idLock.lock.unlock();
             }
         } finally {
             idLocks.computeIfPresent(subscriptionId, (__, held) -> held.oneCallerLess() ? null : held);
@@ -314,7 +320,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
             // One per subscription, so an EveryN configured for the whole model counts this subscription's events only
             Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
-            CheckpointRegistration registration = new CheckpointRegistration(config.persistCloudEventPositionPredicate.getClass() == EveryN.class);
+            CheckpointRegistration registration = new CheckpointRegistration();
             Consumer<CloudEvent> checkpointingAction = cloudEvent -> {
                 // Read before the action runs, so the write uses the token of the lease this event was
                 // delivered under, even if this node lost that lease and won a newer one meanwhile
@@ -613,18 +619,15 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // When a checkpoint was last written for the id, as System.nanoTime(). Starts now, so the first quiet position
         // is saved one interval after the subscribe
         final AtomicLong lastWrite = new AtomicLong(System.nanoTime());
-        // False while the last event delivered is one the persist predicate declined to store. Before the first event
-        // it is true only for EveryN, which stores one in every n. Any other predicate might never store one, such as
-        // one that always answers false, so it has to store an event first
-        volatile boolean quietSaveAllowed;
+        // False while the last event delivered is one the persist predicate declined to store. True before the first
+        // event, since no event can then come before the quiet position without a checkpoint of its own
+        volatile boolean quietSaveAllowed = true;
+        // Held while the checkpoint for an event is written, and by a cancel while it deletes the checkpoint
+        private final ReentrantLock saveLock = new ReentrantLock();
         private boolean cancelled;
         // Counts the deliveries of every run of this subscribe. An action a pause stopped waiting for can return after
         // a resume has delivered later events, and only the latest delivery says what the last event delivered is
         private long deliveries;
-
-        CheckpointRegistration(boolean quietSaveAllowed) {
-            this.quietSaveAllowed = quietSaveAllowed;
-        }
 
         synchronized long delivering() {
             return ++deliveries;
@@ -636,20 +639,31 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             }
         }
 
-        synchronized void saveUnlessCancelled(Runnable save) {
-            if (!cancelled) {
-                save.run();
+        void saveUnlessCancelled(Runnable save) {
+            saveLock.lock();
+            try {
+                if (!cancelled) {
+                    save.run();
+                }
+            } finally {
+                saveLock.unlock();
             }
         }
 
-        synchronized void cancelled(Runnable deleteCheckpoint) {
-            cancelled = true;
-            deleteCheckpoint.run();
+        void cancelled(Runnable deleteCheckpoint) {
+            saveLock.lock();
+            try {
+                cancelled = true;
+                deleteCheckpoint.run();
+            } finally {
+                saveLock.unlock();
+            }
         }
     }
 
-    // Changed only inside compute and computeIfPresent of idLocks, which run one at a time for an id
     private static final class IdLock {
+        final ReentrantLock lock = new ReentrantLock();
+        // Changed only inside compute and computeIfPresent of idLocks, which run one at a time for an id
         private int callers = 1;
 
         IdLock oneMoreCaller() {

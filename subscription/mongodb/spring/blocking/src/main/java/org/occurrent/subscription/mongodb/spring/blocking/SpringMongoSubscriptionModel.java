@@ -260,9 +260,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * Cancels every subscription and shuts down the executor this model made for itself. An executor given to
      * {@link SpringMongoSubscriptionModelConfig#executor(Executor)} is left running.
      */
+    // Takes the monitor itself while it cancels, and waits for the executor without it
     @PreDestroy
     @Override
-    public synchronized void shutdown() {
+    public void shutdown() {
         subscriptions.shutdown();
     }
 
@@ -295,9 +296,14 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * @see #resumeSubscription(String)
      */
     @Override
-    public synchronized void pauseSubscription(String subscriptionId) {
-        requireNotShutdown(subscriptionId);
-        subscriptions.pauseSubscription(subscriptionId);
+    public void pauseSubscription(String subscriptionId) {
+        Runnable waitForTheRunningAction;
+        synchronized (this) {
+            requireNotShutdown(subscriptionId);
+            waitForTheRunningAction = subscriptions.pauseSubscription(subscriptionId);
+        }
+        // Without the monitor, so a call for another subscription doesn't wait for the paused one's action
+        waitForTheRunningAction.run();
     }
 
     /**
@@ -403,8 +409,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         subscriptions.start(resumeSubscriptionsAutomatically);
     }
 
+    // Takes the monitor itself while it pauses, and waits for the running actions without it
     @Override
-    public synchronized void stop() {
+    public void stop() {
         subscriptions.stop();
     }
 

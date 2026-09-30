@@ -69,7 +69,10 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -78,6 +81,7 @@ import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
@@ -87,7 +91,8 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
  * A pause waits a second at most for an action that is running, and a cancel doesn't wait for it at all, so an action
  * can return after the run that called it was closed. What that run then writes must not change where the subscription
  * opens next, no attempt of the action starts once the run is closed, and a pause or a stop ends with the subscription
- * paused however its wait for the action ends.
+ * paused however its wait for the action ends. A pause of another subscription doesn't wait with it, and a resume the
+ * executor has no thread for runs once a thread is free.
  */
 @Testcontainers
 @Timeout(60)
@@ -101,6 +106,7 @@ class ActionThatOutlivesItsRunTest {
     enum Model {SPRING, NATIVE}
 
     private final List<SubscriptionModel> started = new ArrayList<>();
+    private final List<ExecutorService> executors = new ArrayList<>();
     private MongoClient client;
     private MongoTemplate template;
     private SpringMongoEventStore eventStore;
@@ -133,6 +139,7 @@ class ActionThatOutlivesItsRunTest {
         answerThePresent.countDown();
         client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", "off"));
         started.forEach(SubscriptionModel::shutdown);
+        executors.forEach(ExecutorService::shutdownNow);
         client.close();
     }
 
@@ -242,6 +249,58 @@ class ActionThatOutlivesItsRunTest {
         NameDefined afterTheResume = nameDefined();
         eventStore.write("after", serialize(afterTheResume));
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).contains(afterTheResume.eventId()));
+    }
+
+    @ParameterizedTest
+    @EnumSource(Model.class)
+    void a_pause_that_waits_for_the_running_action_of_one_subscription_does_not_hold_up_a_pause_of_another(Model model) throws InterruptedException {
+        // Given a pause of a that waits for a's running action
+        CheckpointAwareSubscriptionModel subscriptionModel = model(model);
+        CountDownLatch handling = new CountDownLatch(1);
+        subscriptionModel.subscribe("a", null, StartAt.now(), blockingOnTheFirstEvent(handling, new CopyOnWriteArrayList<>())).waitUntilStarted(Duration.ofSeconds(10));
+        subscriptionModel.subscribe("b", null, StartAt.now(), __ -> {
+        }).waitUntilStarted(Duration.ofSeconds(10));
+        eventStore.write("first", serialize(nameDefined()));
+        assertThat(handling.await(10, SECONDS)).isTrue();
+        Thread pausingA = new Thread(() -> subscriptionModel.pauseSubscription("a"));
+        pausingA.start();
+        await().atMost(5, SECONDS).until(() -> pausingA.getState() == Thread.State.TIMED_WAITING);
+
+        // When
+        long startedPausingB = System.nanoTime();
+        subscriptionModel.pauseSubscription("b");
+        Duration pausingB = Duration.ofNanos(System.nanoTime() - startedPausingB);
+
+        // Then
+        assertThat(pausingB).as("time to pause b while a pause of a waits for a's action").isLessThan(Duration.ofMillis(500));
+        pausingA.join(SECONDS.toMillis(10));
+        assertThat(List.of("a", "b")).as("paused").allMatch(subscriptionModel::isPaused);
+    }
+
+    @ParameterizedTest
+    @EnumSource(Model.class)
+    void a_resume_the_executor_has_no_thread_for_runs_once_a_thread_is_free(Model model) throws InterruptedException {
+        // Given a subscription on an executor with one thread and no queue, whose action still holds that thread when
+        // the pause returns
+        ThreadPoolExecutor oneThread = new ThreadPoolExecutor(1, 1, 0, SECONDS, new SynchronousQueue<>());
+        executors.add(oneThread);
+        CheckpointAwareSubscriptionModel subscriptionModel = model(model, oneThread);
+        CountDownLatch handling = new CountDownLatch(1);
+        CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe("a", null, StartAt.now(), blockingOnTheFirstEvent(handling, handled)).waitUntilStarted(Duration.ofSeconds(10));
+        eventStore.write("first", serialize(nameDefined()));
+        assertThat(handling.await(10, SECONDS)).isTrue();
+        subscriptionModel.pauseSubscription("a");
+
+        // When the subscription is resumed while the paused run holds the only thread, and the action then returns
+        Throwable thrownByTheResume = catchThrowable(() -> subscriptionModel.resumeSubscription("a"));
+        releaseTheSlowAction.countDown();
+        NameDefined afterTheResume = nameDefined();
+        eventStore.write("after", serialize(afterTheResume));
+
+        // Then
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).as("handled once the thread is free").extracting(CloudEvent::getId).contains(afterTheResume.eventId()));
+        assertThat(thrownByTheResume).as("what resumeSubscription(..) threw").isNull();
     }
 
     @ParameterizedTest
@@ -497,11 +556,22 @@ class ActionThatOutlivesItsRunTest {
         return model(model, retryStrategy, false);
     }
 
+    private CheckpointAwareSubscriptionModel model(Model model, ExecutorService executor) {
+        return model(model, RetryStrategy.fixed(Duration.ofSeconds(1)), false, executor);
+    }
+
     private CheckpointAwareSubscriptionModel model(Model model, RetryStrategy retryStrategy, boolean restartAfterLostHistory) {
+        return model(model, retryStrategy, restartAfterLostHistory, null);
+    }
+
+    private CheckpointAwareSubscriptionModel model(Model model, RetryStrategy retryStrategy, boolean restartAfterLostHistory, @Nullable ExecutorService executor) {
         CheckpointAwareSubscriptionModel subscriptionModel = switch (model) {
-            case SPRING -> new SpringMongoSubscriptionModel(template, SpringMongoSubscriptionModelConfig.withConfig(eventCollection, TimeRepresentation.RFC_3339_STRING)
-                    .maxAwaitTime(Duration.ofMillis(100)).retryStrategy(retryStrategy).restartSubscriptionsOnChangeStreamHistoryLost(restartAfterLostHistory));
-            case NATIVE -> new NativeMongoSubscriptionModel(template.getDb(), eventCollection, TimeRepresentation.RFC_3339_STRING, Executors.newCachedThreadPool(),
+            case SPRING -> {
+                SpringMongoSubscriptionModelConfig config = SpringMongoSubscriptionModelConfig.withConfig(eventCollection, TimeRepresentation.RFC_3339_STRING)
+                        .maxAwaitTime(Duration.ofMillis(100)).retryStrategy(retryStrategy).restartSubscriptionsOnChangeStreamHistoryLost(restartAfterLostHistory);
+                yield new SpringMongoSubscriptionModel(template, executor == null ? config : config.executor(executor));
+            }
+            case NATIVE -> new NativeMongoSubscriptionModel(template.getDb(), eventCollection, TimeRepresentation.RFC_3339_STRING, executor == null ? Executors.newCachedThreadPool() : executor,
                     NativeMongoSubscriptionModelConfig.withConfig().maxAwaitTime(Duration.ofMillis(100)).retryStrategy(retryStrategy).restartSubscriptionsOnChangeStreamHistoryLost(restartAfterLostHistory));
         };
         started.add(subscriptionModel);
