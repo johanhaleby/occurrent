@@ -166,9 +166,9 @@ class ScheduledRefresh {
     }
 
     /**
-     * Stops the notifier without waiting for it. A notification it is delivering may be waiting for the monitor
-     * of the very subscription model that is shutting this down, and waiting for it here would stall that shutdown
-     * for the full timeout.
+     * Stops the notifier without waiting for it. A listener it is calling may be waiting for the database, such as a
+     * grant that resumes a subscription and opens its change stream, and waiting for it here would stall the shutdown
+     * of the subscription model that shuts this down for the full timeout.
      */
     void close() {
         if (notifier != null) {
