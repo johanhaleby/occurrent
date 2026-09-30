@@ -44,8 +44,7 @@ Where such a subscription starts is up to each model:
 | Model | Where a subscription made while it is stopped starts, for `StartAt.now()` or the model default |
 |---|---|
 | `DurableSubscriptionModel` | The position it records in `subscribe(..)` when it has none stored |
-| `NativeMongoSubscriptionModel` | The operation time MongoDB answers with, asked for when `subscribe(..)` is called |
-| `SpringMongoSubscriptionModel` | Wherever the change stream is when it opens, after `start()` or a resume |
+| `NativeMongoSubscriptionModel` and `SpringMongoSubscriptionModel` | The operation time MongoDB answers with, asked for when `subscribe(..)` is called |
 | `InMemorySubscriptionModel` | The first event fed to it after it is resumed |
 | The blocking catch-up models | The replay's own start position, and the live model's for a subscription with no replay |
 
@@ -255,9 +254,9 @@ The blocking catch-up model runs a kept replay again only on `start(true)` or a 
 models in ADR 98 run it on any `start(..)`.
 
 A subscription made on a stopped `CompetingConsumerSubscriptionModel` over a bare `SpringMongoSubscriptionModel`, with
-`StartAt.now()` or the model default, starts where the change stream is once the node wins the lease. An event written
-between `subscribe(..)` and then is not delivered to it. Over a `DurableSubscriptionModel` it is, since that model
-records the position in `subscribe(..)`.
+`StartAt.now()` or the model default, starts at the operation time MongoDB answers with when `subscribe(..)` asks
+([ADR 142](0142-a-quiet-mongodb-subscription-moves-its-position-from-the-empty-batch.md)). An event written after
+MongoDB has answered is delivered to it once the node wins the lease, as long as the oplog still holds that time.
 
 A subscription model of your own that you wrap in a `CompetingConsumerSubscriptionModel` has to hold a subscription
 made while it is stopped paused. One that delivers it straight away delivers it on a node that holds no lease for it.

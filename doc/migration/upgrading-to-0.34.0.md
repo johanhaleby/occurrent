@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Eighteen things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
+Nineteen things are worth reading, four of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -62,10 +62,16 @@ opens its change stream. A call that waits for it to start hangs when it runs be
 Then a blocking catch-up subscription from `StartAtTime.offsetDateTime(..)` now also delivers the events stored at
 the time you give, so passing the time of the last event you handled delivers that event again. Read
 [section 17](#17-startattimeoffsetdatetime-includes-the-events-stored-at-that-time).
-Finally, `CompetingConsumerSubscriptionModel.start(..)` and `resumeSubscription(..)` no longer throw what the lease
+Then `CompetingConsumerSubscriptionModel.start(..)` and `resumeSubscription(..)` no longer throw what the lease
 strategy or the wrapped model threw for a competing subscription. They log it and return, and the subscription is tried
 again on a thread of its own. Read
 [section 18](#18-a-competing-consumers-start-and-resumesubscription-log-a-failure-and-return).
+Finally, `SpringMongoSubscriptionModel` no longer skips an event whose action keeps failing, forgets a subscription
+whose history was lost when it is told not to restart it, and no longer builds on Spring Data's
+`MessageListenerContainer`, which removes the `protected` constructor of `SpringMongoSubscription`. A
+`DurableSubscriptionModel` over a MongoDB model also writes a checkpoint once a minute for a subscription that receives
+no events. Read
+[section 19](#19-springmongosubscriptionmodel-reads-its-own-cursor-and-a-quiet-durable-subscription-saves-its-position).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1288,3 +1294,69 @@ you called again.
 
 There is no recipe for this change. Whether the lease strategy or the wrapped model throws is runtime behavior that a
 rewrite of the source cannot see.
+
+## 19. `SpringMongoSubscriptionModel` reads its own cursor, and a quiet durable subscription saves its position
+
+`SpringMongoSubscriptionModel` now reads each change stream with the cursor loop `NativeMongoSubscriptionModel` uses,
+instead of Spring Data's `MessageListenerContainer`. Both models report the position a subscription has read to when
+no event matched its filter, and `DurableSubscriptionModel` saves it. Go through the list below, since most of it needs
+nothing from you.
+
+### An event whose action keeps failing is no longer skipped
+
+In 0.33.0, when the action still threw after the `RetryStrategy` gave up, `SpringMongoSubscriptionModel` went on to the
+next event, and a `DurableSubscriptionModel` over it then stored a position past the event that failed. The event was
+lost.
+
+Now the model restarts the change stream from the event before it and delivers the failing event again. The default
+`RetryStrategy` never gives up, so this only concerns a strategy with `maxAttempts(..)` or a `retryIf(..)` predicate.
+With such a strategy the restart gives up too, the give-up is logged as an error, and the subscription delivers
+nothing more until you pause and resume it.
+
+If you relied on the skip to get past an event the action cannot handle, catch the exception in the action and decide
+there what to do with the event.
+
+### After lost history with restarting turned off, the subscription is gone
+
+With `restartSubscriptionsOnChangeStreamHistoryLost(false)`, a subscription whose position the oplog no longer holds
+is now removed from the model. `isRunning(id)` and `isPaused(id)` return `false`. In 0.33.0 it still counted as
+running.
+
+To start it again, call `subscribe(..)` with the same id and a position the oplog still holds. Code that called
+`pauseSubscription(id)` and `resumeSubscription(id)` for this now gets `UnknownSubscriptionException`.
+
+### `SpringMongoSubscription` has no `protected` constructor
+
+The constructor took a Spring Data `Subscription`, which the model no longer has. A subclass of
+`SpringMongoSubscription`, or code that created one, stops compiling. Use the `Subscription` that `subscribe(..)`
+returns. `SpringMongoSubscription` and `SpringMongoSubscriptionModel` also no longer override `equals` and `hashCode`,
+so two instances are equal only when they are the same object.
+
+### The default executor belongs to the model
+
+Each `SpringMongoSubscriptionModel` now makes its own executor when you pass none, also for `useVirtualThreads()`, and
+shuts it down in `shutdown()`. In 0.33.0 the default executor was never shut down. An executor you pass with
+`SpringMongoSubscriptionModelConfig.executor(..)` is still yours to shut down.
+
+`subscribe(..)` on a model that is shut down throws `IllegalStateException`.
+
+### A subscription made before `start()` receives what was written before `start()`
+
+A subscription at `StartAt.now()`, or with the model default, made while the model is stopped or on a model created
+with `autoStartup(false)`, now starts at the operation time MongoDB answers with when `subscribe(..)` asks. In 0.33.0
+it started where the change stream was when `start()` opened it, so the events written in between were skipped. They
+are delivered now, which is more than the action received before.
+
+### A quiet subscription's checkpoint is written once a minute
+
+A `DurableSubscriptionModel` over `SpringMongoSubscriptionModel` or `NativeMongoSubscriptionModel` now saves the
+position of a subscription that has had no checkpoint saved for a minute. It uses the same `CheckpointStorage` and the
+same write condition as for an event. A subscription that receives events gets no extra write.
+
+Change the interval with `saveQuietPositionEvery(Duration)` on `DurableSubscriptionModelConfig`, and keep it well
+below the oplog window. `neverSaveQuietPosition()` turns the save off, and the stored checkpoint of a subscription
+that matches nothing for longer than the oplog window is then a position MongoDB can no longer start from. The Spring
+Boot starter has no property for the interval, so define your own `SubscriptionModel` bean to change it there.
+
+There is no recipe for these changes. The removed constructor has no replacement to rewrite to, and the rest is runtime
+behavior that a rewrite of the source cannot see.
