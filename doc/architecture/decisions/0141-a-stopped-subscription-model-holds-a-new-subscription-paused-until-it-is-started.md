@@ -145,22 +145,24 @@ before the call, the node keeps the lease and records the subscription as runnin
 would let another node run it too. One the wrapped model ran before the call, such as a subscription made there directly
 under the same id, is not what the call started, so the lease goes back.
 
-**`CompetingConsumerSubscriptionModel` changes what it records, and asks the wrapped model to change a subscription,
-only while it holds its monitor, except for two steps of `subscribe(..)`, the calls of the thread that tries a
-subscription again, and `shutdown()`.** These threads act on it:
+**`CompetingConsumerSubscriptionModel` calls the lease strategy and the wrapped model for a subscription only while it
+holds a lock kept for that subscription, except for two steps of `subscribe(..)` and `shutdown()`, which hold no lock.
+It never holds its monitor during such a call.** The monitor is held only for a moment, to read and write what several
+subscriptions share, such as the ids being made and the latest `start(..)` or `stop()`. These threads act on it:
 
-| Thread | Outside the monitor | Under the monitor |
+| Thread | Under the subscription's lock | Without it |
 |---|---|---|
-| A user's `stop()`, `start(..)`, `pauseSubscription(..)`, `resumeSubscription(..)` and `cancelSubscription(..)`, also when an action calls one on the wrapped model's delivery thread | Nothing | Everything, including registering with the lease strategy in `start(..)` and `resumeSubscription(..)` |
-| `onConsumeGranted(..)` and `onConsumeProhibited(..)`, which the lease strategy calls on its notifier thread or on the thread that registers | Handing the subscription to the thread that tries it again, when a try or a call on another thread holds the subscription's lock, and returning when the callback comes out of that try's own call | Everything else, including subscribing, resuming or pausing in the wrapped model |
-| `subscribe(..)` | Registering with the lease strategy, and making the subscription in the wrapped model | Deciding the next step from what holds at that moment, and recording the subscription |
-| The thread that tries a subscription again after a call failed | Waiting between two tries, and each call to the lease strategy or the wrapped model, which it makes holding the subscription's lock | Deciding the next call, and recording the subscription |
-| `shutdown()` | Everything, which is shutting the lease strategy down, then the wrapped model, and then giving up each lease once | Nothing |
+| A user's `pauseSubscription(..)`, `resumeSubscription(..)` and `cancelSubscription(..)`, also when an action calls one on the wrapped model's delivery thread | Everything, including registering with the lease strategy in `resumeSubscription(..)` | Nothing |
+| A user's `start(..)` and `stop()` | Applying the call to each subscription whose lock is free | Recording that the model is started or stopped, starting or stopping the wrapped model, and handing each subscription whose lock is taken to a thread of its own |
+| `onConsumeGranted(..)` and `onConsumeProhibited(..)`, which the lease strategy calls on its notifier thread or on the thread that registers | Everything, including subscribing, resuming or pausing in the wrapped model | Handing the subscription to the thread that tries it again, when another thread holds the lock, and returning when the callback comes out of that try's own call |
+| `subscribe(..)` | Deciding the next step from what holds at that moment, and recording the subscription | Registering with the lease strategy, and making the subscription in the wrapped model |
+| The thread that tries a subscription again after a call failed | Every try, including each call to the lease strategy or the wrapped model | Waiting between two tries |
+| `shutdown()` | Nothing | Everything, which is shutting the lease strategy down, then the wrapped model, and then giving up each lease once |
 
 The MongoDB lease strategies retry a registration for as long as MongoDB cannot be reached, and making a subscription
 in the wrapped model can take as long as opening a change stream. A lifecycle call or a lease callback that waited for
 either would hang for as long, so `subscribe(..)` holds nothing while it does them. After each of the two steps it takes
-the monitor and decides the next one from what holds then, whatever held when it began. That is whether the model is
+the subscription's lock and decides the next one from what holds then, whatever held when it began. That is whether the model is
 shut down or stopped, whether the node holds the lease, and whether the wrapped model runs what it made or holds it
 paused.
 
@@ -197,10 +199,11 @@ waiting for a grant otherwise, and the thread above brings it to the end state. 
 down, or whose id is cancelled, while it makes the subscription still throws as described above.
 
 A lease callback for a subscription that `subscribe(..)` has not recorded yet finds nothing and does nothing, and the
-step after it asks the strategy whether the node holds the lease. The wrapped model is started only after a check that
-the model is not stopped, and the check and the start run under one lock that `stop()` also takes to record that it is
-stopped. So a `subscribe(..)` or a try that a `stop()` overtook never starts the wrapped model after that `stop()` has
-returned.
+step after it asks the strategy whether the node holds the lease. The wrapped model is started, or a subscription
+resumed or subscribed there, only after a check that the model is not stopped. The check runs under a lock that
+`stop()` also takes to record that it is stopped, and `stop()` stops the wrapped model only once every call let through
+before that has returned. So a `subscribe(..)`, a try or a lease callback that a `stop()` overtook never starts the
+wrapped model, or runs a subscription there, after that `stop()` has returned.
 
 These rules follow:
 
@@ -224,14 +227,27 @@ These rules follow:
    `DurableSubscriptionModel` subscription deletes the position it stored, so a shutdown during `subscribe(..)` that
    cancelled it would start the next run from the present.
 
-`start(..)` and `resumeSubscription(..)` still register under the monitor, as they do in 0.33.0. The thread that tries a
-subscription again does not. Each subscription has a lock of its own, which that thread holds while it calls the lease
-strategy or the wrapped model, and which a pause, a resume and a cancel of that subscription take before the monitor.
-`start(..)` and `stop()` take each subscription's lock in turn, without holding the monitor while they wait for it. A
-try that retries a registration through a MongoDB outage therefore holds up the calls for its own subscription, and a
-`start(..)` or `stop()` that reaches that subscription, and no call for any other subscription. A lease callback never
-waits for a subscription's lock. It hands the subscription to the thread that tries it again, since the lease strategy
-calls it on one notifier thread for every subscription.
+While a call for one subscription waits for the lease strategy or the wrapped model, no call, grant or lease loss for
+another subscription waits for it. In 0.33.0 every such call ran under the monitor, so a `start(..)` or
+`resumeSubscription(..)` whose registration retried through a MongoDB outage held up every other subscription on the
+node for as long.
+
+A lease callback never waits for a subscription's lock, since the lease strategy calls it on one notifier thread for
+every subscription. When another thread holds the lock, the callback hands the subscription to the thread that tries it
+again, which takes the lock once it is free and decides from what holds then.
+
+`start(..)` and `stop()` never wait for a subscription's lock either. Each applies itself to every subscription whose
+lock is free, and hands a subscription whose lock is taken to a thread of its own. That thread waits for the lock,
+applies the latest `start(..)` or `stop()` to the subscription, and logs a failure as a warning instead of throwing it.
+A `start(..)` or `stop()` that begins while an earlier one is still going through the subscriptions makes the earlier
+one stop there, and goes through every subscription itself. Nothing delivers after a `stop()` has returned all the same,
+since it stops the wrapped model as described above. A handed over subscription can stay registered until its
+thread has the lock, and then unregisters. A `start(..)` that has returned has registered every subscription whose lock was free, and the
+thread it handed each other one to registers that one once the lock is free.
+
+`stop()` waits for every call let through into the wrapped model before it began, so a call for another subscription
+that waits inside the wrapped model holds `stop()` up. The Spring and native MongoDB models run every such call and
+their own `stop()` under their monitor, so the wrapped model's own `stop()` would wait for it too.
 
 `shutdown()` takes neither the monitor nor any subscription's lock. It shuts the lease strategy down, which ends a
 registration waiting between two attempts and makes each later unregister a single attempt, removes the model as a
@@ -243,11 +259,11 @@ is given up, since that model may still deliver, and `shutdown()` throws.
 The alternative is one serial executor that runs every change of state, calls the wrapped model and the lease strategy
 outside it, and applies each result only when nothing changed while the call ran. I did not choose it. Every call moved
 outside the serial path would need its own answer to a stop, a start, a cancel or a lease change that came while it
-ran, for the lease callbacks and the lifecycle calls as much as for `subscribe(..)`. Keeping the wrapped model's calls
-under the monitor means that `stop()`, `start(..)`, a pause, a resume and a lease callback never overlap. The steps
-that go outside are the two steps of `subscribe(..)` that can take as long as an outage, and the calls of the thread
-that tries a subscription again. One rule answers for all of them, which is to decide again from what holds now. The
-tries also hold their subscription's lock, so nothing else acts on that subscription while a try calls out.
+ran, for the lease callbacks and the lifecycle calls as much as for `subscribe(..)`. Keeping every call for a
+subscription under that subscription's lock means that `stop()`, `start(..)`, a pause, a resume, a lease callback and a
+try never overlap for one subscription, and a call for one subscription never waits for a call for another. The steps
+that go outside the lock are the two steps of `subscribe(..)` that can take as long as an outage. One rule answers for
+them and for the tries, which is to decide again from what holds now.
 
 **The blocking catch-up model keeps a replay it cannot run, instead of ending it.** That covers a replay subscribed
 while the model is stopped and one that `stop()` cuts short. The model keeps the replay together with the handle its
@@ -281,7 +297,7 @@ whose subscription still runs after `pauseSubscription(..)` has returned makes `
 subscription's lease.
 
 A wrapped model that refuses `subscribePaused(..)` and loses the lease while it makes a subscription in `subscribe(..)`
-delivers that subscription until `subscribe(..)` takes the monitor again and pauses it.
+delivers that subscription until `subscribe(..)` takes the subscription's lock again and pauses it.
 
 `start(..)` and `resumeSubscription(..)` return when the lease strategy or the wrapped model throws for a competing
 subscription, and so does `subscribe(..)` once the wrapped model has made the subscription. 0.33.0 threw. The failure
@@ -296,7 +312,11 @@ two seconds.
 0.33.0 it waited for the monitor, which a registration retrying through the outage held, and then gave up the leases
 one after another, so the first release that threw left the rest held and the model still registered as a listener.
 
-A `start(..)`, a `resumeSubscription(..)`, a `stop()`, a pause and a cancel still call the lease strategy under the
-monitor, as in 0.33.0. One of them that waits for MongoDB through an outage holds up every other lifecycle call and
-lease callback on the node for as long. A `start(..)` or `stop()` also waits for a try of each subscription it reaches,
-so a try that waits through an outage delays the subscriptions after that one.
+A call that waits for MongoDB through an outage holds up the calls for its own subscription and no call for any other.
+A `start(..)` or `stop()` whose own call for one subscription waits through an outage still delays its work for the
+subscriptions after that one. A subscription that `start(..)` or `stop()` handed to a thread of its own gets the call
+only once the lock is free, and a failure there shows up as a warning in the log instead of being thrown.
+
+The MongoDB lease strategies call every listener on one notifier thread. A grant whose callback resumes the
+subscription in the wrapped model, which opens a change stream, therefore delays the callbacks for other subscriptions
+behind it for as long as that takes. The lease strategy decides that order, and this model does not change it.
