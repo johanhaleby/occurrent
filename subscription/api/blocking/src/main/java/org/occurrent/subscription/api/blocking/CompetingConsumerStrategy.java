@@ -89,8 +89,11 @@ public interface CompetingConsumerStrategy {
     /**
      * The current fencing token for the given subscription, a number a {@code CheckpointStorage} can compare
      * against a stored one to refuse a write from a lease that has moved on (see ADR 116). The value increases on
-     * every genuine change of owner and is unchanged when the same holder refreshes. Empty means this node does
-     * not believe it holds the lock, or this strategy has no token to give. The call must not block and must not
+     * every genuine change of owner and is unchanged when the same holder refreshes. While this node holds the lock,
+     * it is the token of that lock. Once the node has lost, released or given up the lock, it is the token of the last
+     * lock it held, since a handler that started under that lock and is still running writes with it, and a write
+     * from the next holder has already moved past it. Empty means this node never held the lock for the
+     * subscription, or this strategy has no token to give. The call must not block and must not
      * reach a database, since it runs on the per-event write path. An implementation that does not override this
      * method is not broken, it simply has no fence.
      *

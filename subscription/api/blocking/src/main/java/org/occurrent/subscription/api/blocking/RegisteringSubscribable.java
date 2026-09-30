@@ -208,10 +208,24 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     @Override
     public final Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(action, "action cannot be null");
-        return doSubscribe(subscriptionId, filter, startAt, (cloudEvent, bufferIfNotLive) -> {
+        return doSubscribe(subscriptionId, filter, startAt, deliveringTo(action), false);
+    }
+
+    /**
+     * Registers the subscription paused whether or not this model is running, as a registration on a stopped model is,
+     * so nothing is routed to it until it is resumed.
+     */
+    @Override
+    public final Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        Objects.requireNonNull(action, "action cannot be null");
+        return doSubscribe(subscriptionId, filter, startAt, deliveringTo(action), true);
+    }
+
+    private static RoutingAction deliveringTo(Consumer<CloudEvent> action) {
+        return (cloudEvent, bufferIfNotLive) -> {
             action.accept(cloudEvent);
             return true;
-        });
+        };
     }
 
     /**
@@ -222,10 +236,18 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)} itself already enforces at routing time.
      */
     protected final Subscription subscribeReportingDelivery(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RoutingAction action) {
-        return doSubscribe(subscriptionId, filter, startAt, action);
+        return doSubscribe(subscriptionId, filter, startAt, action, false);
     }
 
-    private Subscription doSubscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RoutingAction action) {
+    /**
+     * As {@link #subscribeReportingDelivery(String, SubscriptionFilter, StartAt, RoutingAction)}, registered paused
+     * when {@code holdPaused} is set, as {@link #subscribePaused} registers it.
+     */
+    protected final Subscription subscribeReportingDelivery(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RoutingAction action, boolean holdPaused) {
+        return doSubscribe(subscriptionId, filter, startAt, action, holdPaused);
+    }
+
+    private Subscription doSubscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RoutingAction action, boolean holdPaused) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Objects.requireNonNull(startAt, "startAt cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
@@ -244,7 +266,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
             registrations.add(new Registration(subscriptionId, matcher, action));
             // Registering on a stopped model yields a paused subscription, so a caller that stopped the model before
             // wiring its handlers can resume them one at a time.
-            if (!running) {
+            if (!running || holdPaused) {
                 pausedSubscriptions.add(subscriptionId);
                 return new RegisteredSubscription(subscriptionId, false);
             }

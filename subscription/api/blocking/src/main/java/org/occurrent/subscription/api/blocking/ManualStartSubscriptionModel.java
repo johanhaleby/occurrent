@@ -50,8 +50,8 @@ import static java.util.Objects.requireNonNull;
  * subscriptions up behind a leader election or a health check, or in a test that chooses which subscriptions run.
  * <p>
  * The difference from stopping a model is where the withholding happens. A stopped model has already been handed every
- * subscription, so a layer that reads history rather than a live feed, such as a catch-up model, can still deliver
- * events. This model hands the wrapped one nothing at all, so no lock is taken, no history is replayed and no feed is
+ * subscription, so one that does not hold a new subscription paused while it is stopped can still deliver events.
+ * This model hands the wrapped one nothing at all, so no lock is taken, no history is replayed and no feed is
  * opened until a subscription is started.
  * <p>
  * <b>Where a subscription starts from.</b> A subscription that has run before resumes from its stored checkpoint and
@@ -250,6 +250,21 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      */
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, false);
+    }
+
+    /**
+     * Registers the subscription without starting it, as {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)}
+     * does before this model is started, whether or not it runs, so the wrapped model gets nothing until
+     * {@link #resumeSubscription(String)} or {@link #start(boolean) start(true)} starts it. The start position is
+     * recorded as {@code subscribe(..)} records it.
+     */
+    @Override
+    public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, true);
+    }
+
+    private Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         requireNonNull(action, "Action cannot be null");
@@ -266,16 +281,17 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             // live, which is why the pin happens here rather than only on the deferred path.
             pinStartPosition(subscriptionId, startAt);
             synchronized (stateLock) {
-                if (state != State.RUNNING) {
-                    registrations.put(subscriptionId, new Registration.Deferred(filter, startAt, action));
+                if (holdPaused || state != State.RUNNING) {
+                    // Replaced rather than put, so a cancelSubscription since the claim stays cancelled
+                    registrations.replace(subscriptionId, Registration.STARTING, new Registration.Deferred(filter, startAt, action));
                     return new DeferredSubscription(subscriptionId);
                 }
             }
             Subscription subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
-            registrations.put(subscriptionId, new Registration.Live(subscription));
+            keepUnlessCancelled(subscriptionId, subscription);
             return subscription;
         } catch (RuntimeException e) {
-            forget(subscriptionId);
+            forgetIfStillStarting(subscriptionId);
             throw e;
         }
     }
@@ -321,12 +337,14 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             if (delegate.isPaused(subscriptionId)) {
                 subscription = delegate.resumeSubscription(subscriptionId);
             }
-            registrations.put(subscriptionId, new Registration.Live(subscription));
+            if (!keepUnlessCancelled(subscriptionId, subscription)) {
+                throw new UnknownSubscriptionException(subscriptionId);
+            }
             reopenAfterStop();
             return subscription;
         } catch (RuntimeException e) {
-            // Put it back so a subscription that failed to start can be started again.
-            registrations.put(subscriptionId, deferred);
+            // Put it back so a subscription that failed to start can be started again, unless it was cancelled meanwhile
+            registrations.replace(subscriptionId, Registration.STARTING, deferred);
             throw e;
         }
     }
@@ -491,6 +509,22 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     private void forget(String subscriptionId) {
         registrations.remove(subscriptionId);
         registrationOrder.remove(subscriptionId);
+    }
+
+    private void forgetIfStillStarting(String subscriptionId) {
+        if (registrations.remove(subscriptionId, Registration.STARTING)) {
+            registrationOrder.remove(subscriptionId);
+        }
+    }
+
+    // A cancelSubscription while the wrapped model subscribed found nothing there to cancel, so the subscription it
+    // made is cancelled here instead of being kept for an id that is gone
+    private boolean keepUnlessCancelled(String subscriptionId, Subscription subscription) {
+        if (registrations.replace(subscriptionId, Registration.STARTING, new Registration.Live(subscription))) {
+            return true;
+        }
+        delegate.cancelSubscription(subscriptionId);
+        return false;
     }
 
     private boolean isWithheld(String subscriptionId) {

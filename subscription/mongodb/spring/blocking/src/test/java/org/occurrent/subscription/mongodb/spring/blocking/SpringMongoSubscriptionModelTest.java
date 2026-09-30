@@ -556,6 +556,77 @@ public class SpringMongoSubscriptionModelTest {
                     assertThat(handled).extracting(CloudEvent::getId).containsExactly(writtenWhilePaused.eventId()));
         }
 
+        @Test
+        void a_wait_on_a_subscription_held_paused_on_a_running_model_ends_once_a_resume_opens_its_change_stream() {
+            // Given
+            String subscriptionId = UUID.randomUUID().toString();
+            SpringMongoSubscription handle = (SpringMongoSubscription) subscriptionModel.subscribePaused(subscriptionId, null, StartAt.now(), __ -> {
+            });
+            org.springframework.data.mongodb.core.messaging.Subscription heldPaused = handle.getSubscriptionReference().get();
+            CompletableFuture<Boolean> waiting = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return heldPaused.await(Duration.ofSeconds(30));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+            });
+
+            // When
+            subscriptionModel.resumeSubscription(subscriptionId);
+
+            // Then
+            assertThat(waiting).as("a wait begun while the subscription was held paused").succeedsWithin(Duration.ofSeconds(10)).isEqualTo(true);
+        }
+
+        @Test
+        void cancelling_a_paused_subscription_forgets_it_so_a_start_delivers_nothing_to_it_and_it_can_be_subscribed_again() throws InterruptedException {
+            // Given
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), handled::add).waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.pauseSubscription(subscriptionId);
+
+            // When
+            subscriptionModel.cancelSubscription(subscriptionId);
+            subscriptionModel.stop();
+            subscriptionModel.start(true);
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+            Thread.sleep(1000);
+
+            // Then
+            assertAll(
+                    () -> assertThat(subscriptionModel.isPaused(subscriptionId)).describedAs("is paused").isFalse(),
+                    () -> assertThat(subscriptionModel.isRunning(subscriptionId)).describedAs("is running").isFalse(),
+                    () -> assertThat(handled).describedAs("delivered after the cancel").isEmpty(),
+                    () -> assertThat(catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, StartAt.now(), handled::add))).describedAs("subscribing the id again").isNull()
+            );
+        }
+
+        @Test
+        void cancelling_a_subscription_made_while_the_model_is_stopped_forgets_it_so_a_start_delivers_nothing_to_it() throws InterruptedException {
+            // Given
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.stop();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), handled::add);
+
+            // When
+            subscriptionModel.cancelSubscription(subscriptionId);
+            subscriptionModel.start(true);
+            Thread.sleep(1000);
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+            Thread.sleep(1000);
+
+            // Then
+            assertAll(
+                    () -> assertThat(subscriptionModel.isPaused(subscriptionId)).describedAs("is paused").isFalse(),
+                    () -> assertThat(subscriptionModel.isRunning(subscriptionId)).describedAs("is running").isFalse(),
+                    () -> assertThat(handled).describedAs("delivered after the cancel").isEmpty(),
+                    () -> assertThat(catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, StartAt.now(), handled::add))).describedAs("subscribing the id again").isNull()
+            );
+        }
+
     }
 
     @Nested

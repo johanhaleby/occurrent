@@ -28,6 +28,7 @@ import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.*;
+import org.occurrent.subscription.util.predicate.EveryN;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,6 +41,7 @@ import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpointOrThrowIAE;
@@ -87,6 +89,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // one of them active for a given id at a time, so no two attempts for the same id are ever both live against
     // this set.
     private final Set<String> notCheckpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    // Ids this model stores checkpoints for, so a restart after lost history stores a position only for those
+    private final Set<String> checkpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    // Kept so shutdown can remove the same instance it added, since every method reference is a new object
+    private final HistoryLossReportingSubscriptions.HistoryLossListener historyLossListener = this::storeRestartPositionAfterHistoryLoss;
     // Striped rather than one lock object per id, since subscriptionId is caller-supplied to public methods
     // (cancelSubscription, resumeSubscription) and an unknown or made-up id must not grow this without bound. A
     // fixed number of locks bounds memory for good and needs no lifecycle bookkeeping to remove an entry once its
@@ -168,6 +174,24 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         this.subscriptionModel = subscriptionModel;
         this.config = config;
         this.writeVersionSource = writeVersionSource;
+        HistoryLossReportingSubscriptions.findIn(subscriptionModel)
+                .ifPresent(model -> model.addHistoryLossListener(historyLossListener));
+    }
+
+    // Stored now rather than with the next event, since a process stopping before that event would restart from
+    // the lost position and skip everything written in between. Same write condition as any other checkpoint
+    private void storeRestartPositionAfterHistoryLoss(String subscriptionId, Checkpoint restartedFrom) {
+        synchronized (lockFor(subscriptionId)) {
+            if (!checkpointedSubscriptions.contains(subscriptionId)) {
+                return;
+            }
+            try {
+                storage.save(subscriptionId, restartedFrom, writeConditionFor(subscriptionId));
+            } catch (CheckpointWriteConditionNotFulfilledException e) {
+                log.warn("Did not store the position subscription {} restarts from after its history was lost, since another node has written its checkpoint with a newer lease: {}",
+                        subscriptionId, e.getMessage());
+            }
+        }
     }
 
     /**
@@ -185,6 +209,19 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      */
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, false);
+    }
+
+    /**
+     * Records the start position as {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)} does, and has
+     * the wrapped model hold the subscription paused, so it starts from the recorded position once it is resumed.
+     */
+    @Override
+    public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, true);
+    }
+
+    private Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
         // Held for the whole method, not just the opt-out branch, so subscribe, resumeSubscription and
@@ -204,7 +241,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 boolean alreadyMarked = notCheckpointedSubscriptions.contains(subscriptionId);
                 notCheckpointedSubscriptions.add(subscriptionId);
                 try {
-                    return getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+                    Subscription optedOut = holdPaused
+                            ? getWrappedSubscriptionModel().subscribePaused(subscriptionId, filter, startAt, action)
+                            : getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+                    checkpointedSubscriptions.remove(subscriptionId);
+                    return optedOut;
                 } catch (Throwable t) {
                     if (!alreadyMarked) {
                         notCheckpointedSubscriptions.remove(subscriptionId);
@@ -213,18 +254,26 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 }
             }
 
-            Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
-                        action.accept(cloudEvent);
-                        if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
-                            Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
-                            storage.save(subscriptionId, checkpoint, writeConditionFor(subscriptionId));
-                        }
-                    }
-            );
+            // One per subscription, so an EveryN configured for the whole model counts this subscription's events only
+            Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
+            Consumer<CloudEvent> checkpointingAction = cloudEvent -> {
+                // Read before the action runs, so the write uses the token of the lease this event was
+                // delivered under, even if this node lost that lease and won a newer one meanwhile
+                CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
+                action.accept(cloudEvent);
+                if (persistCheckpoint.test(cloudEvent)) {
+                    Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
+                    storage.save(subscriptionId, checkpoint, writeCondition);
+                }
+            };
+            Subscription subscription = holdPaused
+                    ? subscriptionModel.subscribePaused(subscriptionId, filter, startAtToUse, checkpointingAction)
+                    : subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, checkpointingAction);
             // Cleared only now, after the delegate accepted this managed subscription, not before: a previous
             // subscribe may have left this id opted out and still active, and a duplicate id the delegate refuses
             // must leave that active subscription's marker alone rather than losing it to this failed attempt.
             notCheckpointedSubscriptions.remove(subscriptionId);
+            checkpointedSubscriptions.add(subscriptionId);
             return subscription;
         }
     }
@@ -448,13 +497,20 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             subscriptionModel.cancelSubscription(subscriptionId);
             storage.delete(subscriptionId);
             notCheckpointedSubscriptions.remove(subscriptionId);
+            checkpointedSubscriptions.remove(subscriptionId);
         }
     }
 
     @Override
     @PreDestroy
     public void shutdown() {
-        subscriptionModel.shutdown();
+        // Removed even when shutting the wrapped model down throws, since a wrapped model that outlives this model
+        // would otherwise keep it reachable and keep telling it about lost history
+        try {
+            subscriptionModel.shutdown();
+        } finally {
+            HistoryLossReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.removeHistoryLossListener(historyLossListener));
+        }
     }
 
     @Nullable

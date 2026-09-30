@@ -39,6 +39,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
@@ -80,7 +81,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * module.
  */
 @NullMarked
-public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions {
+public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -102,6 +103,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
     private final MongoCollection<Document> eventCollection;
     private final ConcurrentMap<String, InternalSubscription> runningSubscriptions;
+    private final List<HistoryLossListener> historyLossListeners = new CopyOnWriteArrayList<>();
     private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions;
     private final TimeRepresentation timeRepresentation;
     private final ExecutorService cloudEventDispatcher;
@@ -206,6 +208,20 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
     @Override
     public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, false);
+    }
+
+    /**
+     * Holds the subscription paused as a subscription made while this model is stopped, so its change stream opens on
+     * {@link #resumeSubscription(String)} or {@link #start(boolean) start(true)}. A subscription started at the present
+     * is delivered the events written from this call on.
+     */
+    @Override
+    public synchronized Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, true);
+    }
+
+    private Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
@@ -235,7 +251,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         // Known from here on rather than once its change stream opens, so a pause or a cancel reaches it while MongoDB
         // cannot be reached, and a wrapper asking which subscriptions this model runs gets the right answer. On a
         // running model a run that opens at the present asks for it first.
-        if (running) {
+        if (running && !holdPaused) {
             runningSubscriptions.put(subscriptionId, internalSubscription);
             startSubscription(subscriptionId, internalSubscription, () -> runningSubscriptions.remove(subscriptionId, internalSubscription));
         } else {
@@ -376,7 +392,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             } else if (isChangeStreamHistoryLost(e)) {
                 if (restartSubscriptionsOnChangeStreamHistoryLost) {
                     log.warn("There was not enough oplog to resume subscription {}, will restart subscription from current time.", subscriptionId, e);
-                    currentStartAt.set(StartAt.now());
+                    currentStartAt.set(restartPositionAfterHistoryLost(subscriptionId));
                     throw e;
                 } else {
                     log.error("There was not enough oplog to resume subscription {}, will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.", subscriptionId, e);
@@ -398,6 +414,30 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
                 }
             }
         }
+    }
+
+    // Tells the listeners the present before restarting from it. A listener that throws fails this attempt and
+    // the retry runs it again. Without an operation time in the reply to ping, restarts from now and tells nobody
+    private StartAt restartPositionAfterHistoryLost(String subscriptionId) {
+        BsonTimestamp operationTime = currentOperationTime();
+        if (operationTime == null) {
+            return StartAt.now();
+        }
+        Checkpoint present = new MongoOperationTimeCheckpoint(operationTime);
+        historyLossListeners.forEach(listener -> listener.restartingAfterHistoryLoss(subscriptionId, present));
+        return StartAt.checkpoint(present);
+    }
+
+    @Override
+    public void addHistoryLossListener(HistoryLossListener listener) {
+        requireNonNull(listener, HistoryLossListener.class.getSimpleName() + " cannot be null");
+        historyLossListeners.add(listener);
+    }
+
+    @Override
+    public void removeHistoryLossListener(HistoryLossListener listener) {
+        requireNonNull(listener, HistoryLossListener.class.getSimpleName() + " cannot be null");
+        historyLossListeners.remove(listener);
     }
 
     // Only while the subscription is still on this run. A pause and a resume in the meantime started a new run, which

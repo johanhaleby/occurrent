@@ -1095,7 +1095,8 @@ What goes is the reactor model's record of which attempt was writing a marker, a
 
 A caller that wants an id to read its history again deletes its checkpoint, which is the recovery ADR 116 already
 documents for a subscription that must start over. That is now the only way to ask for it, in process as well as
-after a restart, rather than a cancel and a fresh subscribe sometimes meaning the same thing.
+after a restart, rather than a cancel and a fresh subscribe sometimes meaning the same thing. The 2026-09-30 amendment
+below reverses this paragraph, and a cancel now deletes the marker.
 
 Two things about that write turned out to need saying, both found while implementing the amendment above.
 
@@ -1452,3 +1453,34 @@ The unreleased 0.34.0 javadoc then said such a feed was supported and could lose
 guide for 0.34.0 tells a caller on 0.33.0 what to use instead, and names the two sources that have no supported
 replacement, an HTTP endpoint whose caller does not retry and a Spring application event for an event that no event
 store holds.
+
+## Amendment (2026-09-30): a cancel deletes the catch-up marker
+
+`cancelSubscription(..)` discards the stored checkpoint of a subscription, and the catch-up marker is one. The
+2026-08-22 amendment above kept the marker on a cancel, so a subscription made with the same id afterwards went
+straight to live delivery without the history, in this process and after a restart. 0.32.0 and 0.33.0 kept it too.
+
+Both stacks now delete the marker in `cancelSubscription(..)`, so a subscription made with a cancelled id reads the
+history the way the first one did, in this process and after a restart. A marker still means what the amendment above
+says, that the id's history has been read, and every later attempt trusts a marker that is there, except one whose
+delete this process has not seen succeed.
+
+The delete has to run after any marker write already running for that id, or the write puts the marker back. The
+blocking model deletes under the id's lock, the one the write takes, so a cancel waits for a write that has begun,
+and a write that starts after the cancel finds the id gone and writes nothing. It deletes before it cancels anything
+else, so after a delete that throws the subscription still runs and the cancel can be called again.
+
+The reactor model's `cancelSubscription(..)` returns before its delete runs. That model runs the marker writes and
+deletes for one id one after the other, and a marker read waits for the last of them, so a `subscribe(..)` right after
+a cancel finds no marker. A delete that fails there is logged as a warning, and the model remembers the id until a
+delete of its marker succeeds or a new marker is written for it. A `subscribe(..)` for a remembered id tries the delete
+again and reads the history whether or not that works.
+
+One gap is still open, a process that ends between a reactor `cancelSubscription(..)` returning and its delete
+succeeding. The marker is still stored, and after a restart a subscription made with that id goes straight to live delivery.
+`CancellableSubscriptions.cancelSubscription(String)` returns `void`, so a caller has nothing to wait for. Closing that
+gap needs a cancel that returns a `Mono<Void>` completing once the delete has succeeded and failing when it fails, which
+is new public API and not part of this change. Until then, a caller that must not lose the history across a restart
+deletes the marker from the checkpoint storage after the cancel.
+
+A caller no longer deletes the checkpoint by hand to have an id read its history again, since a cancel does it.

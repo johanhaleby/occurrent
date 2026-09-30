@@ -16,6 +16,14 @@
 
 package org.occurrent.subscription.api.blocking;
 
+import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionFilter;
+
+import java.util.function.Consumer;
+
 /**
  * Common interface for blocking subscription models. The purpose of a subscription is to read events from an event store
  * and react to these events.
@@ -25,5 +33,22 @@ package org.occurrent.subscription.api.blocking;
  * <p>
  * A blocking subscription model also you to create and manage subscriptions that'll use blocking IO.
  */
+@NullMarked
 public interface SubscriptionModel extends Subscribable, SubscriptionModelLifeCycle {
+
+    /**
+     * Subscribes as {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)} does, but holds the subscription
+     * paused whether or not this model is running, as a stopped model holds a subscription made while it is stopped.
+     * It starts from the position such a subscription starts from, and delivers nothing until
+     * {@link #resumeSubscription(String)} or {@link #start(boolean) start(true)} resumes it.
+     * <p>
+     * The default implementation throws {@link UnsupportedOperationException}. Subscribing when {@link #isRunning()}
+     * returns {@code false} would not hold the subscription paused if another thread starts this model in between, and
+     * pausing a subscription after subscribing it could deliver an event before the pause.
+     *
+     * @throws UnsupportedOperationException if this model cannot hold a new subscription paused
+     */
+    default Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        throw new UnsupportedOperationException(getClass().getName() + " cannot hold subscription " + subscriptionId + " paused.");
+    }
 }

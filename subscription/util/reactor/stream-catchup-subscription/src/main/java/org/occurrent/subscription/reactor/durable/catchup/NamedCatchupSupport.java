@@ -70,10 +70,9 @@ import static java.util.Objects.requireNonNull;
  * over to the wrapped model paused (blocking parity). A stop aborts the replay WITHOUT handing over, and parks the
  * subscription. {@code start(..)} relaunches the replay from its original start position, so replayed events may be
  * delivered again (the composition is at-least-once anyway). A subscription created while the model is stopped parks
- * the same way and replays only once the model starts. This is deliberately safer than the blocking catch-up model,
- * which abandons a stop-interrupted replay outright. The blocking composition never notices, because its durable
- * model parks subscriptions before the catch-up model sees them, a gate the delegating path here does not run
- * through. Cancelling or shutting down aborts in-flight replays. Waiting on a subscription that was cancelled, or
+ * the same way and replays only once the model starts. The blocking catch-up model parks both the same way, but runs
+ * a parked replay again only on {@code start(true)} or a resume of that subscription, as its live delegate resumes
+ * only then. Cancelling or shutting down aborts in-flight replays. Waiting on a subscription that was cancelled, or
  * whose model was shut down, before its handover fails, since that subscription never started and nothing will start
  * it, and the blocking {@code CancelledSubscription} answers {@code false} for the same cases. Model-wide calls
  * forward to the wrapped model, so give each composition its own wrapped model rather than sharing one.

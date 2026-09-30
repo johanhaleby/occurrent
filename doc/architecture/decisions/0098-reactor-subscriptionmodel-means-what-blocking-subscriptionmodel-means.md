@@ -9,6 +9,10 @@ Accepted. #535, and the interface TCK phase 7 consumes.
 Supersedes the `ManagedSubscriptionModel` proposal in the phase 7 plan of record. Amends [ADR 94](0094-the-subscription-tck-declares-three-differences-and-waits-deterministically.md),
 which recorded the shape of the problem but not this answer.
 
+Amended by [ADR 141](0141-a-stopped-subscription-model-holds-a-new-subscription-paused-until-it-is-started.md). The
+blocking catch-up model no longer abandons a replay that `stop()` cuts short. It keeps the replay and runs it again on
+`start(true)` or a resume.
+
 ## Context
 
 The two subscription stacks used the same type name for two different things.

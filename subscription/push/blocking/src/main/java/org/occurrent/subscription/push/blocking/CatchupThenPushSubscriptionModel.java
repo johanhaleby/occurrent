@@ -107,7 +107,9 @@ import java.util.stream.Stream;
  *       replay finished, so a restart skips it and lets the broker resume. The stored value marks completion, it is not
  *       a live resume position. Correctness across a restart then depends on the broker retaining the backlog for an
  *       offline consumer (a durable queue with a preserved offset). If the marker is lost or absent, the projection is
- *       caught up again.</li>
+ *       caught up again. {@link #cancelSubscription(String)} deletes the marker, so subscribing the same id again
+ *       replays the history, as the first subscribe did. It deletes the marker before anything else, so a delete that
+ *       throws cancels nothing, and the cancel can be tried again.</li>
  * </ul>
  * Only stream and capability-agnostic subscription filters can be replayed (their plain {@link Filter} drives the
  * position-ordered read). A DCB subscription filter is rejected, since a DCB boundary needs a different replay read.
@@ -310,6 +312,21 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, false);
+    }
+
+    /**
+     * Registers the subscription paused on the live feed and keeps its replay waiting to run, as a replay that
+     * {@link #stop()} interrupted waits, so nothing is read or delivered until {@link #resumeSubscription(String)} or
+     * {@link #start(boolean) start(true)} runs the replay. Waiting on the returned handle returns {@code false}, as it
+     * does for a replay that a stop interrupted.
+     */
+    @Override
+    public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, startAt, action, true);
+    }
+
+    private Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Objects.requireNonNull(startAt, "startAt cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
@@ -360,17 +377,19 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         AtomicReference<Supplier<Future<Boolean>>> ownLaunch = new AtomicReference<>();
         Supplier<Future<Boolean>> launch = () -> launchReplay(subscriptionId, handover, replayFilter, ownLaunch);
         ownLaunch.set(launch);
-        Future<Boolean> replay;
+        final Future<Boolean> replay;
         // Held across the live-feed registration and everything this subscribe installs, so a cancelSubscription
         // running at the same time sees either all of it or none of it. Without it a cancel landing in the middle
         // left the handover, the launcher and the replay itself behind for a subscription that is already gone.
         // The replay thread this starts needs the monitor only at its own boundaries, and nothing here waits for
         // it, so starting it under the monitor cannot deadlock.
         synchronized (this) {
-            liveFeed.subscribeCatchupThenPush(subscriptionId, filter, StartAt.subscriptionModelDefault(), routingAction);
+            liveFeed.subscribeCatchupThenPush(subscriptionId, filter, StartAt.subscriptionModelDefault(), routingAction, holdPaused);
             handoversBySubscriptionId.put(subscriptionId, handover);
             interruptibleReplays.put(subscriptionId, launch);
-            replay = launch.get();
+            // A launcher with nothing replaying is what relaunchInterruptedReplay runs, so a replay held back here
+            // runs on a resume or a start(true) as an interrupted one does
+            replay = holdPaused ? CompletableFuture.completedFuture(false) : launch.get();
         }
         return new CatchingUpSubscription(subscriptionId, replay);
     }
@@ -946,6 +965,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // running waits for the write rather than taking the id from under it. Monitor first and the lock second,
         // the one order every caller uses.
         whileHoldingMarkerLock(subscriptionId, () -> {
+            // First, so a delete that throws changes nothing, the subscription stays as it was, and a cancel tried
+            // again does all of it. Under the monitor, which is what orders it before any subscribe for the id, whose
+            // replay then finds no marker. So stop() and every other lifecycle call wait for one delete, as they wait
+            // behind a cancel that waits for a marker write already running. Under the same lock as the replay's own marker write, which finds the
+            // replay gone once this cancel is done and writes nothing.
+            if (catchupMarker != null) {
+                catchupMarker.delete(subscriptionId);
+            }
             // Removing the replay entry is what stops a replay in flight, since shouldKeepReplaying reads this map.
             // All of it under the monitor, so a subscribe running at the same time installs everything or nothing.
             replayingSubscriptions.remove(subscriptionId);

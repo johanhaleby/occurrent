@@ -233,8 +233,9 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     // same-package but not a subclass, so it cannot reach the protected RegisteringSubscribable method directly.
     // Lets it register an action that reports whether an event genuinely landed, instead of the plain
     // Consumer<CloudEvent> subscribe(..) takes.
-    Subscription subscribeCatchupThenPush(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RegisteringSubscribable.RoutingAction action) {
-        return super.subscribeReportingDelivery(subscriptionId, filter, startAt, action);
+    // Registered paused when holdPaused is set, as subscribePaused registers a subscription
+    Subscription subscribeCatchupThenPush(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RegisteringSubscribable.RoutingAction action, boolean holdPaused) {
+        return super.subscribeReportingDelivery(subscriptionId, filter, startAt, action, holdPaused);
     }
 
     // Keeps a broken observer from masquerading as a handler failure. accept(...) throwing is what tells a broker

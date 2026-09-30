@@ -51,7 +51,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -120,7 +120,8 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
         eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
         subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, requireNonNull(connectionString.getCollection()), timeRepresentation);
         storage = new SpringMongoCheckpointStorage(mongoTemplate, "storage");
-        cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), SOURCE).idMapper(DomainEvent::eventId).build();
+        cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), SOURCE).idMapper(DomainEvent::eventId)
+                .timeMapper(e -> e.timestamp().toInstant().atOffset(ZoneOffset.UTC)).build();
         time = LocalDateTime.now();
     }
 
@@ -191,31 +192,32 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
     }
 
     @Test
-    void a_legacy_time_based_resume_token_in_position_mode_is_detected_and_re_resolved_instead_of_being_trusted() {
-        // Simulate a store that flipped stream position on after previously running the legacy time-based catch-up:
-        // the checkpoint storage still holds a time-based token written before the flip.
+    void a_legacy_time_based_resume_token_in_position_mode_resumes_the_replay_from_that_time_instead_of_being_read_as_a_position() {
+        // A store that turned stream position on after running the legacy time-based catch-up, whose checkpoint
+        // storage still holds the time token that replay stored. It says the replay handled everything before that
+        // time, so an event before it is not replayed, and one at or after it, written before the flip, is.
+        NameDefined beforeTheToken = new NameDefined(UUID.randomUUID().toString(), time.minusMinutes(2), "name", "beforeTheToken");
         NameDefined preFlip = nameDefined("preFlip");
+        write(beforeTheToken);
         write(preFlip);
-        String legacyTimeToken = RFC_3339_DATE_TIME_FORMATTER.format(OffsetDateTime.now().minusMinutes(1));
+        // Formatted in UTC like the event times, since the RFC 3339 string representation compares times as strings
+        String legacyTimeToken = RFC_3339_DATE_TIME_FORMATTER.format(time.minusMinutes(1).atOffset(ZoneOffset.UTC));
         storage.save("subscription", new StringBasedCheckpoint(legacyTimeToken));
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore,
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
-        // Using StartAt.subscriptionModelDefault() triggers the default resume-from-storage path, where the model
-        // must detect that the stored token is a legacy time token (not a GlobalCheckpoint) and re-resolve
-        // rather than misinterpret it as -- or crash trying to parse it as -- a position.
+        // StartAt.subscriptionModelDefault() resumes from storage, where the model has to recognise the token as a
+        // time rather than read it as, or fail to parse it as, a position
         subscription.subscribe("subscription", StreamSubscriptionFilter.filter(type(EVENT_TYPE)),
                 StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted();
 
-        // The re-resolved subscription does not replay preFlip history (it delegates live, exactly like a
-        // fresh subscription with no stored position at all), but subsequently delivers new live events normally.
         NameDefined afterResolve = nameDefined("afterResolve");
         write(afterResolve);
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
-                assertThat(received).containsExactly(afterResolve));
-        assertThat(received).doesNotContain(preFlip);
+                assertThat(received).containsExactly(preFlip, afterResolve));
+        assertThat(received).doesNotContain(beforeTheToken);
     }
 
     @Test

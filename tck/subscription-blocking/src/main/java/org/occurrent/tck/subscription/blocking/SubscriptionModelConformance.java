@@ -533,6 +533,50 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                     .isEmpty();
         }
 
+        /**
+         * A model either holds a subscription made with {@code subscribePaused} paused while it runs, or refuses it
+         * with {@link UnsupportedOperationException}, which is what the default implementation does.
+         */
+        @Test
+        void subscribe_paused_on_a_running_model_holds_the_subscription_until_it_is_resumed_or_refuses_it() {
+            @Nullable RecordedEvents witness = fixture().acceptsSeveralSubscriptions() ? subscribeAndWait(subscriptionId()) : null;
+            String id = subscriptionId();
+            RecordedEvents recorded = new RecordedEvents();
+
+            final Subscription held;
+            try {
+                held = subscriptionModel().subscribePaused(id, null, StartAt.subscriptionModelDefault(), recorded);
+            } catch (UnsupportedOperationException e) {
+                assertThat(subscriptionModel().isPaused(id) || subscriptionModel().isRunning(id))
+                        .as("a refused subscription is not kept")
+                        .isFalse();
+                return;
+            }
+
+            assertThat(held.id()).isEqualTo(id);
+            assertThat(subscriptionModel().isRunning()).as("holding a subscription paused does not stop the model").isTrue();
+            assertThat(subscriptionModel().isPaused(id)).isTrue();
+            assertThat(subscriptionModel().isRunning(id)).isFalse();
+            CloudEvent whileHeld = ConformanceEvents.event("1", "NameDefined");
+            publish(whileHeld);
+            if (witness != null) {
+                witness.awaitAtLeast(1, deliveryTimeout());
+            }
+            assertThat(recorded.soFar()).as("a subscription held paused delivers nothing before it is resumed").isEmpty();
+
+            subscriptionModel().resumeSubscription(id).waitUntilStarted(deliveryTimeout());
+            CloudEvent afterResume = ConformanceEvents.event("2", "NameWasChanged");
+            publish(afterResume);
+
+            // Whether the event published while held arrives depends on where the model starts a subscription made
+            // while it is stopped, so only the order is asserted for it
+            List<CloudEvent> received = recorded.awaitUntil(events -> idsOf(events).contains(afterResume.getId()), deliveryTimeout());
+            assertThat(idsOf(received))
+                    .as("the resumed subscription delivers what is published after the resume, and nothing out of order")
+                    .isSubsetOf(whileHeld.getId(), afterResume.getId())
+                    .endsWith(afterResume.getId());
+        }
+
         @Test
         void start_after_stop_delivers_again() {
             String id = subscriptionId();

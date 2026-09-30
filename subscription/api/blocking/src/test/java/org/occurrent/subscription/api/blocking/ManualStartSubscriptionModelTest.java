@@ -326,6 +326,68 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_subscription_cancelled_while_a_resume_is_starting_it_is_cancelled_in_the_wrapped_model_too() throws InterruptedException {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        CountDownLatch insideSubscribe = new CountDownLatch(1);
+        CountDownLatch releaseSubscribe = new CountDownLatch(1);
+        delegate.subscribeEntered = insideSubscribe;
+        delegate.holdSubscribeUntil = releaseSubscribe;
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> resume = pool.submit(() -> model.resumeSubscription(SUBSCRIPTION_ID));
+            assertThat(insideSubscribe.await(10, TimeUnit.SECONDS)).isTrue();
+
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            releaseSubscribe.countDown();
+            catchThrowable(() -> resume.get(10, TimeUnit.SECONDS));
+        } finally {
+            releaseSubscribe.countDown();
+            pool.shutdownNow();
+        }
+
+        assertThat(model.subscriptionIds()).as("known here after the cancel").isEmpty();
+        assertThat(delegate.subscriptionIds()).as("known to the wrapped model after the cancel").isEmpty();
+        assertThat(catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        }))).as("subscribing the id again").isNull();
+    }
+
+    @Test
+    void a_subscription_cancelled_while_a_subscribe_on_a_running_model_is_starting_it_is_cancelled_in_the_wrapped_model_too() throws InterruptedException {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        CountDownLatch insideSubscribe = new CountDownLatch(1);
+        CountDownLatch releaseSubscribe = new CountDownLatch(1);
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        model.start();
+        delegate.subscribeEntered = insideSubscribe;
+        delegate.holdSubscribeUntil = releaseSubscribe;
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> subscribe = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            }));
+            assertThat(insideSubscribe.await(10, TimeUnit.SECONDS)).isTrue();
+
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            releaseSubscribe.countDown();
+            catchThrowable(() -> subscribe.get(10, TimeUnit.SECONDS));
+        } finally {
+            releaseSubscribe.countDown();
+            pool.shutdownNow();
+        }
+        delegate.subscribeEntered = null;
+        delegate.holdSubscribeUntil = null;
+
+        assertThat(model.subscriptionIds()).as("known here after the cancel").isEmpty();
+        assertThat(delegate.subscriptionIds()).as("known to the wrapped model after the cancel").isEmpty();
+        assertThat(catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        }))).as("subscribing the id again").isNull();
+    }
+
+    @Test
     void stopping_makes_a_later_registration_wait_to_be_started_again() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);

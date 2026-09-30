@@ -70,8 +70,8 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
         PushSubscriptionModel feed = new PushSubscriptionModel() {
             @Override
             Subscription subscribeCatchupThenPush(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
-                                                  RegisteringSubscribable.RoutingAction action) {
-                Subscription subscription = super.subscribeCatchupThenPush(subscriptionId, filter, startAt, action);
+                                                  RegisteringSubscribable.RoutingAction action, boolean holdPaused) {
+                Subscription subscription = super.subscribeCatchupThenPush(subscriptionId, filter, startAt, action, holdPaused);
                 Thread.ofVirtual().start(() -> {
                     cancelStarted.countDown();
                     modelRef.get().cancelSubscription(subscriptionId);

@@ -568,9 +568,9 @@ public class CatchupSubscriptionModelTest {
         subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
         subscription.subscribe(subscriptionId, state::add).waitUntilStarted();
 
-        // Then
+        // Then the restart reads from nameDefined2's time on, since another event can share it, so nameDefined2 comes twice
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
-                assertThat(state).hasSize(4).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined3, nameWasChanged1));
+                assertThat(state).hasSize(5).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined2, nameDefined3, nameWasChanged1));
     }
 
     @Test
@@ -617,9 +617,9 @@ public class CatchupSubscriptionModelTest {
         subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
         subscription.subscribe(subscriptionId, filter(type(NameDefined.class.getName())), state::add).waitUntilStarted();
 
-        // Then
+        // Then the restart reads from nameDefined2's time on, since another event can share it, so nameDefined2 comes twice
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
-                assertThat(state).hasSize(4).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined3, nameDefined4));
+                assertThat(state).hasSize(5).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined2, nameDefined3, nameDefined4));
     }
 
     @Test

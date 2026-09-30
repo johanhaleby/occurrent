@@ -361,6 +361,22 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
+    void subscribing_again_after_a_cancel_replays_the_history_as_a_first_subscribe_does() {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created"), cloudEvent("2", "Updated")), 2);
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(new CopyOnWriteArrayList<>())).waitUntilStarted().block();
+        await().untilAsserted(() -> assertThat(marker.read("proj").block()).as("catch-up marker once the first replay is done").isNotNull());
+
+        model.cancelSubscription("proj");
+        List<String> afterTheCancel = new CopyOnWriteArrayList<>();
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(afterTheCancel)).waitUntilStarted().block();
+
+        assertThat(afterTheCancel).as("events delivered to the subscription made after the cancel").containsExactly("1", "2");
+    }
+
+    @Test
     void starting_the_model_again_replays_a_catch_up_that_was_stopped() {
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
         PushSubscriptionModel feed = new PushSubscriptionModel();

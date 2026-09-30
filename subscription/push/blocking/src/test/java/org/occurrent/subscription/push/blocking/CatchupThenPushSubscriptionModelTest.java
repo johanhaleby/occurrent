@@ -163,6 +163,28 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
+    void subscribe_paused_on_a_running_model_replays_nothing_until_it_is_resumed() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        Subscription held = model.subscribePaused("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()));
+        store.write("s1", List.of(cloudEvent("3", "Updated")));
+
+        assertThat(held.waitUntilStarted(Duration.ofMillis(200))).as("the held subscription reports itself started").isFalse();
+        assertThat(model.isRunning()).isTrue();
+        assertThat(model.isPaused("proj")).isTrue();
+        assertThat(delivered).as("delivered while held").isEmpty();
+
+        model.resumeSubscription("proj").waitUntilStarted();
+        store.write("s1", List.of(cloudEvent("4", "Updated")));
+
+        assertThat(delivered).containsExactly("1", "2", "3", "4");
+    }
+
+    @Test
     void an_event_both_replayed_and_delivered_live_during_catch_up_is_delivered_once() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         CloudEvent e1 = cloudEvent("1", "Created");
@@ -268,6 +290,26 @@ class CatchupThenPushSubscriptionModelTest {
         // Only live events flow after the restart, resumed by the broker (here, the forwarding store).
         store.write("s1", List.of(cloudEvent("3", "Updated")));
         assertThat(secondRun).containsExactly("3");
+    }
+
+    @Test
+    void subscribing_again_after_a_cancel_replays_the_history_as_a_first_subscribe_does() throws InterruptedException {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> {}).waitUntilStarted();
+        awaitHandover(model, marker, "proj");
+        assertThat(marker.exists("proj")).as("catch-up marker once the first replay is done").isTrue();
+
+        model.cancelSubscription("proj");
+        List<String> afterTheCancel = new CopyOnWriteArrayList<>();
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> afterTheCancel.add(ce.getId())).waitUntilStarted();
+        awaitHandover(model, marker, "proj");
+
+        assertThat(afterTheCancel).as("events delivered to the subscription made after the cancel").containsExactly("1", "2");
+        assertThat(marker.exists("proj")).as("catch-up marker once the second replay is done").isTrue();
     }
 
     @Test

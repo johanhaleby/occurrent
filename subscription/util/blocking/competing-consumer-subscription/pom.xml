@@ -23,6 +23,11 @@
             <artifactId>occurrent-functional-support</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-retry</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency> <!-- Required for @PreDestroy -->
             <groupId>jakarta.annotation</groupId>
             <artifactId>jakarta.annotation-api</artifactId>

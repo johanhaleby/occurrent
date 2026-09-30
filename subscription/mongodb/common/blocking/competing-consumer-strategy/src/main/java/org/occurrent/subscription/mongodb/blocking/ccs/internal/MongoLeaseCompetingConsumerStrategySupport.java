@@ -31,6 +31,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -38,6 +39,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -82,6 +84,12 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private final Duration leaseTime;
     private final ScheduledRefresh scheduledRefresh;
     private final ConcurrentMap<CompetingConsumer, Status> competingConsumers;
+    /**
+     * The token of the last lease this instance was granted, per subscription id. Kept after the lease is lost,
+     * released or unregistered, since that token is the one a handler still running from that lease has to write
+     * with. See {@link #fencingToken(String)}.
+     */
+    private final ConcurrentMap<String, Long> lastHeldFencingTokens = new ConcurrentHashMap<>();
     private final Set<CompetingConsumerListener> competingConsumerListeners;
     private final RetryStrategy retryStrategy;
     /**
@@ -172,8 +180,10 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         }
 
         scheduledRefresh.scheduleInBackground(() -> {
+            // Empty until an attempt of this round fails, and then the consumers the next attempt refreshes again
+            AtomicReference<@Nullable Set<CompetingConsumer>> failedInThisRound = new AtomicReference<>();
             try {
-                retryStrategyToUse.execute(() -> fn.apply(this::refreshOrAcquireLease).run(), whileRunning);
+                retryStrategyToUse.execute(() -> fn.apply(collection -> refreshOrAcquireLease(collection, failedInThisRound)).run(), whileRunning);
             } catch (Exception e) {
                 // scheduleAtFixedRate cancels every later execution once one throws, so a round that exhausted
                 // cappedRetryStrategy is caught here instead of taking the whole schedule down with it.
@@ -248,6 +258,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         boolean oldStatusWasAcquired = oldStatus != null && oldStatus.isLockAcquired();
         logDebug("acquireLease: oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
         competingConsumers.put(competingConsumer, acquired ? Status.lockAcquired(lock.get().version()) : Status.LOCK_NOT_ACQUIRED);
+        lock.ifPresent(l -> lastHeldFencingTokens.merge(subscriptionId, l.version(), Math::max));
         if (!oldStatusWasAcquired && acquired) {
             return new Outcome(true, Notification.GRANTED);
         } else if (oldStatusWasAcquired && !acquired) {
@@ -289,12 +300,14 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     /**
-     * The fencing token for the given subscription. Answers with a value only when exactly one consumer is
-     * registered for {@code subscriptionId} in this instance and that consumer holds the lock, whatever its
-     * status otherwise is (ADR 116). {@code LOCK_RELEASED} counts as not holding, since its token belongs to
-     * the lease it just gave up.
+     * The fencing token for the given subscription. Answers empty while more than one consumer is registered for
+     * {@code subscriptionId} in this instance, whatever their status. Otherwise it answers with the token
+     * of the lease the one registered consumer holds, or, when this instance holds no lease for the subscription
+     * right now, with the token of the last lease it held. A handler that started under a lease and finishes after
+     * this instance lost, released or unregistered it writes with that older token, which a write from the next
+     * holder has already moved past. Empty when this instance never held a lease for the subscription.
      * <p>
-     * Reads the in-memory map only, so this neither blocks nor reaches MongoDB, which a call on the per-event
+     * Reads the in-memory maps only, so this neither blocks nor reaches MongoDB, which a call on the per-event
      * write path requires.
      */
     public OptionalLong fencingToken(String subscriptionId) {
@@ -310,7 +323,11 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 onlyStatus = entry.getValue();
             }
         }
-        return registered == 1 && onlyStatus.isLockAcquired() ? onlyStatus.fencingToken() : OptionalLong.empty();
+        if (registered == 1 && onlyStatus.isLockAcquired()) {
+            return onlyStatus.fencingToken();
+        }
+        Long lastHeld = lastHeldFencingTokens.get(subscriptionId);
+        return lastHeld == null ? OptionalLong.empty() : OptionalLong.of(lastHeld);
     }
 
     public void addListener(CompetingConsumerListener listenerConsumer) {
@@ -329,12 +346,84 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         scheduledRefresh.close();
     }
 
-    private void refreshOrAcquireLease(MongoCollection<BsonDocument> collection) {
+    /**
+     * One attempt at a refresh round. The first attempt refreshes every consumer, and a retry of the round refreshes
+     * only the consumers in {@code failedInThisRound}. A consumer whose refresh fails does not stop the others from
+     * being refreshed, since one lease MongoDB refuses to write must not let every other lease on this instance
+     * expire. Once every consumer has had its turn, the first failure is thrown with the others attached as
+     * suppressed, so the round's retry strategy gives a failing consumer the same attempts it gave the whole round
+     * before. What a round changed reaches the listeners through {@link ScheduledRefresh#notifyInBackground}, so a
+     * listener that blocks, which pausing a subscription whose change stream is still opening does, holds up the
+     * notifications behind it but never the next refresh round.
+     */
+    private void refreshOrAcquireLease(MongoCollection<BsonDocument> collection, AtomicReference<@Nullable Set<CompetingConsumer>> failedInThisRound) {
         logDebug("In refreshOrAcquireLease with {} competing consumers", competingConsumers.size());
-        competingConsumers.forEach((cc, __) -> {
-            Outcome outcome = inConsumerLock(cc, () -> refreshOne(collection, cc));
-            notifyListeners(outcome, cc.subscriptionId, cc.subscriberId);
-        });
+        Set<CompetingConsumer> toRefresh = failedInThisRound.get();
+        Set<CompetingConsumer> failed = new HashSet<>();
+        @Nullable RuntimeException firstFailure = null;
+        for (CompetingConsumer cc : competingConsumers.keySet()) {
+            if (toRefresh != null && !toRefresh.contains(cc)) {
+                continue;
+            }
+            final Outcome outcome;
+            try {
+                outcome = inConsumerLock(cc, () -> refreshOne(collection, cc));
+            } catch (RuntimeException e) {
+                logDebug("Failed to refresh the lease due to {} - {}, refreshing the other consumers before this one is tried again (subscriberId={}, subscriptionId={})",
+                        e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId);
+                failed.add(cc);
+                if (firstFailure == null) {
+                    firstFailure = e;
+                } else {
+                    firstFailure.addSuppressed(e);
+                }
+                continue;
+            }
+            if (outcome.notification() != Notification.NONE) {
+                scheduledRefresh.notifyInBackground(() -> notifyListenersIfStillTrue(outcome, cc));
+            }
+        }
+        failedInThisRound.set(failed);
+        if (firstFailure != null) {
+            throw firstFailure;
+        }
+    }
+
+    /**
+     * Runs later than the round that decided it, on the notifier thread, and by then the consumer may have moved on.
+     * A grant for a consumer that no longer holds the lock is dropped, since starting the subscription would leave it
+     * running on an instance without its lease. A prohibition is always delivered, also to a consumer that holds the
+     * lock again. The listener then pauses the subscription and gives the lease up, and a later round grants it again.
+     * Dropping it could leave this instance refreshing a lease for a subscription that has stopped delivering, which
+     * no grant would restart, since the listener finds the consumer running already, and which no other instance
+     * could take over. A listener that throws is logged, and the other listeners are told anyway.
+     */
+    private void notifyListenersIfStillTrue(Outcome outcome, CompetingConsumer cc) {
+        if (!running) {
+            return;
+        }
+        boolean holdsTheLockNow = hasLock(cc.subscriptionId, cc.subscriberId);
+        boolean stillTrue = switch (outcome.notification()) {
+            case GRANTED -> holdsTheLockNow;
+            case PROHIBITED -> true;
+            case NONE -> false;
+        };
+        if (!stillTrue) {
+            logDebug("Dropping {} since the lock status changed before it was delivered (subscriberId={}, subscriptionId={})", outcome.notification(), cc.subscriberId, cc.subscriptionId);
+            return;
+        }
+        for (CompetingConsumerListener listener : competingConsumerListeners) {
+            try {
+                if (outcome.notification() == Notification.GRANTED) {
+                    listener.onConsumeGranted(cc.subscriptionId, cc.subscriberId);
+                } else {
+                    listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId);
+                }
+            } catch (RuntimeException e) {
+                log.warn("Listener {} failed on {} due to {} - {} (subscriberId={}, subscriptionId={})",
+                        listener, outcome.notification(), e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId, e);
+            }
+        }
     }
 
     private Outcome refreshOne(MongoCollection<BsonDocument> collection, CompetingConsumer cc) {
@@ -425,8 +514,9 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * A consumer's status, with its fencing token for the acquired case. The token stays exactly as it was
      * while this status remains {@code LOCK_ACQUIRED}, since a refresh (see {@code refreshOne}) commits
      * without touching the map entry, and a lost commit replaces the whole status with {@code LOCK_NOT_ACQUIRED}
-     * rather than updating the token in place. That staleness is deliberate. The stale token is what a fence
-     * built on {@link #fencingToken(String)} refuses.
+     * rather than updating the token in place. The token itself outlives the status in
+     * {@link #lastHeldFencingTokens}, and that stale token is what a fence built on {@link #fencingToken(String)}
+     * refuses once the next holder has written.
      */
     private record Status(Kind kind, OptionalLong fencingToken) {
         private static final Status LOCK_NOT_ACQUIRED = new Status(Kind.LOCK_NOT_ACQUIRED, OptionalLong.empty());
