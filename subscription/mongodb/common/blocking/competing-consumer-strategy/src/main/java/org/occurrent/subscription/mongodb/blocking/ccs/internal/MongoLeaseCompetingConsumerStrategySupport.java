@@ -353,8 +353,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * expire. Once every consumer has had its turn, the first failure is thrown with the others attached as
      * suppressed, so the round's retry strategy gives a failing consumer the same attempts it gave the whole round
      * before. What a round changed reaches the listeners through {@link ScheduledRefresh#notifyInBackground}, so a
-     * listener that blocks, which pausing a subscription whose change stream is still opening does, holds up the
-     * notifications behind it but never the next refresh round.
+     * listener that blocks, which pausing or resuming a subscription while the database does not answer does, holds up
+     * the later notifications for that subscription, but never those for another one or the next refresh round.
      */
     private void refreshOrAcquireLease(MongoCollection<BsonDocument> collection, AtomicReference<@Nullable Set<CompetingConsumer>> failedInThisRound) {
         logDebug("In refreshOrAcquireLease with {} competing consumers", competingConsumers.size());
@@ -380,7 +380,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 continue;
             }
             if (outcome.notification() != Notification.NONE) {
-                scheduledRefresh.notifyInBackground(() -> notifyListenersIfStillTrue(outcome, cc));
+                scheduledRefresh.notifyInBackground(cc.subscriptionId, () -> notifyListenersIfStillTrue(outcome, cc));
             }
         }
         failedInThisRound.set(failed);
@@ -390,7 +390,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     /**
-     * Runs later than the round that decided it, on the notifier thread, and by then the consumer may have moved on.
+     * Runs later than the round that decided it, on the notifier, and by then the consumer may have moved on.
      * A grant for a consumer that no longer holds the lock is dropped, since starting the subscription would leave it
      * running on an instance without its lease. A prohibition is always delivered, also to a consumer that holds the
      * lock again. The listener then pauses the subscription and gives the lease up, and a later round grants it again.
@@ -476,21 +476,34 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * straight into the subscription model, which is synchronized on itself and calls back into this class from those
      * callbacks, while an application thread pausing or registering holds that same monitor before it arrives here.
      * Notifying under the lock closes that cycle, and the refresh thread and the application thread deadlock.
+     * <p>
+     * Every listener is told, also when one before it throws. The first failure is thrown once they all have been,
+     * with any later one attached as suppressed.
      */
     private void notifyListeners(Outcome outcome, String subscriptionId, String subscriberId) {
-        switch (outcome.notification()) {
-            case GRANTED -> {
-                logDebug("Consumption granted (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-                competingConsumerListeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
-                logDebug("Completed calling onConsumeGranted for all listeners (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+        if (outcome.notification() == Notification.NONE) {
+            return;
+        }
+        logDebug("Consumption {} (subscriberId={}, subscriptionId={})", outcome.notification(), subscriberId, subscriptionId);
+        @Nullable RuntimeException firstFailure = null;
+        for (CompetingConsumerListener listener : competingConsumerListeners) {
+            try {
+                if (outcome.notification() == Notification.GRANTED) {
+                    listener.onConsumeGranted(subscriptionId, subscriberId);
+                } else {
+                    listener.onConsumeProhibited(subscriptionId, subscriberId);
+                }
+            } catch (RuntimeException e) {
+                if (firstFailure == null) {
+                    firstFailure = e;
+                } else {
+                    firstFailure.addSuppressed(e);
+                }
             }
-            case PROHIBITED -> {
-                logDebug("Consumption prohibited (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-                competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
-                logDebug("Completed calling onConsumeProhibited for all listeners (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            }
-            case NONE -> {
-            }
+        }
+        logDebug("Completed telling every listener of {} (subscriberId={}, subscriptionId={})", outcome.notification(), subscriberId, subscriptionId);
+        if (firstFailure != null) {
+            throw firstFailure;
         }
     }
 

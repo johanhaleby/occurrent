@@ -23,6 +23,11 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 
 import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -35,10 +40,11 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 /**
  * Schedules a periodic refresh, and tells the listeners what a refresh changed on a thread of its own.
  * <p>
- * A listener runs straight into the subscription model, and pausing a subscription there can block for as long as
- * its change stream takes to open. On the refresh thread that would hold up every other lease on the instance
- * until each one expired, so {@link #auto()} and {@link #every(Duration)} hand notifications to a single notifier
- * thread instead, which delivers them in the order the refresh decided them.
+ * A listener runs straight into the subscription model, and pausing or resuming a subscription there can block for as
+ * long as the database takes to answer. On the refresh thread that would hold up every other lease on the instance
+ * until each one expired, so {@link #auto()} and {@link #every(Duration)} hand notifications to a notifier instead.
+ * Each subscription id gets its notifications one at a time, in the order the refresh decided them, and a
+ * notification that blocks holds up later ones for its own subscription id only.
  *
  * @see #auto()
  */
@@ -49,6 +55,10 @@ class ScheduledRefresh {
     // Made by the same default thread factory as the refresh thread, so neither is a daemon thread, and close() is what
     // ends both
     private final @Nullable ExecutorService notifier;
+    // The notifications not yet delivered per subscription id, the first one being delivered or about to be. An id is
+    // here only while a task on the notifier delivers its notifications, so a new notification for it is queued behind
+    // them and one for an id not here starts a task of its own. Read and written under its own monitor only.
+    private final Map<String, Deque<Runnable>> undelivered = new HashMap<>();
 
     /**
      * Runs every notification on the thread that runs the refresh, so a test that holds the refresh and runs it
@@ -76,7 +86,7 @@ class ScheduledRefresh {
             throw new IllegalArgumentException("Period must be > 0 but got " + period);
         }
 
-        return new ScheduledRefresh((lease, scheduler) -> scheduler.fixedRate(Duration.ZERO, period), Executors.newSingleThreadExecutor());
+        return new ScheduledRefresh((lease, scheduler) -> scheduler.fixedRate(Duration.ZERO, period), Executors.newCachedThreadPool());
     }
 
     /**
@@ -90,7 +100,7 @@ class ScheduledRefresh {
             }
 
             scheduler.fixedRate(Duration.ZERO, lease.dividedBy(2));
-        }, Executors.newSingleThreadExecutor());
+        }, Executors.newCachedThreadPool());
     }
 
     void scheduleInBackground(Runnable refresh, Duration leaseTime) {
@@ -98,18 +108,60 @@ class ScheduledRefresh {
     }
 
     /**
-     * Hands {@code notification} to the notifier thread, or runs it right here when there is none. A notification
-     * handed over after {@link #close()} is dropped, since nothing is left to act on it.
+     * Hands {@code notification} to the notifier, or runs it right here when there is none. It runs once every
+     * notification handed over before it for the same {@code subscriptionId} has run, and never waits for one for
+     * another subscription id, as long as the notifier has a thread free, which the one {@link #auto()} and
+     * {@link #every(Duration)} make always has. A notification handed over after {@link #close()} is dropped, since
+     * nothing is left to act on it.
      */
-    void notifyInBackground(Runnable notification) {
+    void notifyInBackground(String subscriptionId, Runnable notification) {
         if (notifier == null) {
             notification.run();
             return;
         }
+        synchronized (undelivered) {
+            Deque<Runnable> queued = undelivered.get(subscriptionId);
+            if (queued != null) {
+                queued.add(notification);
+                return;
+            }
+            undelivered.put(subscriptionId, new ArrayDeque<>(List.of(notification)));
+        }
+        deliverNextInBackground(notifier, subscriptionId);
+    }
+
+    private void deliverNextInBackground(ExecutorService notifier, String subscriptionId) {
         try {
-            notifier.execute(notification);
+            notifier.execute(() -> deliverNext(notifier, subscriptionId));
         } catch (RejectedExecutionException closed) {
             // close() ran, and the listeners are shutting down with this instance
+            synchronized (undelivered) {
+                undelivered.remove(subscriptionId);
+            }
+        }
+    }
+
+    // One notification per task, so one that throws leaves the rest to the next task instead of to nobody
+    private void deliverNext(ExecutorService notifier, String subscriptionId) {
+        Runnable next;
+        synchronized (undelivered) {
+            next = undelivered.get(subscriptionId).getFirst();
+        }
+        try {
+            next.run();
+        } finally {
+            boolean more;
+            synchronized (undelivered) {
+                Deque<Runnable> queued = undelivered.get(subscriptionId);
+                queued.removeFirst();
+                more = !queued.isEmpty();
+                if (!more) {
+                    undelivered.remove(subscriptionId);
+                }
+            }
+            if (more) {
+                deliverNextInBackground(notifier, subscriptionId);
+            }
         }
     }
 
