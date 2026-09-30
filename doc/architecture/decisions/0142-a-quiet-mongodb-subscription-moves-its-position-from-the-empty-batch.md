@@ -51,9 +51,24 @@ action cannot return while it waits.
   ends without calling the `RetryStrategy`'s `onError`, `onRetryableError` or `onAfterRetry` for the attempt it
   skipped, since the action did not fail.
 - `stop()` closes every subscription before it waits, and waits one second for all of them together.
+- The pause is recorded before the wait, and the wait runs after the model has let go of its monitor. So a call for
+  another subscription, a pause, a resume, a cancel or `subscriptionIds()`, doesn't wait for the paused subscription's action. The
+  loop waits for an action, and a model for its executor to shut down, only without the monitor and without any lock
+  of the loop. A virtual thread that waits while it holds a monitor keeps its carrier thread on JDK 21 to 23, and
+  every other virtual thread that needs that carrier waits with it. A pause, a cancel and a shutdown still close the
+  cursor with the monitor held.
 - An interrupt doesn't end the wait. The subscription is paused when `pauseSubscription(..)` or `stop()` returns, and
   the interrupt is set on the thread again. `stop()` pauses every subscription even when one pause throws, and then
   throws the first failure.
+
+**A resume the executor rejects is handed to it again.** The subscription counts as running, and a thread of its own
+hands the run to the executor again, 100 ms and then up to 2 seconds apart, until the executor takes it, a pause or a
+cancel closes the run, or the model or the executor shuts down. A warning is logged on the first rejection and on
+every fifth try after it. A resume can come from `start(true)` or from a lease handover, and nothing calls either
+again, so a rejection thrown to the caller would leave the subscription paused for good. A `subscribe(..)` the executor
+rejects still throws, since its caller gets the exception and the id is not registered. A start right after a stop,
+or a pause followed at once by a resume of many subscriptions, can need up to twice as many threads as there are
+subscriptions until the reads of the closed runs return, and an executor with fewer threads delays those resumes.
 
 **A run that has been closed never changes the position a later run of the subscription opens at, and never
 stores a checkpoint that a later run, or a later subscribe of the same id, starts from, with one exception in
@@ -79,7 +94,9 @@ and a resume or a start makes a new run of the same subscription.
   `DurableSubscriptionModel` numbers the deliveries of every run of a subscribe, and only the latest one decides it.
   An action that returns after a resume has delivered later events doesn't change it, so it can't let the resumed run
   save a quiet position past an event the predicate declined.
-- The exception is a checkpoint written after the pause has stopped waiting and a resume has come. A
+- The exception is a checkpoint written after a resume has come. That is after the pause has stopped waiting, or
+  while it still waits when another thread resumes the subscription then, since the pause is recorded before its
+  wait. A
   `DurableSubscriptionModel` action that returns that late still saves the checkpoint of its event, and a quiet
   position whose save starts that late is still saved. The model can't tell which run the action or the save belongs
   to. Every event up to either position has had its action return, so a subscription that restarts from one can
@@ -95,14 +112,19 @@ writes the position under a condition reads that condition when it is asked, whi
 
 - It saves only for a subscription it stores checkpoints for, and only for the registration that was current when it
   was asked. A cancel followed by a new subscribe of the same id is another registration.
-- It saves at most once per interval per subscription. The interval starts at `subscribe(..)` and starts again with
-  every checkpoint saved for an event and with every attempt to save a quiet position, so a subscription that
-  stores a checkpoint for an event at least once per interval gets no extra write. The default is one minute,
+- It saves at most once per interval per subscription. The interval starts at `subscribe(..)`. It starts again when a
+  checkpoint for an event has been written, when a quiet position's save goes ahead because the registration is still
+  current and the save still allowed, whether or not the write then succeeds, and when the write condition for a
+  quiet position can't be read. So a subscription that stores a checkpoint for an event at least once per interval
+  gets no extra write. The default is one minute,
   `saveQuietPositionEvery(Duration)` changes it and `neverSaveQuietPosition()` turns the save off.
 - It saves nothing while the last event delivered is one the persist predicate declined to store, since the quiet
-  position comes after that event. Before the first event it saves only with an `EveryN` predicate, which is what
-  `DurableSubscriptionModelConfig(int)` makes. A predicate of another class, such as one that always answers `false`,
-  first has to store a checkpoint for an event.
+  position comes after that event. A predicate can decline events until a batch the action keeps in memory is
+  written, and a restart from a position after those events would lose the batch.
+- Before the first event after a subscribe it saves whatever the predicate is. A read that returns nothing then comes
+  after no event the subscription hasn't been given. After a restart, the events the predicate declined come after the
+  stored checkpoint, so the change stream returns them before any empty read, and the first one the predicate declines
+  stops the save again.
 - It writes with the same `CheckpointWriteCondition` as a checkpoint for an event, read before the read that
   returned the position.
 - The save holds the lock per subscription id that `subscribe(..)`, `resumeSubscription(..)`, `cancelSubscription(..)`
@@ -110,7 +132,8 @@ writes the position under a condition reads that condition when it is asked, whi
   after a new subscribe of the id has replaced the registration. The checkpoint write for an event takes only a lock
   of its own for each subscribe, which a cancel also takes before it deletes the checkpoint. The lock is one per id,
   and exists only while a call holds it or waits for it, so a checkpoint store that hangs during a save makes only
-  calls for that id wait.
+  calls for that id wait. Neither lock is a monitor, for the reason the loop waits without one. A virtual thread that
+  waits for the checkpoint store while it holds a monitor keeps its carrier thread on JDK 21 to 23.
 - A write the condition refuses is thrown to the wrapped model, which ends delivery for that subscription on that
   node, as it does when the write for an event is refused. Any other failure is logged as a warning and tried again
   after the interval, since nothing is lost by a quiet position that was not saved.
@@ -130,9 +153,9 @@ A quiet position is stored only when all of these hold:
 2. The write condition was read before that read, so a node whose lease moved during the read writes with the token
    it held ([ADR 139](0139-a-node-that-gave-up-a-lease-writes-with-the-token-it-held.md)). The store refuses that
    write once the node that holds the lease now has written a checkpoint of its own, and accepts it before then.
-3. The interval has passed since the last checkpoint write or attempt for that subscription.
-4. The persist predicate stored the last event delivered, or no event has been delivered and the predicate is an
-   `EveryN`.
+3. The interval has passed since the subscribe, the last checkpoint written for an event, the last quiet position
+   save that went ahead, or the last failed read of the write condition for one.
+4. The persist predicate stored the last event delivered, or no event has been delivered since the subscribe.
 
 A pause that comes while a quiet position is being written waits up to a second for the write, as it does for an
 action. A write that takes longer can finish after the pause has returned, and after another node has taken the lease.
@@ -163,8 +186,9 @@ doubles the change streams, and the token of the second one says nothing about w
 ## Consequences
 
 A quiet subscription behind a `DurableSubscriptionModel` costs one checkpoint write per interval. Keep the interval
-well below the oplog window. A subscription whose persist predicate is not an `EveryN` gets no quiet position saved
-until the predicate has stored a checkpoint for an event.
+well below the oplog window. A subscription whose persist predicate declines some events, such as an `EveryN` with
+`n` above 1, gets no quiet position saved after a declined event until the predicate stores one. If it stays quiet
+for longer than the oplog window after that, a restart still ends in lost history.
 
 A subscription that matches nothing resumes and restarts from a position the oplog still has, as long as the process
 is down, or the subscription paused, for less than the oplog window. Longer than that still ends in lost history.
@@ -192,6 +216,9 @@ neither it nor `SpringMongoSubscriptionModel` has an `equals` and `hashCode` of 
 `NativeMongoSubscriptionModel.pauseSubscription(..)` and `stop()` no longer wait for a read that returns nothing.
 Before, each pause waited up to a second for it, so stopping a model with many quiet subscriptions took up to a second
 per subscription.
+
+`CompetingConsumerSubscriptionModel` calls the wrapped model's `pauseSubscription(..)` while it holds its own monitor.
+So when it pauses a subscription whose action is running, its calls for other subscriptions still wait up to a second.
 
 `NativeMongoSubscriptionModel` restarts a change stream whose cursor the driver reports as no longer open when the
 model did not close it. Before, the subscription ended without a log line above debug and stayed listed as running.

@@ -86,9 +86,10 @@ public class DurableSubscriptionModelConfig {
      * event starts the interval again, so a subscription that stores a checkpoint for an event at least once per
      * {@code interval} gets no extra write.
      * <p>
-     * Nothing is saved while the last event delivered is one the {@link #persistCloudEventPositionPredicate} declined
-     * to store. With a predicate other than {@link EveryN}, nothing is saved until the predicate has stored a
-     * checkpoint for an event, so a predicate that always returns {@code false} never gets a position saved.
+     * The position is saved from the subscribe on, whatever the {@link #persistCloudEventPositionPredicate} is, but
+     * not while the last event delivered is one the predicate declined to store. So with a predicate that declines
+     * some events, such as {@link EveryN} with {@code n} above 1, a subscription that goes quiet right after a
+     * declined event gets no position saved until the predicate stores one.
      * <p>
      * The default is one minute. Keep it well below the time the wrapped model keeps its history, which for MongoDB
      * is the oplog window.

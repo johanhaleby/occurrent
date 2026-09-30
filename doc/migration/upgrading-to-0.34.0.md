@@ -1359,13 +1359,17 @@ the action didn't fail.
 `pauseSubscription(..)` waits up to a second for an action that is running, and `stop()` waits one second for all of
 them together. An action that takes longer can still be running when they return. A pause called from inside the
 action does not wait. An interrupt doesn't end the wait, so the subscription is paused when they return, and the
-interrupt is set on the thread again.
+interrupt is set on the thread again. While a pause waits, a call for another subscription doesn't wait for it.
 
 Neither waits for a read that is waiting on the server, in `SpringMongoSubscriptionModel` or in
 `NativeMongoSubscriptionModel`, so the thread of a paused subscription can stay busy for up to `maxAwaitTime` after
-they return. A resume or a start right after that needs a thread of its own. If you pass an executor with a fixed
-number of threads, give it more threads than you have subscriptions, or that resume or start waits for a free thread
-or is rejected.
+they return. So a `start(true)` right after `stop()`, or a pause followed at once by a resume of many subscriptions,
+can need up to twice as many threads as you have subscriptions until those reads return.
+
+If you pass an executor with a fixed number of threads and it has no thread free for a resume, the model hands the
+subscription to it again, 100 ms and then up to 2 seconds apart, until it takes it, the subscription is paused or
+cancelled, or the model shuts down. The subscription counts as running meanwhile. So a smaller executor delays the
+resume rather than leaving the subscription paused. A `subscribe(..)` the executor has no thread for still throws.
 
 ### A quiet subscription's checkpoint is written once a minute
 
@@ -1375,9 +1379,12 @@ same write condition as for an event. A subscription that stores a checkpoint fo
 gets no extra write.
 
 The save follows your persist predicate. Nothing is saved while the last event delivered is one the predicate
-declined to store, since the saved position would come after that event. With a predicate other than `EveryN`, such
-as your own lambda, nothing is saved until the predicate has stored a checkpoint for an event, so a predicate that
-always returns `false` never gets a position saved.
+declined to store, since the saved position would come after that event. Before the first event after a subscribe,
+the position is saved whatever the predicate is.
+
+So with a predicate that declines some events, such as `EveryN` with `n` above 1, a subscription that goes quiet right
+after a declined event gets no position saved until the predicate stores one. If it stays quiet for longer than the
+oplog window, a restart still ends in lost history.
 
 Change the interval with `saveQuietPositionEvery(Duration)` on `DurableSubscriptionModelConfig`, and keep it well
 below the oplog window. `neverSaveQuietPosition()` turns the save off, and the stored checkpoint of a subscription
