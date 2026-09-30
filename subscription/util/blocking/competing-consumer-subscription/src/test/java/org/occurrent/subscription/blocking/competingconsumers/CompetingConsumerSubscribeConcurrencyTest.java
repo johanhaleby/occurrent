@@ -26,8 +26,6 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.filter.Filter;
-import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnknownSubscriptionException;
@@ -302,7 +300,7 @@ class CompetingConsumerSubscribeConcurrencyTest {
     }
 
     @Test
-    void a_subscribe_tried_again_after_its_registration_failed_once_a_start_overtook_it_takes_over_what_the_wrapped_model_holds() {
+    void a_subscription_whose_registration_fails_once_a_start_overtook_the_subscribe_is_recorded_and_registers_and_runs() {
         UserWrittenModel delegate = new UserWrittenModel(false);
         delegate.implementsSubscribePaused = true;
         Strategy strategy = new Strategy();
@@ -314,24 +312,25 @@ class CompetingConsumerSubscribeConcurrencyTest {
             runOnAnotherThreadUntilDoneOrBlocked(() -> model.start(false));
         };
         strategy.registerFailsOnce.add("s1");
-        List<String> firstReceived = new CopyOnWriteArrayList<>();
-        List<String> retryReceived = new CopyOnWriteArrayList<>();
+        List<String> s1Received = new CopyOnWriteArrayList<>();
 
-        Throwable failure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> firstReceived.add(e.getId())));
+        Throwable failure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId())));
         Set<String> recordedAfterTheFailure = model.subscriptionIds();
-        Throwable retryFailure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> retryReceived.add(e.getId())));
-        delegate.write("e1");
 
-        assertThat(retryFailure).as("the subscribe of s1 tried again, after the first one failed with " + failure).isNull();
-        assertThat(failure).as("the first subscribe of s1").hasMessage("transient register failure");
-        assertThat(recordedAfterTheFailure).as("subscriptions recorded once the first subscribe had thrown").isEmpty();
-        assertThat(delegate.cancelled).as("subscriptions cancelled in the wrapped model").isEmpty();
-        assertThat(retryReceived).as("events the action of the second subscribe received").containsExactly("e1");
-        assertThat(firstReceived).as("events the action of the failed subscribe received").isEmpty();
+        try {
+            assertThat(failure).as("the subscribe of s1, whose registration failed").isNull();
+            assertThat(recordedAfterTheFailure).as("subscriptions recorded once the subscribe had returned").containsExactly("s1");
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delegate.isRunning("s1")).as("s1 runs in the wrapped model once registered, registered=" + strategy.registered).isTrue());
+            delegate.write("e1");
+            assertThat(delegate.cancelled).as("subscriptions cancelled in the wrapped model").isEmpty();
+            assertThat(s1Received).as("events s1 received").containsExactly("e1");
+        } finally {
+            model.shutdown();
+        }
     }
 
     @Test
-    void a_subscribe_that_cannot_give_the_lease_back_after_a_failed_resume_throws_and_a_second_subscribe_takes_over_what_the_wrapped_model_holds() {
+    void a_subscription_that_cannot_give_the_lease_back_after_a_failed_resume_is_recorded_and_runs_once_tried_again() {
         UserWrittenModel delegate = new UserWrittenModel(false);
         Strategy strategy = new Strategy();
         CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
@@ -346,12 +345,15 @@ class CompetingConsumerSubscribeConcurrencyTest {
         strategy.releaseFailsOnce = true;
 
         Throwable failure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), __ -> {}));
-        Throwable retryFailure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), __ -> {}));
 
-        assertThat(retryFailure).as("the subscribe of s1 tried again, after the first one failed with " + failure).isNull();
-        assertThat(failure).as("the first subscribe of s1").hasMessage("transient release failure");
-        assertThat(delegate.cancelled).as("subscriptions cancelled in the wrapped model").isEmpty();
-        assertThat(delegate.isRunning("s1")).as("s1 runs in the wrapped model once this node holds its lease").isTrue();
+        try {
+            assertThat(failure).as("the subscribe of s1, which could not give the lease back").isNull();
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delegate.isRunning("s1")).as("s1 runs in the wrapped model while this node holds its lease, holders=" + strategy.holders).isTrue());
+            assertThat(strategy.hasLock("s1", "node")).as("lease of s1 held while it runs").isTrue();
+            assertThat(delegate.cancelled).as("subscriptions cancelled in the wrapped model").isEmpty();
+        } finally {
+            model.shutdown();
+        }
     }
 
     @Test
@@ -407,76 +409,6 @@ class CompetingConsumerSubscribeConcurrencyTest {
     }
 
     @Test
-    void a_subscribe_tried_again_with_another_filter_or_start_position_throws_and_one_with_the_same_takes_the_subscription_over() {
-        UserWrittenModel delegate = new UserWrittenModel(false);
-        delegate.implementsSubscribePaused = true;
-        Strategy strategy = new Strategy();
-        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
-        model.stop();
-        // Another thread starts the model once the wrapped model holds s1 paused, and the registration that follows fails
-        delegate.afterSubscribe = id -> {
-            delegate.afterSubscribe = __ -> {};
-            runOnAnotherThreadUntilDoneOrBlocked(() -> model.start(false));
-        };
-        strategy.registerFailsOnce.add("s1");
-        SubscriptionFilter filter = AgnosticSubscriptionFilter.filter(Filter.type("t1"));
-        SubscriptionFilter anotherFilter = AgnosticSubscriptionFilter.filter(Filter.type("t2"));
-        List<String> retryReceived = new CopyOnWriteArrayList<>();
-
-        Throwable failure = catchThrowable(() -> model.subscribe("node", "s1", filter, StartAt.subscriptionModelDefault(), __ -> {}));
-        Throwable withAnotherFilter = catchThrowable(() -> model.subscribe("node", "s1", anotherFilter, StartAt.subscriptionModelDefault(), __ -> {}));
-        Object filterAfterAnotherFilter = delegate.filters.get("s1");
-        Throwable withAnotherStartPosition = catchThrowable(() -> model.subscribe("node", "s1", filter, StartAt.now(), __ -> {}));
-        Throwable withTheSame = catchThrowable(() -> model.subscribe("node", "s1", AgnosticSubscriptionFilter.filter(Filter.type("t1")), StartAt.subscriptionModelDefault(), e -> retryReceived.add(e.getId())));
-        delegate.write("e1");
-
-        assertThat(failure).as("the first subscribe of s1").hasMessage("transient register failure");
-        assertThat(withAnotherFilter).as("the subscribe of s1 tried again with another filter, filter in the wrapped model=" + filterAfterAnotherFilter)
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("from a subscribe that failed").hasMessageContaining("cancelSubscription(\"s1\")");
-        assertThat(withAnotherStartPosition).as("the subscribe of s1 tried again with another start position")
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("from a subscribe that failed");
-        assertThat(withTheSame).as("the subscribe of s1 tried again with the same filter and start position").isNull();
-        assertThat(delegate.filters.get("s1")).as("filter of s1 in the wrapped model").isEqualTo(filter);
-        assertThat(delegate.cancelled).as("subscriptions cancelled in the wrapped model").isEmpty();
-        assertThat(retryReceived).as("events the action of the subscribe that took s1 over received").containsExactly("e1");
-    }
-
-    @Test
-    void a_subscription_kept_after_a_failed_subscribe_is_unknown_to_every_call_until_it_is_cancelled_or_subscribed_again() {
-        UserWrittenModel delegate = new UserWrittenModel(false);
-        delegate.implementsSubscribePaused = true;
-        Strategy strategy = new Strategy();
-        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
-        model.stop();
-        // Another thread starts the model once the wrapped model holds s1 paused, and the registration that follows fails
-        delegate.afterSubscribe = id -> {
-            delegate.afterSubscribe = __ -> {};
-            runOnAnotherThreadUntilDoneOrBlocked(() -> model.start(false));
-        };
-        strategy.registerFailsOnce.add("s1");
-        StartAt notCompeting = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(CompetingConsumerSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
-
-        Throwable failure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), __ -> {}));
-        boolean paused = model.isPaused("s1");
-        Set<String> ids = model.subscriptionIds();
-        Throwable resume = catchThrowable(() -> model.resumeSubscription("s1"));
-        Throwable pause = catchThrowable(() -> model.pauseSubscription("s1"));
-        Throwable notCompetingSubscribe = catchThrowable(() -> model.subscribe("s1", null, notCompeting, __ -> {}));
-        model.cancelSubscription("s1");
-        Throwable subscribeAfterTheCancel = catchThrowable(() -> model.subscribe("node", "s1", AgnosticSubscriptionFilter.filter(Filter.type("t2")), StartAt.now(), __ -> {}));
-
-        assertThat(failure).as("the first subscribe of s1").hasMessage("transient register failure");
-        assertThat(paused).as("isPaused for s1, which pause and resume do not know, resume=" + resume + ", pause=" + pause).isFalse();
-        assertThat(ids).as("subscriptionIds() once the subscribe of s1 had thrown").isEmpty();
-        assertThat(resume).as("resuming s1").isInstanceOf(UnknownSubscriptionException.class);
-        assertThat(pause).as("pausing s1").isInstanceOf(UnknownSubscriptionException.class);
-        assertThat(notCompetingSubscribe).as("a subscribe of s1 that does not compete")
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("from a subscribe that failed").hasMessageContaining("cancelSubscription(\"s1\")");
-        assertThat(delegate.cancelled).as("subscriptions cancelled in the wrapped model").containsExactly("s1");
-        assertThat(subscribeAfterTheCancel).as("a subscribe of s1 with another filter and start position once s1 was cancelled").isNull();
-    }
-
-    @Test
     void a_subscribe_that_no_longer_holds_the_lease_after_giving_it_back_failed_returns_and_waits_for_the_next_grant() {
         UserWrittenModel delegate = new UserWrittenModel(false);
         Strategy strategy = new Strategy();
@@ -528,7 +460,7 @@ class CompetingConsumerSubscribeConcurrencyTest {
             strategy.listeners.forEach(l -> l.onConsumeProhibited("s1", "node"));
 
             await().atMost(8, SECONDS).untilAsserted(() -> assertThat(warnings).as("warnings while the pause of s1 keeps failing")
-                    .anySatisfy(warning -> assertThat(warning).contains("Still could not pause").contains("after 5 tries").contains("subscriptionId=s1")));
+                    .anySatisfy(warning -> assertThat(warning).contains("Still could not").contains("after 5 tries").contains("subscriptionId=s1")));
         } finally {
             logger.detachAppender(appender);
             model.shutdown();
@@ -588,7 +520,7 @@ class CompetingConsumerSubscribeConcurrencyTest {
     }
 
     @Test
-    void a_waiting_subscription_whose_registration_throws_in_start_is_registered_by_the_next_start() {
+    void a_waiting_subscription_whose_registration_throws_in_start_is_registered_once_tried_again() {
         UserWrittenModel delegate = new UserWrittenModel(false);
         Strategy strategy = new Strategy();
         strategy.heldElsewhere.add("s1");
@@ -598,13 +530,99 @@ class CompetingConsumerSubscribeConcurrencyTest {
         strategy.registerFailsOnce.add("s1");
 
         Throwable start = catchThrowable(() -> model.start(true));
-        Set<String> registeredAfterTheFailedStart = Set.copyOf(strategy.registered);
-        Throwable nextStart = catchThrowable(() -> model.start(true));
 
-        assertThat(start).as("the start() whose registration of s1 threw").hasMessage("transient register failure");
-        assertThat(registeredAfterTheFailedStart).as("registrations once that start() had thrown").isEmpty();
-        assertThat(nextStart).as("the next start()").isNull();
-        assertThat(strategy.registered).as("registrations once the next start() had returned").containsExactly("s1");
+        try {
+            assertThat(start).as("the start() whose registration of s1 threw").isNull();
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(strategy.registered).as("registrations once the registration of s1 is tried again").containsExactly("s1"));
+            assertThat(delegate.isRunning("s1")).as("s1 while another node holds its lease").isFalse();
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    @Test
+    void a_subscription_the_wrapped_model_runs_when_its_registration_fails_after_a_stop_and_a_start_registers_and_runs_with_the_lease() {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        // Other threads stop the model and then start it when the wrapped model is about to make s1, the wrapped model is
+        // started again before it does, and registering s1 again fails once, and so does pausing it
+        delegate.beforeSubscribe = id -> {
+            delegate.beforeSubscribe = __ -> {};
+            join(runOnAnotherThreadUntilDoneOrBlocked(model::stop));
+            join(runOnAnotherThreadUntilDoneOrBlocked(() -> model.start(true)));
+            delegate.start(false);
+            strategy.registerFailsOnce.add("s1");
+            delegate.pauseFailsOnce = true;
+        };
+        List<String> s1Received = new CopyOnWriteArrayList<>();
+
+        Throwable failure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId())));
+
+        try {
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(strategy.registered).as("registrations once the subscribe of s1 had returned, subscribe failure=" + failure
+                    + ", holders=" + strategy.holders + ", paused in the wrapped model=" + delegate.isPaused("s1") + ", paused here=" + model.isPaused("s1")).containsExactly("s1"));
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delegate.isRunning("s1")).as("s1 runs in the wrapped model once this node holds its lease, holders=" + strategy.holders).isTrue());
+            delegate.write("e1");
+            assertThat(s1Received).as("events s1 received").containsExactly("e1");
+            assertThat(strategy.hasLock("s1", "node")).as("lease of s1 held while it runs").isTrue();
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    @Test
+    void a_subscription_that_runs_without_the_lease_when_its_registration_fails_registers_and_stops_being_tried_once_this_node_wins_the_lease() {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        // As above, but another node holds the lease by then and pausing s1 keeps failing
+        delegate.beforeSubscribe = id -> {
+            delegate.beforeSubscribe = __ -> {};
+            join(runOnAnotherThreadUntilDoneOrBlocked(model::stop));
+            join(runOnAnotherThreadUntilDoneOrBlocked(() -> model.start(true)));
+            delegate.start(false);
+            strategy.registerFailsOnce.add("s1");
+            strategy.heldElsewhere.add("s1");
+            delegate.pauseKeepsFailing = true;
+        };
+
+        Throwable failure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), __ -> {}));
+
+        try {
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(strategy.registered).as("registrations while another node holds the lease of s1, subscribe failure=" + failure).containsExactly("s1"));
+            strategy.heldElsewhere.remove("s1");
+            grant(strategy, "s1");
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(threadsTryingAgain("s1")).as("threads trying s1 again once this node holds its lease").isEmpty());
+            assertThat(delegate.isRunning("s1")).as("s1 runs in the wrapped model once this node holds its lease").isTrue();
+        } finally {
+            delegate.pauseKeepsFailing = false;
+            model.shutdown();
+        }
+    }
+
+    @Test
+    void a_registration_that_a_failed_subscribe_could_not_give_up_while_holding_the_lease_is_given_up_afterwards() {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        delegate.implementsSubscribePaused = true;
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        // Making s1 in the wrapped model fails, and so does the unregister after it, before the strategy forgets s1
+        delegate.beforeSubscribe = id -> {
+            strategy.unregisterFailsOnceBeforeForgettingTheConsumer = true;
+            throw new IllegalStateException("transient subscribe failure");
+        };
+
+        Throwable failure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), __ -> {}));
+
+        try {
+            assertThat(failure).as("the subscribe of s1").hasMessage("transient subscribe failure");
+            assertThat(model.subscriptionIds()).as("subscriptions recorded once the subscribe of s1 had thrown").isEmpty();
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(strategy.registered).as("registrations once the subscribe of s1 had thrown, holders=" + strategy.holders).isEmpty());
+            assertThat(strategy.holders).as("leases held once the subscribe of s1 had thrown").isEmpty();
+        } finally {
+            model.shutdown();
+        }
     }
 
     @Test
@@ -669,6 +687,15 @@ class CompetingConsumerSubscribeConcurrencyTest {
         assertThat(starting).succeedsWithin(Duration.ofSeconds(5));
     }
 
+    // Threads of the model that try something for the subscription again
+    private static List<String> threadsTryingAgain(String subscriptionId) {
+        return Thread.getAllStackTraces().keySet().stream()
+                .filter(Thread::isAlive)
+                .map(Thread::getName)
+                .filter(name -> name.startsWith("occurrent-competing-consumer-") && name.endsWith("-" + subscriptionId))
+                .toList();
+    }
+
     // Gives this node the lease, as a refresh that wins it does
     private static void grant(Strategy strategy, String subscriptionId) {
         strategy.holders.add(subscriptionId);
@@ -697,7 +724,7 @@ class CompetingConsumerSubscribeConcurrencyTest {
 
     // Grants a lease unless another node holds it, makes a registration wait on a latch when told to, and fails a
     // registration or a release once when told to, the release either before or after it has given up the lease. It can
-    // also fail an unregister once, after it has forgotten the consumer.
+    // also fail an unregister once, either before or after it has forgotten the consumer.
     private static final class Strategy implements CompetingConsumerStrategy {
         private final Set<String> holders = ConcurrentHashMap.newKeySet();
         private final Set<String> heldElsewhere = ConcurrentHashMap.newKeySet();
@@ -707,6 +734,7 @@ class CompetingConsumerSubscribeConcurrencyTest {
         private volatile boolean releaseFailsOnce;
         private volatile boolean releaseFailsOnceAfterGivingUpTheLease;
         private volatile boolean unregisterFailsOnceAfterForgettingTheConsumer;
+        private volatile boolean unregisterFailsOnceBeforeForgettingTheConsumer;
         private final CountDownLatch registerEntered = new CountDownLatch(1);
         private final CountDownLatch shutDown = new CountDownLatch(1);
         private final List<CompetingConsumerListener> listeners = new CopyOnWriteArrayList<>();
@@ -735,6 +763,10 @@ class CompetingConsumerSubscribeConcurrencyTest {
 
         @Override
         public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
+            if (unregisterFailsOnceBeforeForgettingTheConsumer) {
+                unregisterFailsOnceBeforeForgettingTheConsumer = false;
+                throw new IllegalStateException("transient unregister failure");
+            }
             registered.remove(subscriptionId);
             holders.remove(subscriptionId);
             if (unregisterFailsOnceAfterForgettingTheConsumer) {
@@ -789,7 +821,6 @@ class CompetingConsumerSubscribeConcurrencyTest {
         private volatile boolean pauseFailsOnce;
         private volatile boolean pauseFailsAfterPausing;
         private volatile boolean pauseKeepsFailing;
-        private final Map<String, Object> filters = new ConcurrentHashMap<>();
         private final List<String> cancelled = new CopyOnWriteArrayList<>();
         private boolean running = true;
         private final Set<String> runningIds = new HashSet<>();
@@ -823,7 +854,6 @@ class CompetingConsumerSubscribeConcurrencyTest {
                 }
                 (running && !paused ? runningIds : pausedIds).add(subscriptionId);
                 actions.put(subscriptionId, action);
-                filters.put(subscriptionId, filter == null ? "none" : filter);
                 positions.put(subscriptionId, log.size());
             }
             afterSubscribe.accept(subscriptionId);

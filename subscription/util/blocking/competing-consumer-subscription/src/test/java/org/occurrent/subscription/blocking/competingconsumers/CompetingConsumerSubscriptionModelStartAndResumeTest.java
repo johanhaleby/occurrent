@@ -18,6 +18,7 @@ package org.occurrent.subscription.blocking.competingconsumers;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -28,20 +29,23 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
 
 /**
  * What starting the model, and resuming or pausing a subscription, do when the lease is not free, when the strategy
  * throws, or when the wrapped model throws on starting itself or on a subscription, competing or not. The strategy
  * tells its listeners about a grant on the thread that registers, the way the MongoDB lease strategies do, and nothing
- * here needs MongoDB.
+ * here needs MongoDB. A competing consumer that a call fails for is tried again on a thread of its own, so the test
+ * doubles take calls from more than one thread.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CompetingConsumerSubscriptionModelStartAndResumeTest {
@@ -52,8 +56,14 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     private final SynchronousLeaseStrategy strategy = new SynchronousLeaseStrategy();
     private final CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
 
+    // Ends the tries of a consumer that keeps failing
+    @AfterEach
+    void shutdownTheModel() {
+        model.shutdown();
+    }
+
     @Test
-    void start_throws_what_the_wrapped_model_threw_once_every_consumer_had_its_turn() {
+    void start_returns_once_every_consumer_had_its_turn_and_one_the_wrapped_model_threw_on_runs_once_that_model_recovers() {
         strategy.grantOnRegister = false;
         subscribe("failing-1");
         subscribe("healthy");
@@ -64,14 +74,15 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
         Throwable thrown = catchThrowable(() -> model.start(true));
 
-        assertThat(thrown).as("the caller of start learns that a subscription did not start").isInstanceOf(IllegalStateException.class);
-        assertThat(thrown.getSuppressed()).as("and learns about every one of them").hasSize(1);
+        assertThat(thrown).as("start(), whose failing consumers are tried again instead").isNull();
         assertThat(delegate.running).as("a failing consumer does not keep the others from starting").containsExactly("healthy");
-        assertThat(strategy.holders).as("a consumer that failed to start gave its lease back").containsExactly("healthy");
+        delegate.throwsOn.clear();
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delegate.running).as("every consumer once the wrapped model starts them again").containsExactlyInAnyOrder("failing-1", "healthy", "failing-2"));
+        assertThat(strategy.holders).containsExactlyInAnyOrder("failing-1", "healthy", "failing-2");
     }
 
     @Test
-    void resuming_a_consumer_the_wrapped_model_throws_on_throws_to_the_caller() {
+    void resuming_a_consumer_the_wrapped_model_throws_on_returns_and_the_consumer_runs_once_the_wrapped_model_recovers() {
         strategy.grantOnRegister = false;
         subscribe("failing");
         model.pauseSubscription("failing");
@@ -80,10 +91,11 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
         Throwable thrown = catchThrowable(() -> model.resumeSubscription("failing"));
 
-        assertThat(thrown).as("the grant that registering brought failed to start the subscription, and the caller of resume is told")
-                .isInstanceOf(IllegalStateException.class);
-        assertThat(strategy.holders).isEmpty();
+        assertThat(thrown).as("resuming the consumer, whose failure is tried again instead").isNull();
         assertThat(model.isRunning("failing")).isFalse();
+        delegate.throwsOn.clear();
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delegate.running).as("the consumer once the wrapped model starts it again").containsExactly("failing"));
+        assertThat(strategy.holders).containsExactly("failing");
     }
 
     @Test
@@ -105,17 +117,17 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     }
 
     @Test
-    void a_consumer_whose_registration_threw_on_start_is_resumed_by_the_next_start() {
+    void a_consumer_whose_registration_threw_on_start_resumes_once_the_lease_store_is_back() {
         strategy.grantOnRegister = true;
         subscribe("x");
         model.stop();
         strategy.registerThrows = true;
-        assertThat(catchThrowable(() -> model.start(true))).as("the lease store is down").isInstanceOf(IllegalStateException.class);
+        assertThat(catchThrowable(() -> model.start(true))).as("start() while the lease store is down").isNull();
+        assertThat(delegate.running).as("x while the lease store is down").isEmpty();
+
         strategy.registerThrows = false;
 
-        model.start(true);
-
-        assertThat(delegate.running).as("x resumes on the next start once the lease store is back").contains("x");
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delegate.running).as("x once the lease store is back").containsExactly("x"));
         assertThat(strategy.holders).containsExactly("x");
     }
 
@@ -142,7 +154,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         subscribe("x");
         model.stop();
         delegate.throwsOn.add("x");
-        assertThat(catchThrowable(() -> model.start(true))).isInstanceOf(IllegalStateException.class);
+        assertThat(catchThrowable(() -> model.start(true))).isNull();
         assertThat(strategy.calls).as("x gives its lease back and stays registered, so it keeps competing for it").endsWith("release x");
         delegate.throwsOn.clear();
 
@@ -178,7 +190,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         Throwable thrown = catchThrowable(() -> model.start(true));
 
         assertThat(thrown).as("the caller of start learns that the wrapped model did not start").hasMessage("The wrapped model cannot start right now");
-        assertThat(thrown.getSuppressed()).as("nc and x still get their turn, and fail as well, since resuming them starts the wrapped model").hasSize(2);
+        assertThat(thrown.getSuppressed()).as("nc still gets its turn and fails as well, since resuming it starts the wrapped model, while x is tried again instead").hasSize(1);
         assertThat(strategy.calls).as("x gives back the lease it won").endsWith("release x");
         delegate.startThrows = false;
         strategy.grant("x");
@@ -284,8 +296,10 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
         Throwable thrown = catchThrowable(() -> model.start(true));
 
-        assertThat(thrown).as("the caller of start learns that the strategy threw for a").hasMessage("A custom lease strategy failed to answer for a");
+        assertThat(thrown).as("start(), which tries a again instead").isNull();
         assertThat(delegate.running).as("b resumes although asking about a threw").containsExactly("b");
+        strategy.hasLockThrowsOn.clear();
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delegate.running).as("a once the strategy answers for it again").containsExactlyInAnyOrder("a", "b"));
     }
 
     @Test
@@ -464,7 +478,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         // The wrapped model has lost x, as it does for a catch-up replay that failed, while x is recorded as running here
         delegate.cancelSubscription("x");
         delegate.throwsOn.add("x");
-        assertThat(catchThrowable(() -> model.resumeSubscription("x"))).isInstanceOf(IllegalStateException.class);
+        assertThat(catchThrowable(() -> model.resumeSubscription("x"))).isNull();
         assertThat(strategy.calls).as("x gives its lease back and stays registered").endsWith("release x");
         delegate.throwsOn.clear();
 
@@ -492,12 +506,12 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
      * {@link #running}.
      */
     private static final class RecordingDelegate implements SubscriptionModel {
-        private final Set<String> throwsOn = new HashSet<>();
-        private final List<String> running = new ArrayList<>();
-        private final Set<String> paused = new HashSet<>();
-        private boolean started = true;
-        private boolean startThrows;
-        private boolean stopThrows;
+        private final Set<String> throwsOn = ConcurrentHashMap.newKeySet();
+        private final List<String> running = new CopyOnWriteArrayList<>();
+        private final Set<String> paused = ConcurrentHashMap.newKeySet();
+        private volatile boolean started = true;
+        private volatile boolean startThrows;
+        private volatile boolean stopThrows;
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -595,14 +609,14 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
      * when the consumer held the lease, a release only while {@link #tellsTheListenersAboutARelease} is set.
      */
     private static final class SynchronousLeaseStrategy implements CompetingConsumerStrategy {
-        private final List<String> calls = new ArrayList<>();
-        private final Set<String> registered = new HashSet<>();
-        private final Set<String> holders = new HashSet<>();
-        private final Set<String> hasLockThrowsOn = new HashSet<>();
-        private final List<CompetingConsumerListener> listeners = new ArrayList<>();
-        private boolean grantOnRegister;
-        private boolean registerThrows;
-        private boolean tellsTheListenersAboutARelease = true;
+        private final List<String> calls = new CopyOnWriteArrayList<>();
+        private final Set<String> registered = ConcurrentHashMap.newKeySet();
+        private final Set<String> holders = ConcurrentHashMap.newKeySet();
+        private final Set<String> hasLockThrowsOn = ConcurrentHashMap.newKeySet();
+        private final List<CompetingConsumerListener> listeners = new CopyOnWriteArrayList<>();
+        private volatile boolean grantOnRegister;
+        private volatile boolean registerThrows;
+        private volatile boolean tellsTheListenersAboutARelease = true;
 
         /**
          * A grant the strategy decided before the lease moved on, which reaches the listeners once this node no longer

@@ -19,10 +19,8 @@ package org.occurrent.subscription.mongodb;
 import com.mongodb.client.model.Filters;
 import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
-import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.SubscriptionFilter;
 
-import java.util.Arrays;
 import java.util.function.BiFunction;
 
 import static com.mongodb.client.model.Aggregates.match;
@@ -49,16 +47,6 @@ public class MongoFilterSpecification implements SubscriptionFilter {
 
         public static MongoJsonFilterSpecification filter(String json) {
             return new MongoJsonFilterSpecification(json);
-        }
-
-        @Override
-        public boolean equals(@Nullable Object o) {
-            return o instanceof MongoJsonFilterSpecification that && json.equals(that.json);
-        }
-
-        @Override
-        public int hashCode() {
-            return json.hashCode();
         }
     }
 
@@ -165,21 +153,6 @@ public class MongoFilterSpecification implements SubscriptionFilter {
 
         public Bson[] getAggregationStages() {
             return aggregationStages;
-        }
-
-        /**
-         * Two specifications are equal when their aggregation stages are equal, in order. The stages that the methods of
-         * this class and {@link Filters} make are equal by value. A stage of a type with no {@code equals} of its own
-         * is equal only to itself.
-         */
-        @Override
-        public boolean equals(@Nullable Object o) {
-            return o instanceof MongoBsonFilterSpecification that && Arrays.equals(aggregationStages, that.aggregationStages);
-        }
-
-        @Override
-        public int hashCode() {
-            return Arrays.hashCode(aggregationStages);
         }
     }
 }
