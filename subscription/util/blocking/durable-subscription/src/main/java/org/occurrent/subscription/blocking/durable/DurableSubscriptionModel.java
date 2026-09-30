@@ -43,6 +43,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
@@ -233,10 +234,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     // Stored now rather than with the next event, since a process stopping before that event would restart from
-    // the lost position and skip everything written in between. Same write condition as any other checkpoint
-    private void storeRestartPositionAfterHistoryLoss(String subscriptionId, Checkpoint restartedFrom) {
+    // the lost position and skip everything written in between. Same write condition as any other checkpoint. Asked
+    // under the lock resumeSubscription and cancelSubscription hold, so a run that a resume replaced or a cancel ended
+    // while it asked for the present stores nothing
+    private void storeRestartPositionAfterHistoryLoss(String subscriptionId, Checkpoint restartedFrom, BooleanSupplier stillCurrent) {
         synchronized (lockFor(subscriptionId)) {
-            if (!checkpointedSubscriptions.contains(subscriptionId)) {
+            if (!checkpointedSubscriptions.contains(subscriptionId) || !stillCurrent.getAsBoolean()) {
                 return;
             }
             try {

@@ -18,8 +18,12 @@ package org.occurrent.subscription.blocking.competingconsumers;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.event.CommandFailedEvent;
+import com.mongodb.event.CommandListener;
+import com.mongodb.event.CommandStartedEvent;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
@@ -103,12 +107,18 @@ class ActionThatOutlivesItsRunTest {
     private String eventCollection;
     private SpringMongoCheckpointStorage storage;
     private final CountDownLatch releaseTheSlowAction = new CountDownLatch(1);
+    // The model asks MongoDB for the present with a ping. Only the ping from the thread whose change stream open lost
+    // its history is held, since the model also asks for the present when a subscription starts
+    private final AtomicBoolean holdTheNextQuestionForThePresent = new AtomicBoolean();
+    private volatile @Nullable Thread lostItsHistory;
+    private final CountDownLatch askedForThePresent = new CountDownLatch(1);
+    private final CountDownLatch answerThePresent = new CountDownLatch(1);
 
     @BeforeEach
     void connect() {
         ConnectionString connectionString = new ConnectionString(mongo.getReplicaSetUrl() + ".events");
         eventCollection = "events-" + UUID.randomUUID();
-        client = MongoClients.create(connectionString);
+        client = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).addCommandListener(holdingTheQuestionForThePresent()).build());
         String database = requireNonNull(connectionString.getDatabase());
         template = new MongoTemplate(client, database);
         eventStore = new SpringMongoEventStore(template, new EventStoreConfig.Builder().eventStoreCollectionName(eventCollection)
@@ -120,6 +130,7 @@ class ActionThatOutlivesItsRunTest {
     @AfterEach
     void shutdown() {
         releaseTheSlowAction.countDown();
+        answerThePresent.countDown();
         client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", "off"));
         started.forEach(SubscriptionModel::shutdown);
         client.close();
@@ -286,6 +297,88 @@ class ActionThatOutlivesItsRunTest {
         await().during(Duration.ofMillis(500)).atMost(2, SECONDS).untilAsserted(() -> assertThat(attemptAfterTheCancel).as("an attempt started after cancelSubscription(..) returned").isFalse());
     }
 
+    @ParameterizedTest
+    @EnumSource(Model.class)
+    void a_retry_that_a_cancel_ends_before_its_next_attempt_tells_the_error_listener_nothing_about_that_attempt(Model model) throws InterruptedException {
+        // Given an action that fails, and a retry that waits until the subscription is cancelled
+        CountDownLatch waitingToRetry = new CountDownLatch(1);
+        CountDownLatch cancelReturned = new CountDownLatch(1);
+        List<Throwable> errors = new CopyOnWriteArrayList<>();
+        CheckpointAwareSubscriptionModel subscriptionModel = model(model, RetryStrategy.fixed(Duration.ofMillis(10)).onBeforeRetry(__ -> {
+            waitingToRetry.countDown();
+            try {
+                cancelReturned.await(10, SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }).onError((__, e) -> errors.add(e)));
+        subscriptionModel.subscribe("cancelled", null, StartAt.now(), __ -> {
+            throw new IllegalStateException("expected");
+        }).waitUntilStarted(Duration.ofSeconds(10));
+        eventStore.write("first", serialize(nameDefined()));
+        assertThat(waitingToRetry.await(10, SECONDS)).isTrue();
+
+        // When
+        subscriptionModel.cancelSubscription("cancelled");
+        cancelReturned.countDown();
+
+        // Then the listener has heard of the failure of the action and of nothing else
+        await().during(Duration.ofMillis(500)).atMost(2, SECONDS).untilAsserted(() -> assertThat(errors).as("the errors the listener was told of")
+                .extracting(Throwable::getMessage).containsExactly("expected"));
+    }
+
+    @ParameterizedTest
+    @EnumSource(Model.class)
+    void a_run_that_lost_its_history_stores_no_restart_position_once_its_subscription_was_cancelled_and_subscribed_again(Model model) throws InterruptedException {
+        // Given a durable subscription whose history is lost when its change stream opens, and whose run is waiting for
+        // the present to restart from
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(model(model, RetryStrategy.fixed(Duration.ofSeconds(1)), true), storage, new DurableSubscriptionModelConfig(everyEvent()));
+        started.addFirst(durable);
+        holdTheNextQuestionForThePresent.set(true);
+        loseTheHistoryOfTheNextChangeStreamOpen();
+        durable.subscribe("lost", null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+        assertThat(askedForThePresent.await(10, SECONDS)).as("asked for the present").isTrue();
+
+        // When the subscription is cancelled and subscribed again with the same id before the answer comes
+        durable.cancelSubscription("lost");
+        durable.subscribe("lost", null, StartAt.subscriptionModelDefault(), __ -> {
+        }).waitUntilStarted(Duration.ofSeconds(10));
+        Checkpoint whereTheNewSubscriptionStarted = storage.read("lost");
+        assertThat(whereTheNewSubscriptionStarted).as("the position the new subscription recorded").isNotNull();
+        answerThePresent.countDown();
+
+        // Then the checkpoint stays where the new subscription started. The present the cancelled run is answered
+        // comes after that, so a process restart from it would skip what the new subscription has not handled yet
+        await().during(Duration.ofSeconds(1)).atMost(2, SECONDS).untilAsserted(() -> assertThat(storage.read("lost"))
+                .as("the checkpoint once the cancelled run has its answer").isEqualTo(whereTheNewSubscriptionStarted));
+    }
+
+    @ParameterizedTest
+    @EnumSource(Model.class)
+    void a_run_that_lost_its_history_stores_no_restart_position_once_a_resume_has_replaced_it(Model model) throws InterruptedException {
+        // Given a durable subscription whose history is lost when its change stream opens, and whose run is waiting for
+        // the present to restart from
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(model(model, RetryStrategy.fixed(Duration.ofSeconds(1)), true), storage, new DurableSubscriptionModelConfig(everyEvent()));
+        started.addFirst(durable);
+        holdTheNextQuestionForThePresent.set(true);
+        loseTheHistoryOfTheNextChangeStreamOpen();
+        durable.subscribe("lost", null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+        Checkpoint recorded = storage.read("lost");
+        assertThat(askedForThePresent.await(10, SECONDS)).as("asked for the present").isTrue();
+
+        // When the subscription is paused and resumed before the answer comes
+        durable.pauseSubscription("lost");
+        durable.resumeSubscription("lost").waitUntilStarted(Duration.ofSeconds(10));
+        answerThePresent.countDown();
+
+        // Then the checkpoint stays where the resumed run started. The present the replaced run is answered comes
+        // after that, so a process restart from it would skip what the resumed run has not handled yet
+        await().during(Duration.ofSeconds(1)).atMost(2, SECONDS).untilAsserted(() -> assertThat(storage.read("lost"))
+                .as("the checkpoint once the replaced run has its answer").isEqualTo(recorded));
+    }
+
     private record CallResult(@Nullable Throwable thrown, boolean interruptedAfterwards) {
     }
 
@@ -346,11 +439,15 @@ class ActionThatOutlivesItsRunTest {
     }
 
     private CheckpointAwareSubscriptionModel model(Model model, RetryStrategy retryStrategy) {
+        return model(model, retryStrategy, false);
+    }
+
+    private CheckpointAwareSubscriptionModel model(Model model, RetryStrategy retryStrategy, boolean restartAfterLostHistory) {
         CheckpointAwareSubscriptionModel subscriptionModel = switch (model) {
             case SPRING -> new SpringMongoSubscriptionModel(template, SpringMongoSubscriptionModelConfig.withConfig(eventCollection, TimeRepresentation.RFC_3339_STRING)
-                    .maxAwaitTime(Duration.ofMillis(100)).retryStrategy(retryStrategy));
+                    .maxAwaitTime(Duration.ofMillis(100)).retryStrategy(retryStrategy).restartSubscriptionsOnChangeStreamHistoryLost(restartAfterLostHistory));
             case NATIVE -> new NativeMongoSubscriptionModel(template.getDb(), eventCollection, TimeRepresentation.RFC_3339_STRING, Executors.newCachedThreadPool(),
-                    NativeMongoSubscriptionModelConfig.withConfig().maxAwaitTime(Duration.ofMillis(100)).retryStrategy(retryStrategy));
+                    NativeMongoSubscriptionModelConfig.withConfig().maxAwaitTime(Duration.ofMillis(100)).retryStrategy(retryStrategy).restartSubscriptionsOnChangeStreamHistoryLost(restartAfterLostHistory));
         };
         started.add(subscriptionModel);
         return subscriptionModel;
@@ -361,6 +458,35 @@ class ActionThatOutlivesItsRunTest {
     private void failTheNextChangeStreamOpen() {
         client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", new Document("times", 1))
                 .append("data", new Document("failCommands", List.of("aggregate")).append("errorCode", 2)));
+    }
+
+    // ChangeStreamHistoryLost, after which the model restarts from the present when it is configured to
+    private void loseTheHistoryOfTheNextChangeStreamOpen() {
+        client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", new Document("times", 1))
+                .append("data", new Document("failCommands", List.of("aggregate")).append("errorCode", 286)));
+    }
+
+    private CommandListener holdingTheQuestionForThePresent() {
+        return new CommandListener() {
+            @Override
+            public void commandFailed(CommandFailedEvent event) {
+                if (event.getCommandName().equals("aggregate") && holdTheNextQuestionForThePresent.get()) {
+                    lostItsHistory = Thread.currentThread();
+                }
+            }
+
+            @Override
+            public void commandStarted(CommandStartedEvent event) {
+                if (event.getCommandName().equals("ping") && Thread.currentThread() == lostItsHistory && holdTheNextQuestionForThePresent.compareAndSet(true, false)) {
+                    askedForThePresent.countDown();
+                    try {
+                        answerThePresent.await(10, SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+        };
     }
 
     private static NameDefined nameDefined() {

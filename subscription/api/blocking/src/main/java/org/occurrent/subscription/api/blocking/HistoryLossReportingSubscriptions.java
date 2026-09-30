@@ -20,6 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.Checkpoint;
 
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 
 /**
  * A subscription model that restarts a subscription from a new position when the position it had read to is no
@@ -71,10 +72,19 @@ public interface HistoryLossReportingSubscriptions extends SubscriptionModelCapa
          * Called before the subscription restarts from {@code restartedFrom}. A listener that throws makes the model
          * try the restart again later, as it does for any other failure to restart, and ask again for the position
          * to restart from.
+         * <p>
+         * The model asks MongoDB for {@code restartedFrom} before it calls this, and the subscription can be resumed,
+         * or cancelled and subscribed again, while it asks. {@code stillCurrent} returns {@code false} once either has
+         * happened, and a pause alone leaves it {@code true}. A listener that stores {@code restartedFrom} as the
+         * subscription's checkpoint calls it under the same lock as its own resume and cancel of the subscription,
+         * and stores nothing when it returns {@code false}. Otherwise a subscription restarted from that checkpoint
+         * can skip the events the resumed or new subscription had not received yet.
          *
          * @param subscriptionId The subscription that lost its history.
          * @param restartedFrom  The position the subscription restarts from.
+         * @param stillCurrent   Returns {@code false} once the subscription has been resumed or cancelled since it
+         *                       lost its history.
          */
-        void restartingAfterHistoryLoss(String subscriptionId, Checkpoint restartedFrom);
+        void restartingAfterHistoryLoss(String subscriptionId, Checkpoint restartedFrom, BooleanSupplier stillCurrent);
     }
 }

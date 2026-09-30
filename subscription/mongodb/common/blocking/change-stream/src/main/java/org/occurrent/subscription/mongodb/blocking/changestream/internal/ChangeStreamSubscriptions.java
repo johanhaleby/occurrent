@@ -30,6 +30,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.retry.internal.RetryExecution.AttemptNotMade;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
@@ -411,7 +412,7 @@ public final class ChangeStreamSubscriptions {
             } else if (isChangeStreamHistoryLost(e)) {
                 if (restartSubscriptionsOnChangeStreamHistoryLost) {
                     log.warn("There was not enough oplog to resume subscription {}, will restart subscription from current time.", subscriptionId, e);
-                    internalSubscription.movedUnlessReplacedTo(restartPositionAfterHistoryLost(subscriptionId));
+                    internalSubscription.movedUnlessReplacedTo(restartPositionAfterHistoryLost(subscriptionId, internalSubscription));
                     throw e;
                 } else {
                     log.error("There was not enough oplog to resume subscription {}, will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.", subscriptionId, e);
@@ -436,20 +437,15 @@ public final class ChangeStreamSubscriptions {
     }
 
     // Checked before every attempt, a retry included, so no attempt starts once a pause or a cancel has closed the run.
-    // One that has already started can still be running when they return
+    // One that has already started can still be running when they return. The retry ends without telling the
+    // strategy's listeners, since skipping the attempt is no error
     private static Consumer<CloudEvent> attemptWhileOpen(InternalSubscription internalSubscription, Consumer<CloudEvent> action) {
         return cloudEvent -> {
             if (internalSubscription.isIntentionallyClosed()) {
-                throw new ClosedBeforeTheAttempt();
+                throw new AttemptNotMade("The subscription was paused or cancelled before the action was called");
             }
             action.accept(cloudEvent);
         };
-    }
-
-    private static final class ClosedBeforeTheAttempt extends RuntimeException {
-        ClosedBeforeTheAttempt() {
-            super("The subscription was paused or cancelled before the action was called", null, false, false);
-        }
     }
 
     private List<Consumer<Checkpoint>> quietPositionConsumersFor(String subscriptionId) {
@@ -480,14 +476,15 @@ public final class ChangeStreamSubscriptions {
     }
 
     // Tells the listeners the present before restarting from it. A listener that throws fails this attempt and
-    // the retry runs it again. Without an operation time in the reply to ping, restarts from now and tells nobody
-    private StartAt restartPositionAfterHistoryLost(String subscriptionId) {
+    // the retry runs it again. Without an operation time in the reply to ping, restarts from now and tells nobody.
+    // A listener asks the run whether a resume or a cancel came while this asked for the present
+    private StartAt restartPositionAfterHistoryLost(String subscriptionId, InternalSubscription internalSubscription) {
         BsonTimestamp operationTime = currentOperationTime();
         if (operationTime == null) {
             return StartAt.now();
         }
         Checkpoint present = new MongoOperationTimeCheckpoint(operationTime);
-        historyLossListeners.forEach(listener -> listener.restartingAfterHistoryLoss(subscriptionId, present));
+        historyLossListeners.forEach(listener -> listener.restartingAfterHistoryLoss(subscriptionId, present, internalSubscription::isCurrent));
         return StartAt.checkpoint(present);
     }
 
@@ -852,6 +849,8 @@ public final class ChangeStreamSubscriptions {
         private volatile boolean intentionallyClosed = false;
         // Set under this object's lock once a resume has created the next run of the subscription
         private boolean replaced;
+        // Set under this object's lock by a cancel or a shutdown
+        private boolean cancelled;
         // Read and written under this object's lock. The cursor the current attempt delivers from, and the thread
         // running the action or handing over a quiet position right now.
         private @Nullable MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
@@ -902,6 +901,12 @@ public final class ChangeStreamSubscriptions {
         synchronized void stoppedDelivering() {
             delivering = null;
             notifyAll();
+        }
+
+        // False once a resume has created the next run or a cancel has ended the subscription. A pause alone leaves it
+        // true, since the subscription is still on this run until it is resumed
+        synchronized boolean isCurrent() {
+            return !replaced && !cancelled;
         }
 
         synchronized void movedUnlessReplacedTo(StartAt position) {
@@ -972,6 +977,9 @@ public final class ChangeStreamSubscriptions {
         // Unlike a pause, a cancel or a shutdown also stops an outstanding question for the present, since nothing
         // opens after it
         void cancel() {
+            synchronized (this) {
+                cancelled = true;
+            }
             close();
             presentAtSubscribe.cancel();
         }
