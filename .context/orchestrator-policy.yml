@@ -1,0 +1,12 @@
+schema_version: 1
+repository: johanhaleby/occurrent
+updated_at: 2026-09-30T14:45:00+02:00
+updated_by: Claude Code session review-scope-article-eval-389a7d
+
+oversight:
+  hold_merge: never
+  colleague_review: never
+  provenance:
+    granted_by: Johan Haleby
+    granted_at: 2026-09-30T13:30:00+02:00
+    source: "answer in Claude Code session review-scope-article-eval-389a7d while planning the oversight rules: occurrent should not hold pull requests the way core does, and that belongs in the tracked policy file"
