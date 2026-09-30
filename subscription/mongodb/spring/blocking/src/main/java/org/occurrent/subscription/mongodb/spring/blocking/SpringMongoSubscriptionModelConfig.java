@@ -100,8 +100,9 @@ public class SpringMongoSubscriptionModelConfig {
     /**
      * Specify the executor to use for this subscription model. The {@link SpringMongoSubscriptionModel} reads the change stream of each subscription on a thread from this executor,
      * so it needs a thread per subscription. A pause or a stop returns without waiting for a read that is waiting on the server, so the thread of a paused subscription can stay
-     * busy for up to {@link #maxAwaitTime(Duration)} after it returns, and for as long as an action still runs once the pause has stopped waiting for it. A start right after a
-     * stop, or a pause followed at once by a resume of many subscriptions, can therefore need up to twice as many threads as you have subscriptions until those reads return.
+     * busy for up to {@link #maxAwaitTime(Duration)} after it returns, and for as long as an action still runs once the pause has stopped waiting for it. So the model needs a thread
+     * for each running subscription, and one more for each closed run that is still reading or still running its action. Every pause and resume of a subscription, and every
+     * stop and start of the model, can add such a run, so no fixed number of threads is always enough.
      * When an executor with a fixed number of threads has no thread free for a resume or a start, the subscription counts as running and is handed to the executor again, 100 ms
      * and then up to 2 seconds apart, until a thread is free, the subscription is paused or cancelled, or the model shuts down. So a smaller executor delays the resume rather
      * than leaving the subscription paused. A subscribe the executor has no thread for throws. By default each model creates a {@link ThreadPoolTaskExecutor} with queue size

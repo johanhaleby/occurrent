@@ -50,6 +50,13 @@ action cannot return while it waits.
   at most. A document the read returns after the close is left to the resume. A retry that finds the run closed
   ends without calling the `RetryStrategy`'s `onError`, `onRetryableError` or `onAfterRetry` for the attempt it
   skipped, since the action did not fail.
+- `DurableSubscriptionModel` reads the version to write an event's checkpoint with before it calls your action, and
+  that read can outlast a pause or a cancel. Both models therefore implement the new `DeliveryCheckingSubscriptions`,
+  and `DurableSubscriptionModel` calls its `checkStillDelivering()` between the read and your action. The loop keeps
+  the run that called the action in a thread-local while the action runs, and the call throws once that run is
+  closed. The loop treats that like the check before the attempt, so your action doesn't start and the position
+  doesn't move past the event. A wrapped model that doesn't implement it, or a call from a thread the model didn't
+  call the action on, gets no check.
 - `stop()` closes every subscription before it waits, and waits one second for all of them together.
 - The pause is recorded before the wait, and the wait runs after the model has let go of its monitor. So a call for
   another subscription, a pause, a resume, a cancel or `subscriptionIds()`, doesn't wait for the paused subscription's action. The
@@ -66,9 +73,12 @@ hands the run to the executor again, 100 ms and then up to 2 seconds apart, unti
 cancel closes the run, or the model or the executor shuts down. A warning is logged on the first rejection and on
 every fifth try after it. A resume can come from `start(true)` or from a lease handover, and nothing calls either
 again, so a rejection thrown to the caller would leave the subscription paused for good. A `subscribe(..)` the executor
-rejects still throws, since its caller gets the exception and the id is not registered. A start right after a stop,
-or a pause followed at once by a resume of many subscriptions, can need up to twice as many threads as there are
-subscriptions until the reads of the closed runs return, and an executor with fewer threads delays those resumes.
+rejects still throws, since its caller gets the exception and the id is not registered. A closed run keeps its thread
+until its read returns, which takes up to `maxAwaitTime`, and for as long as an action that outlived the pause still
+runs. Every pause and resume, and every stop and start, can add such a run, so no multiple of the number of
+subscriptions is always enough. An executor with too few threads delays a resume, and the subscription is not left
+paused. An executor the model can't ask whether it is shut down counts as running, so a resume it rejects after it
+was shut down is handed to it again until the subscription is paused or cancelled or the model shuts down.
 
 **A run that has been closed never changes the position a later run of the subscription opens at, and never
 stores a checkpoint that a later run, or a later subscribe of the same id, starts from, with one exception in
@@ -100,8 +110,8 @@ and a resume or a start makes a new run of the same subscription.
   `DurableSubscriptionModel` action that returns that late still saves the checkpoint of its event, and a quiet
   position whose save starts that late is still saved. The model can't tell which run the action or the save belongs
   to. Every event up to either position has had its action return, so a subscription that restarts from one can
-  receive events again but skips none. Closing it needs the wrapped model to give the checkpoint write for an event
-  the same `BooleanSupplier`, which is a change to the public subscribe API.
+  receive events again but skips none. Closing it needs the wrapped model to tell the checkpoint write for an event
+  which run it belongs to.
 
 **A model tells the quiet position to a listener through the new `QuietPositionReportingSubscriptions`.** The model
 asks each listener before a read whether it wants the position, and the listener answers with a consumer or with
@@ -205,7 +215,8 @@ These change for `SpringMongoSubscriptionModel`, and each was a defect:
 - The executor the model makes by default, or for `useVirtualThreads()`, is made per model and shut down with it.
 - A subscription at the present made while the model is stopped receives the events written before `start()`.
 - No attempt of the action starts after `pauseSubscription(..)` or `cancelSubscription(..)` has returned, a retry
-  included, and an event the change stream has already returned by then is left to the resume. `pauseSubscription(..)`
+  included, and an event the change stream has already returned by then is left to the resume. Through a
+  `DurableSubscriptionModel` the same holds for your action. `pauseSubscription(..)`
   also waits up to a second for an action that is running, and `stop()` one second for all of them. Before, they did
   not wait for the action, and an event could be delivered after they had returned.
 
@@ -229,4 +240,6 @@ also evaluated it right after `subscribe(..)`, to find out whether it was the pr
 evaluating the supplier, and the supplier uses the recorded present when it answers `StartAt.now()`.
 
 A subscription model of your own that a `DurableSubscriptionModel` wraps gets no quiet position saved unless it
-implements `QuietPositionReportingSubscriptions`.
+implements `QuietPositionReportingSubscriptions`. Through such a model your action can still start after a pause or a
+cancel has returned, while `DurableSubscriptionModel` reads the write version, unless the model implements
+`DeliveryCheckingSubscriptions`.

@@ -1354,7 +1354,8 @@ In 0.33.0, `pauseSubscription(..)` and `stop()` did not wait for an action that 
 the action an event the change stream had already read after `pauseSubscription(..)` or `cancelSubscription(..)` had
 returned. Now no attempt of the action starts once they have returned, a retry included, and that event is delivered
 after the resume instead. The `RetryStrategy`'s `onError` isn't called for a retry that was skipped this way, since
-the action didn't fail.
+the action didn't fail. The same holds for the action you pass to a `DurableSubscriptionModel`, which checks again
+after it has read the version to write the checkpoint with.
 
 `pauseSubscription(..)` waits up to a second for an action that is running, and `stop()` waits one second for all of
 them together. An action that takes longer can still be running when they return. A pause called from inside the
@@ -1363,8 +1364,10 @@ interrupt is set on the thread again. While a pause waits, a call for another su
 
 Neither waits for a read that is waiting on the server, in `SpringMongoSubscriptionModel` or in
 `NativeMongoSubscriptionModel`, so the thread of a paused subscription can stay busy for up to `maxAwaitTime` after
-they return. So a `start(true)` right after `stop()`, or a pause followed at once by a resume of many subscriptions,
-can need up to twice as many threads as you have subscriptions until those reads return.
+they return, and for as long as an action still runs once the pause has stopped waiting for it. So the model needs a
+thread for each running subscription, and one more for each closed run that is still reading or still running its
+action. Every pause and resume, and every `stop()` and `start(true)`, can add such a run, so no fixed number of threads
+is always enough.
 
 If you pass an executor with a fixed number of threads and it has no thread free for a resume, the model hands the
 subscription to it again, 100 ms and then up to 2 seconds apart, until it takes it, the subscription is paused or
@@ -1385,6 +1388,11 @@ the position is saved whatever the predicate is.
 So with a predicate that declines some events, such as `EveryN` with `n` above 1, a subscription that goes quiet right
 after a declined event gets no position saved until the predicate stores one. If it stays quiet for longer than the
 oplog window, a restart still ends in lost history.
+
+If you widen the filter of a durable subscription and keep its id, it now resumes from the last quiet position it
+saved, so the events before that position that the old filter didn't match are not delivered. Before, it resumed after
+the last event the old filter matched, and received them. When you widen a filter, use a new subscription id, or
+subscribe once with a `StartAt` for the position to start from.
 
 Change the interval with `saveQuietPositionEvery(Duration)` on `DurableSubscriptionModelConfig`, and keep it well
 below the oplog window. `neverSaveQuietPosition()` turns the save off, and the stored checkpoint of a subscription
