@@ -65,6 +65,22 @@ class CompetingConsumerOverAUserWrittenModelTest {
     }
 
     @Test
+    void a_subscription_made_while_stopped_that_loses_its_lease_while_the_wrapped_model_subscribes_it_runs_once_this_node_wins_it_back() {
+        UserWrittenModel delegate = new UserWrittenModel(true, false, false);
+        LeaseRecordingStrategy strategy = new LeaseRecordingStrategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        model.stop();
+        delegate.whileSubscribing = () -> strategy.holders.remove("s1");
+
+        model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), __ -> {});
+        assertThat(delegate.isRunning("s1")).as("s1 in the wrapped model once another node took its lease").isFalse();
+        strategy.grant("s1");
+
+        assertThat(delegate.isRunning("s1")).as("s1 in the wrapped model once this node wins its lease back").isTrue();
+        assertThat(strategy.holders).as("leases held once this node wins the lease back").containsExactly("s1");
+    }
+
+    @Test
     void a_subscription_made_while_stopped_after_a_resume_gets_an_event_written_before_start_true() {
         UserWrittenModel delegate = new UserWrittenModel(false, false, false);
         LeaseRecordingStrategy strategy = new LeaseRecordingStrategy();
@@ -173,6 +189,8 @@ class CompetingConsumerOverAUserWrittenModelTest {
         private final boolean cannotPause;
         private boolean stopThrowsOnce;
         private boolean running;
+        private Runnable whileSubscribing = () -> {
+        };
         private final Set<String> runningIds = new HashSet<>();
         private final Set<String> pausedIds = new HashSet<>();
         private final List<String> log = new ArrayList<>();
@@ -194,6 +212,7 @@ class CompetingConsumerOverAUserWrittenModelTest {
             (running ? runningIds : pausedIds).add(subscriptionId);
             actions.put(subscriptionId, action);
             positions.put(subscriptionId, log.size());
+            whileSubscribing.run();
             return new UserWrittenSubscription(subscriptionId);
         }
 
@@ -284,16 +303,26 @@ class CompetingConsumerOverAUserWrittenModelTest {
     // Grants every lease asked for and records who holds one
     private static final class LeaseRecordingStrategy implements CompetingConsumerStrategy {
         private final Set<String> holders = new HashSet<>();
+        private final Set<String> registered = new HashSet<>();
         private final List<CompetingConsumerListener> listeners = new ArrayList<>();
+
+        // A registered consumer wins the lease, and nothing is granted to one that is not registered
+        private void grant(String subscriptionId) {
+            if (registered.contains(subscriptionId) && holders.add(subscriptionId)) {
+                List.copyOf(listeners).forEach(listener -> listener.onConsumeGranted(subscriptionId, "node"));
+            }
+        }
 
         @Override
         public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
+            registered.add(subscriptionId);
             holders.add(subscriptionId);
             return true;
         }
 
         @Override
         public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
+            registered.remove(subscriptionId);
             holders.remove(subscriptionId);
         }
 

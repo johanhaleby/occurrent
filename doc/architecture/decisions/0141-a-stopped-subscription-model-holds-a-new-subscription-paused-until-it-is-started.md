@@ -67,9 +67,11 @@ winning the lease resumes it in the wrapped model.
 the way it did in 0.33.0, the one case where a subscription made while the node is stopped delivers events before
 `start()` without being resumed.**
 The node competes for the lease straight away. When it wins, it subscribes the subscription in the running wrapped
-model and records it as running, so it delivers events before `start()`, and `start()` finds it started. A lease the
-node loses meanwhile pauses it, as it pauses any running subscription. One that loses the lease in `subscribe(..)` waits
-for `start()`. Waiting for `start()` also after winning would start it where the wrapped model starts a subscription at
+model and records it as running, so it delivers events before `start()`, and `start()` finds it started. From then on
+it competes as a subscription the user resumed since `stop()` does. A lease the node loses pauses it and keeps it
+competing, and winning the lease back resumes it. One that loses the lease in `subscribe(..)`, or one the wrapped model
+does not run after all, gives up its registration and waits for `start()`, since a stopped node competes for nothing it
+does not deliver. Waiting for `start()` also after winning would start it where the wrapped model starts a subscription at
 that moment, and lose every event written in between. Losing no event ranks above what `stop()` promises, so the rule
 for this case is that for any wrapped model, nothing that works in 0.33.0 throws or delivers fewer events, and nothing is
 delivered without the lease.
@@ -81,14 +83,23 @@ a node delivers only while it holds the lease. A subscription the wrapped model 
 own `stop()` threw, `stop()` throws an `IllegalStateException` with that failure as its cause, which names the
 subscriptions it paused and says that `start(true)` resumes them while `start(false)` keeps them paused.
 
-**`subscribe(..)`, `stop()`, `start(..)`, `cancelSubscription(..)` and `shutdown()` run one at a time on a lock of their
-own, and a lease callback does not wait for that lock.** `subscribe(..)` holds it while the wrapped model subscribes, so
-no `stop()` runs between winning the lease and subscribing. Such a `stop()` would find nothing to stop, and the
-subscription would run with its lease after `stop()` returned. `subscribe(..)` does not hold the model's monitor while
-the wrapped model subscribes, which can take as long as opening a change stream, so a lease the node loses for another
-subscription pauses that subscription without waiting. A lease callback for the subscription being subscribed finds
+**`subscribe(..)` registers with the lease strategy and subscribes in the wrapped model without holding anything that
+`stop()`, `start(..)`, `cancelSubscription(..)` or `shutdown()` waits for, and it records the subscription only when none
+of them ran in the meantime.** The MongoDB lease strategies retry a registration for as long as MongoDB cannot be
+reached, and subscribing in the wrapped model can take as long as opening a change stream. A lifecycle call that waited
+for either would hang for as long, `shutdown()` included. Each of the four calls counts as a new lifecycle state, and
+`subscribe(..)` records what it made under the model's monitor only while the state it made it for still holds.
+Otherwise it makes the subscription again for the new state. After a `stop()` it pauses what it made in the wrapped
+model and gives up its registration, and after a `start(..)` it competes for the lease. `shutdown()` ends a registration
+that is retrying, and a `subscribe(..)` that `shutdown()` overtook pauses what it made, gives up its registration and
+throws `IllegalStateException`. So once `subscribe(..)` has returned, a subscription that a `stop()` overtook is paused
+in the wrapped model and holds no lease.
+
+A lease callback does not wait for `subscribe(..)` either. A callback for the subscription being subscribed finds
 nothing recorded yet and does nothing. So once the wrapped model has it, `subscribe(..)` asks the strategy again, and
-pauses it when the lease is gone, or starts it when a grant came in the meantime.
+pauses it when the lease is gone, or starts it when a grant came in the meantime. `start(..)` still registers under the
+monitor, as it does in 0.33.0, so a `shutdown()` waits for a `start(..)` whose registration retries while MongoDB cannot
+be reached.
 
 **The blocking catch-up model keeps a replay it cannot run, instead of ending it.** That covers a replay subscribed
 while the model is stopped and one that `stop()` cuts short. The model keeps the replay together with the handle its

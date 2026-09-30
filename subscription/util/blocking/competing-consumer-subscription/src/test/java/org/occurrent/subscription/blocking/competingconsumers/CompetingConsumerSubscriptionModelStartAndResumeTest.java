@@ -321,6 +321,21 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     }
 
     @Test
+    void a_subscription_that_lost_its_lease_before_a_stop_competes_again_after_start_false_and_runs_once_this_node_wins_it() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        strategy.loseTheLease("x");
+        assertThat(model.isRunning("x")).as("x after another node took its lease").isFalse();
+        model.stop();
+
+        model.start(false);
+        strategy.grant("x");
+
+        assertThat(strategy.calls).as("calls to the strategy, since nothing but the lease paused x").endsWith("register x", "grant x");
+        assertThat(delegate.running).as("x once this node wins its lease back").containsExactly("x");
+    }
+
+    @Test
     void a_subscription_the_user_resumes_while_the_model_is_stopped_runs_once_this_node_wins_its_lease_later() {
         strategy.grantOnRegister = false;
         subscribe("x");
@@ -596,6 +611,12 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         void grantWithoutTheLease(String subscriptionId) {
             calls.add("stale grant " + subscriptionId);
             listeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, SUBSCRIBER_ID));
+        }
+
+        void loseTheLease(String subscriptionId) {
+            calls.add("lost " + subscriptionId);
+            holders.remove(subscriptionId);
+            listeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, SUBSCRIBER_ID));
         }
 
         void grant(String subscriptionId) {
