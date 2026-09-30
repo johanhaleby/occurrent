@@ -1348,14 +1348,19 @@ with `autoStartup(false)`, now starts at the operation time MongoDB answers with
 it started where the change stream was when `start()` opened it, so the events written in between were skipped. They
 are delivered now, which is more than the action received before.
 
-### A pause waits for an action that is running, and no new one starts after it
+### A pause waits for an action that is running, and the model checks before each attempt
 
 In 0.33.0, `pauseSubscription(..)` and `stop()` did not wait for an action that was running, and the model could hand
 the action an event the change stream had already read after `pauseSubscription(..)` or `cancelSubscription(..)` had
-returned. Now no attempt of the action starts once they have returned, a retry included, and that event is delivered
-after the resume instead. The `RetryStrategy`'s `onError` isn't called for a retry that was skipped this way, since
-the action didn't fail. The same holds for the action you pass to a `DurableSubscriptionModel`, which checks again
-after it has read the version to write the checkpoint with.
+returned. Now the model checks right before each attempt of the action, a retry included, and makes no attempt once
+they have closed the subscription, so that event is delivered after the resume instead. A cancel doesn't wait for an
+attempt that passed the check, so that attempt can still start just after `cancelSubscription(..)` has returned. The
+`RetryStrategy`'s `onError` isn't called for a retry that was skipped this way, since the action didn't fail.
+
+A `DurableSubscriptionModel` reads the version to write the checkpoint with after that check and before it calls your
+action. So through it your action can still be called once after `cancelSubscription(..)` has returned, or after
+`pauseSubscription(..)` has stopped waiting for that read. No event is lost this way, and after a cancel the checkpoint
+of that call is not saved.
 
 `pauseSubscription(..)` waits up to a second for an action that is running, and `stop()` waits one second for all of
 them together. An action that takes longer can still be running when they return. A pause called from inside the

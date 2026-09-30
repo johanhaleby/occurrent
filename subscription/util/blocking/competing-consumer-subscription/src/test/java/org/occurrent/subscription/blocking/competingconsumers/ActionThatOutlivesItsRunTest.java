@@ -331,7 +331,7 @@ class ActionThatOutlivesItsRunTest {
 
     @ParameterizedTest
     @EnumSource(Model.class)
-    void the_action_of_a_durable_subscription_does_not_start_once_a_cancel_has_returned_during_its_read_of_the_write_version(Model model) throws InterruptedException {
+    void a_durable_subscription_writes_no_checkpoint_for_an_action_it_calls_after_a_cancel_returned_during_its_read_of_the_write_version(Model model) throws InterruptedException {
         // Given a durable subscription that is cancelled while it reads the version to write the checkpoint for an event with
         CountDownLatch readingTheWriteVersion = new CountDownLatch(1);
         CountDownLatch answerTheWriteVersion = new CountDownLatch(1);
@@ -347,34 +347,9 @@ class ActionThatOutlivesItsRunTest {
         // When
         answerTheWriteVersion.countDown();
 
-        // Then
-        await().during(Duration.ofMillis(500)).atMost(2, SECONDS).untilAsserted(() -> assertThat(handled).as("events handled after cancelSubscription(..) returned").isEmpty());
-    }
-
-    @ParameterizedTest
-    @EnumSource(Model.class)
-    void the_action_of_a_durable_subscription_does_not_start_once_a_pause_has_returned_during_its_read_of_the_write_version(Model model) throws InterruptedException {
-        // Given a durable subscription whose read of the version to write the checkpoint for an event with outlasts the
-        // second a pause waits
-        CountDownLatch readingTheWriteVersion = new CountDownLatch(1);
-        CountDownLatch answerTheWriteVersion = new CountDownLatch(1);
-        DurableSubscriptionModel durable = new DurableSubscriptionModel(model(model), storage, new DurableSubscriptionModelConfig(everyEvent()),
-                writeVersionHeldOnce(readingTheWriteVersion, answerTheWriteVersion));
-        started.addFirst(durable);
-        CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
-        durable.subscribe("paused", null, StartAt.now(), handled::add).waitUntilStarted(Duration.ofSeconds(10));
-        NameDefined first = nameDefined();
-        eventStore.write("first", serialize(first));
-        assertThat(readingTheWriteVersion.await(10, SECONDS)).isTrue();
-        durable.pauseSubscription("paused");
-
-        // When
-        answerTheWriteVersion.countDown();
-
-        // Then the event is handled once the subscription is resumed, and not before
-        await().during(Duration.ofMillis(500)).atMost(2, SECONDS).untilAsserted(() -> assertThat(handled).as("events handled after pauseSubscription(..) returned").isEmpty());
-        durable.resumeSubscription("paused").waitUntilStarted(Duration.ofSeconds(10));
-        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).as("events handled after the resume").extracting(CloudEvent::getId).containsExactly(first.eventId()));
+        // Then the action can still be called once, and its checkpoint is not saved
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).as("events handled after cancelSubscription(..) returned").hasSize(1));
+        await().during(Duration.ofMillis(500)).atMost(2, SECONDS).untilAsserted(() -> assertThat(storage.read("cancelled")).as("checkpoint after the cancel").isNull());
     }
 
     @ParameterizedTest

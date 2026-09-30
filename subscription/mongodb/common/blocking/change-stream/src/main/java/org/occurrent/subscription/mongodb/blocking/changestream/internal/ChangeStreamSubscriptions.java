@@ -162,8 +162,6 @@ public final class ChangeStreamSubscriptions {
     private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions = new ConcurrentHashMap<>();
     private final List<HistoryLossListener> historyLossListeners = new CopyOnWriteArrayList<>();
     private final List<QuietPositionListener> quietPositionListeners = new CopyOnWriteArrayList<>();
-    // Set on the delivering thread only while the action runs
-    private final ThreadLocal<InternalSubscription> runCallingTheAction = new ThreadLocal<>();
     private final TimeRepresentation timeRepresentation;
     private final RetryStrategy retryStrategy;
     private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
@@ -451,34 +449,17 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
-    // Checked before every attempt, a retry included, so no attempt starts once a pause or a cancel has closed the run.
-    // One that has already started can still be running when they return. The retry ends without telling the
+    // Checked before every attempt, a retry included, so no attempt starts once this has read the run closed. Nothing
+    // locks the check and the call together, so an attempt can still start just after a cancel returns, and one that
+    // has already started can still be running when a pause or a cancel returns. The retry ends without telling the
     // strategy's listeners, since skipping the attempt is no error
-    private Consumer<CloudEvent> attemptWhileOpen(InternalSubscription internalSubscription, Consumer<CloudEvent> action) {
+    private static Consumer<CloudEvent> attemptWhileOpen(InternalSubscription internalSubscription, Consumer<CloudEvent> action) {
         return cloudEvent -> {
             if (internalSubscription.isIntentionallyClosed()) {
                 throw new AttemptNotMade("The subscription was paused or cancelled before the action was called");
             }
-            runCallingTheAction.set(internalSubscription);
-            try {
-                action.accept(cloudEvent);
-            } finally {
-                runCallingTheAction.remove();
-            }
+            action.accept(cloudEvent);
         };
-    }
-
-    /**
-     * Throws when called from inside an action this class called and a pause, a cancel or a stop has closed the run
-     * that called it since, so a model that wraps the action can check again after its own reads. The exception ends
-     * the attempt like the check before it, without another attempt and without moving the position past the event.
-     * Returns at once otherwise.
-     */
-    public void checkStillDelivering() {
-        InternalSubscription run = runCallingTheAction.get();
-        if (run != null && run.isIntentionallyClosed()) {
-            throw new AttemptNotMade("The subscription was paused or cancelled before the wrapped action was called");
-        }
     }
 
     private List<Consumer<Checkpoint>> quietPositionConsumersFor(String subscriptionId) {
