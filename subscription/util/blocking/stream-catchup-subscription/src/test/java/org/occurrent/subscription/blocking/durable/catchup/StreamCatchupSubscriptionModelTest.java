@@ -46,7 +46,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
@@ -397,10 +396,10 @@ class StreamCatchupSubscriptionModelTest {
         AtomicBoolean runningMarkedBeforeCatchupRuns = new AtomicBoolean(false);
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100)) {
             @Override
-            protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup, boolean holdPaused) {
-                return super.startCatchupAsync(subscriptionId, () -> {
+            protected Future<Subscription> startCatchupAsync(String subscriptionId, CatchupReplay catchup, boolean holdPaused) {
+                return super.startCatchupAsync(subscriptionId, lastStored -> {
                     runningMarkedBeforeCatchupRuns.set(runningCatchupSubscriptions.containsKey(subscriptionId));
-                    return catchup.call();
+                    return catchup.replayFrom(lastStored);
                 }, holdPaused);
             }
         };
@@ -850,6 +849,90 @@ class StreamCatchupSubscriptionModelTest {
         Throwable thrown = catchThrowable(() -> subscription.isCatchingUp(null));
 
         assertThat(thrown).isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void a_shutdown_during_the_replay_stores_no_position_past_the_history_so_a_restart_delivers_all_of_it() throws Exception {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        List<NameDefined> history = Stream.of("event0", "event1", "event2", "event3", "event4").map(this::nameDefined).toList();
+        history.forEach(e -> write(eventStore, e));
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        StartAt fromTheStoredPositionOrTheBeginning = StartAt.dynamic(__ -> storage.exists("subscription") ? StartAt.subscriptionModelDefault() : StartAtTime.beginningOfTime());
+        CountDownLatch handlingFirstEvent = new CountDownLatch(1);
+        CountDownLatch releaseFirstEvent = new CountDownLatch(1);
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel first = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1000)));
+        first.subscribe("subscription", fromTheStoredPositionOrTheBeginning, e -> {
+            received.add(e);
+            if (received.size() == 1) {
+                handlingFirstEvent.countDown();
+                awaitLatch(releaseFirstEvent);
+            }
+        });
+        awaitLatch(handlingFirstEvent);
+
+        first.shutdown();
+        releaseFirstEvent.countDown();
+        await().atMost(Duration.ofSeconds(5)).until(() -> !first.isCatchingUp("subscription"));
+
+        assertThat(storage.read("subscription")).as("position stored by a replay the shutdown cut short").isNull();
+        InMemorySubscriptionModel restartedLive = new InMemorySubscriptionModel();
+        try {
+            CopyOnWriteArrayList<CloudEvent> afterRestart = new CopyOnWriteArrayList<>();
+            StreamCatchupSubscriptionModel second = new StreamCatchupSubscriptionModel(new CheckpointAwareInMemorySubscriptionModel(restartedLive), eventStore,
+                    new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1000)));
+            second.subscribe("subscription", fromTheStoredPositionOrTheBeginning, afterRestart::add);
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(Stream.concat(received.stream(), afterRestart.stream()).map(CloudEvent::getId).distinct())
+                    .as("history delivered across the shutdown and the restart")
+                    .containsExactlyInAnyOrderElementsOf(history.stream().map(DomainEvent::eventId).toList()));
+        } finally {
+            restartedLive.shutdown();
+        }
+    }
+
+    @Test
+    void a_replay_that_stop_cut_short_runs_again_from_the_last_position_it_stored_so_the_stored_position_never_moves_back() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        List<NameDefined> history = Stream.of("event0", "event1", "event2", "event3", "event4", "event5").map(this::nameDefined).toList();
+        history.forEach(e -> write(eventStore, e));
+        CopyOnWriteArrayList<Long> stored = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String id, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                // The wrapped model's own position, stored once the replay hands over, is not a position in the history
+                if (GlobalCheckpoint.isGlobalCheckpoint(checkpoint)) {
+                    stored.add(GlobalCheckpoint.positionOf(checkpoint));
+                }
+                return super.save(id, checkpoint, condition);
+            }
+        };
+        CountDownLatch handlingThirdEvent = new CountDownLatch(1);
+        CountDownLatch releaseThirdEvent = new CountDownLatch(1);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel model = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)).dcbCatchupPositionWindowSize(2));
+        model.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), e -> {
+            received.add(e.getId());
+            if (received.size() == 3) {
+                handlingThirdEvent.countDown();
+                awaitLatch(releaseThirdEvent);
+            }
+        });
+        awaitLatch(handlingThirdEvent);
+
+        model.stop();
+        model.start(true);
+        releaseThirdEvent.countDown();
+
+        List<String> historyIds = history.stream().map(DomainEvent::eventId).toList();
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).containsAll(historyIds));
+        await().atMost(Duration.ofSeconds(5)).until(() -> !model.isCatchingUp("subscription"));
+        assertAll(
+                () -> assertThat(stored).as("positions stored during the replay, in the order they were stored").isSorted(),
+                () -> assertThat(received.subList(0, 3)).as("delivered before the stop").containsExactlyElementsOf(historyIds.subList(0, 3)),
+                () -> assertThat(received).as("delivered in all").containsExactlyElementsOf(historyIds)
+        );
     }
 
     private static void awaitLatch(CountDownLatch latch) {

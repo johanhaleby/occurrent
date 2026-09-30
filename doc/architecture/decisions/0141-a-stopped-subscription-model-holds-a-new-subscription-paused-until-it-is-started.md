@@ -51,7 +51,8 @@ Where such a subscription starts is up to each model:
 
 **`SubscriptionModel.subscribePaused(..)` holds a new subscription paused the same way, whether or not the model
 runs.** `SpringMongoSubscriptionModel`, `NativeMongoSubscriptionModel`, `InMemorySubscriptionModel`,
-`DurableSubscriptionModel` and the blocking catch-up models implement it. The default implementation calls
+`DurableSubscriptionModel`, `ManualStartSubscriptionModel`, the blocking push, synchronous and catch-up-then-push
+models, and the blocking catch-up models implement it. The default implementation calls
 `subscribe(..)` while the model is stopped and throws `UnsupportedOperationException` while it runs, since pausing a
 subscription after subscribing it could deliver an event first.
 
@@ -60,20 +61,31 @@ subscription after subscribing it could deliver an event first.
 then holds it paused also when a `resumeSubscription(..)` since `stop()` has started it again, or when its own `stop()`
 threw. A lease won while stopped would lock every other node out of a subscription this node does not serve. `start()`
 makes it compete for the lease whether or not it resumes subscriptions automatically, since nobody paused it, and
-winning the lease resumes it in the wrapped model.
+winning the lease resumes it in the wrapped model. A running wrapped model that refuses `subscribePaused(..)` with
+`UnsupportedOperationException` gets the subscription only once the node wins the lease, the same as a subscription
+that loses the lease in `subscribe(..)`. Subscribing it and pausing it straight after would start it where
+`subscribe(..)` starts it, but an event the wrapped model hands over before the pause would be delivered without the
+lease, on a node the user has stopped.
+
+**`CompetingConsumerSubscriptionModel.stop()` pauses a subscription in the wrapped model when that model still runs it
+before it gives up the lease.** A wrapped model that threw from its own `stop()` can still run every subscription, and
+a node delivers only while it holds the lease. A subscription the wrapped model still runs after
+`pauseSubscription(..)` has returned keeps its lease and stays running, and `stop()` throws.
 
 **The blocking catch-up model keeps a replay it cannot run, instead of ending it.** That covers a replay subscribed
 while the model is stopped and one that `stop()` cuts short. The model keeps the replay together with the handle its
-subscriber already holds, stores no further position for it, and counts the subscription as paused. `start(true)` runs every
-kept replay again from where it started, and `resumeSubscription(id)` runs that one, first starting the model without
+subscriber already holds, and counts the subscription as paused. An event whose action completed before the stop may
+still have its position stored, and nothing past it is. `start(true)` runs every kept replay again from the last
+position it stored, or from where it started when it stored none, and `resumeSubscription(id)` runs that one, first starting the model without
 resuming anything else when it is stopped. `start(false)` does not run them, the same way the live model it wraps
 does not resume its paused subscriptions on `start(false)`. Cancelling the subscription or shutting the model down
-drops the replay, and `waitUntilStarted()` on its handle then returns `false`.
+drops the replay, and `waitUntilStarted()` on its handle then returns `false`. Neither stores the present as the
+position of a replay it cut short, since that position lies past the history the replay has not read.
 
 ## Consequences
 
-A replay that `stop()` cut short runs again from the position it started at when the subscription was made, so the
-events it delivered before the stop are delivered again.
+A replay that `stop()` cut short runs again from the last position it stored, so the events it delivered after that
+position are delivered again, and the stored position never moves back.
 
 The blocking catch-up model runs a kept replay again only on `start(true)` or a resume, where the reactor catch-up
 models in ADR 98 run it on any `start(..)`.
@@ -86,4 +98,6 @@ records the position in `subscribe(..)`.
 A subscription model of your own that you wrap in a `CompetingConsumerSubscriptionModel` has to hold a subscription
 made while it is stopped paused. One that delivers it straight away delivers it on a node that holds no lease for it.
 Unless it implements `subscribePaused(..)`, a subscription made while the competing consumer model is stopped and the
-wrapped model runs is refused with `UnsupportedOperationException`.
+wrapped model runs reaches your model only once the node wins the lease, and starts where your model starts a
+subscription at that moment. A model whose subscription still runs after `pauseSubscription(..)` has returned makes
+`stop()` throw, and the node keeps that subscription's lease.

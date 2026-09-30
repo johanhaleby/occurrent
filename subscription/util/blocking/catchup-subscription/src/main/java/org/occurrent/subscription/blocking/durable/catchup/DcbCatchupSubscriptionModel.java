@@ -118,7 +118,10 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             return subscribeLiveWithoutCatchup(subscriptionId, filter, firstStartAt, action, holdPaused);
         }
 
-        Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId, () -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt), holdPaused);
+        // A replay that stop() cut short runs again from the last position it stored, as a restart would, so the
+        // stored position does not move back
+        Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId,
+                lastStored -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, lastStored == null ? firstStartAt : StartAt.checkpoint(lastStored)), holdPaused);
         return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
     }
 
@@ -229,17 +232,9 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
             final Subscription subscription;
             if (subscriptionsWasCancelledOrShutdown) {
-                // Same fix as the blocking stream side. Priming startAtToUse is skipped for an explicit cancellation of
-                // this exact id, since its get() call saves globalCheckpoint as a side effect, which would recreate the
-                // position cancelSubscription's own deletePositionFromStorage call just deleted. Skipped for a replay
-                // a stop() parked too, which runs again from where it started.
-                if (!wasCancelled() && !wasParked()) {
-                    doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                        if (!cfg.storage().exists(subscriptionId)) {
-                            startAtToUse.get(generateSubscriptionModelContext());
-                        }
-                    });
-                }
+                // startAtToUse is not resolved here, since resolving it stores the live position, which lies past the
+                // history a cancel, a stop or a shutdown kept this replay from reading. A restart would then skip that
+                // history, and a cancel would get back the position it deleted.
                 subscription = new CancelledSubscription(subscriptionId);
             } else {
                 subscription = startLiveDcbSubscription(subscriptionId, filter, startAtToUse, action, catchupPhaseCache);
@@ -268,13 +263,13 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             takeWhile
                     .peek(action)
                     // Rechecked here, not just by takeWhile before action ran: see the blocking stream catch-up's
-                    // identical reasoning, action can outlast this attempt's ownership. Identity only, not
-                    // shouldKeepReplaying, for the same reason: a stop or shutdown this event's own action
-                    // triggered must not suppress persisting the position it just reached.
+                    // identical reasoning, action can outlast this attempt's ownership. Not shouldKeepReplaying, for
+                    // the same reason. The action has completed, so a stop or a shutdown does not keep its position
+                    // from being stored, and a replay that runs again after a stop starts from there.
                     .filter(e -> isSafeToPersistFor(subscriptionId))
                     .filter(persistDuringCatchup)
                     .forEach(e -> doIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class,
-                            cfg -> cfg.storage().save(subscriptionId, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e)), writeConditionFor(cfg, subscriptionId))));
+                            cfg -> saveCatchupCheckpoint(subscriptionId, cfg, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e)))));
         }
     }
 

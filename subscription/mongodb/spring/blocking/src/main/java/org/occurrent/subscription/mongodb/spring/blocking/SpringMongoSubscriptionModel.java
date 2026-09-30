@@ -295,6 +295,12 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     public synchronized void cancelSubscription(String subscriptionId) {
         logDebug("Cancelling subscription for {}", subscriptionId);
         InternalSubscription subscription = runningSubscriptions.remove(subscriptionId);
+        if (subscription == null) {
+            // A paused one too, or its id could never be subscribed again and a resume or start(true) would deliver to
+            // it. Removing it from the container keeps a change stream registered while the container was stopped
+            // from opening once the container starts.
+            subscription = pausedSubscriptions.remove(subscriptionId);
+        }
         stoppedRestarting.remove(subscriptionId);
         if (subscription == null) {
             logDebug("Subscription {} not found when cancelling", subscriptionId);

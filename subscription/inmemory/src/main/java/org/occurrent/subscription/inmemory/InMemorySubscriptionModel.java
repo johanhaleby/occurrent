@@ -188,7 +188,12 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
 
     @Override
     public void cancelSubscription(String subscriptionId) {
-        subscriptions.remove(subscriptionId);
+        // Shut down too, so its thread stops handing the events it had queued to the action and the id is not served
+        // by two threads once it is subscribed again
+        InMemorySubscription subscription = subscriptions.remove(subscriptionId);
+        if (subscription != null) {
+            subscription.shutdown();
+        }
         pausedSubscriptions.remove(subscriptionId);
     }
 

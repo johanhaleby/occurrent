@@ -66,17 +66,23 @@ import static java.util.Objects.requireNonNull;
  * <br>
  * <br>
  * After {@link #stop()}, and until the next {@link #start(boolean)}, this node holds no lease and delivers nothing for a
- * competing subscription, also one made while it is stopped. The one exception is a subscription the user resumes with
- * {@link #resumeSubscription(String)}. It competes for its lease and runs once this node wins it, whether that happens
- * straight away or on a later grant.
+ * competing subscription, also one made while it is stopped. {@code stop()} pauses a subscription in the wrapped model
+ * when that model still runs it, which it can after throwing from its own {@code stop()}. A subscription the wrapped
+ * model cannot pause keeps its lease and stays running, since it still delivers, and {@code stop()} throws. The other
+ * exception is a subscription the user resumes with {@link #resumeSubscription(String)}. It competes for its lease and
+ * runs once this node wins it, whether that happens straight away or on a later grant.
  * <br>
  * <br>
  * A competing subscription made while this model is stopped goes to the wrapped model straight away, through
  * {@link SubscriptionModel#subscribePaused}, which holds it paused whether or not the wrapped model runs. It starts from
  * the position the wrapped model gives a subscription made while that model is stopped. For a
  * {@code DurableSubscriptionModel} with no stored position, that is the position when {@code subscribe(..)} was called,
- * so an event written before {@link #start(boolean)} is delivered. The subscription competes for its lease once this
- * model is started, with or without resuming subscriptions automatically, and winning the lease resumes it.
+ * so an event written before {@link #start(boolean)} is delivered. A running wrapped model that refuses
+ * {@code subscribePaused} with {@link UnsupportedOperationException}, as its default implementation does, gets the
+ * subscription only once this node wins the lease, the same as a subscription that loses the lease in
+ * {@code subscribe(..)}, so it starts where that model starts a subscription at that moment. The subscription competes
+ * for its lease once this model is started, with or without resuming subscriptions automatically, and winning the
+ * lease resumes it, or subscribes it in the wrapped model when that model does not have it.
  * <br>
  * <br>
  * The wrapped model is started, without resuming what it holds paused, before a subscription whose lease this node
@@ -183,19 +189,54 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             if (delegate.isRunning()) {
                 delegate.stop();
             }
-        } finally {
-            // Unregister every competing consumer, not only the running ones, and also when stopping the wrapped model
-            // throws. A consumer left registered keeps competing for the lock through the strategy's refresh thread,
-            // so a stopped model can take a lock it then refuses to act on, and start() sees no status change and
-            // never starts it.
-            // Only a running consumer becomes paused. A waiting one stays waiting, so start() registers it again.
-            unregisterAllCompetingConsumers(cc -> {
-                logDebug("Stopped CompetingConsumer subscription (subscriberId={}, subscriptionId={})", cc.getSubscriberId(), cc.getSubscriptionId());
-                if (cc.isRunning()) {
-                    competingConsumers.put(cc.subscriptionIdAndSubscriberId, cc.registerPaused(true));
-                }
-            });
+        } catch (Throwable e) {
+            // The consumers are stopped also when stopping the wrapped model throws, or this node would keep leases
+            // for subscriptions it no longer means to serve
+            RuntimeException consumerFailure = stopEveryConsumer();
+            if (consumerFailure != null) {
+                e.addSuppressed(consumerFailure);
+            }
+            throw e;
         }
+        RuntimeException consumerFailure = stopEveryConsumer();
+        if (consumerFailure != null) {
+            throw consumerFailure;
+        }
+    }
+
+    /**
+     * Pauses every running consumer and unregisters every consumer, so none of them competes for the lock. A consumer
+     * left registered keeps competing through the strategy's refresh thread, so a stopped model can take a lock it then
+     * refuses to act on, and start() sees no status change and never starts it. A waiting one stays waiting, so
+     * start() registers it again.
+     * <p>
+     * A running consumer that the wrapped model still runs is paused there first, since a wrapped model that threw from
+     * stop(), or one that keeps its subscriptions running across a stop, still delivers them. One that cannot be paused
+     * there keeps its lease and stays recorded as running, since it still delivers, and the failure is returned with
+     * any later one attached as suppressed.
+     */
+    private @Nullable RuntimeException stopEveryConsumer() {
+        @Nullable RuntimeException firstFailure = null;
+        for (CompetingConsumer cc : List.copyOf(competingConsumers.values())) {
+            String subscriptionId = cc.getSubscriptionId();
+            try {
+                if (cc.isRunning() && delegate.isRunning(subscriptionId)) {
+                    delegate.pauseSubscription(subscriptionId);
+                    if (delegate.isRunning(subscriptionId)) {
+                        throw new IllegalStateException("Subscription " + subscriptionId + " still runs in the wrapped subscription model after it was paused there, so this node keeps its lease");
+                    }
+                }
+                unregisterCompetingConsumer(cc, c -> {
+                    logDebug("Stopped CompetingConsumer subscription (subscriberId={}, subscriptionId={})", c.getSubscriberId(), c.getSubscriptionId());
+                    if (c.isRunning()) {
+                        competingConsumers.put(c.subscriptionIdAndSubscriberId, c.registerPaused(true));
+                    }
+                });
+            } catch (RuntimeException e) {
+                firstFailure = withSuppressed(firstFailure, e);
+            }
+        }
+        return firstFailure;
     }
 
     /**
@@ -409,9 +450,20 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             // Held paused in the wrapped model also when a resume since stop() has started it again. One that decides
             // the start position at subscribe, such as DurableSubscriptionModel, then delivers an event written before
             // this node wins the lease.
-            Subscription subscription = delegate.subscribePaused(subscriptionId, filter, startAt, action);
+            @Nullable Subscription subscription;
+            try {
+                subscription = delegate.subscribePaused(subscriptionId, filter, startAt, action);
+            } catch (UnsupportedOperationException e) {
+                // A running wrapped model that cannot hold it paused gets it once this node wins the lease, as a
+                // subscription that loses the lease in subscribe does, since subscribing and pausing it there could
+                // deliver an event without the lease
+                logDebug("Wrapped model cannot hold the subscription paused while it runs, subscribing it there once the lease is won (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+                subscription = null;
+            }
             competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, waiting));
-            competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
+            competingConsumerSubscription = subscription == null
+                    ? new CompetingConsumerSubscription(subscriptionId, subscriberId)
+                    : new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
         } else if (competingConsumerStrategy.registerCompetingConsumer(subscriptionId, subscriberId)) {
             logDebug("Successfully registered CompetingConsumer subscription (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             Subscription subscription = giveTheLeaseBackIfItThrows(subscriptionIdAndSubscriberId, null, subscribeInTheWrappedModel);

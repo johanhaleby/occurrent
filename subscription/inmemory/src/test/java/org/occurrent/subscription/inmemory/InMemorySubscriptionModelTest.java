@@ -38,6 +38,7 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 
 import static java.time.ZoneOffset.UTC;
@@ -108,6 +109,37 @@ public class InMemorySubscriptionModelTest {
                 () -> assertThat(inMemorySubscriptionModel.isRunning(subscriberId)).isFalse(),
                 () -> assertThat(inMemorySubscriptionModel.isPaused(subscriberId)).isFalse()
         );
+    }
+
+    @Test
+    void a_cancelled_subscription_delivers_none_of_the_events_it_had_queued() throws InterruptedException {
+        // Given: the action holds on to the first event, so the next two wait in the subscription's queue
+        CountDownLatch handlingFirstEvent = new CountDownLatch(1);
+        CountDownLatch releaseFirstEvent = new CountDownLatch(1);
+        CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+        inMemorySubscriptionModel.subscribe(subscriptionId, e -> {
+            handled.add(e);
+            handlingFirstEvent.countDown();
+            try {
+                releaseFirstEvent.await();
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+        }).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+        LocalDateTime now = LocalDateTime.now();
+        inMemoryEventStore.write("1", serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1")));
+        inMemoryEventStore.write("2", serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name2")));
+        inMemoryEventStore.write("3", serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name3")));
+        assertThat(handlingFirstEvent.await(5, SECONDS)).isTrue();
+
+        // When
+        inMemorySubscriptionModel.cancelSubscription(subscriptionId);
+        releaseFirstEvent.countDown();
+        Thread.sleep(1000);
+
+        // Then
+        assertThat(handled).describedAs("events delivered to the cancelled subscription").hasSize(1);
     }
 
     private List<CloudEvent> serialize(DomainEvent e) {

@@ -393,13 +393,14 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         delegate.stopThrows = true;
         assertThat(catchThrowable(model::stop)).isInstanceOf(IllegalStateException.class);
         assertThat(delegate.isRunning()).as("the wrapped model still runs").isTrue();
+        assertThat(delegate.running).as("stop() paused x in the wrapped model that still runs").doesNotContain("x");
 
         subscribe("y");
 
         assertThat(delegate.isPaused("y")).as("the wrapped model has y, and records where it starts, from the subscribe").isTrue();
         assertThat(delegate.running).as("y delivers nothing before this node wins its lease").doesNotContain("y");
         model.start(false);
-        assertThat(delegate.running).as("winning the lease resumes y once").containsExactly("x", "y");
+        assertThat(delegate.running).as("winning the lease resumes y once, and x stays paused without a resume").containsExactly("y");
     }
 
     @Test

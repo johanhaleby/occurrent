@@ -253,13 +253,19 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     }
 
     private Subscription streamPositionCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt positionStartAt, boolean holdPaused) {
-        Future<Subscription> future = startCatchupAsync(subscriptionId, () -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, positionStartAt), holdPaused);
+        Future<Subscription> future = startCatchupAsync(subscriptionId, lastStored -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, resumeFrom(lastStored, positionStartAt)), holdPaused);
         return new CatchupSubscription(subscriptionId, future);
     }
 
     private Subscription streamTimeCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt, boolean holdPaused) {
-        Future<Subscription> future = startCatchupAsync(subscriptionId, () -> startCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt), holdPaused);
+        Future<Subscription> future = startCatchupAsync(subscriptionId, lastStored -> startCatchupSubscription(subscriptionId, filter, startAt, action, resumeFrom(lastStored, firstStartAt)), holdPaused);
         return new CatchupSubscription(subscriptionId, future);
+    }
+
+    // A replay that stop() cut short runs again from the last position it stored, as a restart would, so the stored
+    // position does not move back
+    private static StartAt resumeFrom(@Nullable Checkpoint lastStored, StartAt startAt) {
+        return lastStored == null ? startAt : StartAt.checkpoint(lastStored);
     }
 
     private Subscription startCatchupSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
@@ -393,20 +399,9 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     private Subscription startDelegatedSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, boolean subscriptionsWasCancelledOrShutdown, StartAt startAtToUse, Consumer<CloudEvent> liveConsumer) {
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
-            // Priming startAtToUse is skipped for an explicit cancellation of this exact id, since its get() call
-            // saves globalCheckpoint as a side effect, which would recreate the position cancelSubscription's own
-            // deletePositionFromStorage call just deleted. It is skipped for a replay a stop() parked as well, since
-            // that replay runs again from where it started, and a primed position would make a restart skip the
-            // history it has not read yet. A shutdown deletes nothing, so priming it for a shutdown stores a position
-            // for the next restart to resume from.
-            if (!wasCancelled() && !wasParked()) {
-                doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                    // Only get position if using storage and no position has been stored
-                    if (!cfg.storage().exists(subscriptionId)) {
-                        startAtToUse.get(generateSubscriptionModelContext());
-                    }
-                });
-            }
+            // startAtToUse is not resolved here, since resolving it stores the live position, which lies past the
+            // history a cancel, a stop or a shutdown kept this replay from reading. A restart would then skip that
+            // history, and a cancel would get back the position it deleted.
             subscription = new CancelledSubscription(subscriptionId);
         } else {
             subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAtToUse, liveConsumer);
@@ -587,11 +582,12 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                     // Rechecked here, not just by takeWhile before action ran: action is caller code and can take
                     // long enough for this attempt to be superseded while it runs, and persisting a stale attempt's
                     // position after that would regress a newer attempt's already-more-advanced one, since the
-                    // default write condition is any(). Identity only, not shouldKeepReplaying: a stop or shutdown
-                    // this same event's action triggered must not suppress persisting the position it just reached.
+                    // default write condition is any(). Not shouldKeepReplaying, since the action has completed and a stop or
+                    // a shutdown, also one this same event's action triggered, does not keep its position from being
+                    // stored, and a replay that runs again after a stop starts from there.
                     .filter(e -> isSafeToPersistFor(subscriptionId))
                     .filter(persistDuringCatchup)
-                    .forEach(e -> doIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, cfg -> cfg.storage().save(subscriptionId, positionToPersist.apply(e), writeConditionFor(cfg, subscriptionId))));
+                    .forEach(e -> doIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, cfg -> saveCatchupCheckpoint(subscriptionId, cfg, positionToPersist.apply(e))));
         }
     }
 
