@@ -97,17 +97,18 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // Kept so shutdown can remove the same instance it added, since every method reference is a new object
     private final HistoryLossReportingSubscriptions.HistoryLossListener historyLossListener = this::storeRestartPositionAfterHistoryLoss;
     private final QuietPositionReportingSubscriptions.QuietPositionListener quietPositionListener = this::quietPositionSaverFor;
-    // When a checkpoint was last written for each id this model stores checkpoints for, as System.nanoTime(). A new
-    // object for every subscribe, so a read that began before a cancel saves nothing for a later subscribe of the id
-    private final ConcurrentMap<String, AtomicLong> lastCheckpointWrites = new ConcurrentHashMap<>();
+    // The current subscribe of each id this model stores checkpoints for. A new object for every subscribe, so a read
+    // that began before a cancel saves nothing for a later subscribe of the id
+    private final ConcurrentMap<String, CheckpointRegistration> registrations = new ConcurrentHashMap<>();
     // Striped rather than one lock object per id, since subscriptionId is caller-supplied to public methods
     // (cancelSubscription, resumeSubscription) and an unknown or made-up id must not grow this without bound. A
     // fixed number of locks bounds memory for good and needs no lifecycle bookkeeping to remove an entry once its
     // holder is gone, at the cost of occasional cross-id serialization when two ids hash to the same stripe. The
-    // checkpoint write for an event takes no lock. A quiet position save takes one on the wrapped model's read
-    // thread, at most once per interval for an id, and the other callers are startup and reconfiguration calls, so
-    // that cost is ordinarily microseconds. But if the delegate or checkpoint storage hangs inside one id's call,
-    // every other id sharing its stripe blocks too until it returns, a quiet save for such an id included.
+    // checkpoint write for an event takes none of these, only the lock of its own CheckpointRegistration, which a
+    // cancel of that id also takes. A quiet position save takes one on the wrapped model's read thread, at most once
+    // per interval for an id, and the other callers are startup and reconfiguration calls, so that cost is ordinarily
+    // microseconds. But if the delegate or checkpoint storage hangs inside one id's call, every other id sharing its
+    // stripe blocks too until it returns, a quiet save for such an id included.
     private static final int SUBSCRIPTION_ID_LOCK_STRIPES = 1024;
     private final Object[] subscriptionIdLocks = new Object[SUBSCRIPTION_ID_LOCK_STRIPES];
 
@@ -190,35 +191,37 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
     }
 
-    // Answers nothing until the interval has passed since the last checkpoint write, so a subscription that receives
-    // events gets no extra write. The write condition is read here, before the wrapped model reads, so the save uses
-    // the token of the lease the read was made under, like the write for an event. A source that cannot answer is
-    // asked again after the interval rather than before every read
+    // Answers nothing until the interval has passed since the last checkpoint write, so a subscription that stores a
+    // checkpoint for an event at least once per interval gets no extra write. It also answers nothing while the last
+    // event delivered is one the persist predicate declined to store, since the quiet position would move the
+    // checkpoint past it. The write condition is read here, before the wrapped model reads, so the save uses the token
+    // of the lease the read was made under, like the write for an event. A source that cannot answer is asked again
+    // after the interval rather than before every read
     private @Nullable Consumer<Checkpoint> quietPositionSaverFor(String subscriptionId) {
         Duration interval = config.quietPositionSaveInterval;
-        AtomicLong lastCheckpointWrite = lastCheckpointWrites.get(subscriptionId);
-        if (interval == null || lastCheckpointWrite == null || System.nanoTime() - lastCheckpointWrite.get() < interval.toNanos()) {
+        CheckpointRegistration registration = registrations.get(subscriptionId);
+        if (interval == null || registration == null || !registration.quietSaveAllowed || System.nanoTime() - registration.lastWrite.get() < interval.toNanos()) {
             return null;
         }
         CheckpointWriteCondition writeCondition;
         try {
             writeCondition = writeConditionFor(subscriptionId);
         } catch (RuntimeException e) {
-            lastCheckpointWrite.set(System.nanoTime());
+            registration.lastWrite.set(System.nanoTime());
             log.warn("Could not read the write version for subscription {}, so its quiet position is not saved this time. Trying again in {}.", subscriptionId, interval, e);
             return null;
         }
-        return quietPosition -> saveQuietPosition(subscriptionId, quietPosition, writeCondition, lastCheckpointWrite);
+        return quietPosition -> saveQuietPosition(subscriptionId, quietPosition, writeCondition, registration);
     }
 
     // A refused write is thrown, so the wrapped model ends delivery on a node whose lease moved, as it does for an
     // event. Any other failure is logged and tried again after the interval, since the subscription has lost nothing
-    private void saveQuietPosition(String subscriptionId, Checkpoint quietPosition, CheckpointWriteCondition writeCondition, AtomicLong lastCheckpointWrite) {
+    private void saveQuietPosition(String subscriptionId, Checkpoint quietPosition, CheckpointWriteCondition writeCondition, CheckpointRegistration registration) {
         synchronized (lockFor(subscriptionId)) {
-            if (lastCheckpointWrites.get(subscriptionId) != lastCheckpointWrite) {
+            if (registrations.get(subscriptionId) != registration || !registration.quietSaveAllowed) {
                 return;
             }
-            lastCheckpointWrite.set(System.nanoTime());
+            registration.lastWrite.set(System.nanoTime());
             try {
                 storage.save(subscriptionId, quietPosition, writeCondition);
             } catch (CheckpointWriteConditionNotFulfilledException e) {
@@ -293,7 +296,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                             ? getWrappedSubscriptionModel().subscribePaused(subscriptionId, filter, startAt, action)
                             : getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
                     checkpointedSubscriptions.remove(subscriptionId);
-                    lastCheckpointWrites.remove(subscriptionId);
+                    registrations.remove(subscriptionId);
                     return optedOut;
                 } catch (Throwable t) {
                     if (!alreadyMarked) {
@@ -305,8 +308,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
             // One per subscription, so an EveryN configured for the whole model counts this subscription's events only
             Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
-            // Starts now, so the first quiet position is saved one interval after the subscribe
-            AtomicLong lastCheckpointWrite = new AtomicLong(System.nanoTime());
+            CheckpointRegistration registration = new CheckpointRegistration(config.persistCloudEventPositionPredicate.getClass() == EveryN.class);
             Consumer<CloudEvent> checkpointingAction = cloudEvent -> {
                 // Read before the action runs, so the write uses the token of the lease this event was
                 // delivered under, even if this node lost that lease and won a newer one meanwhile
@@ -314,8 +316,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 action.accept(cloudEvent);
                 if (persistCheckpoint.test(cloudEvent)) {
                     Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
-                    storage.save(subscriptionId, checkpoint, writeCondition);
-                    lastCheckpointWrite.set(System.nanoTime());
+                    registration.saveUnlessCancelled(() -> {
+                        storage.save(subscriptionId, checkpoint, writeCondition);
+                        registration.lastWrite.set(System.nanoTime());
+                        registration.quietSaveAllowed = true;
+                    });
+                } else {
+                    registration.quietSaveAllowed = false;
                 }
             };
             Subscription subscription = holdPaused
@@ -326,7 +333,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             // must leave that active subscription's marker alone rather than losing it to this failed attempt.
             notCheckpointedSubscriptions.remove(subscriptionId);
             checkpointedSubscriptions.add(subscriptionId);
-            lastCheckpointWrites.put(subscriptionId, lastCheckpointWrite);
+            registrations.put(subscriptionId, registration);
             return subscription;
         }
     }
@@ -548,10 +555,16 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     public void cancelSubscription(String subscriptionId) {
         synchronized (lockFor(subscriptionId)) {
             subscriptionModel.cancelSubscription(subscriptionId);
-            storage.delete(subscriptionId);
+            // The wrapped model doesn't wait for an action that is running, so its checkpoint is written before this
+            // deletes it or not at all
+            CheckpointRegistration registration = registrations.remove(subscriptionId);
+            if (registration == null) {
+                storage.delete(subscriptionId);
+            } else {
+                registration.cancelled(() -> storage.delete(subscriptionId));
+            }
             notCheckpointedSubscriptions.remove(subscriptionId);
             checkpointedSubscriptions.remove(subscriptionId);
-            lastCheckpointWrites.remove(subscriptionId);
         }
     }
 
@@ -586,5 +599,32 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 .add("storage=" + storage)
                 .add("config=" + config)
                 .toString();
+    }
+
+    // One for each subscribe of an id this model stores checkpoints for
+    private static final class CheckpointRegistration {
+        // When a checkpoint was last written for the id, as System.nanoTime(). Starts now, so the first quiet position
+        // is saved one interval after the subscribe
+        final AtomicLong lastWrite = new AtomicLong(System.nanoTime());
+        // False while the last event delivered is one the persist predicate declined to store. Before the first event
+        // it is true only for EveryN, which stores one in every n. Any other predicate might never store one, such as
+        // one that always answers false, so it has to store an event first
+        volatile boolean quietSaveAllowed;
+        private boolean cancelled;
+
+        CheckpointRegistration(boolean quietSaveAllowed) {
+            this.quietSaveAllowed = quietSaveAllowed;
+        }
+
+        synchronized void saveUnlessCancelled(Runnable save) {
+            if (!cancelled) {
+                save.run();
+            }
+        }
+
+        synchronized void cancelled(Runnable deleteCheckpoint) {
+            cancelled = true;
+            deleteCheckpoint.run();
+        }
     }
 }

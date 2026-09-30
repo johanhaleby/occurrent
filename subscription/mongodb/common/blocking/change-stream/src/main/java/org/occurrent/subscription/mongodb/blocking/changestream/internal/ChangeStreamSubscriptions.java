@@ -160,6 +160,11 @@ public final class ChangeStreamSubscriptions {
 
     private volatile boolean shutdown = false;
     private volatile boolean running;
+    // Set by stop() while it pauses every subscription, so they share one wait for a running action. Read and written
+    // under the model's monitor, which stop() and pauseSubscription(..) both hold
+    private @Nullable Long stopWaitsUntil;
+
+    private static final Duration WAIT_FOR_A_RUNNING_ACTION = Duration.ofSeconds(1);
 
     private final Predicate<Throwable> NOT_SHUTDOWN = __ -> !shutdown;
     // A refused checkpoint write must never be retried, on either retry loop below. The call sites already pass
@@ -385,8 +390,10 @@ public final class ChangeStreamSubscriptions {
                     }
                     MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
                             .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())))
-                            .ifPresent(executeWithRetry(action, RETRYABLE.and(__ -> !internalSubscription.isIntentionallyClosed()), retryStrategy));
-                    currentStartAt.set(StartAt.checkpoint(new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())));
+                            .ifPresent(executeWithRetry(attemptWhileOpen(internalSubscription, action), RETRYABLE.and(__ -> !internalSubscription.isIntentionallyClosed()), retryStrategy));
+                    // A run a pause closed while the action ran still moves the position, so a plain resume goes on
+                    // after the event. Not once a resume has replaced it, since that resume set the position to open at
+                    internalSubscription.movedUnlessReplacedTo(StartAt.checkpoint(new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())));
                 } finally {
                     internalSubscription.stoppedDelivering();
                 }
@@ -404,7 +411,7 @@ public final class ChangeStreamSubscriptions {
             } else if (isChangeStreamHistoryLost(e)) {
                 if (restartSubscriptionsOnChangeStreamHistoryLost) {
                     log.warn("There was not enough oplog to resume subscription {}, will restart subscription from current time.", subscriptionId, e);
-                    currentStartAt.set(restartPositionAfterHistoryLost(subscriptionId));
+                    internalSubscription.movedUnlessReplacedTo(restartPositionAfterHistoryLost(subscriptionId));
                     throw e;
                 } else {
                     log.error("There was not enough oplog to resume subscription {}, will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.", subscriptionId, e);
@@ -425,6 +432,23 @@ public final class ChangeStreamSubscriptions {
                     log.debug("Failed to close cursor for subscription {}, this can happen if the connection was already closed.", subscriptionId, closeException);
                 }
             }
+        }
+    }
+
+    // Checked before every attempt, a retry included, so no attempt starts once a pause or a cancel has closed the run.
+    // One that has already started can still be running when they return
+    private static Consumer<CloudEvent> attemptWhileOpen(InternalSubscription internalSubscription, Consumer<CloudEvent> action) {
+        return cloudEvent -> {
+            if (internalSubscription.isIntentionallyClosed()) {
+                throw new ClosedBeforeTheAttempt();
+            }
+            action.accept(cloudEvent);
+        };
+    }
+
+    private static final class ClosedBeforeTheAttempt extends RuntimeException {
+        ClosedBeforeTheAttempt() {
+            super("The subscription was paused or cancelled before the action was called", null, false, false);
         }
     }
 
@@ -545,7 +569,26 @@ public final class ChangeStreamSubscriptions {
             // the actions still running end side by side rather than one after the other.
             List<String> subscriptionIds = new ArrayList<>(runningSubscriptions.keySet());
             subscriptionIds.stream().map(runningSubscriptions::get).filter(Objects::nonNull).forEach(InternalSubscription::close);
-            subscriptionIds.forEach(model::pauseSubscription);
+            // One second for all of them together rather than one each. Every id is paused even when an earlier
+            // pause throws, and the first failure is thrown once they all are
+            List<RuntimeException> failures = new ArrayList<>();
+            stopWaitsUntil = System.nanoTime() + WAIT_FOR_A_RUNNING_ACTION.toNanos();
+            try {
+                for (String subscriptionId : subscriptionIds) {
+                    try {
+                        model.pauseSubscription(subscriptionId);
+                    } catch (RuntimeException e) {
+                        failures.add(e);
+                    }
+                }
+            } finally {
+                stopWaitsUntil = null;
+            }
+            if (!failures.isEmpty()) {
+                RuntimeException first = failures.getFirst();
+                failures.subList(1, failures.size()).forEach(first::addSuppressed);
+                throw first;
+            }
         }
     }
 
@@ -661,15 +704,11 @@ public final class ChangeStreamSubscriptions {
         if (internalSubscription == null) {
             throw new SubscriptionNotRunningException(subscriptionId);
         }
-        if (repositionTo != null) {
-            internalSubscription.currentStartAt.set(repositionTo);
-        }
-
         running = true;
 
         // Shares the same currentStartAt reference so a resume continues from the last change-stream document
-        // read before the subscription was paused, not the original StartAt, unless repositionTo replaced it above.
-        InternalSubscription resumed = internalSubscription.resumed();
+        // read before the subscription was paused, not the original StartAt, unless repositionTo replaces it.
+        InternalSubscription resumed = internalSubscription.replacedBy(repositionTo);
         pausedSubscriptions.remove(subscriptionId);
         runningSubscriptions.put(subscriptionId, resumed);
         startSubscription(subscriptionId, resumed, () -> {
@@ -693,11 +732,16 @@ public final class ChangeStreamSubscriptions {
 
         InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
         if (internalSubscription != null) {
-            internalSubscription.close();
-            if (!internalSubscription.waitUntilNotDelivering(Duration.ofSeconds(1))) {
-                log.debug("The action of subscription {} was still running 1 second after it was paused.", subscriptionId);
+            // Paused whatever the wait ends in, so the subscription is never missing from both maps
+            try {
+                internalSubscription.close();
+                Long waitsUntil = stopWaitsUntil;
+                if (!internalSubscription.waitUntilNotDelivering(waitsUntil == null ? System.nanoTime() + WAIT_FOR_A_RUNNING_ACTION.toNanos() : waitsUntil)) {
+                    log.debug("The action of subscription {} was still running when the pause stopped waiting for it.", subscriptionId);
+                }
+            } finally {
+                pausedSubscriptions.put(subscriptionId, internalSubscription);
             }
-            pausedSubscriptions.put(subscriptionId, internalSubscription);
         }
     }
 
@@ -806,6 +850,8 @@ public final class ChangeStreamSubscriptions {
         final PresentAtSubscribe presentAtSubscribe;
         final Consumer<CloudEvent> action;
         private volatile boolean intentionallyClosed = false;
+        // Set under this object's lock once a resume has created the next run of the subscription
+        private boolean replaced;
         // Read and written under this object's lock. The cursor the current attempt delivers from, and the thread
         // running the action or handing over a quiet position right now.
         private @Nullable MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
@@ -824,7 +870,13 @@ public final class ChangeStreamSubscriptions {
             this.firstStartedLatch = firstStartedLatch;
         }
 
-        InternalSubscription resumed() {
+        // Under the same lock as movedUnlessReplacedTo, so an action of this run that returns after the pause waited
+        // for it cannot move the position once the run that replaces it exists
+        synchronized InternalSubscription replacedBy(@Nullable StartAt repositionTo) {
+            replaced = true;
+            if (repositionTo != null) {
+                currentStartAt.set(repositionTo);
+            }
             return new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStartedLatch);
         }
 
@@ -850,6 +902,12 @@ public final class ChangeStreamSubscriptions {
         synchronized void stoppedDelivering() {
             delivering = null;
             notifyAll();
+        }
+
+        synchronized void movedUnlessReplacedTo(StartAt position) {
+            if (!replaced) {
+                currentStartAt.set(position);
+            }
         }
 
         // False when this run was closed, and the position is then left as it is
@@ -884,24 +942,30 @@ public final class ChangeStreamSubscriptions {
 
         // Only for what is being delivered, not for a read waiting on the server, which returns on its own once
         // maxAwaitTime has passed and then delivers nothing since this run is closed. Not when the action itself
-        // pauses, since it cannot return while it waits
-        synchronized boolean waitUntilNotDelivering(Duration duration) {
+        // pauses, since it cannot return while it waits. An interrupt doesn't end the wait, since the pause must finish
+        // moving the subscription, and is set again on the thread afterwards
+        synchronized boolean waitUntilNotDelivering(long deadlineNanos) {
             if (delivering == Thread.currentThread()) {
                 return true;
             }
-            long deadline = System.nanoTime() + duration.toNanos();
+            boolean interrupted = false;
             try {
                 while (delivering != null) {
-                    long remaining = deadline - System.nanoTime();
+                    long remaining = deadlineNanos - System.nanoTime();
                     if (remaining <= 0) {
                         return false;
                     }
-                    NANOSECONDS.timedWait(this, remaining);
+                    try {
+                        NANOSECONDS.timedWait(this, remaining);
+                    } catch (InterruptedException e) {
+                        interrupted = true;
+                    }
                 }
                 return true;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException(e);
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
 

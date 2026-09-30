@@ -83,7 +83,12 @@ public class DurableSubscriptionModelConfig {
      * {@code QuietPositionReportingSubscriptions}, such as the blocking MongoDB models, reports the position a
      * subscription has read to when a read returned no event for it, and the {@link DurableSubscriptionModel} saves
      * that position as the subscription's checkpoint at most once per {@code interval}. A checkpoint saved for an
-     * event starts the interval again, so a subscription that receives events gets no extra write.
+     * event starts the interval again, so a subscription that stores a checkpoint for an event at least once per
+     * {@code interval} gets no extra write.
+     * <p>
+     * Nothing is saved while the last event delivered is one the {@link #persistCloudEventPositionPredicate} declined
+     * to store. With a predicate other than {@link EveryN}, nothing is saved until the predicate has stored a
+     * checkpoint for an event, so a predicate that always returns {@code false} never gets a position saved.
      * <p>
      * The default is one minute. Keep it well below the time the wrapped model keeps its history, which for MongoDB
      * is the oplog window.

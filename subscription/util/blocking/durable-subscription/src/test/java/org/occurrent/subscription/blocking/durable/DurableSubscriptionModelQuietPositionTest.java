@@ -121,6 +121,66 @@ class DurableSubscriptionModelQuietPositionTest {
     }
 
     @Test
+    void a_persist_predicate_that_never_stores_means_the_quiet_position_is_never_saved() throws InterruptedException {
+        // Given
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(__ -> false).saveQuietPositionEvery(INTERVAL));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        });
+        Checkpoint storedAtTheSubscribe = storage.read("id");
+        Thread.sleep(INTERVAL.toMillis() + 50);
+
+        // When
+        boolean savedBeforeAnyEvent = wrapped.readNothing("id", QUIET);
+        wrapped.deliver("id", new StringBasedCheckpoint("event"));
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        boolean savedAfterAnEvent = wrapped.readNothing("id", QUIET);
+
+        // Then
+        assertThat(List.of(savedBeforeAnyEvent, savedAfterAnEvent)).containsExactly(false, false);
+        assertThat(storage.read("id")).isEqualTo(storedAtTheSubscribe);
+    }
+
+    @Test
+    void the_quiet_position_is_not_saved_past_an_event_the_persist_predicate_declined_to_store() throws InterruptedException {
+        // Given
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(3).saveQuietPositionEvery(INTERVAL));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        });
+
+        // When
+        List.of("e1", "e2", "e3", "e4", "e5").forEach(position -> wrapped.deliver("id", new StringBasedCheckpoint(position)));
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        boolean savedAfterADeclinedEvent = wrapped.readNothing("id", QUIET);
+        wrapped.deliver("id", new StringBasedCheckpoint("e6"));
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        boolean savedAfterAStoredEvent = wrapped.readNothing("id", QUIET);
+
+        // Then
+        assertThat(savedAfterADeclinedEvent).as("wanted the quiet position after e4 and e5 were declined").isFalse();
+        assertThat(savedAfterAStoredEvent).as("wanted the quiet position after e6 was stored").isTrue();
+        assertThat(storage.read("id")).isEqualTo(QUIET);
+    }
+
+    @Test
+    void a_persist_predicate_other_than_every_n_has_the_quiet_position_saved_only_once_it_has_stored_an_event() throws InterruptedException {
+        // Given
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(__ -> true).saveQuietPositionEvery(INTERVAL));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        });
+        Thread.sleep(INTERVAL.toMillis() + 50);
+
+        // When
+        boolean savedBeforeAnyEvent = wrapped.readNothing("id", QUIET);
+        wrapped.deliver("id", new StringBasedCheckpoint("event"));
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        boolean savedAfterAStoredEvent = wrapped.readNothing("id", QUIET);
+
+        // Then
+        assertThat(List.of(savedBeforeAnyEvent, savedAfterAStoredEvent)).containsExactly(false, true);
+        assertThat(storage.read("id")).isEqualTo(QUIET);
+    }
+
+    @Test
     void the_write_condition_is_the_one_read_before_the_wrapped_model_read() throws InterruptedException {
         // Given
         AtomicLong leaseVersion = new AtomicLong(1);
