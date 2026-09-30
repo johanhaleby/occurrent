@@ -41,7 +41,9 @@ no other node can take the lease over.
 
 A listener that throws is logged, and the other listeners are called anyway. After `shutdown()` the notifiers stop
 without waiting for a call in progress, since that call may be waiting for the database, such as a grant that resumes
-a subscription, and would hold up the shutdown of the subscription model that shuts the strategy down.
+a subscription, and would hold up the shutdown of the subscription model that shuts the strategy down. The notifier
+threads are daemon threads, so a listener that ignores the interrupt `shutdown()` sends and goes on waiting does not
+keep the JVM running.
 
 Registering, unregistering and releasing still call the listeners on the caller's thread before they return, since
 those callers rely on the listener having acted by the time the call returns. A listener that throws fails that call,

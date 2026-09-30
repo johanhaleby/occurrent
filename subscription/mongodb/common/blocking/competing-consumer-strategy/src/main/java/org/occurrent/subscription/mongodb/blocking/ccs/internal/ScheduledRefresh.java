@@ -52,8 +52,8 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 class ScheduledRefresh {
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
     private final BiConsumer<Duration, Scheduler> scheduleIt;
-    // Made by the same default thread factory as the refresh thread, so neither is a daemon thread, and close() is what
-    // ends both
+    // Its threads are daemon threads, since close() does not wait for them, and a listener that ignores the interrupt
+    // close() sends can go on running after it. close() is what ends the refresh thread.
     private final @Nullable ExecutorService notifier;
     // The notifications not yet delivered per subscription id, the first one being delivered or about to be. An id is
     // here only while a task on the notifier delivers its notifications, so a new notification for it is queued behind
@@ -86,7 +86,7 @@ class ScheduledRefresh {
             throw new IllegalArgumentException("Period must be > 0 but got " + period);
         }
 
-        return new ScheduledRefresh((lease, scheduler) -> scheduler.fixedRate(Duration.ZERO, period), Executors.newCachedThreadPool());
+        return new ScheduledRefresh((lease, scheduler) -> scheduler.fixedRate(Duration.ZERO, period), newNotifier());
     }
 
     /**
@@ -100,7 +100,12 @@ class ScheduledRefresh {
             }
 
             scheduler.fixedRate(Duration.ZERO, lease.dividedBy(2));
-        }, Executors.newCachedThreadPool());
+        }, newNotifier());
+    }
+
+    // A thread for each subscription id whose notification blocks, so none of them holds up another
+    private static ExecutorService newNotifier() {
+        return Executors.newCachedThreadPool(Thread.ofPlatform().daemon().name("occurrent-lease-notifier-", 0).factory());
     }
 
     void scheduleInBackground(Runnable refresh, Duration leaseTime) {
