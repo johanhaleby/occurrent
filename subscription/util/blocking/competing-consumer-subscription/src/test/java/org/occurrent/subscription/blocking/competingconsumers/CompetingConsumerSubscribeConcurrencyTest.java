@@ -536,6 +536,78 @@ class CompetingConsumerSubscribeConcurrencyTest {
     }
 
     @Test
+    void a_subscription_whose_registration_a_stop_could_not_give_up_cleanly_registers_again_once_a_start_overtook_the_subscribe() {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        delegate.implementsSubscribePaused = true;
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        // Other threads stop the model and then start it, once this node holds the lease and the wrapped model has s1.
+        // The unregister in stop() throws once the strategy has forgotten the consumer, as the MongoDB strategies do.
+        List<Throwable> stopFailures = new CopyOnWriteArrayList<>();
+        delegate.afterSubscribe = id -> {
+            delegate.afterSubscribe = __ -> {};
+            strategy.unregisterFailsOnceAfterForgettingTheConsumer = true;
+            join(runOnAnotherThreadUntilDoneOrBlocked(() -> stopFailures.add(catchThrowable(model::stop))));
+            join(runOnAnotherThreadUntilDoneOrBlocked(() -> model.start(true)));
+        };
+        List<String> s1Received = new CopyOnWriteArrayList<>();
+
+        Throwable failure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId())));
+        delegate.write("e1");
+
+        assertThat(failure).as("the subscribe of s1").isNull();
+        assertThat(stopFailures).as("what stop() threw").singleElement().satisfies(e -> assertThat(e).hasMessage("transient unregister failure"));
+        assertThat(strategy.registered).as("registrations once start() and the subscribe of s1 had returned, holders=" + strategy.holders + ", paused in the wrapped model=" + delegate.isPaused("s1")).containsExactly("s1");
+        assertThat(s1Received).as("events s1 received once the model was started again").containsExactly("e1");
+    }
+
+    @Test
+    void a_subscription_that_the_wrapped_model_still_runs_when_its_subscribe_fails_is_recorded_as_running_and_the_subscribe_returns() {
+        UserWrittenModel delegate = new UserWrittenModel(true);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        // Another thread stops the model when the wrapped model is about to make s1, the wrapped model is started again
+        // before it does, as a resume of another subscription starts it, and registering s1 again fails
+        delegate.beforeSubscribe = id -> {
+            delegate.beforeSubscribe = __ -> {};
+            join(runOnAnotherThreadUntilDoneOrBlocked(model::stop));
+            delegate.start(false);
+            strategy.registerFailsOnce.add("s1");
+        };
+        List<String> s1Received = new CopyOnWriteArrayList<>();
+
+        Throwable failure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId())));
+        delegate.write("e1");
+        Set<String> ids = model.subscriptionIds();
+        Throwable pause = catchThrowable(() -> model.pauseSubscription("s1"));
+
+        assertThat(delegate.isRunning("s1")).as("s1 runs in the wrapped model that cannot pause it").isTrue();
+        assertThat(ids).as("subscriptionIds() while the wrapped model runs s1, subscribe failure=" + failure + ", received=" + s1Received).containsExactly("s1");
+        assertThat(pause instanceof UnknownSubscriptionException).as("pausing s1, which the wrapped model runs, answers as for an unknown id, pause=" + pause).isFalse();
+        assertThat(failure).as("the subscribe of s1, which the wrapped model runs").isNull();
+    }
+
+    @Test
+    void a_waiting_subscription_whose_registration_throws_in_start_is_registered_by_the_next_start() {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        strategy.heldElsewhere.add("s1");
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), __ -> {});
+        model.stop();
+        strategy.registerFailsOnce.add("s1");
+
+        Throwable start = catchThrowable(() -> model.start(true));
+        Set<String> registeredAfterTheFailedStart = Set.copyOf(strategy.registered);
+        Throwable nextStart = catchThrowable(() -> model.start(true));
+
+        assertThat(start).as("the start() whose registration of s1 threw").hasMessage("transient register failure");
+        assertThat(registeredAfterTheFailedStart).as("registrations once that start() had thrown").isEmpty();
+        assertThat(nextStart).as("the next start()").isNull();
+        assertThat(strategy.registered).as("registrations once the next start() had returned").containsExactly("s1");
+    }
+
+    @Test
     void stop_gives_up_a_lease_that_a_subscribe_it_overtook_has_already_won() throws Exception {
         UserWrittenModel delegate = new UserWrittenModel(false);
         delegate.implementsSubscribePaused = true;
@@ -624,7 +696,8 @@ class CompetingConsumerSubscribeConcurrencyTest {
     }
 
     // Grants a lease unless another node holds it, makes a registration wait on a latch when told to, and fails a
-    // registration or a release once when told to, the release either before or after it has given up the lease
+    // registration or a release once when told to, the release either before or after it has given up the lease. It can
+    // also fail an unregister once, after it has forgotten the consumer.
     private static final class Strategy implements CompetingConsumerStrategy {
         private final Set<String> holders = ConcurrentHashMap.newKeySet();
         private final Set<String> heldElsewhere = ConcurrentHashMap.newKeySet();
@@ -633,6 +706,7 @@ class CompetingConsumerSubscribeConcurrencyTest {
         private final Set<String> registerFailsOnce = ConcurrentHashMap.newKeySet();
         private volatile boolean releaseFailsOnce;
         private volatile boolean releaseFailsOnceAfterGivingUpTheLease;
+        private volatile boolean unregisterFailsOnceAfterForgettingTheConsumer;
         private final CountDownLatch registerEntered = new CountDownLatch(1);
         private final CountDownLatch shutDown = new CountDownLatch(1);
         private final List<CompetingConsumerListener> listeners = new CopyOnWriteArrayList<>();
@@ -663,6 +737,10 @@ class CompetingConsumerSubscribeConcurrencyTest {
         public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
             registered.remove(subscriptionId);
             holders.remove(subscriptionId);
+            if (unregisterFailsOnceAfterForgettingTheConsumer) {
+                unregisterFailsOnceAfterForgettingTheConsumer = false;
+                throw new IllegalStateException("transient unregister failure");
+            }
         }
 
         @Override
