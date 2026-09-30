@@ -44,6 +44,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -951,6 +952,26 @@ class StreamCatchupSubscriptionModelTest {
         model.subscribe("subscription", StartAt.subscriptionModelDefault(), e -> received.add(e.getId())).waitUntilStarted();
 
         assertThat(received).as("event1 and event2, written in the same millisecond as the stored position").contains(history.get(1).eventId(), history.get(2).eventId());
+    }
+
+    @Test
+    void a_restart_on_a_position_store_from_a_time_position_its_replay_stored_delivers_the_rest_of_the_history() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        assertThat(eventStore.writesPosition()).isTrue();
+        List<NameDefined> history = Stream.of(0, 1, 2).map(i -> new NameDefined(UUID.randomUUID().toString(), time.plusSeconds(i), "name", "event" + i)).toList();
+        CloudEventConverter<DomainEvent> atTheirOwnTime = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test"))
+                .idMapper(DomainEvent::eventId).timeMapper(e -> e.timestamp().toInstant().atOffset(ZoneOffset.UTC)).build();
+        history.forEach(e -> eventStore.write(e.eventId(), atTheirOwnTime.toCloudEvents(List.of(e))));
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        // What a replay from StartAtTime.offsetDateTime(..) that stored event0's time and then stopped would have left behind
+        storage.save("subscription", TimeBasedCheckpoint.from(history.get(0).timestamp().toInstant().atOffset(ZoneOffset.UTC)));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel model = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+
+        model.subscribe("subscription", StartAt.subscriptionModelDefault(), e -> received.add(e.getId())).waitUntilStarted();
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).as("the history after the stored time position").contains(history.get(1).eventId(), history.get(2).eventId()));
     }
 
     @Test

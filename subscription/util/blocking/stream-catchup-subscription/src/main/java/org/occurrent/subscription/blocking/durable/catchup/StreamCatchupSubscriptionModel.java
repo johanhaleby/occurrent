@@ -167,12 +167,9 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
                 // the handover would, keeping DCB events out.
                 return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), startAt, action, holdPaused);
-            } else if (positionMode && isTimeBasedCheckpoint(checkpoint)) {
-                // The store now writes position, but this stored token predates that and is time-based. Reading it as a
-                // position would misinterpret a timestamp or replay from an unrelated cursor, so re-resolve to the
-                // model default instead.
-                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), StartAt.subscriptionModelDefault(), action, holdPaused);
             } else {
+                // A time position stored by a replay that did not finish resumes that replay, also on a store that
+                // writes position, where it runs through the time-ordered catch-up
                 firstStartAt = StartAt.checkpoint(checkpoint);
             }
         } else if (startAt.isDynamic()) {
