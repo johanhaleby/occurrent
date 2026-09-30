@@ -1319,14 +1319,15 @@ What to do:
    `cancelSubscription(..)`.
 
 `UpgradeToOccurrent_0_34` changes a Java implementation of either interface that returns `void` to return `Mono<Void>`.
-What it does with the body depends on how the body ends:
+A declaration with no body, an abstract one or one in an interface that extends either interface, gets the new return
+type and nothing else. What the recipe does with a body depends on how the body ends:
 
 | The body | What the recipe does |
 |---|---|
 | ends by calling `cancelSubscription(..)` on the model it wraps, or on its superclass | returns that call |
 | is empty, or ends in a statement such as a method call or an assignment | adds `return Mono.empty()` at the end |
 | ends in a `return` or a `throw` | keeps the body in the method |
-| ends in anything else, an `if`, a loop, a `try` or a `switch` for example | moves the body unchanged into a new private `void` method named `doCancelSubscription`, or `doCancelSubscription2` when the class already has or inherits a method with that name, then calls it and returns `Mono.empty()` |
+| ends in anything else, an `if`, a loop, a `try` or a `switch` for example | moves the body unchanged into a new private `void` method named `doCancelSubscription`, then calls it and returns `Mono.empty()`. The name becomes `doCancelSubscription2`, and so on, when the class can already call a method with that name without a qualifier, one it has or inherits, one of an enclosing class, or a statically imported one |
 
 Where the body stays in the method, each `return` without a value becomes `return Mono.empty()`. That is the whole
 change for step 3, and for step 5 when the wrapped model's cancel is the last statement.
@@ -1343,6 +1344,11 @@ reads and writes the checkpoint only after a delete that a cancel of the same id
 right after a cancel no longer resumes from the cancelled subscription's position. A subscribe that was still reading
 its start position when the cancel came reads it again after the delete, and the checkpoints it writes after that are
 kept.
+
+Each of those waits lasts at most `cancelWaitsForStorageAtMost(..)` on `ReactorDurableSubscriptionModelConfig`, 10
+seconds by default. The delete goes ahead when a write takes longer, and a subscribe stops waiting when the delete takes
+longer. The `Mono` then fails with a `TimeoutException`, since the checkpoint can still be stored, so call
+`cancelSubscription(id)` again once the store answers.
 
 A reactor catch-up model cancelled before its replay handed the subscription over to the wrapped model now passes the
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has. A wrapped model

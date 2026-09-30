@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.util.predicate.EveryN;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.function.Predicate;
@@ -33,13 +34,14 @@ public class ReactorDurableSubscriptionModelConfig {
 
     public final Predicate<CloudEvent> persistCloudEventPositionPredicate;
     public final boolean startWhenNoStartPositionCanBeRecorded;
+    public final Duration cancelWaitsForStorageAtMost;
 
     /**
      * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
      *                                           Supply a predicate that always returns {@code false} to never store the position.
      */
     public ReactorDurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
-        this(persistCloudEventPositionPredicate, false);
+        this(persistCloudEventPositionPredicate, false, Duration.ofSeconds(10));
     }
 
     /**
@@ -49,10 +51,16 @@ public class ReactorDurableSubscriptionModelConfig {
         this(new EveryN(persistPositionForEveryNCloudEvent));
     }
 
-    private ReactorDurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate, boolean startWhenNoStartPositionCanBeRecorded) {
+    private ReactorDurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate, boolean startWhenNoStartPositionCanBeRecorded,
+                                                  Duration cancelWaitsForStorageAtMost) {
         Objects.requireNonNull(persistCloudEventPositionPredicate, "persistCloudEventPositionPredicate cannot be null");
+        Objects.requireNonNull(cancelWaitsForStorageAtMost, "cancelWaitsForStorageAtMost cannot be null");
+        if (cancelWaitsForStorageAtMost.isNegative() || cancelWaitsForStorageAtMost.isZero()) {
+            throw new IllegalArgumentException("cancelWaitsForStorageAtMost must be positive, was " + cancelWaitsForStorageAtMost);
+        }
         this.persistCloudEventPositionPredicate = persistCloudEventPositionPredicate;
         this.startWhenNoStartPositionCanBeRecorded = startWhenNoStartPositionCanBeRecorded;
+        this.cancelWaitsForStorageAtMost = cancelWaitsForStorageAtMost;
     }
 
     /**
@@ -67,7 +75,22 @@ public class ReactorDurableSubscriptionModelConfig {
      * @return A new instance of {@code ReactorDurableSubscriptionModelConfig}
      */
     public ReactorDurableSubscriptionModelConfig startWhenNoStartPositionCanBeRecorded(boolean startWhenNoStartPositionCanBeRecorded) {
-        return new ReactorDurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded);
+        return new ReactorDurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, cancelWaitsForStorageAtMost);
+    }
+
+    /**
+     * The longest {@code cancelSubscription} waits for the storage, first for the checkpoint writes that the cancelled
+     * subscription started and that have not ended, then for its own delete of the checkpoint. The delete goes ahead
+     * when a write takes longer than this, and a subscribe of the same id stops waiting for the delete when the delete
+     * takes longer than this. The cancel's {@code Mono} then fails with a
+     * {@link java.util.concurrent.TimeoutException}, since the store can still hold a checkpoint of the cancelled
+     * subscription, or come to hold one. The default is 10 seconds.
+     *
+     * @param cancelWaitsForStorageAtMost A positive duration
+     * @return A new instance of {@code ReactorDurableSubscriptionModelConfig}
+     */
+    public ReactorDurableSubscriptionModelConfig cancelWaitsForStorageAtMost(Duration cancelWaitsForStorageAtMost) {
+        return new ReactorDurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, cancelWaitsForStorageAtMost);
     }
 
     @Override
@@ -75,12 +98,13 @@ public class ReactorDurableSubscriptionModelConfig {
         if (this == o) return true;
         if (!(o instanceof ReactorDurableSubscriptionModelConfig that)) return false;
         return startWhenNoStartPositionCanBeRecorded == that.startWhenNoStartPositionCanBeRecorded
-               && Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate);
+               && Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate)
+               && Objects.equals(cancelWaitsForStorageAtMost, that.cancelWaitsForStorageAtMost);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded);
+        return Objects.hash(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, cancelWaitsForStorageAtMost);
     }
 
     @Override
@@ -88,6 +112,7 @@ public class ReactorDurableSubscriptionModelConfig {
         return new StringJoiner(", ", ReactorDurableSubscriptionModelConfig.class.getSimpleName() + "[", "]")
                 .add("persistCloudEventPositionPredicate=" + persistCloudEventPositionPredicate)
                 .add("startWhenNoStartPositionCanBeRecorded=" + startWhenNoStartPositionCanBeRecorded)
+                .add("cancelWaitsForStorageAtMost=" + cancelWaitsForStorageAtMost)
                 .toString();
     }
 }

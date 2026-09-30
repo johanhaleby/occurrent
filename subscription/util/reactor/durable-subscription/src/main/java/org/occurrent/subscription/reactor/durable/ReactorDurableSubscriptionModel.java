@@ -41,6 +41,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -49,6 +50,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -181,7 +183,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private final Map<String, Set<PositionWriter>> positionWritersStarting = new HashMap<>();
     // The position writes that have started and not ended yet, by subscription id
     private final Map<String, Set<Mono<Void>>> positionWritesInFlight = new HashMap<>();
-    // The stored-position deletes that cancelSubscription started and that have not ended yet, by subscription id
+    // For each delete of a stored position that cancelSubscription started and that has not ended yet, what reads and
+    // writes of that subscription id wait for. It completes only after it has been taken out of this map.
     private final Map<String, Mono<Void>> positionDeletes = new HashMap<>();
 
     private volatile boolean shutdown = false;
@@ -531,11 +534,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // and it is then read as it would have been without the cancel.
     private Mono<Void> afterPositionDelete(String subscriptionId) {
         return Mono.defer(() -> {
-            final Mono<Void> delete;
+            final Mono<Void> deleteEnded;
             synchronized (positionLock) {
-                delete = positionDeletes.get(subscriptionId);
+                deleteEnded = positionDeletes.get(subscriptionId);
             }
-            return delete == null ? Mono.empty() : delete.onErrorResume(__ -> Mono.empty());
+            return deleteEnded == null ? Mono.empty() : deleteEnded;
         });
     }
 
@@ -588,18 +591,18 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         return Mono.defer(() -> {
             Sinks.Empty<Void> ended = Sinks.empty();
             Mono<Void> writeEnded = ended.asMono();
-            final Mono<Void> delete;
+            final Mono<Void> deleteEnded;
             synchronized (positionLock) {
                 if (writer.retired) {
                     return whenRetired;
                 }
-                delete = positionDeletes.get(subscriptionId);
-                if (delete == null) {
+                deleteEnded = positionDeletes.get(subscriptionId);
+                if (deleteEnded == null) {
                     positionWritesInFlight.computeIfAbsent(subscriptionId, __ -> new HashSet<>()).add(writeEnded);
                 }
             }
-            if (delete != null) {
-                return delete.onErrorResume(__ -> Mono.empty()).then(writePosition(subscriptionId, writer, write, whenRetired));
+            if (deleteEnded != null) {
+                return deleteEnded.then(writePosition(subscriptionId, writer, write, whenRetired));
             }
             Mono<T> started = Mono.defer(write)
                     .doFinally(__ -> {
@@ -677,7 +680,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // would skip whatever lies between the two. onErrorMap sits on the read, upstream of the comparison, so it
     // cannot re-wrap the refusals below it.
     private Mono<Checkpoint> refuseUnlessTheStoredPositionIsTheOneRead(String subscriptionId, Checkpoint positionRead) {
-        return storage.read(subscriptionId)
+        return readStoredPosition(subscriptionId)
                 .onErrorMap(throwable -> StartPositionAlreadyPinnedException
                         .readingTheStoredPositionBackFailed(subscriptionId, positionRead, throwable))
                 .flatMap(stored -> positionRead.asString().equals(stored.asString())
@@ -767,6 +770,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * this is called reads again once the delete has ended, and the checkpoint it writes after that is kept, since
      * this cancel stops only the subscription it removes.
      * <p>
+     * Each of those waits on the storage lasts at most
+     * {@link ReactorDurableSubscriptionModelConfig#cancelWaitsForStorageAtMost(java.time.Duration)}. A write that has
+     * not ended by then no longer holds up the delete, and a delete that has not ended by then no longer holds up a
+     * subscribe of the same id. The {@code Mono} then fails with a {@link java.util.concurrent.TimeoutException},
+     * since the store can still hold a checkpoint of the cancelled subscription, or come to hold one.
+     * <p>
      * The returned {@code Mono} is cached. A failed delete is also logged as a warning, whether or not anything
      * subscribes to the {@code Mono}.
      * <p>
@@ -799,35 +808,58 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // Started here rather than by whoever subscribes to the result, so the delete runs even when nobody waits for it.
-    // Cached, so a caller that waits does not delete a second time. Runs after the position writes already in flight
-    // and after an earlier delete of the id, since either ending after this delete would leave a position stored.
-    // Installed under the lock in the same step that retires the writer, so no read or write of the id falls between.
+    // Runs after the position writes already in flight and after an earlier delete of the id, since either ending
+    // after this delete would leave a position stored. Reads and writes of the id wait for deleteEnded instead of the
+    // delete. It is put in the map in the same step that retires the writer and completes only once it is taken out,
+    // so each read or write waits for this delete at most once.
     private Mono<Void> deleteStoredCheckpoint(String subscriptionId) {
-        final Mono<Void> delete;
+        Sinks.Empty<Void> ended = Sinks.empty();
+        Mono<Void> deleteEnded = ended.asMono();
+        final List<Mono<Void>> endedFirst;
         synchronized (positionLock) {
             PositionWriter cancelled = positionWriters.remove(subscriptionId);
             if (cancelled != null) {
                 cancelled.retired = true;
             }
             positionWritersStarting.getOrDefault(subscriptionId, Set.of()).forEach(writer -> writer.overtakenByCancel = true);
-            List<Mono<Void>> endedFirst = new ArrayList<>(positionWritesInFlight.getOrDefault(subscriptionId, Set.of()));
-            Mono<Void> earlierDelete = positionDeletes.get(subscriptionId);
-            if (earlierDelete != null) {
-                endedFirst.add(earlierDelete.onErrorResume(__ -> Mono.empty()));
+            endedFirst = new ArrayList<>(positionWritesInFlight.getOrDefault(subscriptionId, Set.of()));
+            Mono<Void> earlierDeleteEnded = positionDeletes.get(subscriptionId);
+            if (earlierDeleteEnded != null) {
+                endedFirst.add(earlierDeleteEnded);
             }
-            delete = Mono.when(endedFirst).then(Mono.defer(() -> storage.delete(subscriptionId))).cache();
-            positionDeletes.put(subscriptionId, delete);
+            positionDeletes.put(subscriptionId, deleteEnded);
         }
-        delete.doFinally(__ -> positionDeleteEnded(subscriptionId, delete))
-                .subscribe(unused -> {
-                }, throwable -> log.warn("Failed to delete stored checkpoint for cancelled subscription {}. Cancel it again, or a later subscribe with the subscription-model default start position resumes from that checkpoint.", subscriptionId, throwable));
+        Duration atMost = config.cancelWaitsForStorageAtMost;
+        Mono<Void> delete = Mono.when(endedFirst).thenReturn(true)
+                .timeout(atMost, Mono.just(false))
+                .flatMap(writesEnded -> Mono.defer(() -> storage.delete(subscriptionId))
+                        .timeout(atMost, Mono.error(() -> deleteNotEnded(subscriptionId, atMost)))
+                        .then(writesEnded ? Mono.<Void>empty() : Mono.error(() -> writeNotEnded(subscriptionId, atMost))))
+                // Before the caller hears of the end, so a subscribe made once the cancel completed finds no delete
+                .doOnTerminate(() -> {
+                    synchronized (positionLock) {
+                        positionDeletes.remove(subscriptionId, deleteEnded);
+                    }
+                    ended.tryEmitEmpty();
+                })
+                .cache();
+        delete.subscribe(unused -> {
+        }, throwable -> log.warn("The cancel of subscription {} did not complete. Cancel it again, or a later subscribe with the subscription-model default start position can resume from a checkpoint the cancelled subscription wrote.", subscriptionId, throwable));
         return delete;
     }
 
-    private void positionDeleteEnded(String subscriptionId, Mono<Void> delete) {
-        synchronized (positionLock) {
-            positionDeletes.remove(subscriptionId, delete);
-        }
+    private static TimeoutException writeNotEnded(String subscriptionId, Duration atMost) {
+        return new TimeoutException("A checkpoint write that subscription " + subscriptionId + " started before it was " +
+                                    "cancelled had not ended " + atMost + " after the cancel, so the stored checkpoint " +
+                                    "was deleted without waiting for it. That write can still store a checkpoint. " +
+                                    "Cancel the subscription again once it has ended.");
+    }
+
+    private static TimeoutException deleteNotEnded(String subscriptionId, Duration atMost) {
+        return new TimeoutException("Deleting the stored checkpoint of cancelled subscription " + subscriptionId +
+                                    " had not ended " + atMost + " after it started, so a subscribe of the same id no " +
+                                    "longer waits for it and the checkpoint can still be stored. Cancel the " +
+                                    "subscription again.");
     }
 
     @Override

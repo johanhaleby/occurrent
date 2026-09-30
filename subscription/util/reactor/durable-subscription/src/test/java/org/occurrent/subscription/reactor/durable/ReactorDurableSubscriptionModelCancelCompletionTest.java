@@ -30,25 +30,35 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorDurableSubscriptionModelCancelCompletionTest {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
+    private static final String PAUSE_HOOK = "pause-for-" + ReactorDurableSubscriptionModelCancelCompletionTest.class.getSimpleName();
     private static final String SUBSCRIPTION_ID = "sub";
     private static final StringBasedCheckpoint REACHED_BEFORE_THE_CANCEL = new StringBasedCheckpoint("reached-before-the-cancel");
     private static final String WHERE_THE_FEED_IS_NOW = "where-the-feed-is-now";
@@ -289,8 +299,8 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     }
 
     /**
-     * This model drives the feed itself here. The action of the cancelled subscription is still running when the
-     * cancel completes, and it ends after that.
+     * This model drives the feed itself here. The action of the cancelled subscription has ended, and the save behind
+     * it is about to start, when the cancel is called. The save goes on after the cancel completed.
      */
     @Test
     void a_position_save_the_cancelled_subscription_would_start_after_the_cancel_never_reaches_the_storage_when_this_model_drives_the_feed() throws Exception {
@@ -299,32 +309,237 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
         feed.events = Flux.just(eventAt(REACHED_BY_THE_CANCELLED_SUBSCRIPTION)).concatWith(Flux.never());
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
-        CountDownLatch actionEntered = new CountDownLatch(1);
-        CountDownLatch releaseAction = new CountDownLatch(1);
-        CountDownLatch actionEnded = new CountDownLatch(1);
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.<Void>fromRunnable(() -> {
-            actionEntered.countDown();
-            // The dispose of the cancel can interrupt this thread, which ends the action too
-            try {
-                awaitLatch(releaseAction);
-            } finally {
-                actionEnded.countDown();
+        AtomicReference<@Nullable Thread> actionThread = new AtomicReference<>();
+        CountDownLatch saveAboutToStart = new CountDownLatch(1);
+        CountDownLatch releaseSave = new CountDownLatch(1);
+        // The first operator the save assembles is where it goes on to check whether it may still write
+        Hooks.onEachOperator(PAUSE_HOOK, publisher -> {
+            if (Thread.currentThread() == actionThread.get() && saveAboutToStart.getCount() > 0 && publisher.getClass().getSimpleName().equals("MonoDefer")) {
+                saveAboutToStart.countDown();
+                awaitUninterruptibly(releaseSave);
             }
-        }).subscribeOn(Schedulers.boundedElastic()));
-        assertThat(actionEntered.await(5, TimeUnit.SECONDS)).as("the action is handling the event").isTrue();
+            return publisher;
+        });
+
+        try {
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.<Void>fromRunnable(() -> actionThread.set(Thread.currentThread()))
+                    .subscribeOn(Schedulers.boundedElastic()));
+            assertThat(saveAboutToStart.await(5, TimeUnit.SECONDS)).as("the action has ended and the save behind it is about to start").isTrue();
+
+            // When
+            model.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
+            releaseSave.countDown();
+            await().atMost(TIMEOUT).until(() -> isIdle(requireThread(actionThread)));
+
+            // Then
+            assertThat(hasPosition(storage)).as("position in storage after the save behind the action of the cancelled subscription went on").isFalse();
+        } finally {
+            releaseSave.countDown();
+            Hooks.resetOnEachOperator(PAUSE_HOOK);
+        }
+    }
+
+    /**
+     * The cancel has taken the subscription out of this model and not yet told reads of the id to wait for its delete
+     * when the subscribe of the same id arrives.
+     */
+    @Test
+    void a_subscribe_arriving_while_the_cancel_is_still_under_way_starts_from_its_own_start_at() throws Exception {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage);
+        runningFromAStoredPosition(model, storage);
+
+        // When
+        @Nullable Throwable subscribeFailure = subscribeWhileTheCancelIsHeld(model, publisher -> publisher.getClass().getSimpleName().equals("MonoWhen"));
+
+        // Then
+        assertThat(subscribeFailure).as("failure of the subscribe that arrived during the cancel").isNull();
+        assertThat(wrapped.startedAt.get(1)).as("start position of the subscribe that arrived during the cancel").hasToString(WHERE_THE_FEED_IS_NOW);
+        assertThat(storage.read(SUBSCRIPTION_ID).map(Checkpoint::asString).block(TIMEOUT)).as("position stored for the subscribe that arrived during the cancel").isEqualTo(WHERE_THE_FEED_IS_NOW);
+    }
+
+    /**
+     * The subscribe finds the delete of the cancel before the cancel has started it, and the storage deletes and saves
+     * on the thread that asks it to.
+     */
+    @Test
+    void a_subscribe_that_finds_a_delete_the_cancel_has_not_started_yet_waits_for_it_and_records_its_own_start_position() throws Exception {
+        // Given
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage);
+
+        // When
+        @Nullable Throwable subscribeFailure = subscribeWhileTheCancelIsHeld(model, __ -> readsOfTheIdWaitForADelete(model));
+
+        // Then
+        assertThat(subscribeFailure).as("failure of the subscribe that found the delete").isNull();
+        assertThat(wrapped.startedAt.get(0)).as("start position of the subscribe that found the delete").hasToString(WHERE_THE_FEED_IS_NOW);
+        assertThat(storage.read(SUBSCRIPTION_ID).map(Checkpoint::asString).block(TIMEOUT)).as("position stored for the subscribe that found the delete").isEqualTo(WHERE_THE_FEED_IS_NOW);
+    }
+
+    /**
+     * The storage never answers the save of the position the cancelled subscription reached.
+     */
+    @Test
+    void a_position_save_that_never_ends_holds_up_the_delete_and_a_later_subscribe_only_for_the_configured_time() throws Exception {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        CountDownLatch saveEntered = new CountDownLatch(1);
+        CountDownLatch releaseSave = new CountDownLatch(1);
+        storage.heldSave = REACHED_BY_THE_CANCELLED_SUBSCRIPTION;
+        storage.heldSaveEntered = saveEntered;
+        storage.releaseHeldSave = releaseSave;
+        RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        feed.events = Flux.just(eventAt(REACHED_BY_THE_CANCELLED_SUBSCRIPTION)).concatWith(Flux.never());
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage, new ReactorDurableSubscriptionModelConfig(1).cancelWaitsForStorageAtMost(Duration.ofMillis(200)));
+        runningFromAStoredPosition(model, storage);
+        assertThat(saveEntered.await(5, TimeUnit.SECONDS)).as("the save of the position the subscription reached has reached the storage").isTrue();
 
         try {
             // When
-            model.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
-            releaseAction.countDown();
-            assertThat(actionEnded.await(5, TimeUnit.SECONDS)).as("the action has ended").isTrue();
-            // Nothing signals a save that never starts, so this waits long enough for one that did to have been written
-            Mono.delay(Duration.ofMillis(300)).block();
+            CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
 
             // Then
-            assertThat(hasPosition(storage)).as("position in storage after the action of the cancelled subscription ended").isFalse();
+            assertThatThrownBy(() -> cancelled.get(5, TimeUnit.SECONDS)).as("outcome of the cancel while the save never ends")
+                    .isInstanceOf(ExecutionException.class).hasCauseInstanceOf(TimeoutException.class);
+            assertThat(hasPosition(storage)).as("position in storage once the cancel stopped waiting for the save").isFalse();
+
+            // When
+            feed.events = Flux.never();
+            subscribe(model);
+
+            // Then
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(feed.startedAt).hasSize(2));
+            assertThat(feed.startedAt.get(1)).as("start position of the subscription made after the cancel stopped waiting").hasToString(WHERE_THE_FEED_IS_NOW);
         } finally {
-            releaseAction.countDown();
+            releaseSave.countDown();
+        }
+    }
+
+    /**
+     * The storage never answers the delete.
+     */
+    @Test
+    void a_delete_that_never_ends_holds_up_a_later_subscribe_only_for_the_configured_time() {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        storage.beforeDelete = Mono.never();
+        RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage, new ReactorDurableSubscriptionModelConfig(1).cancelWaitsForStorageAtMost(Duration.ofMillis(200)));
+        runningFromAStoredPosition(model, storage);
+
+        // When
+        CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+        subscribe(model);
+
+        // Then
+        assertThatThrownBy(() -> cancelled.get(5, TimeUnit.SECONDS)).as("outcome of the cancel while the delete never ends")
+                .isInstanceOf(ExecutionException.class).hasCauseInstanceOf(TimeoutException.class);
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(feed.startedAt).hasSize(2));
+        assertThat(feed.startedAt.get(1)).as("start position of the subscription made while the delete never ended").hasToString(REACHED_BEFORE_THE_CANCEL.asString());
+    }
+
+    // Holds the thread that cancels at the first operator it assembles once pauseHere answers true, and subscribes the
+    // same id on another thread while it is held. Answers what that subscribe threw.
+    private static @Nullable Throwable subscribeWhileTheCancelIsHeld(ReactorDurableSubscriptionModel model, Predicate<Object> pauseHere) throws Exception {
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CompletableFuture<Void> cancelCalled = new CompletableFuture<>();
+        AtomicReference<@Nullable Throwable> subscribeFailure = new AtomicReference<>();
+        Thread canceller = new Thread(() -> {
+            try {
+                model.cancelSubscription(SUBSCRIPTION_ID);
+                cancelCalled.complete(null);
+            } catch (Throwable throwable) {
+                cancelCalled.completeExceptionally(throwable);
+            }
+        });
+        Thread subscriber = new Thread(() -> {
+            try {
+                subscribe(model);
+            } catch (Throwable throwable) {
+                subscribeFailure.set(throwable);
+            }
+        });
+        Hooks.onEachOperator(PAUSE_HOOK, publisher -> {
+            if (Thread.currentThread() == canceller && held.getCount() > 0 && pauseHere.test(publisher)) {
+                held.countDown();
+                awaitUninterruptibly(release);
+            }
+            return publisher;
+        });
+        try {
+            canceller.start();
+            assertThat(held.await(5, TimeUnit.SECONDS)).as("the cancel is held where the test pauses it").isTrue();
+            subscriber.start();
+            // A subscribe that waits waits for the cancel, which goes on only once it is released
+            await().atMost(TIMEOUT).until(() -> !subscriber.isAlive() || subscriber.getState() != Thread.State.RUNNABLE);
+            release.countDown();
+            cancelCalled.get(5, TimeUnit.SECONDS);
+            subscriber.join(TIMEOUT.toMillis());
+            assertThat(subscriber.isAlive()).as("subscribe still running once the cancel was released").isFalse();
+            return subscribeFailure.get();
+        } finally {
+            release.countDown();
+            Hooks.resetOnEachOperator(PAUSE_HOOK);
+        }
+    }
+
+    // Asked on the thread that cancels. True once reads and writes of the id wait for a delete and that thread no
+    // longer holds the lock they take to find it.
+    private static boolean readsOfTheIdWaitForADelete(ReactorDurableSubscriptionModel model) {
+        Object positionLock = field(model, "positionLock");
+        if (Thread.holdsLock(positionLock)) {
+            return false;
+        }
+        synchronized (positionLock) {
+            return ((Map<?, ?>) field(model, "positionDeletes")).containsKey(SUBSCRIPTION_ID);
+        }
+    }
+
+    private static Object field(ReactorDurableSubscriptionModel model, String name) {
+        try {
+            Field field = ReactorDurableSubscriptionModel.class.getDeclaredField(name);
+            field.setAccessible(true);
+            return field.get(model);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    // A scheduler thread that has gone back to waiting for its next task
+    private static boolean isIdle(Thread thread) {
+        return (thread.getState() == Thread.State.WAITING || thread.getState() == Thread.State.TIMED_WAITING)
+               && Arrays.stream(thread.getStackTrace()).noneMatch(frame -> frame.getClassName().startsWith("org.occurrent"));
+    }
+
+    private static Thread requireThread(AtomicReference<@Nullable Thread> thread) {
+        Thread value = thread.get();
+        if (value == null) {
+            throw new IllegalStateException("No thread recorded");
+        }
+        return value;
+    }
+
+    // The cancel disposes the subscription, which can interrupt the thread held here
+    private static void awaitUninterruptibly(CountDownLatch latch) {
+        boolean interrupted = false;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        try {
+            while (latch.getCount() > 0 && System.nanoTime() < deadline) {
+                try {
+                    latch.await(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 

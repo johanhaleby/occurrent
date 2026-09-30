@@ -59,10 +59,13 @@ import java.util.UUID;
  *     <li>Any other body, one ending in an {@code if}, a loop, a {@code try} or a {@code switch} for example, moves
  *     unchanged into a new private {@code void} method, which the method calls before it returns
  *     {@code Mono.empty()}. Whether such a body can run off its end takes the compiler's own analysis to decide, and
- *     moving it keeps the result compiling either way.</li>
+ *     moving it keeps the result compiling either way. The new method is named {@code doCancelSubscription}, or
+ *     {@code doCancelSubscription2} and so on when code in the class can already call a method of that name without
+ *     a qualifier.</li>
  * </ul>
  * A body ending in a {@code return} or a {@code throw} stays in place too. Each {@code return;} of a body that stays in
- * place becomes {@code return Mono.empty();}. A call to a wrapped
+ * place becomes {@code return Mono.empty();}. A declaration with no body, abstract or in an interface that extends
+ * either one, changes only its return type. A call to a wrapped
  * {@code cancelSubscription(String)} that the result does not return gets a {@code TODO} comment, since the
  * {@code Mono} returned then completes without waiting for that call's cleanup. See
  * doc/migration/upgrading-to-0.34.0.md for an implementation that deletes stored state asynchronously, which has to
@@ -106,7 +109,9 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                "model's or the superclass's `cancelSubscription(String)` returns that call. A body ending in a " +
                "statement that completes whenever it is reached gets `return Mono.empty();` at its end, and any other body that " +
                "does not end in a `return` or a `throw` moves into a new private `void` method that the method calls before returning " +
-               "`Mono.empty()`. A wrapped `cancelSubscription(String)` call that is not returned gets a `TODO` " +
+               "`Mono.empty()`, named so that it hides no method the class could already call. A declaration " +
+               "with no body only changes its return type. A wrapped `cancelSubscription(String)` call that is not " +
+               "returned gets a `TODO` " +
                "comment. An implementation that deletes stored state asynchronously still has to return a `Mono` " +
                "that completes once that delete has, see doc/migration/upgrading-to-0.34.0.md. Java only, a Kotlin " +
                "implementation needs the manual steps instead.";
@@ -133,8 +138,13 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
 
             @Override
             public J.MethodDeclaration visitMethodDeclaration(J.MethodDeclaration method, ExecutionContext ctx) {
-                if (!isVoidReactorCancelSubscription(method) || method.getBody() == null) {
+                if (!isVoidReactorCancelSubscription(method)) {
                     return super.visitMethodDeclaration(method, ctx);
+                }
+                if (method.getBody() == null) {
+                    // Abstract or declared by an interface, so only the return type changes
+                    maybeAddImport(MONO);
+                    return returningMonoOfVoid(super.visitMethodDeclaration(method, ctx));
                 }
                 List<Statement> original = method.getBody().getStatements();
                 Statement last = original.isEmpty() ? null : original.get(original.size() - 1);
@@ -163,13 +173,17 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                     md = super.visitMethodDeclaration(method, ctx);
                     Cursor owner = getCursor().dropParentUntil(parent -> parent instanceof J.ClassDeclaration || parent instanceof J.NewClass);
                     Map<UUID, J.MethodDeclaration> helpers = owner.computeMessageIfAbsent(HELPERS, __ -> new LinkedHashMap<>());
-                    J.MethodDeclaration helper = helper(md, helperName(owner.getValue(), helpers.values()));
+                    J.MethodDeclaration helper = helper(md, helperName(owner, helpers.values()));
                     helpers.put(md.getId(), helper);
                     J.Block body = md.getBody().withStatements(List.of(callTo(helper, md), returnMonoEmpty(Space.format("\n"))));
                     body = autoFormat(body, ctx, new Cursor(getCursor(), md));
                     md = md.withBody(flagged ? body.withStatements(ListUtils.mapFirst(body.getStatements(), this::withTodo)) : body);
                 }
                 maybeAddImport(MONO);
+                return returningMonoOfVoid(md);
+            }
+
+            private J.MethodDeclaration returningMonoOfVoid(J.MethodDeclaration md) {
                 return md.withReturnTypeExpression(monoOfVoid(md.getReturnTypeExpression() == null ? Space.EMPTY : md.getReturnTypeExpression().getPrefix()))
                         .withMethodType(md.getMethodType() == null ? null : md.getMethodType().withReturnType(monoOfVoidType()));
             }
@@ -271,23 +285,57 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                 return statement.withPrefix(Space.build(whitespace, comments));
             }
 
-            private String helperName(Object owner, Iterable<J.MethodDeclaration> chosen) {
-                J.Block body = owner instanceof J.ClassDeclaration cd ? cd.getBody() : ((J.NewClass) owner).getBody();
-                JavaType type = owner instanceof J.ClassDeclaration cd ? cd.getType() : ((J.NewClass) owner).getType();
+            // A method added to the owner hides every method of the same name that code in the owner calls without a
+            // qualifier, one an enclosing class has or a static import brings in for example. Such a call would then run
+            // the new method or stop compiling, so the name is one none of them use.
+            private String helperName(Cursor owner, Iterable<J.MethodDeclaration> chosen) {
                 Set<String> taken = new HashSet<>();
-                if (body != null) {
-                    body.getStatements().stream()
-                            .filter(J.MethodDeclaration.class::isInstance)
-                            .forEach(statement -> taken.add(((J.MethodDeclaration) statement).getSimpleName()));
+                for (Cursor enclosing = owner; enclosing != null; enclosing = enclosing.getParent()) {
+                    if (enclosing.getValue() instanceof J.ClassDeclaration || enclosing.getValue() instanceof J.NewClass) {
+                        memberNames(enclosing.getValue(), taken);
+                    }
                 }
-                // A private method named like one it inherits would hide or clash with that one
-                inheritedMethodNames(TypeUtils.asFullyQualified(type), taken, new HashSet<>());
+                J.CompilationUnit compilationUnit = owner.firstEnclosing(J.CompilationUnit.class);
+                if (compilationUnit != null) {
+                    compilationUnit.getImports().stream().filter(J.Import::isStatic).forEach(anImport -> staticallyImportedNames(anImport, taken));
+                }
+                // Covers a call the names above miss, one a static import on demand of a type this parser cannot see
+                // resolves for example
+                new JavaIsoVisitor<Set<String>>() {
+                    @Override
+                    public J.MethodInvocation visitMethodInvocation(J.MethodInvocation invocation, Set<String> names) {
+                        if (invocation.getSelect() == null) {
+                            names.add(invocation.getSimpleName());
+                        }
+                        return super.visitMethodInvocation(invocation, names);
+                    }
+                }.visit((J) owner.getValue(), taken);
                 chosen.forEach(helper -> taken.add(helper.getSimpleName()));
                 String name = HELPER_NAME;
                 for (int suffix = 2; taken.contains(name); suffix++) {
                     name = HELPER_NAME + suffix;
                 }
                 return name;
+            }
+
+            private void memberNames(Object classOrAnonymousClass, Set<String> names) {
+                J.Block body = classOrAnonymousClass instanceof J.ClassDeclaration cd ? cd.getBody() : ((J.NewClass) classOrAnonymousClass).getBody();
+                JavaType type = classOrAnonymousClass instanceof J.ClassDeclaration cd ? cd.getType() : ((J.NewClass) classOrAnonymousClass).getType();
+                if (body != null) {
+                    body.getStatements().stream()
+                            .filter(J.MethodDeclaration.class::isInstance)
+                            .forEach(statement -> names.add(((J.MethodDeclaration) statement).getSimpleName()));
+                }
+                inheritedMethodNames(TypeUtils.asFullyQualified(type), names, new HashSet<>());
+            }
+
+            private void staticallyImportedNames(J.Import anImport, Set<String> names) {
+                String name = anImport.getQualid().getSimpleName();
+                if (!"*".equals(name)) {
+                    names.add(name);
+                    return;
+                }
+                inheritedMethodNames(TypeUtils.asFullyQualified(anImport.getQualid().getTarget().getType()), names, new HashSet<>());
             }
 
             private void inheritedMethodNames(JavaType.FullyQualified type, Set<String> names, Set<String> visited) {

@@ -24,8 +24,10 @@ description: >-
   superclass's cancelSubscription returns that call. A body ending in a statement such as a method call gets return
   Mono.empty() at its end, and each bare return in it becomes return Mono.empty(). Any other body, one ending in an if,
   a loop, a try or a switch for example, moves into a new private void method that the method calls before returning
-  Mono.empty(). A wrapped cancelSubscription call that is not returned gets a TODO comment. An implementation that
-  deletes stored state asynchronously still has to return a Mono that completes once that delete has, see
-  doc/migration/upgrading-to-0.34.0.md. Java only, a Kotlin implementation needs the manual steps instead.
+  Mono.empty(), named so that it hides no method the class could already call. A declaration with no body, abstract or
+  in an interface, only changes its return type. A wrapped cancelSubscription call that is not returned gets a TODO
+  comment. An implementation that deletes stored state asynchronously still has to return a Mono that completes once
+  that delete has, see doc/migration/upgrading-to-0.34.0.md. Java only, a Kotlin implementation needs the manual steps
+  instead.
 recipeList:
   - org.occurrent.rewrite.MigrateReactorCancelSubscriptionReturnType

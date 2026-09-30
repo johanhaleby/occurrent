@@ -27,7 +27,11 @@ import javax.tools.SimpleJavaFileObject;
 import javax.tools.ToolProvider;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.URI;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -944,13 +948,517 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
         );
     }
 
+    @Test
+    void namesTheVoidMethodSoItDoesNotHideOneOfTheEnclosingClassThatTheBodyCalls() {
+        String migrated = """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                import java.util.ArrayList;
+                import java.util.HashSet;
+                import java.util.List;
+                import java.util.Set;
+
+                class Outer {
+                    private final List<String> cancelled = new ArrayList<>();
+
+                    void doCancelSubscription(String subscriptionId) {
+                        cancelled.add(subscriptionId);
+                    }
+
+                    class Inner implements CancellableSubscriptions {
+                        private final Set<String> ids = new HashSet<>(Set.of("known"));
+
+                        @Override
+                        public Mono<Void> cancelSubscription(String subscriptionId) {
+                            doCancelSubscription2(subscriptionId);
+                            return Mono.empty();
+                        }
+
+                        private void doCancelSubscription2(String subscriptionId) {
+                            if (ids.remove(subscriptionId)) {
+                                doCancelSubscription(subscriptionId);
+                            }
+                        }
+                    }
+
+                    static String run() {
+                        Outer outer = new Outer();
+                        outer.new Inner().cancelSubscription("known");
+                        return String.join(",", outer.cancelled);
+                    }
+                }
+                """;
+        migrates(
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                import java.util.ArrayList;
+                import java.util.HashSet;
+                import java.util.List;
+                import java.util.Set;
+
+                class Outer {
+                    private final List<String> cancelled = new ArrayList<>();
+
+                    void doCancelSubscription(String subscriptionId) {
+                        cancelled.add(subscriptionId);
+                    }
+
+                    class Inner implements CancellableSubscriptions {
+                        private final Set<String> ids = new HashSet<>(Set.of("known"));
+
+                        @Override
+                        public void cancelSubscription(String subscriptionId) {
+                            if (ids.remove(subscriptionId)) {
+                                doCancelSubscription(subscriptionId);
+                            }
+                        }
+                    }
+
+                    static String run() {
+                        Outer outer = new Outer();
+                        outer.new Inner().cancelSubscription("known");
+                        return String.join(",", outer.cancelled);
+                    }
+                }
+                """,
+                migrated
+        );
+        assertThat(run(migrated)).as("ids the enclosing class cancelled when the migrated inner class was asked to cancel").isEqualTo("known");
+    }
+
+    @Test
+    void namesTheVoidMethodSoItDoesNotHideOneOfTheEnclosingClassThatAnAnonymousClassCalls() {
+        migrates(
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                class Outer {
+                    void doCancelSubscription(String subscriptionId, boolean now) {
+                    }
+
+                    CancellableSubscriptions model() {
+                        return new CancellableSubscriptions() {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @Override
+                            public void cancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    doCancelSubscription(subscriptionId, true);
+                                }
+                            }
+                        };
+                    }
+                }
+                """,
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                class Outer {
+                    void doCancelSubscription(String subscriptionId, boolean now) {
+                    }
+
+                    CancellableSubscriptions model() {
+                        return new CancellableSubscriptions() {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @Override
+                            public Mono<Void> cancelSubscription(String subscriptionId) {
+                                doCancelSubscription2(subscriptionId);
+                                return Mono.empty();
+                            }
+
+                            private void doCancelSubscription2(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    doCancelSubscription(subscriptionId, true);
+                                }
+                            }
+                        };
+                    }
+                }
+                """
+        );
+    }
+
+    @Test
+    void namesTheVoidMethodSoItDoesNotHideOneOfAClassTwoLevelsOutThatTheBodyCalls() {
+        String migrated = """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                import java.util.ArrayList;
+                import java.util.HashSet;
+                import java.util.List;
+                import java.util.Set;
+
+                class Outer {
+                    private final List<String> cancelled = new ArrayList<>();
+
+                    void doCancelSubscription(String subscriptionId) {
+                        cancelled.add(subscriptionId);
+                    }
+
+                    class Middle {
+                        class Inner implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>(Set.of("known"));
+
+                            @Override
+                            public Mono<Void> cancelSubscription(String subscriptionId) {
+                                doCancelSubscription2(subscriptionId);
+                                return Mono.empty();
+                            }
+
+                            private void doCancelSubscription2(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    doCancelSubscription(subscriptionId);
+                                }
+                            }
+                        }
+                    }
+
+                    static String run() {
+                        Outer outer = new Outer();
+                        outer.new Middle().new Inner().cancelSubscription("known");
+                        return String.join(",", outer.cancelled);
+                    }
+                }
+                """;
+        migrates(
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                import java.util.ArrayList;
+                import java.util.HashSet;
+                import java.util.List;
+                import java.util.Set;
+
+                class Outer {
+                    private final List<String> cancelled = new ArrayList<>();
+
+                    void doCancelSubscription(String subscriptionId) {
+                        cancelled.add(subscriptionId);
+                    }
+
+                    class Middle {
+                        class Inner implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>(Set.of("known"));
+
+                            @Override
+                            public void cancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    doCancelSubscription(subscriptionId);
+                                }
+                            }
+                        }
+                    }
+
+                    static String run() {
+                        Outer outer = new Outer();
+                        outer.new Middle().new Inner().cancelSubscription("known");
+                        return String.join(",", outer.cancelled);
+                    }
+                }
+                """,
+                migrated
+        );
+        assertThat(run(migrated)).as("ids the outermost class cancelled when the migrated inner class was asked to cancel").isEqualTo("known");
+    }
+
+    @Test
+    void namesTheVoidMethodSoItDoesNotHideAStaticallyImportedOneThatTheBodyCalls() {
+        String migrated = """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                import java.util.ArrayList;
+                import java.util.HashSet;
+                import java.util.List;
+                import java.util.Set;
+
+                import static com.example.Cleanup.doCancelSubscription;
+
+                class Model implements CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>(Set.of("known"));
+
+                    @Override
+                    public Mono<Void> cancelSubscription(String subscriptionId) {
+                        doCancelSubscription2(subscriptionId);
+                        return Mono.empty();
+                    }
+
+                    private void doCancelSubscription2(String subscriptionId) {
+                        if (ids.remove(subscriptionId)) {
+                            doCancelSubscription(subscriptionId);
+                        }
+                    }
+
+                    static String run() {
+                        new Model().cancelSubscription("known");
+                        return String.join(",", Cleanup.CANCELLED);
+                    }
+                }
+
+                class Cleanup {
+                    static final List<String> CANCELLED = new ArrayList<>();
+
+                    static void doCancelSubscription(String subscriptionId) {
+                        CANCELLED.add(subscriptionId);
+                    }
+                }
+                """;
+        migrates(
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                import java.util.ArrayList;
+                import java.util.HashSet;
+                import java.util.List;
+                import java.util.Set;
+
+                import static com.example.Cleanup.doCancelSubscription;
+
+                class Model implements CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>(Set.of("known"));
+
+                    @Override
+                    public void cancelSubscription(String subscriptionId) {
+                        if (ids.remove(subscriptionId)) {
+                            doCancelSubscription(subscriptionId);
+                        }
+                    }
+
+                    static String run() {
+                        new Model().cancelSubscription("known");
+                        return String.join(",", Cleanup.CANCELLED);
+                    }
+                }
+
+                class Cleanup {
+                    static final List<String> CANCELLED = new ArrayList<>();
+
+                    static void doCancelSubscription(String subscriptionId) {
+                        CANCELLED.add(subscriptionId);
+                    }
+                }
+                """,
+                migrated
+        );
+        assertThat(run(migrated)).as("ids the statically imported method cancelled when the migrated class was asked to cancel").isEqualTo("known");
+    }
+
+    @Test
+    void namesTheVoidMethodSoItDoesNotHideOneAStaticImportOnDemandBringsInThatTheClassDoesNotCall() {
+        migrates(
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                import static com.example.Cleanup.*;
+
+                class Model implements CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    @Override
+                    public void cancelSubscription(String subscriptionId) {
+                        if (ids.remove(subscriptionId)) {
+                            ids.clear();
+                        }
+                    }
+                }
+
+                class Cleanup {
+                    static void doCancelSubscription(String subscriptionId) {
+                    }
+                }
+                """,
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                import static com.example.Cleanup.*;
+
+                class Model implements CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    @Override
+                    public Mono<Void> cancelSubscription(String subscriptionId) {
+                        doCancelSubscription2(subscriptionId);
+                        return Mono.empty();
+                    }
+
+                    private void doCancelSubscription2(String subscriptionId) {
+                        if (ids.remove(subscriptionId)) {
+                            ids.clear();
+                        }
+                    }
+                }
+
+                class Cleanup {
+                    static void doCancelSubscription(String subscriptionId) {
+                    }
+                }
+                """
+        );
+    }
+
+    @Test
+    void changesAnAbstractDeclarationAndTheSubclassThatImplementsIt() {
+        migrates(
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                abstract class BaseModel implements CancellableSubscriptions {
+                    @Override
+                    public abstract void cancelSubscription(String subscriptionId);
+                }
+
+                class Model extends BaseModel {
+                    private final Set<String> ids = new HashSet<>();
+
+                    @Override
+                    public void cancelSubscription(String subscriptionId) {
+                        ids.remove(subscriptionId);
+                    }
+                }
+                """,
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                abstract class BaseModel implements CancellableSubscriptions {
+                    @Override
+                    public abstract Mono<Void> cancelSubscription(String subscriptionId);
+                }
+
+                class Model extends BaseModel {
+                    private final Set<String> ids = new HashSet<>();
+
+                    @Override
+                    public Mono<Void> cancelSubscription(String subscriptionId) {
+                        ids.remove(subscriptionId);
+                        return Mono.empty();
+                    }
+                }
+                """
+        );
+    }
+
+    @Test
+    void changesTheDeclarationOfASubinterfaceAndTheClassThatImplementsIt() {
+        migrates(
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                interface NamedCancellableSubscriptions extends CancellableSubscriptions {
+                    @Override
+                    void cancelSubscription(String subscriptionId);
+                }
+
+                class Model implements NamedCancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    @Override
+                    public void cancelSubscription(String subscriptionId) {
+                        ids.remove(subscriptionId);
+                    }
+                }
+                """,
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                interface NamedCancellableSubscriptions extends CancellableSubscriptions {
+                    @Override
+                    Mono<Void> cancelSubscription(String subscriptionId);
+                }
+
+                class Model implements NamedCancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    @Override
+                    public Mono<Void> cancelSubscription(String subscriptionId) {
+                        ids.remove(subscriptionId);
+                        return Mono.empty();
+                    }
+                }
+                """
+        );
+    }
+
     private void migrates(String before, String after) {
         rewriteRun(java(before, after));
         assertCompiles(after);
     }
 
+    // Compiles the migrated source and answers what the static run() of its first type returns
+    private static String run(String source) {
+        Path classes = assertCompiles(source);
+        try (URLClassLoader loader = new URLClassLoader(new URL[]{classes.toUri().toURL()}, ClassLoader.getPlatformClassLoader())) {
+            Method run = loader.loadClass(typeName(source)).getDeclaredMethod("run");
+            run.setAccessible(true);
+            return (String) run.invoke(null);
+        } catch (InvocationTargetException e) {
+            throw new AssertionError("run() of the migrated source threw " + e.getCause(), e.getCause());
+        } catch (IOException | ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     // rewriteRun never compiles the result, so this compiles it against stubs of the 0.34.0 interfaces
-    private static void assertCompiles(String source) {
+    private static Path assertCompiles(String source) {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
         List<JavaFileObject> sources = Stream.of(MONO, CANCELLABLE_SUBSCRIPTIONS, DCB_SUBSCRIPTION_MODEL, source)
@@ -960,23 +1468,29 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
             Path classes = Files.createTempDirectory("migrated");
             boolean compiled = compiler.getTask(null, null, diagnostics, List.of("-proc:none", "-d", classes.toString()), null, sources).call();
             assertThat(compiled).as("the migrated source compiles, with these diagnostics: %s", diagnostics.getDiagnostics()).isTrue();
+            return classes;
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
     }
 
     private static JavaFileObject inMemory(String source) {
-        Matcher packageName = Pattern.compile("package ([\\w.]+);").matcher(source);
-        Matcher typeName = Pattern.compile("(?:class|interface) (\\w+)").matcher(source);
-        if (!packageName.find() || !typeName.find()) {
-            throw new IllegalArgumentException("No package or type in " + source);
-        }
-        URI uri = URI.create("string:///" + packageName.group(1).replace('.', '/') + "/" + typeName.group(1) + ".java");
+        URI uri = URI.create("string:///" + typeName(source).replace('.', '/') + ".java");
         return new SimpleJavaFileObject(uri, JavaFileObject.Kind.SOURCE) {
             @Override
             public CharSequence getCharContent(boolean ignoreEncodingErrors) {
                 return source;
             }
         };
+    }
+
+    // The fully qualified name of the first type the source declares
+    private static String typeName(String source) {
+        Matcher packageName = Pattern.compile("package ([\\w.]+);").matcher(source);
+        Matcher typeName = Pattern.compile("(?:class|interface) (\\w+)").matcher(source);
+        if (!packageName.find() || !typeName.find()) {
+            throw new IllegalArgumentException("No package or type in " + source);
+        }
+        return packageName.group(1) + "." + typeName.group(1);
     }
 }

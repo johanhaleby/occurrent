@@ -1507,6 +1507,14 @@ The cancel stops the position writes of the subscription it removes and no other
 that was still reading its start position when the cancel came reads it again after the delete, and the positions it
 saves after that are kept.
 
+In 0.33.0 neither the cancel nor a later `subscribe(..)` waited for the store, so a store that never answers a save or a
+delete would now hold up both for good. Each wait therefore ends after `cancelWaitsForStorageAtMost(..)` on
+`ReactorDurableSubscriptionModelConfig`, 10 seconds by default. The delete goes ahead when a write takes longer, a
+`subscribe(..)` stops waiting when the delete takes longer, and the `Mono` fails with a `TimeoutException` in both cases,
+since the position can still be stored. Calling off the write instead would not help, because a store can still apply
+a write after its caller stopped waiting for it. The bound is a setting, because how long a write can take depends on
+the store.
+
 A reactor catch-up model that is cancelled before its replay handed the id over to the wrapped model now passes the
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has, since the wrapped
 model can hold what an earlier process stored for that id.
@@ -1517,8 +1525,8 @@ subscription wrote, and a subscription made after the cancel stores its own. A p
 
 That costs a breaking change to a released interface. A class that implements `CancellableSubscriptions` or the reactor
 `DcbSubscriptionModel` has to return `Mono<Void>`, and code compiled against 0.33.0 that calls the method has to be
-recompiled. `UpgradeToOccurrent_0_34` changes a Java implementation that returns `void`, and one that deletes stored
-state in the background has to be changed by hand. The second method I rejected kept the interface as it was, but it
+recompiled. `UpgradeToOccurrent_0_34` changes a Java implementation that returns `void`, and an abstract or interface
+declaration of the method. An implementation that deletes stored state in the background has to be changed by hand. The second method I rejected kept the interface as it was, but it
 left `cancelSubscription(..)` itself with the gap, and every wrapping model would have had two cancel methods.
 
 A caller no longer deletes the checkpoint by hand to have an id read its history again, since a cancel does it.
