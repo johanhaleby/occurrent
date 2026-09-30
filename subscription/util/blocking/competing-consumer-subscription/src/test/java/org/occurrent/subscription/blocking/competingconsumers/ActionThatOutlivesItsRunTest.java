@@ -379,6 +379,44 @@ class ActionThatOutlivesItsRunTest {
                 .as("the checkpoint once the replaced run has its answer").isEqualTo(recorded));
     }
 
+    @ParameterizedTest
+    @EnumSource(Model.class)
+    void an_action_that_returns_after_a_resume_does_not_let_the_resumed_run_save_a_quiet_position_past_an_event_the_predicate_declined(Model model) throws InterruptedException {
+        // Given a durable subscription whose persist predicate declines one event, and whose action is still running on
+        // the slow event when the pause returns
+        NameDefined first = nameDefined();
+        NameDefined slow = nameDefined();
+        NameDefined declined = nameDefined();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(model(model), storage,
+                new DurableSubscriptionModelConfig(cloudEvent -> !cloudEvent.getId().equals(declined.eventId())).saveQuietPositionEvery(Duration.ofMillis(100)));
+        started.addFirst(durable);
+        CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        CountDownLatch handlingTheSlowEvent = new CountDownLatch(1);
+        AtomicBoolean firstDeliveryOfTheSlowEventReturned = new AtomicBoolean();
+        durable.subscribe("declining", null, StartAt.now(), blockingOnTheFirstDeliveryOf(slow, handlingTheSlowEvent, handled, firstDeliveryOfTheSlowEventReturned))
+                .waitUntilStarted(Duration.ofSeconds(10));
+        eventStore.write("first", serialize(first));
+        eventStore.write("slow", serialize(slow));
+        assertThat(handlingTheSlowEvent.await(10, SECONDS)).as("handling the slow event").isTrue();
+        durable.pauseSubscription("declining");
+        durable.resumeSubscription("declining").waitUntilStarted(Duration.ofSeconds(10));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(first.eventId(), slow.eventId(), slow.eventId()));
+        Checkpoint afterTheSlowEvent = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(handled.getLast());
+        eventStore.write("declined", serialize(declined));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).last().isEqualTo(declined.eventId()));
+        // The resumed run's checkpoint for the slow event, or a quiet position it saved before the declined event
+        Checkpoint beforeTheDeclinedEvent = requireNonNull(storage.read("declining"));
+
+        // When the first delivery of the slow event returns on the run the pause closed
+        releaseTheSlowAction.countDown();
+        await().atMost(5, SECONDS).untilTrue(firstDeliveryOfTheSlowEventReturned);
+
+        // Then the resumed run saves no quiet position, since the last event it delivered is one the predicate declined.
+        // The returning action may still store the checkpoint of the slow event
+        await().during(Duration.ofSeconds(1)).atMost(2, SECONDS).untilAsserted(() -> assertThat(storage.read("declining"))
+                .as("stored checkpoint stays before the declined event while it is the last one delivered").isIn(beforeTheDeclinedEvent, afterTheSlowEvent));
+    }
+
     private record CallResult(@Nullable Throwable thrown, boolean interruptedAfterwards) {
     }
 
@@ -414,6 +452,23 @@ class ActionThatOutlivesItsRunTest {
                     Thread.currentThread().interrupt();
                     throw new RuntimeException(e);
                 }
+            }
+        };
+    }
+
+    private Consumer<CloudEvent> blockingOnTheFirstDeliveryOf(NameDefined slow, CountDownLatch handling, List<CloudEvent> handled, AtomicBoolean firstDeliveryReturned) {
+        AtomicBoolean blocked = new AtomicBoolean();
+        return cloudEvent -> {
+            handled.add(cloudEvent);
+            if (cloudEvent.getId().equals(slow.eventId()) && blocked.compareAndSet(false, true)) {
+                handling.countDown();
+                try {
+                    releaseTheSlowAction.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException(e);
+                }
+                firstDeliveryReturned.set(true);
             }
         };
     }

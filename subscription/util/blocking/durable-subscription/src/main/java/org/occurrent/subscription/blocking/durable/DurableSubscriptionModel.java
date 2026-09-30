@@ -46,6 +46,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpointOrThrowIAE;
@@ -89,7 +90,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // checkpoint management (the same "not allowed to start" case CompetingConsumerSubscriptionModel has its own
     // set for). resumeSubscription reads this so it forwards such a subscription unchanged too, rather than
     // resuming it from a checkpoint this model was never asked to manage. A plain set is safe here only because
-    // subscribe, cancelSubscription and resumeSubscription all run under subscriptionIdLock, which makes at most
+    // subscribe, cancelSubscription and resumeSubscription all run under the lock for the id, which makes at most
     // one of them active for a given id at a time, so no two attempts for the same id are ever both live against
     // this set.
     private final Set<String> notCheckpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
@@ -101,26 +102,28 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // The current subscribe of each id this model stores checkpoints for. A new object for every subscribe, so a read
     // that began before a cancel saves nothing for a later subscribe of the id
     private final ConcurrentMap<String, CheckpointRegistration> registrations = new ConcurrentHashMap<>();
-    // Striped rather than one lock object per id, since subscriptionId is caller-supplied to public methods
-    // (cancelSubscription, resumeSubscription) and an unknown or made-up id must not grow this without bound. A
-    // fixed number of locks bounds memory for good and needs no lifecycle bookkeeping to remove an entry once its
-    // holder is gone, at the cost of occasional cross-id serialization when two ids hash to the same stripe. The
-    // checkpoint write for an event takes none of these, only the lock of its own CheckpointRegistration, which a
-    // cancel of that id also takes. A quiet position save takes one on the wrapped model's read thread, at most once
-    // per interval for an id, and the other callers are startup and reconfiguration calls, so that cost is ordinarily
-    // microseconds. But if the delegate or checkpoint storage hangs inside one id's call, every other id sharing its
-    // stripe blocks too until it returns, a quiet save for such an id included.
-    private static final int SUBSCRIPTION_ID_LOCK_STRIPES = 1024;
-    private final Object[] subscriptionIdLocks = new Object[SUBSCRIPTION_ID_LOCK_STRIPES];
+    // One lock per id, which exists while a call holds or waits for it. Per id, so a checkpoint store that hangs in
+    // one id's call blocks only calls for that id. Removed once no call needs it, so an unknown or made-up id passed
+    // to cancelSubscription or resumeSubscription leaves nothing behind. The checkpoint write for an event takes none
+    // of these, only the lock of its own CheckpointRegistration, which a cancel of that id also takes
+    private final ConcurrentMap<String, IdLock> idLocks = new ConcurrentHashMap<>();
 
-    {
-        for (int i = 0; i < subscriptionIdLocks.length; i++) {
-            subscriptionIdLocks[i] = new Object();
+    private <T> T underLockFor(String subscriptionId, Supplier<T> call) {
+        IdLock lock = idLocks.compute(subscriptionId, (__, held) -> held == null ? new IdLock() : held.oneMoreCaller());
+        try {
+            synchronized (lock) {
+                return call.get();
+            }
+        } finally {
+            idLocks.computeIfPresent(subscriptionId, (__, held) -> held.oneCallerLess() ? null : held);
         }
     }
 
-    private Object lockFor(String subscriptionId) {
-        return subscriptionIdLocks[Math.floorMod(subscriptionId.hashCode(), subscriptionIdLocks.length)];
+    private void runUnderLockFor(String subscriptionId, Runnable call) {
+        underLockFor(subscriptionId, () -> {
+            call.run();
+            return null;
+        });
     }
 
     /**
@@ -218,7 +221,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // A refused write is thrown, so the wrapped model ends delivery on a node whose lease moved, as it does for an
     // event. Any other failure is logged and tried again after the interval, since the subscription has lost nothing
     private void saveQuietPosition(String subscriptionId, Checkpoint quietPosition, CheckpointWriteCondition writeCondition, CheckpointRegistration registration) {
-        synchronized (lockFor(subscriptionId)) {
+        runUnderLockFor(subscriptionId, () -> {
             if (registrations.get(subscriptionId) != registration || !registration.quietSaveAllowed) {
                 return;
             }
@@ -230,7 +233,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             } catch (RuntimeException e) {
                 log.warn("Failed to save the quiet position of subscription {}. Trying again in {}.", subscriptionId, config.quietPositionSaveInterval, e);
             }
-        }
+        });
     }
 
     // Stored now rather than with the next event, since a process stopping before that event would restart from
@@ -238,7 +241,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // under the lock resumeSubscription and cancelSubscription hold, so a run that a resume replaced or a cancel ended
     // while it asked for the present stores nothing
     private void storeRestartPositionAfterHistoryLoss(String subscriptionId, Checkpoint restartedFrom, BooleanSupplier stillCurrent) {
-        synchronized (lockFor(subscriptionId)) {
+        runUnderLockFor(subscriptionId, () -> {
             if (!checkpointedSubscriptions.contains(subscriptionId) || !stillCurrent.getAsBoolean()) {
                 return;
             }
@@ -248,7 +251,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 log.warn("Did not store the position subscription {} restarts from after its history was lost, since another node has written its checkpoint with a newer lease: {}",
                         subscriptionId, e.getMessage());
             }
-        }
+        });
     }
 
     /**
@@ -286,7 +289,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // comment above). The blocking MongoDB models evaluate the returned StartAt on their executor each time
         // they open a change stream, outside this lock, so a cancelSubscription can run while it reads the
         // checkpoint or writes the first position.
-        synchronized (lockFor(subscriptionId)) {
+        return underLockFor(subscriptionId, () -> {
             StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
             if (startAtToUse == null) {
                 // Not allowed to start, delegate to the wrapped subscription instead. Whether it was already
@@ -316,16 +319,17 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 // Read before the action runs, so the write uses the token of the lease this event was
                 // delivered under, even if this node lost that lease and won a newer one meanwhile
                 CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
+                long delivery = registration.delivering();
                 action.accept(cloudEvent);
                 if (persistCheckpoint.test(cloudEvent)) {
                     Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
                     registration.saveUnlessCancelled(() -> {
                         storage.save(subscriptionId, checkpoint, writeCondition);
                         registration.lastWrite.set(System.nanoTime());
-                        registration.quietSaveAllowed = true;
+                        registration.delivered(delivery, true);
                     });
                 } else {
-                    registration.quietSaveAllowed = false;
+                    registration.delivered(delivery, false);
                 }
             };
             Subscription subscription = holdPaused
@@ -338,7 +342,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             checkpointedSubscriptions.add(subscriptionId);
             registrations.put(subscriptionId, registration);
             return subscription;
-        }
+        });
     }
 
     // A version from writeVersionSource stamps notOlderThan. An empty answer or no source stamps any(). Always the
@@ -529,7 +533,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     public Subscription resumeSubscription(String subscriptionId) {
         // Held for the whole decision, reposition call included, so a concurrent subscribe or cancelSubscription
         // for this id cannot land between the marker check and acting on it.
-        synchronized (lockFor(subscriptionId)) {
+        return underLockFor(subscriptionId, () -> {
             if (!notCheckpointedSubscriptions.contains(subscriptionId)) {
                 Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel());
                 if (repositionable.isPresent()) {
@@ -540,7 +544,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 }
             }
             return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
-        }
+        });
     }
 
     @Override
@@ -556,7 +560,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
-        synchronized (lockFor(subscriptionId)) {
+        runUnderLockFor(subscriptionId, () -> {
             subscriptionModel.cancelSubscription(subscriptionId);
             // The wrapped model doesn't wait for an action that is running, so its checkpoint is written before this
             // deletes it or not at all
@@ -568,7 +572,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             }
             notCheckpointedSubscriptions.remove(subscriptionId);
             checkpointedSubscriptions.remove(subscriptionId);
-        }
+        });
     }
 
     @Override
@@ -614,9 +618,22 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // one that always answers false, so it has to store an event first
         volatile boolean quietSaveAllowed;
         private boolean cancelled;
+        // Counts the deliveries of every run of this subscribe. An action a pause stopped waiting for can return after
+        // a resume has delivered later events, and only the latest delivery says what the last event delivered is
+        private long deliveries;
 
         CheckpointRegistration(boolean quietSaveAllowed) {
             this.quietSaveAllowed = quietSaveAllowed;
+        }
+
+        synchronized long delivering() {
+            return ++deliveries;
+        }
+
+        synchronized void delivered(long delivery, boolean stored) {
+            if (delivery == deliveries) {
+                quietSaveAllowed = stored;
+            }
         }
 
         synchronized void saveUnlessCancelled(Runnable save) {
@@ -628,6 +645,20 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         synchronized void cancelled(Runnable deleteCheckpoint) {
             cancelled = true;
             deleteCheckpoint.run();
+        }
+    }
+
+    // Changed only inside compute and computeIfPresent of idLocks, which run one at a time for an id
+    private static final class IdLock {
+        private int callers = 1;
+
+        IdLock oneMoreCaller() {
+            callers++;
+            return this;
+        }
+
+        boolean oneCallerLess() {
+            return --callers == 0;
         }
     }
 }
