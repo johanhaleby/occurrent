@@ -90,6 +90,21 @@ a node delivers only while it holds the lease. A subscription the wrapped model 
 own `stop()` threw, `stop()` throws an `IllegalStateException` with that failure as its cause, which names the
 subscriptions it paused and says that `start(true)` resumes them while `start(false)` keeps them paused.
 
+`stop()` also gives up the lease of a subscription that `subscribe(..)` is making on another thread once its
+registration has returned, unless the wrapped model already runs that subscription. That one, and one whose
+registration is still under way, give the lease up at the next step of their `subscribe(..)`, so each can hold it after
+`stop()` has returned until then. Waiting for them would make `stop()` wait for a registration or a subscribe in the
+wrapped model.
+
+**A pause in the wrapped model that throws after the node has lost a lease is tried again.** A subscription the wrapped
+model runs without its lease delivers events that the node holding the lease delivers too. The lease-loss callback
+pauses the subscription there, and so does `subscribe(..)` when the lease went while the wrapped model made it. When
+that pause throws with the wrapped model still running the subscription, a thread of its own tries it again, with the
+backoff the MongoDB lease strategies use by default, until the wrapped model no longer runs it or the node holds the
+lease again. The callback does not wait for it. In 0.33.0 the callback threw, and the subscription went on delivering.
+A wrapped model that returns from `pauseSubscription(..)` normally and keeps running the subscription goes on
+delivering it, since pausing it again would do the same.
+
 **`CompetingConsumerSubscriptionModel` changes what it records, and asks the wrapped model to change a subscription,
 only while it holds its monitor, except for two steps of `subscribe(..)`.** These threads act on it:
 
@@ -112,8 +127,8 @@ paused.
 - Shut down: it gives up its registration and throws `IllegalStateException`. What it made is left to the wrapped
   model's own `shutdown()`, and paused first when the wrapped model runs it. A `subscribe(..)` after `shutdown()`
   throws the same exception before it does anything.
-- Stopped, nothing made yet: it makes the subscription with `subscribePaused(..)`. A wrapped model that refuses gets it
-  as described above.
+- Stopped, nothing made yet: it gives up a registration that a `stop()` overtook, and makes the subscription with
+  `subscribePaused(..)`. A wrapped model that refuses gets it as described above.
 - Stopped, something made: it pauses the subscription when the wrapped model runs it, gives up its registration, and
   records it as waiting for `start()`. One the wrapped model still runs after the pause keeps its lease and is recorded
   as running. So is one that a model refusing `subscribePaused(..)` runs.
@@ -123,11 +138,16 @@ paused.
   that throws gives up the registration, and `subscribe(..)` throws.
 - Started, lease held, something made: it resumes what the wrapped model holds paused, and starts that model first when
   it is stopped. A resume that throws keeps the subscription paused there, records it as waiting and gives the lease
-  back, so it stays a candidate and the next grant tries again. `subscribe(..)` returns.
+  back, so it stays a candidate and the next grant tries again. `subscribe(..)` returns, unless giving the lease back
+  throws too.
 - Started, lease not held: it records the subscription as waiting for a grant, still registered. When the wrapped model
   runs what it made, which only a model refusing `subscribePaused(..)` does, it pauses it there first. One the wrapped
-  model still runs after the pause, also when the pause throws, is recorded as running and stays registered, the same
-  as one whose lease-loss callback cannot pause it.
+  model still runs after the pause is recorded as running and stays registered, the same as one whose lease-loss
+  callback cannot pause it, and a pause that threw is tried again.
+
+A `subscribe(..)` whose step throws otherwise records nothing, gives up its registration and throws. What the wrapped
+model made for it stays there paused, and the next `subscribe(..)` of the id takes it over instead of making it again,
+with the action that call gives.
 
 A lease callback for a subscription that `subscribe(..)` has not recorded yet finds nothing and does nothing, and the
 step after it asks the strategy whether the node holds the lease. The wrapped model is started only under the monitor,
@@ -135,20 +155,22 @@ so a `subscribe(..)` that a `stop()` overtook never starts the wrapped model aft
 
 These rules follow:
 
-1. A subscription delivers only while the node holds its lease. The one exception is a wrapped model that refuses
-   `subscribePaused(..)` and runs a subscription whose lease is lost while that model makes it. It delivers until the
-   step after it pauses the subscription, and for as long as it still runs after the pause. 0.33.0 never paused it.
-2. Once `subscribe(..)` has returned or thrown, what the model records for the id matches what the wrapped model holds,
-   whatever ran on other threads in the meantime.
+1. A subscription delivers only while the node holds its lease, except for two cases. A wrapped model that refuses
+   `subscribePaused(..)` runs a subscription whose lease is lost while that model makes it, until the step after
+   pauses it. A wrapped model that returns from `pauseSubscription(..)` normally but keeps running the subscription
+   goes on delivering it. A pause that throws is tried again until the wrapped model no longer runs the subscription
+   or the node holds the lease again, so it delivers without the lease only until a try succeeds. 0.33.0 never paused
+   a subscription whose lease went while the wrapped model made it, and never tried a failed pause again.
+2. Once `subscribe(..)` has returned, what the model records for the id matches what the wrapped model holds, whatever
+   ran on other threads in the meantime. Once it has thrown, the model records nothing, and the wrapped model holds
+   nothing or a subscription it keeps paused for the next `subscribe(..)` of the id.
 3. No lifecycle call and no lease callback waits for a registration or a subscribe in the wrapped model that
    `subscribe(..)` does on another thread.
-4. A failure that goes away does not keep a subscription from running for good. A step under the monitor that fails
-   once the wrapped model has the subscription keeps it paused there and recorded as waiting for a grant, which tries
-   it again, and `subscribe(..)` returns. A `subscribe(..)` that throws gives up its registration, and the wrapped
-   model has nothing under the id, or after a shutdown only what its own `shutdown()` ends, so the same id can be
-   subscribed again. The one exception is a registration that fails after the wrapped model holds the subscription paused, which
-   happens only for one made while the model was stopped. It stays recorded as waiting, and `resumeSubscription(..)`
-   or `start()` registers it again.
+4. A failure that goes away does not keep a subscription from running for good. A resume that fails once the wrapped
+   model has the subscription keeps it paused there and recorded as waiting for a grant, which tries it again, and
+   `subscribe(..)` returns. A `subscribe(..)` that throws records nothing and gives up its registration, so a
+   `subscribe(..)` of the same id tried again succeeds, and takes over what the wrapped model keeps paused without
+   losing the position a durable subscription stored.
 5. Only a user's `cancelSubscription(..)` cancels a subscription in the wrapped model. Cancelling a
    `DurableSubscriptionModel` subscription deletes the position it stored, so a shutdown during `subscribe(..)` that
    cancelled it would start the next run from the present.
@@ -200,6 +222,14 @@ subscription's lease.
 
 A wrapped model that refuses `subscribePaused(..)` and loses the lease while it makes a subscription in `subscribe(..)`
 delivers that subscription until `subscribe(..)` takes the monitor again and pauses it.
+
+A `subscribe(..)` that throws once the wrapped model has the subscription records nothing, and the subscription
+stays paused in the wrapped model until the next `subscribe(..)` of the id takes it over or `cancelSubscription(..)`
+cancels it. A `subscribe(..)` tried again with another filter or start position gets the subscription the failed one
+made, with its own action.
+
+A pause that keeps failing holds a thread of its own for its subscription, until a try succeeds, the wrapped model no
+longer runs the subscription, the node holds the lease again, or the model is shut down.
 
 During a MongoDB outage, with no socket read timeout on the MongoDB client, `shutdown()` waits until MongoDB answers
 again when another thread holds the monitor in a registration attempt, as in 0.33.0. Moving the registrations of
