@@ -46,7 +46,7 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
-import static org.occurrent.condition.Condition.gt;
+import static org.occurrent.condition.Condition.gte;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.filter.Filter.time;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
@@ -503,8 +503,10 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         if (isBeginningOfTime(checkpoint)) {
             timeFilter = Filter.all();
         } else {
+            // Inclusive, since events can share a time and a stored time says only that one of them was handled. The
+            // events at that time are delivered again, which at-least-once delivery allows.
             OffsetDateTime offsetDateTime = OffsetDateTime.parse(checkpoint.asString(), RFC_3339_DATE_TIME_FORMATTER);
-            timeFilter = time(gt(offsetDateTime));
+            timeFilter = time(gte(offsetDateTime));
         }
 
         final Filter catchupFilter;

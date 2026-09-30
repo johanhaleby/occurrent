@@ -46,6 +46,8 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 class ScheduledRefresh {
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
     private final BiConsumer<Duration, Scheduler> scheduleIt;
+    // Made by the same default thread factory as the refresh thread, so neither is a daemon thread, and close() is what
+    // ends both
     private final @Nullable ExecutorService notifier;
 
     /**

@@ -17,6 +17,7 @@
 package org.occurrent.subscription.blocking.competingconsumers;
 
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -27,6 +28,7 @@ import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.*;
 import java.util.function.Consumer;
@@ -39,13 +41,14 @@ import static org.assertj.core.api.Assertions.catchThrowable;
  * A wrapped model written by a user, which does not override {@link SubscriptionModel#subscribePaused}, and which
  * either runs all the time or can throw from {@link SubscriptionModel#stop()}. A node delivers a subscription only while
  * it holds its lease, and after any stop() the wrapped model holds what this model records. A subscription made while
- * stopped reaches such a model, while it runs, only once the node wins the lease.
+ * stopped reaches such a model, while it runs, straight away when the node wins its lease, so it loses no event written
+ * before the next start().
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CompetingConsumerOverAUserWrittenModelTest {
 
     @Test
-    void a_subscription_made_while_stopped_over_a_model_that_always_runs_reaches_that_model_once_the_node_holds_its_lease() {
+    void a_subscription_made_while_stopped_over_a_model_that_always_runs_runs_there_straight_away_with_its_lease() {
         UserWrittenModel delegate = new UserWrittenModel(true, false, false);
         LeaseRecordingStrategy strategy = new LeaseRecordingStrategy();
         CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
@@ -53,29 +56,49 @@ class CompetingConsumerOverAUserWrittenModelTest {
         model.stop();
 
         assertThatCode(() -> model.subscribe("node", "s2", null, StartAt.subscriptionModelDefault(), __ -> {})).doesNotThrowAnyException();
-        assertThat(delegate.knows("s2")).as("s2 in the running wrapped model while stopped").isFalse();
-        assertThat(strategy.holders).as("leases held while stopped").isEmpty();
+        assertThat(delegate.isRunning("s2")).as("s2 runs in the wrapped model while stopped").isTrue();
+        assertThat(strategy.holders).as("leases held while stopped").containsExactly("s2");
 
-        model.start(false);
+        assertThatCode(() -> model.start(false)).doesNotThrowAnyException();
         assertThat(delegate.isRunning("s2")).as("s2 runs in the wrapped model after start(false)").isTrue();
-        assertThat(strategy.holders).as("leases held after start(false)").contains("s2");
+        assertThat(strategy.holders).as("leases held after start(false)").containsExactly("s2");
     }
 
     @Test
-    void a_subscription_made_while_stopped_after_a_resume_reaches_the_running_wrapped_model_once_the_node_holds_its_lease() {
+    void a_subscription_made_while_stopped_after_a_resume_gets_an_event_written_before_start_true() {
         UserWrittenModel delegate = new UserWrittenModel(false, false, false);
         LeaseRecordingStrategy strategy = new LeaseRecordingStrategy();
         CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
         model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), __ -> {});
         model.stop();
         model.resumeSubscription("s1");
+        List<String> received = new ArrayList<>();
+        model.subscribe("node", "s2", null, StartAt.subscriptionModelDefault(), e -> received.add(e.getId()));
 
-        assertThatCode(() -> model.subscribe("node", "s2", null, StartAt.subscriptionModelDefault(), __ -> {})).doesNotThrowAnyException();
-        assertThat(delegate.knows("s2")).as("s2 in the running wrapped model while stopped").isFalse();
-        assertThat(strategy.holders).as("leases held while stopped").containsExactly("s1");
+        delegate.write("E");
+        Throwable startFailure = catchThrowable(() -> model.start(true));
 
+        assertThat(startFailure).as("start(true) with s2 already running with its lease").isNull();
+        assertThat(received).as("events s2 received").containsExactly("E");
+        assertThat(strategy.holders).as("leases held after start(true)").containsExactlyInAnyOrder("s1", "s2");
+    }
+
+    @Test
+    void a_subscription_made_while_stopped_after_a_resume_gets_the_events_written_before_and_after_start_false() {
+        UserWrittenModel delegate = new UserWrittenModel(false, false, false);
+        LeaseRecordingStrategy strategy = new LeaseRecordingStrategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), __ -> {});
+        model.stop();
+        model.resumeSubscription("s1");
+        List<String> received = new ArrayList<>();
+        model.subscribe("node", "s2", null, StartAt.subscriptionModelDefault(), e -> received.add(e.getId()));
+
+        delegate.write("E");
         model.start(false);
-        assertThat(delegate.isRunning("s2")).as("s2 runs in the wrapped model after start(false)").isTrue();
+        delegate.write("F");
+
+        assertThat(received).as("events s2 received").containsExactly("E", "F");
         assertThat(strategy.holders).as("leases held after start(false)").containsExactlyInAnyOrder("s1", "s2");
     }
 
@@ -87,7 +110,7 @@ class CompetingConsumerOverAUserWrittenModelTest {
         CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
         model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), __ -> {});
 
-        assertThat(catchThrowable(model::stop)).hasMessage("stop failed");
+        assertThat(catchThrowable(model::stop)).hasRootCauseMessage("stop failed");
 
         assertThat(delegate.isRunning("s1")).as("s1 runs in the wrapped model after a stop that threw").isFalse();
         assertThat(strategy.holders).as("leases held after a stop that threw").isEmpty();
@@ -95,7 +118,7 @@ class CompetingConsumerOverAUserWrittenModelTest {
     }
 
     @Test
-    void a_subscription_made_after_a_stop_whose_wrapped_stop_threw_reaches_the_wrapped_model_once_the_node_holds_its_lease() {
+    void a_subscription_made_after_a_stop_whose_wrapped_stop_threw_runs_in_the_wrapped_model_straight_away_with_its_lease() {
         UserWrittenModel delegate = new UserWrittenModel(false, true, false);
         delegate.start(true);
         LeaseRecordingStrategy strategy = new LeaseRecordingStrategy();
@@ -104,8 +127,8 @@ class CompetingConsumerOverAUserWrittenModelTest {
         catchThrowable(model::stop);
 
         assertThatCode(() -> model.subscribe("node", "s2", null, StartAt.subscriptionModelDefault(), __ -> {})).doesNotThrowAnyException();
-        assertThat(delegate.knows("s2")).as("s2 in the running wrapped model while stopped").isFalse();
-        assertThat(strategy.holders).as("leases held while stopped").isEmpty();
+        assertThat(delegate.isRunning("s2")).as("s2 runs in the wrapped model while stopped").isTrue();
+        assertThat(strategy.holders).as("leases held while stopped").containsExactly("s2");
 
         model.start(true);
         assertThat(delegate.isRunning("s2")).as("s2 runs in the wrapped model after start(true)").isTrue();
@@ -142,8 +165,9 @@ class CompetingConsumerOverAUserWrittenModelTest {
         assertThat(strategy.holders).as("lease kept while the wrapped model delivers s1").contains("s1");
     }
 
-    // Starts where it is told, and holds a subscription made while it is stopped paused. One that always runs ignores
-    // stop(), and one that cannot pause ignores pauseSubscription(..).
+    // Starts a subscription at the end of its log when the subscription is made, as a durable model with nothing stored
+    // does, and holds one made while it is stopped paused. One that always runs ignores stop(), and one that cannot pause
+    // ignores pauseSubscription(..).
     private static final class UserWrittenModel implements SubscriptionModel {
         private final boolean alwaysRuns;
         private final boolean cannotPause;
@@ -151,6 +175,9 @@ class CompetingConsumerOverAUserWrittenModelTest {
         private boolean running;
         private final Set<String> runningIds = new HashSet<>();
         private final Set<String> pausedIds = new HashSet<>();
+        private final List<String> log = new ArrayList<>();
+        private final Map<String, Consumer<CloudEvent>> actions = new HashMap<>();
+        private final Map<String, Integer> positions = new HashMap<>();
 
         private UserWrittenModel(boolean alwaysRuns, boolean stopThrowsOnce, boolean cannotPause) {
             this.alwaysRuns = alwaysRuns;
@@ -165,13 +192,29 @@ class CompetingConsumerOverAUserWrittenModelTest {
                 throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
             }
             (running ? runningIds : pausedIds).add(subscriptionId);
+            actions.put(subscriptionId, action);
+            positions.put(subscriptionId, log.size());
             return new UserWrittenSubscription(subscriptionId);
+        }
+
+        private void write(String eventId) {
+            log.add(eventId);
+            List.copyOf(runningIds).forEach(this::deliver);
+        }
+
+        private void deliver(String subscriptionId) {
+            for (int position = positions.get(subscriptionId); position < log.size(); position++) {
+                actions.get(subscriptionId).accept(CloudEventBuilder.v1().withId(log.get(position)).withSource(URI.create("urn:user-written")).withType("written").build());
+                positions.put(subscriptionId, position + 1);
+            }
         }
 
         @Override
         public void cancelSubscription(String subscriptionId) {
             runningIds.remove(subscriptionId);
             pausedIds.remove(subscriptionId);
+            actions.remove(subscriptionId);
+            positions.remove(subscriptionId);
         }
 
         @Override
@@ -194,6 +237,7 @@ class CompetingConsumerOverAUserWrittenModelTest {
             if (resumeSubscriptionsAutomatically) {
                 runningIds.addAll(pausedIds);
                 pausedIds.clear();
+                List.copyOf(runningIds).forEach(this::deliver);
             }
         }
 
@@ -212,16 +256,13 @@ class CompetingConsumerOverAUserWrittenModelTest {
             return pausedIds.contains(subscriptionId);
         }
 
-        private boolean knows(String subscriptionId) {
-            return runningIds.contains(subscriptionId) || pausedIds.contains(subscriptionId);
-        }
-
         @Override
         public Subscription resumeSubscription(String subscriptionId) {
             if (!pausedIds.remove(subscriptionId)) {
                 throw new IllegalStateException("Subscription " + subscriptionId + " is not paused");
             }
             runningIds.add(subscriptionId);
+            deliver(subscriptionId);
             return new UserWrittenSubscription(subscriptionId);
         }
 

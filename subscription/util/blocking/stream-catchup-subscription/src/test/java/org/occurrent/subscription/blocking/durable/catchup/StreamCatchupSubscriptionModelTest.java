@@ -43,6 +43,7 @@ import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -933,6 +934,58 @@ class StreamCatchupSubscriptionModelTest {
                 () -> assertThat(received.subList(0, 3)).as("delivered before the stop").containsExactlyElementsOf(historyIds.subList(0, 3)),
                 () -> assertThat(received).as("delivered in all").containsExactlyElementsOf(historyIds)
         );
+    }
+
+    @Test
+    void a_restart_from_a_stored_time_position_delivers_the_events_written_in_that_same_millisecond() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        List<NameDefined> history = Stream.of("event0", "event1", "event2").map(this::nameDefined).toList();
+        history.forEach(e -> eventStore.write(e.eventId(), inTheSameMillisecond().toCloudEvents(List.of(e))));
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        // What a replay that stored event0's position and then stopped would have left behind
+        storage.save("subscription", TimeBasedCheckpoint.from(SAME_MILLISECOND));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel model = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+
+        model.subscribe("subscription", StartAt.subscriptionModelDefault(), e -> received.add(e.getId())).waitUntilStarted();
+
+        assertThat(received).as("event1 and event2, written in the same millisecond as the stored position").contains(history.get(1).eventId(), history.get(2).eventId());
+    }
+
+    @Test
+    void a_time_replay_that_stop_cut_short_delivers_every_event_when_they_share_the_stored_millisecond() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        List<NameDefined> history = Stream.of("event0", "event1", "event2", "event3", "event4", "event5").map(this::nameDefined).toList();
+        history.forEach(e -> eventStore.write(e.eventId(), inTheSameMillisecond().toCloudEvents(List.of(e))));
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        CountDownLatch handlingThirdEvent = new CountDownLatch(1);
+        CountDownLatch releaseThirdEvent = new CountDownLatch(1);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel model = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        model.subscribe("subscription", StartAtTime.beginningOfTime(), e -> {
+            received.add(e.getId());
+            if (received.size() == 3) {
+                handlingThirdEvent.countDown();
+                awaitLatch(releaseThirdEvent);
+            }
+        });
+        awaitLatch(handlingThirdEvent);
+
+        model.stop();
+        model.start(true);
+        releaseThirdEvent.countDown();
+
+        List<String> historyIds = history.stream().map(DomainEvent::eventId).toList();
+        await().atMost(Duration.ofSeconds(5)).until(() -> !model.isCatchingUp("subscription"));
+        assertThat(received).as("every history event delivered across the stop and start(true)").containsAll(historyIds);
+    }
+
+    private static final OffsetDateTime SAME_MILLISECOND = OffsetDateTime.parse("2026-01-01T10:00:00.123Z");
+
+    private static CloudEventConverter<DomainEvent> inTheSameMillisecond() {
+        return new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).timeMapper(__ -> SAME_MILLISECOND).build();
     }
 
     private static void awaitLatch(CountDownLatch latch) {

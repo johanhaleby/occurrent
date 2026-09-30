@@ -802,11 +802,16 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         }
     }
 
-    // Holds the spring subscription, the position the subscription has read to, and the change stream request
-    // builder that reads it, so a subscription can be paused (by removing it) and resumed (by starting a new
-    // one from that position).
-    // Stands in for the change stream of a subscription held paused on a running container until a resume registers one
+    // Stands in for the change stream of a subscription held paused on a running container until a resume registers
+    // one. A wait on it ends when the resume registers it, and goes on to wait for that change stream to open for
+    // whatever is left of its timeout.
     private static final class NotYetRegistered implements org.springframework.data.mongodb.core.messaging.Subscription {
+        private final CompletableFuture<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> registered = new CompletableFuture<>();
+
+        void registeredAs(org.springframework.data.mongodb.core.messaging.Subscription subscription) {
+            registered.complete(subscription);
+        }
+
         @Override
         public boolean isActive() {
             return false;
@@ -814,15 +819,25 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
         @Override
         public boolean await(Duration timeout) throws InterruptedException {
-            Thread.sleep(timeout);
-            return false;
+            long deadline = System.nanoTime() + timeout.toNanos();
+            org.springframework.data.mongodb.core.messaging.@Nullable Subscription subscription;
+            try {
+                subscription = registered.get(timeout.toNanos(), TimeUnit.NANOSECONDS);
+            } catch (TimeoutException | ExecutionException e) {
+                return false;
+            }
+            return subscription != null && subscription.await(Duration.ofNanos(Math.max(0, deadline - System.nanoTime())));
         }
 
         @Override
         public void cancel() {
+            registered.complete(null);
         }
     }
 
+    // Holds the spring subscription, the position the subscription has read to, and the change stream request
+    // builder that reads it, so a subscription can be paused (by removing it) and resumed (by starting a new
+    // one from that position).
     private record InternalSubscription(SpringMongoSubscription occurrentSubscription, AtomicReference<StartAt> currentStartAt, Supplier<ChangeStreamRequest<Document>> changeStreamRequestBuilder) {
 
         // Keeps the same currentStartAt reference, so the resumed subscription continues from where the paused
@@ -835,7 +850,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                 handle = new SpringMongoSubscription(occurrentSubscription.id(), springSubscription);
             } else {
                 handle = occurrentSubscription;
-                handle.changeSubscription(springSubscription);
+                org.springframework.data.mongodb.core.messaging.Subscription previous = handle.getSubscriptionReference().getAndSet(springSubscription);
+                if (previous instanceof NotYetRegistered placeholder) {
+                    placeholder.registeredAs(springSubscription);
+                }
             }
             return new InternalSubscription(handle, currentStartAt, changeStreamRequestBuilder);
         }

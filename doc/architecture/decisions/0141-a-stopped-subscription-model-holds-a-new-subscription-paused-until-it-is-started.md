@@ -61,16 +61,34 @@ subscription after subscribing it could deliver an event first.
 then holds it paused also when a `resumeSubscription(..)` since `stop()` has started it again, or when its own `stop()`
 threw. A lease won while stopped would lock every other node out of a subscription this node does not serve. `start()`
 makes it compete for the lease whether or not it resumes subscriptions automatically, since nobody paused it, and
-winning the lease resumes it in the wrapped model. A running wrapped model that refuses `subscribePaused(..)` with
-`UnsupportedOperationException` gets the subscription only once the node wins the lease, the same as a subscription
-that loses the lease in `subscribe(..)`. Subscribing it and pausing it straight after would start it where
-`subscribe(..)` starts it, but an event the wrapped model hands over before the pause would be delivered without the
-lease, on a node the user has stopped.
+winning the lease resumes it in the wrapped model.
+
+**A running wrapped model that refuses `subscribePaused(..)` with `UnsupportedOperationException` gets the subscription
+the way it did in 0.33.0, the one case where a subscription made while the node is stopped delivers events before
+`start()` without being resumed.**
+The node competes for the lease straight away. When it wins, it subscribes the subscription in the running wrapped
+model and records it as running, so it delivers events before `start()`, and `start()` finds it started. A lease the
+node loses meanwhile pauses it, as it pauses any running subscription. One that loses the lease in `subscribe(..)` waits
+for `start()`. Waiting for `start()` also after winning would start it where the wrapped model starts a subscription at
+that moment, and lose every event written in between. Losing no event ranks above what `stop()` promises, so the rule
+for this case is that for any wrapped model, nothing that works in 0.33.0 throws or delivers fewer events, and nothing is
+delivered without the lease.
 
 **`CompetingConsumerSubscriptionModel.stop()` pauses a subscription in the wrapped model when that model still runs it
 before it gives up the lease.** A wrapped model that threw from its own `stop()` can still run every subscription, and
 a node delivers only while it holds the lease. A subscription the wrapped model still runs after
-`pauseSubscription(..)` has returned keeps its lease and stays running, and `stop()` throws.
+`pauseSubscription(..)` has returned keeps its lease and stays running, and `stop()` throws. When the wrapped model's
+own `stop()` threw, `stop()` throws an `IllegalStateException` with that failure as its cause, which names the
+subscriptions it paused and says that `start(true)` resumes them while `start(false)` keeps them paused.
+
+**`subscribe(..)`, `stop()`, `start(..)`, `cancelSubscription(..)` and `shutdown()` run one at a time on a lock of their
+own, and a lease callback does not wait for that lock.** `subscribe(..)` holds it while the wrapped model subscribes, so
+no `stop()` runs between winning the lease and subscribing. Such a `stop()` would find nothing to stop, and the
+subscription would run with its lease after `stop()` returned. `subscribe(..)` does not hold the model's monitor while
+the wrapped model subscribes, which can take as long as opening a change stream, so a lease the node loses for another
+subscription pauses that subscription without waiting. A lease callback for the subscription being subscribed finds
+nothing recorded yet and does nothing. So once the wrapped model has it, `subscribe(..)` asks the strategy again, and
+pauses it when the lease is gone, or starts it when a grant came in the meantime.
 
 **The blocking catch-up model keeps a replay it cannot run, instead of ending it.** That covers a replay subscribed
 while the model is stopped and one that `stop()` cuts short. The model keeps the replay together with the handle its
@@ -85,7 +103,8 @@ position of a replay it cut short, since that position lies past the history the
 ## Consequences
 
 A replay that `stop()` cut short runs again from the last position it stored, so the events it delivered after that
-position are delivered again, and the stored position never moves back.
+position are delivered again, and the stored position never moves back. For a time position the replay also delivers
+the events stored at that exact time again, since other events can have the same time down to the millisecond.
 
 The blocking catch-up model runs a kept replay again only on `start(true)` or a resume, where the reactor catch-up
 models in ADR 98 run it on any `start(..)`.
@@ -98,6 +117,5 @@ records the position in `subscribe(..)`.
 A subscription model of your own that you wrap in a `CompetingConsumerSubscriptionModel` has to hold a subscription
 made while it is stopped paused. One that delivers it straight away delivers it on a node that holds no lease for it.
 Unless it implements `subscribePaused(..)`, a subscription made while the competing consumer model is stopped and the
-wrapped model runs reaches your model only once the node wins the lease, and starts where your model starts a
-subscription at that moment. A model whose subscription still runs after `pauseSubscription(..)` has returned makes
+wrapped model runs reaches your model as soon as the node wins its lease, and delivers events before `start()`. A model whose subscription still runs after `pauseSubscription(..)` has returned makes
 `stop()` throw, and the node keeps that subscription's lease.

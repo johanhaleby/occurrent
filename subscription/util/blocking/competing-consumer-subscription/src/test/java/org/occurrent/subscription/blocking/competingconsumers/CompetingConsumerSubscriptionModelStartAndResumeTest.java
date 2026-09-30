@@ -341,9 +341,22 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
         Throwable thrown = catchThrowable(model::stop);
 
-        assertThat(thrown).as("the caller of stop learns that the wrapped model did not stop").hasMessage("The wrapped model cannot stop right now");
+        assertThat(thrown).as("the caller of stop learns that the wrapped model did not stop").hasRootCauseMessage("The wrapped model cannot stop right now");
         assertThat(strategy.holders).as("a stopped node holds no lease, although the wrapped model failed to stop").isEmpty();
         assertThat(model.isPaused("x")).isTrue();
+    }
+
+    @Test
+    void a_stop_that_the_wrapped_model_fails_names_the_subscriptions_it_paused_and_how_to_resume_them() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        delegate.stopThrows = true;
+
+        Throwable thrown = catchThrowable(model::stop);
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage("Stopping the wrapped subscription model failed. "
+                + "This model is stopped anyway, and subscriptions [x] are paused in the wrapped model and gave up their lease. "
+                + "start(true) resumes them, while start(false) keeps them paused until each one is resumed.");
     }
 
     @Test

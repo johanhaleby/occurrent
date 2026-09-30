@@ -557,6 +557,29 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
+        void a_wait_on_a_subscription_held_paused_on_a_running_model_ends_once_a_resume_opens_its_change_stream() {
+            // Given
+            String subscriptionId = UUID.randomUUID().toString();
+            SpringMongoSubscription handle = (SpringMongoSubscription) subscriptionModel.subscribePaused(subscriptionId, null, StartAt.now(), __ -> {
+            });
+            org.springframework.data.mongodb.core.messaging.Subscription heldPaused = handle.getSubscriptionReference().get();
+            CompletableFuture<Boolean> waiting = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return heldPaused.await(Duration.ofSeconds(30));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+            });
+
+            // When
+            subscriptionModel.resumeSubscription(subscriptionId);
+
+            // Then
+            assertThat(waiting).as("a wait begun while the subscription was held paused").succeedsWithin(Duration.ofSeconds(10)).isEqualTo(true);
+        }
+
+        @Test
         void cancelling_a_paused_subscription_forgets_it_so_a_start_delivers_nothing_to_it_and_it_can_be_subscribed_again() throws InterruptedException {
             // Given
             CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
