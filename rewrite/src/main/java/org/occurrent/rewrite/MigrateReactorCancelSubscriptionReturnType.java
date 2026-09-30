@@ -21,29 +21,52 @@ import org.openrewrite.InMemoryExecutionContext;
 import org.openrewrite.Recipe;
 import org.openrewrite.Tree;
 import org.openrewrite.TreeVisitor;
+import org.openrewrite.internal.ListUtils;
 import org.openrewrite.java.JavaIsoVisitor;
 import org.openrewrite.java.JavaParser;
 import org.openrewrite.java.RandomizeIdVisitor;
+import org.openrewrite.java.tree.Comment;
+import org.openrewrite.java.tree.Expression;
 import org.openrewrite.java.tree.J;
 import org.openrewrite.java.tree.JContainer;
 import org.openrewrite.java.tree.JRightPadded;
 import org.openrewrite.java.tree.JavaType;
 import org.openrewrite.java.tree.Space;
 import org.openrewrite.java.tree.Statement;
+import org.openrewrite.java.tree.TextComment;
 import org.openrewrite.java.tree.TypeUtils;
-import org.openrewrite.internal.ListUtils;
 import org.openrewrite.marker.Markers;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 
 /**
  * Changes a Java {@code void cancelSubscription(String)} that implements the reactor {@code CancellableSubscriptions}
  * or {@code DcbSubscriptionModel} to return {@code Mono<Void>}, the return type both interfaces declare from 0.34.0.
- * Each {@code return;} in the method itself becomes {@code return Mono.empty();}, and a body that can run off its end
- * gets {@code return Mono.empty();} as its last statement. That keeps what the method did before, which is cleaning
- * up synchronously and reporting nothing. See doc/migration/upgrading-to-0.34.0.md for an implementation that deletes
- * stored state asynchronously, which has to return a {@code Mono} that completes once that delete has.
+ * It changes the body in one of three ways, each chosen so that the result compiles, and keeps what the method did
+ * before, which is cleaning up synchronously and reporting nothing:
+ * <ul>
+ *     <li>A body that ends in a call to the {@code cancelSubscription(String)} of a model it wraps, or of its
+ *     superclass, returns what that call returns.</li>
+ *     <li>A body that is empty, or ends in a statement that completes whenever it is reached, such as a method call
+ *     or an assignment, gets {@code return Mono.empty();} as its last statement.</li>
+ *     <li>Any other body, one ending in an {@code if}, a loop, a {@code try} or a {@code switch} for example, moves
+ *     unchanged into a new private {@code void} method, which the method calls before it returns
+ *     {@code Mono.empty()}. Whether such a body can run off its end takes the compiler's own analysis to decide, and
+ *     moving it keeps the result compiling either way.</li>
+ * </ul>
+ * A body ending in a {@code return} or a {@code throw} stays in place too. Each {@code return;} of a body that stays in
+ * place becomes {@code return Mono.empty();}. A call to a wrapped
+ * {@code cancelSubscription(String)} that the result does not return gets a {@code TODO} comment, since the
+ * {@code Mono} returned then completes without waiting for that call's cleanup. See
+ * doc/migration/upgrading-to-0.34.0.md for an implementation that deletes stored state asynchronously, which has to
+ * return a {@code Mono} that completes once that delete has.
  */
 public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
 
@@ -51,6 +74,9 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
     private static final String DCB_SUBSCRIPTION_MODEL = "org.occurrent.subscription.api.reactor.DcbSubscriptionModel";
     private static final String MONO = "reactor.core.publisher.Mono";
     private static final String TARGET = "reactorCancelSubscriptionReturningVoid";
+    private static final String HELPERS = "reactorCancelSubscriptionHelpers";
+    private static final String HELPER_NAME = "doCancelSubscription";
+    private static final String RETURN_THE_WRAPPED_CANCEL = " TODO: return the Mono of the cancelSubscription call this method makes, so that the Mono returned here waits for its cleanup";
 
     // Parsed with a stub of Mono because this parser does not see the classpath of the source being migrated
     private static final String TYPED_RETURN_SOURCE = """
@@ -65,6 +91,8 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
             }
             """;
 
+    private enum WrappedCancel {NONE, KNOWN, UNKNOWN}
+
     @Override
     public String getDisplayName() {
         return "Return `Mono<Void>` from a reactor `cancelSubscription(String)`";
@@ -74,10 +102,13 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
     public String getDescription() {
         return "The reactor `CancellableSubscriptions.cancelSubscription(String)` and " +
                "`DcbSubscriptionModel.cancelSubscription(String)` return `Mono<Void>` from 0.34.0. This changes a Java " +
-               "implementation that returns `void` to return `Mono<Void>`, turns each `return;` in it into " +
-               "`return Mono.empty();`, and adds `return Mono.empty();` at the end of a body that can run off its " +
-               "end. An implementation that deletes stored state asynchronously still has to return a `Mono` that " +
-               "completes once that delete has, see doc/migration/upgrading-to-0.34.0.md. Java only, a Kotlin " +
+               "implementation that returns `void` to return `Mono<Void>`. A body ending in a call to the wrapped " +
+               "model's or the superclass's `cancelSubscription(String)` returns that call. A body ending in a " +
+               "statement that completes whenever it is reached gets `return Mono.empty();` at its end, and any other body that " +
+               "does not end in a `return` or a `throw` moves into a new private `void` method that the method calls before returning " +
+               "`Mono.empty()`. A wrapped `cancelSubscription(String)` call that is not returned gets a `TODO` " +
+               "comment. An implementation that deletes stored state asynchronously still has to return a `Mono` " +
+               "that completes once that delete has, see doc/migration/upgrading-to-0.34.0.md. Java only, a Kotlin " +
                "implementation needs the manual steps instead.";
     }
 
@@ -87,23 +118,56 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
             private J.Return typedReturn;
 
             @Override
+            public J.ClassDeclaration visitClassDeclaration(J.ClassDeclaration classDecl, ExecutionContext ctx) {
+                J.ClassDeclaration cd = super.visitClassDeclaration(classDecl, ctx);
+                Map<UUID, J.MethodDeclaration> helpers = getCursor().getMessage(HELPERS);
+                return helpers == null ? cd : cd.withBody(withHelpers(cd.getBody(), helpers));
+            }
+
+            @Override
+            public J.NewClass visitNewClass(J.NewClass newClass, ExecutionContext ctx) {
+                J.NewClass nc = super.visitNewClass(newClass, ctx);
+                Map<UUID, J.MethodDeclaration> helpers = getCursor().getMessage(HELPERS);
+                return helpers == null || nc.getBody() == null ? nc : nc.withBody(withHelpers(nc.getBody(), helpers));
+            }
+
+            @Override
             public J.MethodDeclaration visitMethodDeclaration(J.MethodDeclaration method, ExecutionContext ctx) {
-                if (!isVoidReactorCancelSubscription(method)) {
+                if (!isVoidReactorCancelSubscription(method) || method.getBody() == null) {
                     return super.visitMethodDeclaration(method, ctx);
                 }
-                getCursor().putMessage(TARGET, true);
-                J.MethodDeclaration md = super.visitMethodDeclaration(method, ctx);
+                List<Statement> original = method.getBody().getStatements();
+                Statement last = original.isEmpty() ? null : original.get(original.size() - 1);
+                boolean returnsTheWrappedCancel = last instanceof J.MethodInvocation invocation && wrappedCancel(invocation) == WrappedCancel.KNOWN;
+                boolean flagged = wrappedCancelCalls(method.getBody()) > (returnsTheWrappedCancel ? 1 : 0);
 
-                J.Block body = md.getBody();
-                if (body != null && canRunOffTheEnd(body)) {
+                J.MethodDeclaration md;
+                if (last == null || last instanceof J.Return || last instanceof J.Throw || returnsTheWrappedCancel || completesWheneverReached(last)) {
+                    getCursor().putMessage(TARGET, true);
+                    md = super.visitMethodDeclaration(method, ctx);
+                    J.Block body = md.getBody();
                     List<Statement> statements = body.getStatements();
                     if (statements.isEmpty()) {
                         J.Block withReturn = body.withStatements(List.of(returnMonoEmpty(Space.format("\n"))));
                         md = md.withBody(autoFormat(withReturn, ctx, new Cursor(getCursor(), md)));
-                    } else {
-                        Space lastPrefix = statements.get(statements.size() - 1).getPrefix();
-                        md = md.withBody(body.withStatements(ListUtils.concat(statements, returnMonoEmpty(Space.format(lastPrefix.getWhitespace())))));
+                    } else if (returnsTheWrappedCancel) {
+                        md = md.withBody(body.withStatements(ListUtils.mapLast(statements, statement -> returnTheCall((J.MethodInvocation) statement, flagged))));
+                    } else if (!(last instanceof J.Return) && !(last instanceof J.Throw)) {
+                        J.Return returnEmpty = returnMonoEmpty(Space.format(last.getPrefix().getWhitespace()));
+                        md = md.withBody(body.withStatements(ListUtils.concat(statements, flagged ? withTodo(returnEmpty) : returnEmpty)));
+                    } else if (flagged) {
+                        md = md.withBody(body.withStatements(ListUtils.mapFirst(statements, this::withTodo)));
                     }
+                } else {
+                    // The returns in it stay as they are, since they now return from the new void method
+                    md = super.visitMethodDeclaration(method, ctx);
+                    Cursor owner = getCursor().dropParentUntil(parent -> parent instanceof J.ClassDeclaration || parent instanceof J.NewClass);
+                    Map<UUID, J.MethodDeclaration> helpers = owner.computeMessageIfAbsent(HELPERS, __ -> new LinkedHashMap<>());
+                    J.MethodDeclaration helper = helper(md, helperName(owner.getValue(), helpers.values()));
+                    helpers.put(md.getId(), helper);
+                    J.Block body = md.getBody().withStatements(List.of(callTo(helper, md), returnMonoEmpty(Space.format("\n"))));
+                    body = autoFormat(body, ctx, new Cursor(getCursor(), md));
+                    md = md.withBody(flagged ? body.withStatements(ListUtils.mapFirst(body.getStatements(), this::withTodo)) : body);
                 }
                 maybeAddImport(MONO);
                 return md.withReturnTypeExpression(monoOfVoid(md.getReturnTypeExpression() == null ? Space.EMPTY : md.getReturnTypeExpression().getPrefix()))
@@ -129,7 +193,7 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
             }
 
             private boolean isVoidReactorCancelSubscription(J.MethodDeclaration method) {
-                // rewrite-kotlin reuses J.MethodDeclaration, and the Java template below is wrong for a Kotlin file
+                // rewrite-kotlin reuses J.MethodDeclaration, and what this builds is Java
                 if (getCursor().firstEnclosing(J.CompilationUnit.class) == null) {
                     return false;
                 }
@@ -143,18 +207,130 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                 if (methodType == null || methodType.getParameterTypes().size() != 1 || !TypeUtils.isString(methodType.getParameterTypes().get(0))) {
                     return false;
                 }
-                JavaType.FullyQualified declaringType = methodType.getDeclaringType();
-                return TypeUtils.isAssignableTo(CANCELLABLE_SUBSCRIPTIONS, declaringType)
-                       || TypeUtils.isAssignableTo(DCB_SUBSCRIPTION_MODEL, declaringType);
+                return isReactorCancellable(methodType.getDeclaringType());
             }
 
-            private boolean canRunOffTheEnd(J.Block body) {
-                List<Statement> statements = body.getStatements();
-                if (statements.isEmpty()) {
-                    return true;
+            private boolean isReactorCancellable(JavaType type) {
+                return TypeUtils.isAssignableTo(CANCELLABLE_SUBSCRIPTIONS, type) || TypeUtils.isAssignableTo(DCB_SUBSCRIPTION_MODEL, type);
+            }
+
+            // UNKNOWN when the call has no type, so it may or may not return the Mono of a wrapped model
+            private WrappedCancel wrappedCancel(J.MethodInvocation invocation) {
+                if (!"cancelSubscription".equals(invocation.getSimpleName())
+                    || invocation.getArguments().size() != 1 || invocation.getArguments().get(0) instanceof J.Empty) {
+                    return WrappedCancel.NONE;
                 }
-                Statement last = statements.get(statements.size() - 1);
-                return !(last instanceof J.Return) && !(last instanceof J.Throw);
+                JavaType.Method type = invocation.getMethodType();
+                if (type == null) {
+                    return WrappedCancel.UNKNOWN;
+                }
+                return isReactorCancellable(type.getDeclaringType()) ? WrappedCancel.KNOWN : WrappedCancel.NONE;
+            }
+
+            private int wrappedCancelCalls(J.Block body) {
+                List<J.MethodInvocation> calls = new ArrayList<>();
+                new JavaIsoVisitor<List<J.MethodInvocation>>() {
+                    @Override
+                    public J.MethodInvocation visitMethodInvocation(J.MethodInvocation invocation, List<J.MethodInvocation> found) {
+                        if (wrappedCancel(invocation) != WrappedCancel.NONE) {
+                            found.add(invocation);
+                        }
+                        return super.visitMethodInvocation(invocation, found);
+                    }
+                }.visit(body, calls);
+                return calls.size();
+            }
+
+            // A statement the compiler lets complete whenever it can be reached, so a return after it is reachable too
+            private boolean completesWheneverReached(Statement statement) {
+                return statement instanceof J.MethodInvocation
+                       || statement instanceof J.Assignment
+                       || statement instanceof J.AssignmentOperation
+                       || statement instanceof J.Unary
+                       || statement instanceof J.NewClass
+                       || statement instanceof J.VariableDeclarations
+                       || statement instanceof J.Empty
+                       || statement instanceof J.ClassDeclaration
+                       || statement instanceof J.Assert;
+            }
+
+            private Statement returnTheCall(J.MethodInvocation call, boolean flagged) {
+                J.MethodInvocation returning = call.withPrefix(Space.SINGLE_SPACE)
+                        .withMethodType(call.getMethodType() == null ? null : call.getMethodType().withReturnType(monoOfVoidType()));
+                J.Return aReturn = new J.Return(Tree.randomId(), call.getPrefix(), Markers.EMPTY, returning);
+                return flagged ? withTodo(aReturn) : aReturn;
+            }
+
+            private <S extends Statement> S withTodo(S statement) {
+                Space prefix = statement.getPrefix();
+                String whitespace = prefix.getWhitespace();
+                String indent = whitespace.substring(whitespace.lastIndexOf('\n') + 1);
+                List<Comment> comments = new ArrayList<>();
+                comments.add(new TextComment(false, RETURN_THE_WRAPPED_CANCEL, "\n" + indent, Markers.EMPTY));
+                comments.addAll(prefix.getComments());
+                return statement.withPrefix(Space.build(whitespace, comments));
+            }
+
+            private String helperName(Object owner, Iterable<J.MethodDeclaration> chosen) {
+                J.Block body = owner instanceof J.ClassDeclaration cd ? cd.getBody() : ((J.NewClass) owner).getBody();
+                JavaType type = owner instanceof J.ClassDeclaration cd ? cd.getType() : ((J.NewClass) owner).getType();
+                Set<String> taken = new HashSet<>();
+                if (body != null) {
+                    body.getStatements().stream()
+                            .filter(J.MethodDeclaration.class::isInstance)
+                            .forEach(statement -> taken.add(((J.MethodDeclaration) statement).getSimpleName()));
+                }
+                // A private method named like one it inherits would hide or clash with that one
+                inheritedMethodNames(TypeUtils.asFullyQualified(type), taken, new HashSet<>());
+                chosen.forEach(helper -> taken.add(helper.getSimpleName()));
+                String name = HELPER_NAME;
+                for (int suffix = 2; taken.contains(name); suffix++) {
+                    name = HELPER_NAME + suffix;
+                }
+                return name;
+            }
+
+            private void inheritedMethodNames(JavaType.FullyQualified type, Set<String> names, Set<String> visited) {
+                if (type == null || !visited.add(type.getFullyQualifiedName())) {
+                    return;
+                }
+                type.getMethods().forEach(method -> names.add(method.getName()));
+                inheritedMethodNames(type.getSupertype(), names, visited);
+                type.getInterfaces().forEach(anInterface -> inheritedMethodNames(anInterface, names, visited));
+            }
+
+            // The method as it was, with its body, parameters and throws clause, made private and renamed
+            private J.MethodDeclaration helper(J.MethodDeclaration method, String name) {
+                J.MethodDeclaration copy = (J.MethodDeclaration) new RandomizeIdVisitor<Integer>().visitNonNull(method, 0);
+                JavaType.Method type = copy.getMethodType() == null ? null : copy.getMethodType().withName(name);
+                String whitespace = method.getPrefix().getWhitespace();
+                String indent = whitespace.substring(whitespace.lastIndexOf('\n') + 1);
+                J.Modifier privateModifier = new J.Modifier(Tree.randomId(), Space.EMPTY, Markers.EMPTY, null, J.Modifier.Type.Private, Collections.emptyList());
+                return copy.withPrefix(Space.format("\n\n" + indent))
+                        .withLeadingAnnotations(Collections.emptyList())
+                        .withModifiers(List.of(privateModifier))
+                        .withName(copy.getName().withSimpleName(name).withType(type))
+                        .withMethodType(type);
+            }
+
+            private J.MethodInvocation callTo(J.MethodDeclaration helper, J.MethodDeclaration method) {
+                J.VariableDeclarations parameter = (J.VariableDeclarations) method.getParameters().get(0);
+                J.Identifier argument = parameter.getVariables().get(0).getName().withId(Tree.randomId()).withPrefix(Space.EMPTY);
+                J.Identifier name = new J.Identifier(Tree.randomId(), Space.EMPTY, Markers.EMPTY, Collections.emptyList(), helper.getSimpleName(), helper.getMethodType(), null);
+                return new J.MethodInvocation(Tree.randomId(), Space.format("\n"), Markers.EMPTY, null, null, name,
+                        JContainer.build(Space.EMPTY, List.of(JRightPadded.<Expression>build(argument)), Markers.EMPTY), helper.getMethodType());
+            }
+
+            private J.Block withHelpers(J.Block body, Map<UUID, J.MethodDeclaration> helpers) {
+                List<Statement> statements = new ArrayList<>();
+                for (Statement statement : body.getStatements()) {
+                    statements.add(statement);
+                    J.MethodDeclaration helper = helpers.get(statement.getId());
+                    if (helper != null) {
+                        statements.add(helper);
+                    }
+                }
+                return body.withStatements(statements);
             }
 
             private J.Return returnMonoEmpty(Space prefix) {

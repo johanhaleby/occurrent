@@ -20,9 +20,12 @@ displayName: Return Mono<Void> from a reactor cancelSubscription(String)
 description: >-
   The reactor CancellableSubscriptions.cancelSubscription(String) and DcbSubscriptionModel.cancelSubscription(String)
   return Mono<Void> from 0.34.0, completing once the cancelled id's stored state is deleted. Changes a Java
-  implementation that returns void to return Mono<Void>, turns each bare return in it into return Mono.empty(), and adds
-  return Mono.empty() at the end of a body that can run off its end. An implementation that deletes stored state
-  asynchronously still has to return a Mono that completes once that delete has, see
+  implementation that returns void to return Mono<Void>. A body that ends by calling the wrapped model's or the
+  superclass's cancelSubscription returns that call. A body ending in a statement such as a method call gets return
+  Mono.empty() at its end, and each bare return in it becomes return Mono.empty(). Any other body, one ending in an if,
+  a loop, a try or a switch for example, moves into a new private void method that the method calls before returning
+  Mono.empty(). A wrapped cancelSubscription call that is not returned gets a TODO comment. An implementation that
+  deletes stored state asynchronously still has to return a Mono that completes once that delete has, see
   doc/migration/upgrading-to-0.34.0.md. Java only, a Kotlin implementation needs the manual steps instead.
 recipeList:
   - org.occurrent.rewrite.MigrateReactorCancelSubscriptionReturnType

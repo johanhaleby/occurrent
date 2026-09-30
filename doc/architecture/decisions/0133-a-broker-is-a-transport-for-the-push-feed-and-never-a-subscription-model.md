@@ -1503,13 +1503,16 @@ back. So the delete runs after every position write the cancelled subscription h
 not started by then never runs, even when the wrapped model runs an event through the action after the cancel. A
 `subscribe(..)` for that id in the same process reads and writes the position only after that delete has ended, whether
 or not anything waited for the `Mono`, so it does not start from the position of the subscription that was cancelled.
+The cancel stops the position writes of the subscription it removes and no others. A `subscribe(..)` of the same id
+that was still reading its start position when the cancel came reads it again after the delete, and the positions it
+saves after that are kept.
 
 A reactor catch-up model that is cancelled before its replay handed the id over to the wrapped model now passes the
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has, since the wrapped
 model can hold what an earlier process stored for that id.
 
-Once the `Mono` from `cancelSubscription(id)` completes, no store holds a marker or a position for that id that a later
-`subscribe(..)` would resume from. A process that ended before the `Mono` completed finishes the cancel by calling
+Once the `Mono` from `cancelSubscription(id)` completes, no store holds a marker or a position that the cancelled
+subscription wrote, and a subscription made after the cancel stores its own. A process that ended before the `Mono` completed finishes the cancel by calling
 `cancelSubscription(id)` again.
 
 That costs a breaking change to a released interface. A class that implements `CancellableSubscriptions` or the reactor

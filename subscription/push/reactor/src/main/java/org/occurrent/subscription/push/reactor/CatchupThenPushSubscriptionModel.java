@@ -689,7 +689,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         Mono<Void> delete = deleteMarker(subscriptionId, catchupMarker);
         delete.subscribe(unused -> {
         }, error -> log.warn("Could not delete the catch-up marker of cancelled subscription {}. Subscribing it again in this process replays its history, but after a restart the marker makes it skip its history unless the subscription is cancelled again first.", subscriptionId, error));
-        return Mono.when(liveFeedCancelled, delete);
+        return Mono.when(liveFeedCancelled, delete).cache();
     }
 
     /**

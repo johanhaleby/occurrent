@@ -36,6 +36,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -52,6 +53,7 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     private static final StringBasedCheckpoint REACHED_BEFORE_THE_CANCEL = new StringBasedCheckpoint("reached-before-the-cancel");
     private static final String WHERE_THE_FEED_IS_NOW = "where-the-feed-is-now";
     private static final StringBasedCheckpoint REACHED_BY_THE_CANCELLED_SUBSCRIPTION = new StringBasedCheckpoint("reached-by-the-cancelled-subscription");
+    private static final StringBasedCheckpoint HANDLED_BY_THE_NEW_SUBSCRIPTION = new StringBasedCheckpoint("handled-by-the-new-subscription");
 
     @Test
     void completes_only_once_the_stored_position_is_deleted() throws Exception {
@@ -229,6 +231,103 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         assertThat(hasPosition(storage)).as("position in storage after the cancelled subscription handled an event following the completed cancel").isFalse();
     }
 
+    /**
+     * The subscribe is still reading where to start when a cancel of the same id runs, with no subscription under that
+     * id yet, and the subscription it makes goes on to handle an event after the cancel completed.
+     */
+    @Test
+    void a_subscription_still_reading_its_start_position_during_a_cancel_stores_its_own_positions() throws Exception {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage);
+        storage.holdNextRead = true;
+        CompletableFuture<Void> subscribed = CompletableFuture.runAsync(() -> subscribe(model));
+        assertThat(storage.heldReadEntered.await(5, TimeUnit.SECONDS)).as("the subscribe is reading its start position").isTrue();
+
+        try {
+            // When
+            model.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
+            storage.releaseHeldRead.countDown();
+            subscribed.get(5, TimeUnit.SECONDS);
+            wrapped.actions.get(0).apply(eventAt(HANDLED_BY_THE_NEW_SUBSCRIPTION)).block(TIMEOUT);
+
+            // Then
+            assertThat(storage.read(SUBSCRIPTION_ID).map(Checkpoint::asString).block(TIMEOUT)).as("position stored for the new subscription after it handled an event").isEqualTo(HANDLED_BY_THE_NEW_SUBSCRIPTION.asString());
+        } finally {
+            storage.releaseHeldRead.countDown();
+        }
+    }
+
+    /**
+     * The subscribe reads the position of the subscription being cancelled before the delete reaches the storage, and
+     * the read answers after the cancel completed.
+     */
+    @Test
+    void a_subscribe_whose_start_position_read_overlaps_a_cancel_starts_from_its_own_start_at_and_stores_it() throws Exception {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage);
+        runningFromAStoredPosition(model, storage);
+        storage.holdNextRead = true;
+        CompletableFuture<Void> subscribed = CompletableFuture.runAsync(() -> subscribe(model));
+        assertThat(storage.heldReadEntered.await(5, TimeUnit.SECONDS)).as("the second subscribe is reading its start position").isTrue();
+
+        try {
+            // When
+            model.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
+            storage.releaseHeldRead.countDown();
+            subscribed.get(5, TimeUnit.SECONDS);
+
+            // Then
+            assertThat(wrapped.startedAt.get(1)).as("start position of the subscription whose read overlapped the cancel").hasToString(WHERE_THE_FEED_IS_NOW);
+            assertThat(storage.read(SUBSCRIPTION_ID).map(Checkpoint::asString).block(TIMEOUT)).as("position stored for the subscription whose read overlapped the cancel").isEqualTo(WHERE_THE_FEED_IS_NOW);
+        } finally {
+            storage.releaseHeldRead.countDown();
+        }
+    }
+
+    /**
+     * This model drives the feed itself here. The action of the cancelled subscription is still running when the
+     * cancel completes, and it ends after that.
+     */
+    @Test
+    void a_position_save_the_cancelled_subscription_would_start_after_the_cancel_never_reaches_the_storage_when_this_model_drives_the_feed() throws Exception {
+        // Given
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        feed.events = Flux.just(eventAt(REACHED_BY_THE_CANCELLED_SUBSCRIPTION)).concatWith(Flux.never());
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        CountDownLatch actionEntered = new CountDownLatch(1);
+        CountDownLatch releaseAction = new CountDownLatch(1);
+        CountDownLatch actionEnded = new CountDownLatch(1);
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.<Void>fromRunnable(() -> {
+            actionEntered.countDown();
+            // The dispose of the cancel can interrupt this thread, which ends the action too
+            try {
+                awaitLatch(releaseAction);
+            } finally {
+                actionEnded.countDown();
+            }
+        }).subscribeOn(Schedulers.boundedElastic()));
+        assertThat(actionEntered.await(5, TimeUnit.SECONDS)).as("the action is handling the event").isTrue();
+
+        try {
+            // When
+            model.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
+            releaseAction.countDown();
+            assertThat(actionEnded.await(5, TimeUnit.SECONDS)).as("the action has ended").isTrue();
+            // Nothing signals a save that never starts, so this waits long enough for one that did to have been written
+            Mono.delay(Duration.ofMillis(300)).block();
+
+            // Then
+            assertThat(hasPosition(storage)).as("position in storage after the action of the cancelled subscription ended").isFalse();
+        } finally {
+            releaseAction.countDown();
+        }
+    }
+
     private static void runningFromAStoredPosition(ReactorDurableSubscriptionModel model, CheckpointStorage storage) {
         storage.save(SUBSCRIPTION_ID, REACHED_BEFORE_THE_CANCEL).block(TIMEOUT);
         subscribe(model);
@@ -265,6 +364,10 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         private volatile @Nullable Checkpoint heldSave;
         private volatile CountDownLatch heldSaveEntered = new CountDownLatch(0);
         private volatile CountDownLatch releaseHeldSave = new CountDownLatch(0);
+        // The next read answers what the storage held when it arrived, and only once releaseHeldRead is released
+        private volatile boolean holdNextRead = false;
+        private final CountDownLatch heldReadEntered = new CountDownLatch(1);
+        private final CountDownLatch releaseHeldRead = new CountDownLatch(1);
 
         private PositionStorage() {
             this(new InMemoryCheckpointStorage());
@@ -276,7 +379,19 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
 
         @Override
         public Mono<Checkpoint> read(String subscriptionId) {
-            return backing.read(subscriptionId);
+            if (!holdNextRead) {
+                return backing.read(subscriptionId);
+            }
+            holdNextRead = false;
+            // What the storage holds when the read arrives, handed back only once the test releases it
+            return backing.read(subscriptionId).map(Optional::of).defaultIfEmpty(Optional.empty())
+                    .map(stored -> {
+                        heldReadEntered.countDown();
+                        awaitLatch(releaseHeldRead);
+                        return stored;
+                    })
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .flatMap(Mono::justOrEmpty);
         }
 
         @Override

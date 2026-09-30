@@ -38,9 +38,15 @@ public interface CancellableSubscriptions extends SubscriptionModelCapability {
      * <p>
      * A model that stores a checkpoint, a catch-up marker, or anything else a later subscribe under the same id would
      * resume from also deletes it here. The returned {@code Mono} completes once every such delete for this id has
-     * succeeded, in this model and in every model it wraps, and fails when one of them fails. Once it completes, a
-     * later subscribe under the same id starts from its own {@code StartAt}. It is cached, so subscribing to it more
-     * than once waits for the same deletes rather than running them again.
+     * succeeded, in this model and in every model it wraps, and fails when one of them fails. Once it completes, no
+     * store holds such state that the cancelled subscription wrote, so a later subscribe under the same id
+     * does not resume from where the cancelled one got to. It is cached, so subscribing to it more than once waits for
+     * the same deletes rather than running them again.
+     * <p>
+     * Each model Occurrent ships that stores such state also logs a failed delete as a warning, whether or not
+     * anything subscribes to the {@code Mono}, since a caller that ignores it has no other way to learn that the state
+     * is still stored. A caller that handles the error therefore sees the failure twice, once in its handler and once
+     * in the log.
      * <p>
      * A failed {@code Mono}, or a process that ended before it completed, can leave that state stored. Calling this
      * method again for the same id deletes it, also in a new process that never subscribed that id.
