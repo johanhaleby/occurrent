@@ -54,6 +54,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -74,6 +75,7 @@ import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
@@ -373,17 +375,21 @@ public final class ChangeStreamSubscriptions {
                 ChangeStreamDocument<Document> changeStreamDocument = cursor.tryNext();
                 // A document already fetched when the subscription was closed is left to a resume, rather than
                 // delivered to a subscription that is paused or cancelled
-                if (internalSubscription.isIntentionallyClosed()) {
+                if (!internalSubscription.startDelivering()) {
                     return;
                 }
-                if (changeStreamDocument == null) {
-                    reachedQuietPosition(internalSubscription, cursor.getResumeToken(), quietPositionConsumers);
-                    continue;
+                try {
+                    if (changeStreamDocument == null) {
+                        reachedQuietPosition(internalSubscription, cursor.getResumeToken(), quietPositionConsumers);
+                        continue;
+                    }
+                    MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
+                            .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())))
+                            .ifPresent(executeWithRetry(action, RETRYABLE.and(__ -> !internalSubscription.isIntentionallyClosed()), retryStrategy));
+                    currentStartAt.set(StartAt.checkpoint(new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())));
+                } finally {
+                    internalSubscription.stoppedDelivering();
                 }
-                MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
-                        .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())))
-                        .ifPresent(executeWithRetry(action, RETRYABLE.and(__ -> !internalSubscription.isIntentionallyClosed()), retryStrategy));
-                currentStartAt.set(StartAt.checkpoint(new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())));
             }
         } catch (RuntimeException e) {
             if (internalSubscription.isIntentionallyClosed()) {
@@ -393,7 +399,7 @@ public final class ChangeStreamSubscriptions {
                 // the strategy pause a subscription the model no longer knows about. Logged at error level because
                 // the exception leaves the model right after this and the outer retry won't restart on it, so
                 // nothing else would say why the node went quiet.
-                log.error("Checkpoint write for subscription {} was refused: {}. This node's lease has moved to another one, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it, and a resume redelivers the event once this node holds the lease again.", subscriptionId, e.getMessage(), e);
+                log.error("Checkpoint write for subscription {} was refused: {}. A node with a newer lease has already written this subscription's checkpoint, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it. The refused write was for an event, or for a position reached while no event matched.", subscriptionId, e.getMessage(), e);
                 throw e;
             } else if (isChangeStreamHistoryLost(e)) {
                 if (restartSubscriptionsOnChangeStreamHistoryLost) {
@@ -483,7 +489,7 @@ public final class ChangeStreamSubscriptions {
 
     // Only while the subscription is still on this run. A pause and a resume in the meantime started a new run, which
     // has not lost anything. Runs on the executor thread without the model's monitor, because a pause holds that
-    // monitor while it waits for the run to stop.
+    // monitor while it waits for the action to return.
     private void forget(String subscriptionId, InternalSubscription internalSubscription) {
         runningSubscriptions.remove(subscriptionId, internalSubscription);
     }
@@ -535,8 +541,11 @@ public final class ChangeStreamSubscriptions {
             running = false;
             // A copy of the keys, since pauseSubscription moves each id from runningSubscriptions to
             // pausedSubscriptions as it goes, and forEach over a map that its own callback changes can visit an entry
-            // that has already moved, or miss one that has not
-            new ArrayList<>(runningSubscriptions.keySet()).forEach(model::pauseSubscription);
+            // that has already moved, or miss one that has not. Every run is closed before the first pause waits, so
+            // the actions still running end side by side rather than one after the other.
+            List<String> subscriptionIds = new ArrayList<>(runningSubscriptions.keySet());
+            subscriptionIds.stream().map(runningSubscriptions::get).filter(Objects::nonNull).forEach(InternalSubscription::close);
+            subscriptionIds.forEach(model::pauseSubscription);
         }
     }
 
@@ -685,8 +694,8 @@ public final class ChangeStreamSubscriptions {
         InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
         if (internalSubscription != null) {
             internalSubscription.close();
-            if (!internalSubscription.waitUntilStopped(Duration.ofSeconds(1))) {
-                log.debug("Failed to stop internal subscription after 1 second");
+            if (!internalSubscription.waitUntilNotDelivering(Duration.ofSeconds(1))) {
+                log.debug("The action of subscription {} was still running 1 second after it was paused.", subscriptionId);
             }
             pausedSubscriptions.put(subscriptionId, internalSubscription);
         }
@@ -797,10 +806,10 @@ public final class ChangeStreamSubscriptions {
         final PresentAtSubscribe presentAtSubscribe;
         final Consumer<CloudEvent> action;
         private volatile boolean intentionallyClosed = false;
-        // Read and written under this object's lock. The cursor the current attempt delivers from, and a latch released
-        // once that attempt stops.
+        // Read and written under this object's lock. The cursor the current attempt delivers from, and the thread
+        // running the action or handing over a quiet position right now.
         private @Nullable MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
-        private CountDownLatch stoppedLatch = new CountDownLatch(0);
+        private @Nullable Thread delivering;
 
         private InternalSubscription(Logger log, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, List<Bson> pipeline, PresentAtSubscribe presentAtSubscribe) {
             this(log, currentStartAt, action, pipeline, presentAtSubscribe, new CountDownLatch(1));
@@ -825,8 +834,22 @@ public final class ChangeStreamSubscriptions {
                 return false;
             }
             this.cursor = cursor;
-            this.stoppedLatch = new CountDownLatch(1);
             return true;
+        }
+
+        // False when this run was closed, and what the read returned is then left to a resume. Under the same lock as
+        // close(), so a pause that saw nothing being delivered is never followed by a delivery on this run.
+        synchronized boolean startDelivering() {
+            if (intentionallyClosed) {
+                return false;
+            }
+            delivering = Thread.currentThread();
+            return true;
+        }
+
+        synchronized void stoppedDelivering() {
+            delivering = null;
+            notifyAll();
         }
 
         // False when this run was closed, and the position is then left as it is
@@ -845,7 +868,6 @@ public final class ChangeStreamSubscriptions {
 
         synchronized void stopped() {
             cursor = null;
-            stoppedLatch.countDown();
         }
 
         void stoppedRestarting() {
@@ -860,13 +882,23 @@ public final class ChangeStreamSubscriptions {
             return intentionallyClosed;
         }
 
-        boolean waitUntilStopped(Duration duration) {
-            CountDownLatch attemptStopped;
-            synchronized (this) {
-                attemptStopped = stoppedLatch;
+        // Only for what is being delivered, not for a read waiting on the server, which returns on its own once
+        // maxAwaitTime has passed and then delivers nothing since this run is closed. Not when the action itself
+        // pauses, since it cannot return while it waits
+        synchronized boolean waitUntilNotDelivering(Duration duration) {
+            if (delivering == Thread.currentThread()) {
+                return true;
             }
+            long deadline = System.nanoTime() + duration.toNanos();
             try {
-                return attemptStopped.await(duration.toMillis(), MILLISECONDS);
+                while (delivering != null) {
+                    long remaining = deadline - System.nanoTime();
+                    if (remaining <= 0) {
+                        return false;
+                    }
+                    NANOSECONDS.timedWait(this, remaining);
+                }
+                return true;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException(e);

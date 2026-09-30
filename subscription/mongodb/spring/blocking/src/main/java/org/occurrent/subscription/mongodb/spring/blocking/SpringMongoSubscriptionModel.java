@@ -39,6 +39,7 @@ import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptio
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.blocking.changestream.internal.ChangeStreamSubscriptions;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
@@ -59,6 +60,7 @@ import java.util.StringJoiner;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
@@ -191,8 +193,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
         @Override
         public void shutdownExecutor() {
+            // Five seconds for a running action to return, as in the native model, since the executor's own shutdown
+            // interrupts it
             if (ownsExecutor) {
-                ((ThreadPoolTaskExecutor) executor).shutdown();
+                ExecutorShutdown.shutdownSafely(((ThreadPoolTaskExecutor) executor).getThreadPoolExecutor(), 5, TimeUnit.SECONDS);
             }
         }
 

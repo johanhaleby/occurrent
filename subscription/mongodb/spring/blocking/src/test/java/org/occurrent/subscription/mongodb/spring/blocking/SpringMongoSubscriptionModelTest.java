@@ -563,6 +563,140 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
+        void pausing_subscriptions_one_after_the_other_does_not_wait_for_reads_that_return_nothing() throws InterruptedException {
+            // Given: reads that wait on the server longer than a pause waits for an action
+            List<String> subscriptionIds = subscribeFiveSubscriptionsWhoseReadsWaitThreeSeconds();
+
+            // When
+            long startedPausing = System.nanoTime();
+            subscriptionIds.forEach(subscriptionModel::pauseSubscription);
+            Duration pausing = Duration.ofNanos(System.nanoTime() - startedPausing);
+
+            // Then
+            assertThat(pausing).as("time to pause five subscriptions waiting on the server").isLessThan(Duration.ofSeconds(1));
+        }
+
+        @Test
+        void stopping_the_model_does_not_wait_for_reads_that_return_nothing() throws InterruptedException {
+            // Given: reads that wait on the server longer than a pause waits for an action
+            List<String> subscriptionIds = subscribeFiveSubscriptionsWhoseReadsWaitThreeSeconds();
+
+            // When
+            long startedStopping = System.nanoTime();
+            subscriptionModel.stop();
+            Duration stopping = Duration.ofNanos(System.nanoTime() - startedStopping);
+
+            // Then
+            assertAll(
+                    () -> assertThat(stopping).as("time to stop a model with five subscriptions waiting on the server").isLessThan(Duration.ofSeconds(1)),
+                    () -> assertThat(subscriptionIds).as("paused").allMatch(subscriptionModel::isPaused)
+            );
+        }
+
+        @Test
+        void stopping_the_model_waits_for_the_actions_that_are_running_at_the_same_time_rather_than_one_after_the_other() throws InterruptedException {
+            // Given: three subscriptions, each in an action that takes 800 ms, with more events waiting behind it
+            List<CountDownLatch> handling = new ArrayList<>();
+            for (int i = 0; i < 3; i++) {
+                CountDownLatch handlingOne = new CountDownLatch(1);
+                handling.add(handlingOne);
+                subscriptionModel.subscribe(UUID.randomUUID().toString(), StartAt.now(), __ -> {
+                    handlingOne.countDown();
+                    try {
+                        Thread.sleep(800);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }).waitUntilStarted(Duration.ofSeconds(10));
+            }
+            for (int version = 0; version < 5; version++) {
+                mongoEventStore.write("1", version, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name" + version)));
+            }
+            for (CountDownLatch handlingOne : handling) {
+                assertThat(handlingOne.await(10, SECONDS)).isTrue();
+            }
+
+            // When
+            long startedStopping = System.nanoTime();
+            subscriptionModel.stop();
+            Duration stopping = Duration.ofNanos(System.nanoTime() - startedStopping);
+
+            // Then
+            assertThat(stopping).as("time to stop three subscriptions whose actions take 800 ms").isLessThan(Duration.ofMillis(1200));
+        }
+
+        @Test
+        void a_pause_while_the_action_runs_returns_once_the_action_has_returned_and_nothing_is_delivered_after_it() throws InterruptedException {
+            // Given: an action that takes a while on the first of two events
+            CountDownLatch handlingFirstEvent = new CountDownLatch(1);
+            AtomicBoolean firstEventHandled = new AtomicBoolean();
+            AtomicBoolean pauseReturned = new AtomicBoolean();
+            CopyOnWriteArrayList<CloudEvent> deliveredAfterThePause = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+                if (pauseReturned.get()) {
+                    deliveredAfterThePause.add(cloudEvent);
+                } else if (handlingFirstEvent.getCount() == 1) {
+                    handlingFirstEvent.countDown();
+                    try {
+                        Thread.sleep(300);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    firstEventHandled.set(true);
+                }
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+            mongoEventStore.write("2", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2")));
+            assertThat(handlingFirstEvent.await(10, SECONDS)).isTrue();
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+            boolean handledWhenThePauseReturned = firstEventHandled.get();
+            pauseReturned.set(true);
+
+            // Then
+            assertThat(handledWhenThePauseReturned).as("the action had returned when the pause did").isTrue();
+            await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(deliveredAfterThePause).isEmpty());
+        }
+
+        @Test
+        void a_pause_from_inside_the_action_does_not_wait_for_the_action() throws InterruptedException {
+            // Given
+            String subscriptionId = UUID.randomUUID().toString();
+            AtomicReference<Duration> pausing = new AtomicReference<>();
+            CountDownLatch paused = new CountDownLatch(1);
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
+                long startedPausing = System.nanoTime();
+                subscriptionModel.pauseSubscription(subscriptionId);
+                pausing.set(Duration.ofNanos(System.nanoTime() - startedPausing));
+                paused.countDown();
+            }).waitUntilStarted(Duration.ofSeconds(10));
+
+            // When
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+
+            // Then
+            assertThat(paused.await(10, SECONDS)).isTrue();
+            assertThat(pausing.get()).as("time to pause from inside the action").isLessThan(Duration.ofMillis(500));
+        }
+
+        private List<String> subscribeFiveSubscriptionsWhoseReadsWaitThreeSeconds() throws InterruptedException {
+            subscriptionModel.shutdown();
+            subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, withConfig(eventCollectionName, timeRepresentation).maxAwaitTime(Duration.ofSeconds(3)));
+            List<String> subscriptionIds = new ArrayList<>();
+            for (int i = 0; i < 5; i++) {
+                String subscriptionId = UUID.randomUUID().toString();
+                subscriptionModel.subscribe(subscriptionId, StartAt.now(), __ -> {
+                }).waitUntilStarted(Duration.ofSeconds(10));
+                subscriptionIds.add(subscriptionId);
+            }
+            // So every subscription is inside a read by the time it's paused
+            Thread.sleep(500);
+            return subscriptionIds;
+        }
+
+        @Test
         void a_wait_on_a_subscription_held_paused_on_a_running_model_ends_once_a_resume_opens_its_change_stream() {
             // Given
             String subscriptionId = UUID.randomUUID().toString();
@@ -575,6 +709,35 @@ public class SpringMongoSubscriptionModelTest {
 
             // Then
             assertThat(waiting).as("a wait begun while the subscription was held paused").succeedsWithin(Duration.ofSeconds(10)).isEqualTo(true);
+        }
+
+        @Test
+        void shutdown_lets_an_action_that_is_running_return_rather_than_interrupting_it() throws InterruptedException {
+            // Given
+            CountDownLatch handling = new CountDownLatch(1);
+            AtomicBoolean interrupted = new AtomicBoolean();
+            AtomicBoolean returned = new AtomicBoolean();
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), StartAt.now(), __ -> {
+                handling.countDown();
+                try {
+                    Thread.sleep(500);
+                    returned.set(true);
+                } catch (InterruptedException e) {
+                    interrupted.set(true);
+                    Thread.currentThread().interrupt();
+                }
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+            assertThat(handling.await(10, SECONDS)).isTrue();
+
+            // When
+            subscriptionModel.shutdown();
+
+            // Then
+            assertAll(
+                    () -> assertThat(interrupted).as("interrupted").isFalse(),
+                    () -> assertThat(returned).as("returned before shutdown() did").isTrue()
+            );
         }
 
         @Test
