@@ -293,6 +293,26 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
+    void subscribing_again_after_a_cancel_replays_the_history_as_a_first_subscribe_does() throws InterruptedException {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> {}).waitUntilStarted();
+        awaitHandover(model, marker, "proj");
+        assertThat(marker.exists("proj")).as("catch-up marker once the first replay is done").isTrue();
+
+        model.cancelSubscription("proj");
+        List<String> afterTheCancel = new CopyOnWriteArrayList<>();
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> afterTheCancel.add(ce.getId())).waitUntilStarted();
+        awaitHandover(model, marker, "proj");
+
+        assertThat(afterTheCancel).as("events delivered to the subscription made after the cancel").containsExactly("1", "2");
+        assertThat(marker.exists("proj")).as("catch-up marker once the second replay is done").isTrue();
+    }
+
+    @Test
     void overflowing_the_live_buffer_during_replay_fails_loud() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         CloudEvent e1 = cloudEvent("1", "Created");

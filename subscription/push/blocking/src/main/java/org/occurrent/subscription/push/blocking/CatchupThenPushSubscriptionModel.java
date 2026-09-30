@@ -107,7 +107,8 @@ import java.util.stream.Stream;
  *       replay finished, so a restart skips it and lets the broker resume. The stored value marks completion, it is not
  *       a live resume position. Correctness across a restart then depends on the broker retaining the backlog for an
  *       offline consumer (a durable queue with a preserved offset). If the marker is lost or absent, the projection is
- *       caught up again.</li>
+ *       caught up again. {@link #cancelSubscription(String)} deletes the marker, so subscribing the same id again
+ *       replays the history, as the first subscribe did.</li>
  * </ul>
  * Only stream and capability-agnostic subscription filters can be replayed (their plain {@link Filter} drives the
  * position-ordered read). A DCB subscription filter is rejected, since a DCB boundary needs a different replay read.
@@ -972,6 +973,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             interruptibleReplays.remove(subscriptionId);
             handoversBySubscriptionId.remove(subscriptionId);
             liveFeed.cancelSubscription(subscriptionId);
+            // Under the same lock as the replay's own marker write, which finds the replay gone and writes nothing,
+            // so a subscribe after the cancel replays the history as a first subscribe does
+            if (catchupMarker != null) {
+                catchupMarker.delete(subscriptionId);
+            }
         });
     }
 

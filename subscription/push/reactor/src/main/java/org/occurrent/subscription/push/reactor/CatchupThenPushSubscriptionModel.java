@@ -67,7 +67,8 @@ import java.util.function.Supplier;
  * {@code concatMap}, the de-dup cache needs no locking.
  * <p>
  * Contract (see ADR 62 and the blocking model): catch-up is Occurrent's job and runs once per subscription id, guarded
- * by an optional {@link CheckpointStorage} marker so a restart skips it. No live position is persisted, so resuming the
+ * by an optional {@link CheckpointStorage} marker so a restart skips it. {@link #cancelSubscription(String)} deletes the
+ * marker, so subscribing the same id again replays the history. No live position is persisted, so resuming the
  * live feed is the job of whatever feeds the {@link PushSubscriptionModel}. Only stream and capability-agnostic
  * subscription filters can be replayed.
  * <p>
@@ -165,6 +166,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // catch-up completes, and for a non-empty one after, so the completion below would be guarded by an entry that
     // is sometimes already gone. Written only under this model's monitor, or removed by identity.
     private final ConcurrentMap<String, Sinks.One<Boolean>> catchupOwners = new ConcurrentHashMap<>();
+    // The last marker write or delete for each id, until it ends. The next one starts after it and a marker read
+    // waits for it, so a cancel's delete comes after a write already running, and a subscribe after a cancel finds no
+    // marker. Written only under this model's monitor, or removed by identity.
+    private final ConcurrentMap<String, Mono<Void>> markerOperations = new ConcurrentHashMap<>();
     // Runs at the start of a successful catch-up's completion, where the replaying entry is already released and
     // the launcher is not yet. Exists so a test can stand in that window, which nothing else can reach.
     private volatile Runnable beforeCompletingCatchup = () -> {
@@ -290,9 +295,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 // between the last replayed event and this step writes nothing at all. Only an attempt that held
                 // the id when the write began can leave a marker behind, and it had read the whole history by
                 // then, which is what makes a marker worth trusting later.
-                return Mono.defer(() -> mayStillMarkCaughtUp(subscriptionId, replayDone)
-                        ? CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId)
-                        : Mono.empty());
+                return Mono.defer(() -> markCaughtUpIfStillOwned(subscriptionId, replayDone));
             }
 
             @Override
@@ -469,6 +472,24 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         return !shuttingDown && !stopped && catchupOwners.get(subscriptionId) == replay;
     }
 
+    // The ownership check and queueing the write as one step under the monitor cancelSubscription takes, so a cancel
+    // either comes first and nothing is written, or comes after and its delete runs once the write ends
+    private synchronized Mono<Void> markCaughtUpIfStillOwned(String subscriptionId, Sinks.One<Boolean> replay) {
+        return mayStillMarkCaughtUp(subscriptionId, replay) ? afterTheLastMarkerOperation(subscriptionId, markCaughtUp(subscriptionId)) : Mono.empty();
+    }
+
+    private synchronized Mono<Void> afterTheLastMarkerOperation(String subscriptionId, Mono<Void> operation) {
+        Mono<Void> previous = markerOperations.getOrDefault(subscriptionId, Mono.empty());
+        AtomicReference<Mono<Void>> self = new AtomicReference<>();
+        Mono<Void> next = previous.onErrorResume(__ -> Mono.empty())
+                .then(operation)
+                .doFinally(__ -> markerOperations.remove(subscriptionId, self.get()))
+                .cache();
+        self.set(next);
+        markerOperations.put(subscriptionId, next);
+        return next;
+    }
+
     // Checked against the live feed rather than applied blindly. A stop landing between the last replayed event and
     // here already paused everything, and pausing again throws, which would report a catch-up that actually
     // finished as a failure.
@@ -629,6 +650,13 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // catch-up, freeing the id and releasing the registration that was refusing (ADR 104).
         interruptibleReplays.remove(subscriptionId);
         liveFeed.cancelSubscription(subscriptionId);
+        // cancelSubscription is void, so the delete runs on its own, and a subscribe after it reads the marker only
+        // once the delete ends. A delete that fails keeps the marker, and a subscribe then skips the history.
+        if (catchupMarker != null) {
+            afterTheLastMarkerOperation(subscriptionId, catchupMarker.delete(subscriptionId))
+                    .subscribe(unused -> {
+                    }, error -> log.warn("Could not delete the catch-up marker of cancelled subscription {}, so subscribing it again skips its history", subscriptionId, error));
+        }
     }
 
     /**
@@ -687,7 +715,12 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     private Mono<Boolean> alreadyCaughtUp(String subscriptionId) {
-        return catchupMarker == null ? Mono.just(false) : catchupMarker.read(subscriptionId).hasElement();
+        if (catchupMarker == null) {
+            return Mono.just(false);
+        }
+        return Mono.defer(() -> markerOperations.getOrDefault(subscriptionId, Mono.empty()))
+                .onErrorResume(__ -> Mono.empty())
+                .then(catchupMarker.read(subscriptionId).hasElement());
     }
 
     private Mono<Void> markCaughtUp(String subscriptionId) {

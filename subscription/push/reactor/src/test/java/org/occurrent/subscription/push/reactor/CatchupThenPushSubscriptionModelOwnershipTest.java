@@ -324,22 +324,12 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
     }
 
     /**
-     * A marker is only ever written by an attempt that read the id's whole history and owned the id when the write
-     * began, so a replacement finds a marker that describes history somebody read, and skips reading it again. The
-     * same answer a restart gets, and that is the point. The model no longer says one thing to a replacement in
-     * this process and another to the first subscription after a restart, for the same durable state.
-     * <p>
-     * The cancel here arrives while the write is already running, and the write finishes anyway. That ordering is
-     * allowed rather than prevented, since what the marker claims was already true when the write began.
-     * <p>
-     * What this no longer proves, said plainly because it used to. An earlier version of this test asserted the
-     * opposite, that the replacement replays. That behaviour was process-local, since the record it rested on was a
-     * map this model loses on restart, so the marker was distrusted in process and trusted after a restart. This
-     * test is what would fail if that split came back. A caller that wants an id to read its history again deletes
-     * the checkpoint, which is the recovery ADR 116 already documents.
+     * A cancel discards the marker, as it discards any checkpoint, so a subscription made after it reads the history
+     * as a first one does. The cancel here arrives while the write is already running. The write finishes, and the
+     * delete runs after it, so the marker is gone in this process and after a restart alike.
      */
     @Test
-    void a_marker_written_by_an_attempt_that_owned_the_id_is_trusted_by_the_replacement() throws Exception {
+    void a_cancel_while_the_marker_write_runs_deletes_the_marker_once_the_write_ends() throws Exception {
         CountDownLatch saveEntered = new CountDownLatch(1);
         CountDownLatch releaseSave = new CountDownLatch(1);
         InMemoryCheckpointStorage backing = new InMemoryCheckpointStorage();
@@ -382,23 +372,16 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
         // Ownership moves while that write is still in flight.
         model.cancelSubscription("sub");
         releaseSave.countDown();
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
-                assertThat(backing.read("sub").hasElement().block())
-                        .as("the write the cancelled attempt had already started still lands")
-                        .isTrue());
 
         List<String> replacementHandled = new CopyOnWriteArrayList<>();
         model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
-                ce -> Mono.fromRunnable(() -> replacementHandled.add(ce.getId())));
-
-        // Asserted through a live event rather than by waiting on an empty list, so a replacement that never got
-        // anywhere fails here instead of passing for the wrong reason.
+                ce -> Mono.fromRunnable(() -> replacementHandled.add(ce.getId()))).waitUntilStarted().block(Duration.ofSeconds(5));
         feed.accept(cloudEvent("live")).block(Duration.ofSeconds(5));
+
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
                 assertThat(replacementHandled)
-                        .as("the marker says this id's history has been read, so the replacement goes straight live "
-                                + "rather than reading it again")
-                        .containsExactly("live"));
+                        .as("events delivered to the subscription made after the cancel")
+                        .containsExactly("1", "2", "live"));
     }
 
     /**
@@ -447,12 +430,11 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
     }
 
     /**
-     * The ordinary case, which the record of an in-flight marker write must not spoil. A catch-up that finishes
-     * its own write while it still owns the id leaves nothing behind, so the next catch-up for that id trusts the
-     * marker and skips the history rather than reading it all again.
+     * A cancel deletes the marker from storage, not only from what this process remembers, so a model started
+     * afterwards over the same storage reads the history again too.
      */
     @Test
-    void a_catch_up_that_finishes_its_own_marker_write_leaves_the_marker_trusted() {
+    void a_model_started_after_a_cancel_reads_the_history_again() {
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
         PushSubscriptionModel feed = new PushSubscriptionModel();
         PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1"), cloudEvent("2")));
@@ -466,17 +448,17 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
         assertThat(marker.read("sub").hasElement().block()).as("the catch-up marked itself complete").isTrue();
 
         model.cancelSubscription("sub");
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(marker.read("sub").hasElement().block()).as("catch-up marker after the cancel").isFalse());
 
+        CatchupThenPushSubscriptionModel restarted = new CatchupThenPushSubscriptionModel(reader, new PushSubscriptionModel(), marker);
         List<String> secondHandled = new CopyOnWriteArrayList<>();
-        var second = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
-                ce -> Mono.fromRunnable(() -> secondHandled.add(ce.getId())));
-        second.waitUntilStarted().block(Duration.ofSeconds(5));
+        restarted.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+                ce -> Mono.fromRunnable(() -> secondHandled.add(ce.getId()))).waitUntilStarted().block(Duration.ofSeconds(5));
 
-        await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
                 assertThat(secondHandled)
-                        .as("the marker was written by an attempt that owned the id from start to finish, so the "
-                                + "next catch-up trusts it and reads no history")
-                        .isEmpty());
+                        .as("events delivered after the restart")
+                        .containsExactly("1", "2"));
     }
 
     /**
