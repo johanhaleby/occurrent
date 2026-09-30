@@ -22,6 +22,7 @@ import com.mongodb.client.ChangeStreamIterable;
 import com.mongodb.client.MongoChangeStreamCursor;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.CloudEvent;
+import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.bson.conversions.Bson;
@@ -39,6 +40,7 @@ import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions.HistoryLossListener;
+import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions.QuietPositionListener;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
@@ -147,6 +149,7 @@ public final class ChangeStreamSubscriptions {
     private final ConcurrentMap<String, InternalSubscription> runningSubscriptions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions = new ConcurrentHashMap<>();
     private final List<HistoryLossListener> historyLossListeners = new CopyOnWriteArrayList<>();
+    private final List<QuietPositionListener> quietPositionListeners = new CopyOnWriteArrayList<>();
     private final TimeRepresentation timeRepresentation;
     private final RetryStrategy retryStrategy;
     private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
@@ -254,11 +257,8 @@ public final class ChangeStreamSubscriptions {
     // ends while the subscription is paused loses nothing. A cancel or a shutdown stops it before the next attempt
     // rather than interrupting it, since the thread it runs on belongs to the executor and runs other subscriptions.
     private void recordThePresent(String subscriptionId, AtomicReference<StartAt> currentStartAt, BooleanSupplier cancelled) {
-        SubscriptionModelContext subscriptionModelContext = subscriptionModelContext();
         try {
-            executeWithRetry(() -> {
-                MongoCommons.resolveOpeningPosition(currentStartAt, subscriptionModelContext, this::currentOperationTime);
-            }, RETRYABLE.and(__ -> !cancelled.getAsBoolean() && !Thread.currentThread().isInterrupted()), retryStrategy).run();
+            executeWithRetry(() -> pinThePresent(currentStartAt), RETRYABLE.and(__ -> !cancelled.getAsBoolean() && !Thread.currentThread().isInterrupted()), retryStrategy).run();
         } catch (RuntimeException e) {
             if (cancelled.getAsBoolean() || shutdown || e instanceof MongoInterruptedException || Thread.currentThread().isInterrupted()) {
                 log.debug("Stopped asking MongoDB for its operation time for subscription {} because it was cancelled or the model shut down.", subscriptionId, e);
@@ -269,6 +269,22 @@ public final class ChangeStreamSubscriptions {
         } catch (Error e) {
             log.error("Asking MongoDB for its operation time for subscription {} failed with an error, so its change stream doesn't open.", subscriptionId, e);
             throw e;
+        }
+    }
+
+    // Records the present for a dynamic position without evaluating it, so it's evaluated once, when the change stream
+    // opens, and answers the recorded present if it resolves to the present then. A supplier that writes, such as
+    // the one saving a durable subscription's first checkpoint, then writes once
+    private void pinThePresent(AtomicReference<StartAt> currentStartAt) {
+        while (true) {
+            StartAt tracked = currentStartAt.get();
+            if (!needsThePresent(tracked)) {
+                return;
+            }
+            BsonTimestamp operationTime = currentOperationTime();
+            if (operationTime == null || currentStartAt.compareAndSet(tracked, MongoCommons.pinnedTo(tracked, operationTime))) {
+                return;
+            }
         }
     }
 
@@ -305,6 +321,9 @@ public final class ChangeStreamSubscriptions {
             executeWithRetry(() -> newInternalSubscription(subscriptionId, internalSubscription), RETRYABLE.and(__ -> !internalSubscription.isIntentionallyClosed()), retryStrategy).run();
         } catch (RuntimeException e) {
             if (!internalSubscription.isIntentionallyClosed()) {
+                if (!(e instanceof CheckpointWriteConditionNotFulfilledException)) {
+                    log.error("Gave up restarting subscription {}, as its retry strategy says. Pausing and resuming the subscription starts it again.", subscriptionId, e);
+                }
                 throw e;
             }
             log.debug("Stopped restarting subscription {} because it was paused, cancelled or shut down while waiting to restart after {}.", subscriptionId, e.getClass().getName(), e);
@@ -316,7 +335,9 @@ public final class ChangeStreamSubscriptions {
     // currentStartAt tracks the last change-stream document read (updated below, even without a delivered
     // CloudEvent), shared by every attempt of runUntilStopped and by a resume, so each continues gap-free from there
     // instead of the original StartAt. Before the first one it holds the operation time the stream opened at, when
-    // MongoDB's reply had one, so an original StartAt of the present is not resolved again.
+    // MongoDB's reply had one, so an original StartAt of the present is not resolved again. A read that returns no
+    // document moves it to the resume token MongoDB sent with that empty batch, so a subscription that matches nothing
+    // doesn't keep a position the oplog drops.
     // The try block spans opening the cursor too, since a change-stream error (history lost, failover) can surface
     // there just as well as while iterating.
     private void newInternalSubscription(String subscriptionId, InternalSubscription internalSubscription) {
@@ -345,19 +366,27 @@ public final class ChangeStreamSubscriptions {
 
             internalSubscription.started();
 
-            cursor.forEachRemaining(changeStreamDocument -> {
+            while (!internalSubscription.isIntentionallyClosed()) {
+                // Asked before the read, so a listener decides what it may write before it knows what the read returns
+                List<Consumer<Checkpoint>> quietPositionConsumers = quietPositionConsumersFor(subscriptionId);
+                // Waits on the server for at most maxAwaitTime, and returns null when that batch has no document
+                ChangeStreamDocument<Document> changeStreamDocument = cursor.tryNext();
                 // A document already fetched when the subscription was closed is left to a resume, rather than
                 // delivered to a subscription that is paused or cancelled
                 if (internalSubscription.isIntentionallyClosed()) {
                     return;
                 }
+                if (changeStreamDocument == null) {
+                    reachedQuietPosition(internalSubscription, cursor.getResumeToken(), quietPositionConsumers);
+                    continue;
+                }
                 MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
                         .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())))
                         .ifPresent(executeWithRetry(action, RETRYABLE.and(__ -> !internalSubscription.isIntentionallyClosed()), retryStrategy));
                 currentStartAt.set(StartAt.checkpoint(new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())));
-            });
+            }
         } catch (RuntimeException e) {
-            if (internalSubscription.isIntentionallyClosed() || isCursorNoLongerOpen(e)) {
+            if (internalSubscription.isIntentionallyClosed()) {
                 log.debug("Caught {} (message={}) for subscription {}, this might happen when a subscription is paused or cancelled.", e.getClass().getName(), e.getMessage(), subscriptionId, e);
             } else if (e instanceof CheckpointWriteConditionNotFulfilledException) {
                 // Stays known and pausable, unlike the history-lost branch below, since forgetting it here would let
@@ -393,6 +422,33 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
+    private List<Consumer<Checkpoint>> quietPositionConsumersFor(String subscriptionId) {
+        if (quietPositionListeners.isEmpty()) {
+            return List.of();
+        }
+        List<Consumer<Checkpoint>> consumers = new ArrayList<>(quietPositionListeners.size());
+        for (QuietPositionListener listener : quietPositionListeners) {
+            Consumer<Checkpoint> consumer = listener.beforeReading(subscriptionId);
+            if (consumer != null) {
+                consumers.add(consumer);
+            }
+        }
+        return consumers;
+    }
+
+    // The token of an empty batch is a position every matching document before it was returned from, and the action
+    // has completed for each of them, since this thread runs the action before it reads again. A run that was closed
+    // moves nothing, so it cannot undo the position a resume was given. Without a token there is nothing to move to
+    private void reachedQuietPosition(InternalSubscription internalSubscription, @Nullable BsonDocument resumeToken, List<Consumer<Checkpoint>> quietPositionConsumers) {
+        if (resumeToken == null) {
+            return;
+        }
+        Checkpoint quietPosition = new MongoResumeTokenCheckpoint(resumeToken);
+        if (internalSubscription.movedWhileOpenTo(StartAt.checkpoint(quietPosition))) {
+            quietPositionConsumers.forEach(consumer -> consumer.accept(quietPosition));
+        }
+    }
+
     // Tells the listeners the present before restarting from it. A listener that throws fails this attempt and
     // the retry runs it again. Without an operation time in the reply to ping, restarts from now and tells nobody
     private StartAt restartPositionAfterHistoryLost(String subscriptionId) {
@@ -415,6 +471,16 @@ public final class ChangeStreamSubscriptions {
         historyLossListeners.remove(listener);
     }
 
+    public void addQuietPositionListener(QuietPositionListener listener) {
+        requireNonNull(listener, QuietPositionListener.class.getSimpleName() + " cannot be null");
+        quietPositionListeners.add(listener);
+    }
+
+    public void removeQuietPositionListener(QuietPositionListener listener) {
+        requireNonNull(listener, QuietPositionListener.class.getSimpleName() + " cannot be null");
+        quietPositionListeners.remove(listener);
+    }
+
     // Only while the subscription is still on this run. A pause and a resume in the meantime started a new run, which
     // has not lost anything. Runs on the executor thread without the model's monitor, because a pause holds that
     // monitor while it waits for the run to stop.
@@ -431,12 +497,14 @@ public final class ChangeStreamSubscriptions {
         return operationTime;
     }
 
-    private static boolean isCursorNoLongerOpen(Throwable throwable) {
-        return throwable instanceof IllegalStateException && throwable.getMessage() != null && throwable.getMessage().startsWith("Cursor") && throwable.getMessage().contains("is not longer open");
-    }
-
+    // The causes too, since Spring Data wraps the driver's exception in one of its own
     private static boolean isChangeStreamHistoryLost(Throwable throwable) {
-        return throwable instanceof MongoCommandException mongoCommandException && mongoCommandException.getErrorCode() == MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE;
+        for (Throwable t = throwable; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof MongoCommandException mongoCommandException && mongoCommandException.getErrorCode() == MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void cancelSubscription(String subscriptionId) {
@@ -758,6 +826,15 @@ public final class ChangeStreamSubscriptions {
             }
             this.cursor = cursor;
             this.stoppedLatch = new CountDownLatch(1);
+            return true;
+        }
+
+        // False when this run was closed, and the position is then left as it is
+        synchronized boolean movedWhileOpenTo(StartAt position) {
+            if (intentionallyClosed) {
+                return false;
+            }
+            currentStartAt.set(position);
             return true;
         }
 

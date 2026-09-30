@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.util.predicate.EveryN;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.function.Predicate;
@@ -33,13 +34,19 @@ public class DurableSubscriptionModelConfig {
 
     public final Predicate<CloudEvent> persistCloudEventPositionPredicate;
     public final boolean startWhenNoStartPositionCanBeRecorded;
+    /**
+     * How often the quiet position of a subscription is saved, or {@code null} when it is never saved.
+     */
+    public final @Nullable Duration quietPositionSaveInterval;
+
+    private static final Duration DEFAULT_QUIET_POSITION_SAVE_INTERVAL = Duration.ofMinutes(1);
 
     /**
      * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
      *                                           Supply a predicate that always returns {@code false} to never store the position.
      */
     public DurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
-        this(persistCloudEventPositionPredicate, false);
+        this(persistCloudEventPositionPredicate, false, DEFAULT_QUIET_POSITION_SAVE_INTERVAL);
     }
 
     /**
@@ -49,10 +56,11 @@ public class DurableSubscriptionModelConfig {
         this(new EveryN(persistPositionForEveryNCloudEvent));
     }
 
-    private DurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate, boolean startWhenNoStartPositionCanBeRecorded) {
+    private DurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate, boolean startWhenNoStartPositionCanBeRecorded, @Nullable Duration quietPositionSaveInterval) {
         Objects.requireNonNull(persistCloudEventPositionPredicate, "persistCloudEventPositionPredicate cannot be null");
         this.persistCloudEventPositionPredicate = persistCloudEventPositionPredicate;
         this.startWhenNoStartPositionCanBeRecorded = startWhenNoStartPositionCanBeRecorded;
+        this.quietPositionSaveInterval = quietPositionSaveInterval;
     }
 
     /**
@@ -67,7 +75,41 @@ public class DurableSubscriptionModelConfig {
      * @return A new instance of {@code DurableSubscriptionModelConfig}
      */
     public DurableSubscriptionModelConfig startWhenNoStartPositionCanBeRecorded(boolean startWhenNoStartPositionCanBeRecorded) {
-        return new DurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded);
+        return new DurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, quietPositionSaveInterval);
+    }
+
+    /**
+     * How often the position of a subscription that receives no events is saved. A wrapped model that implements
+     * {@code QuietPositionReportingSubscriptions}, such as the blocking MongoDB models, reports the position a
+     * subscription has read to when a read returned no event for it, and the {@link DurableSubscriptionModel} saves
+     * that position as the subscription's checkpoint at most once per {@code interval}. A checkpoint saved for an
+     * event starts the interval again, so a subscription that receives events gets no extra write.
+     * <p>
+     * The default is one minute. Keep it well below the time the wrapped model keeps its history, which for MongoDB
+     * is the oplog window.
+     *
+     * @param interval The shortest time between two saves of a subscription's quiet position, greater than zero
+     * @return A new instance of {@code DurableSubscriptionModelConfig}
+     * @see #neverSaveQuietPosition()
+     */
+    public DurableSubscriptionModelConfig saveQuietPositionEvery(Duration interval) {
+        Objects.requireNonNull(interval, "interval cannot be null");
+        if (interval.isZero() || interval.isNegative()) {
+            throw new IllegalArgumentException("interval must be greater than zero but was " + interval);
+        }
+        return new DurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, interval);
+    }
+
+    /**
+     * Never save the position of a subscription that receives no events, so a checkpoint is only saved for an event.
+     * The stored checkpoint of a subscription that matches no event for longer than the wrapped model keeps its
+     * history is then a position that model can no longer start from.
+     *
+     * @return A new instance of {@code DurableSubscriptionModelConfig}
+     * @see #saveQuietPositionEvery(Duration)
+     */
+    public DurableSubscriptionModelConfig neverSaveQuietPosition() {
+        return new DurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, null);
     }
 
     @Override
@@ -75,12 +117,13 @@ public class DurableSubscriptionModelConfig {
         if (this == o) return true;
         if (!(o instanceof DurableSubscriptionModelConfig that)) return false;
         return startWhenNoStartPositionCanBeRecorded == that.startWhenNoStartPositionCanBeRecorded
-               && Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate);
+               && Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate)
+               && Objects.equals(quietPositionSaveInterval, that.quietPositionSaveInterval);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded);
+        return Objects.hash(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, quietPositionSaveInterval);
     }
 
     @Override
@@ -88,6 +131,7 @@ public class DurableSubscriptionModelConfig {
         return new StringJoiner(", ", DurableSubscriptionModelConfig.class.getSimpleName() + "[", "]")
                 .add("persistCloudEventPositionPredicate=" + persistCloudEventPositionPredicate)
                 .add("startWhenNoStartPositionCanBeRecorded=" + startWhenNoStartPositionCanBeRecorded)
+                .add("quietPositionSaveInterval=" + quietPositionSaveInterval)
                 .toString();
     }
 }

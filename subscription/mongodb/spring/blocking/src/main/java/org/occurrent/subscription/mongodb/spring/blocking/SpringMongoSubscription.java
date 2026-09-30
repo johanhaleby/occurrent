@@ -17,14 +17,13 @@
 package org.occurrent.subscription.mongodb.spring.blocking;
 
 import org.jspecify.annotations.NullMarked;
-import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.time.Duration;
-import java.util.Objects;
 import java.util.StringJoiner;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CountDownLatch;
+import java.util.function.BooleanSupplier;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -32,12 +31,13 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 public class SpringMongoSubscription implements Subscription {
 
     private final String subscriptionId;
-    private final AtomicReference<org.springframework.data.mongodb.core.messaging.Subscription> subscriptionReference;
-    private volatile boolean shutdown = false;
+    private final CountDownLatch started;
+    private final BooleanSupplier modelIsShutDown;
 
-    protected SpringMongoSubscription(String subscriptionId, org.springframework.data.mongodb.core.messaging.Subscription subscriptionReference) {
+    SpringMongoSubscription(String subscriptionId, CountDownLatch started, BooleanSupplier modelIsShutDown) {
         this.subscriptionId = subscriptionId;
-        this.subscriptionReference = new AtomicReference<>(subscriptionReference);
+        this.started = started;
+        this.modelIsShutDown = modelIsShutDown;
     }
 
     @Override
@@ -45,66 +45,39 @@ public class SpringMongoSubscription implements Subscription {
         return subscriptionId;
     }
 
+    /**
+     * Waits until the change stream of the subscription has opened. The wait also ends, with {@code false}, when the
+     * subscription model is shut down.
+     * <p>
+     * An open change stream doesn't mean that MongoDB has confirmed it is healthy. A failure right after this returns
+     * is still possible, and the subscription model then restarts the change stream.
+     */
     @Override
     public boolean waitUntilStarted(Duration timeout) {
         long timeoutMillis = DurationToTimeoutConverter.convertDurationToTimeout(timeout, MILLISECONDS).timeout();
-        boolean continueWaiting = true;
-        final long startTime = System.currentTimeMillis();
-        while (!shutdown && continueWaiting) {
-            final long currentTime = System.currentTimeMillis();
-            if ((currentTime - startTime) >= timeoutMillis) {
-                return false;
-            }
-            try {
-                continueWaiting = !subscriptionReference.get().await(Duration.ofMillis(100));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException(e);
-            }
-        }
-        return !continueWaiting;
-    }
-
-    // Whether the change stream this handle points at has opened, without waiting for it
-    boolean hasStarted() {
+        long startTime = System.currentTimeMillis();
         try {
-            return subscriptionReference.get().await(Duration.ZERO);
+            while (!modelIsShutDown.getAsBoolean()) {
+                long remaining = timeoutMillis - (System.currentTimeMillis() - startTime);
+                if (remaining <= 0) {
+                    return started.getCount() == 0;
+                }
+                if (started.await(Math.min(100, remaining), MILLISECONDS)) {
+                    return true;
+                }
+            }
+            return false;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return false;
+            throw new RuntimeException(e);
         }
-    }
-
-    AtomicReference<org.springframework.data.mongodb.core.messaging.Subscription> getSubscriptionReference() {
-        return subscriptionReference;
-    }
-
-    void changeSubscription(org.springframework.data.mongodb.core.messaging.Subscription subscription) {
-        subscriptionReference.set(subscription);
-    }
-
-    void shutdown() {
-        shutdown = true;
-    }
-
-    @Override
-    public boolean equals(@Nullable Object o) {
-        if (this == o) return true;
-        if (!(o instanceof SpringMongoSubscription that)) return false;
-        return shutdown == that.shutdown && Objects.equals(subscriptionId, that.subscriptionId) && Objects.equals(subscriptionReference, that.subscriptionReference);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(subscriptionId, subscriptionReference, shutdown);
     }
 
     @Override
     public String toString() {
         return new StringJoiner(", ", SpringMongoSubscription.class.getSimpleName() + "[", "]")
                 .add("subscriptionId='" + subscriptionId + "'")
-                .add("subscriptionReference=" + subscriptionReference)
-                .add("shutdown=" + shutdown)
+                .add("started=" + (started.getCount() == 0))
                 .toString();
     }
 }

@@ -32,6 +32,7 @@ import org.occurrent.subscription.util.predicate.EveryN;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.Objects;
 import java.util.Optional;
@@ -39,6 +40,8 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -93,6 +96,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private final Set<String> checkpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
     // Kept so shutdown can remove the same instance it added, since every method reference is a new object
     private final HistoryLossReportingSubscriptions.HistoryLossListener historyLossListener = this::storeRestartPositionAfterHistoryLoss;
+    private final QuietPositionReportingSubscriptions.QuietPositionListener quietPositionListener = this::quietPositionSaverFor;
+    // When a checkpoint was last written for each id this model stores checkpoints for, as System.nanoTime(). A new
+    // object for every subscribe, so a read that began before a cancel saves nothing for a later subscribe of the id
+    private final ConcurrentMap<String, AtomicLong> lastCheckpointWrites = new ConcurrentHashMap<>();
     // Striped rather than one lock object per id, since subscriptionId is caller-supplied to public methods
     // (cancelSubscription, resumeSubscription) and an unknown or made-up id must not grow this without bound. A
     // fixed number of locks bounds memory for good and needs no lifecycle bookkeeping to remove an entry once its
@@ -176,6 +183,49 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         this.writeVersionSource = writeVersionSource;
         HistoryLossReportingSubscriptions.findIn(subscriptionModel)
                 .ifPresent(model -> model.addHistoryLossListener(historyLossListener));
+        if (config.quietPositionSaveInterval != null) {
+            QuietPositionReportingSubscriptions.findIn(subscriptionModel)
+                    .ifPresent(model -> model.addQuietPositionListener(quietPositionListener));
+        }
+    }
+
+    // Answers nothing until the interval has passed since the last checkpoint write, so a subscription that receives
+    // events gets no extra write. The write condition is read here, before the wrapped model reads, so the save uses
+    // the token of the lease the read was made under, like the write for an event. A source that cannot answer is
+    // asked again after the interval rather than before every read
+    private @Nullable Consumer<Checkpoint> quietPositionSaverFor(String subscriptionId) {
+        Duration interval = config.quietPositionSaveInterval;
+        AtomicLong lastCheckpointWrite = lastCheckpointWrites.get(subscriptionId);
+        if (interval == null || lastCheckpointWrite == null || System.nanoTime() - lastCheckpointWrite.get() < interval.toNanos()) {
+            return null;
+        }
+        CheckpointWriteCondition writeCondition;
+        try {
+            writeCondition = writeConditionFor(subscriptionId);
+        } catch (RuntimeException e) {
+            lastCheckpointWrite.set(System.nanoTime());
+            log.warn("Could not read the write version for subscription {}, so its quiet position is not saved this time. Trying again in {}.", subscriptionId, interval, e);
+            return null;
+        }
+        return quietPosition -> saveQuietPosition(subscriptionId, quietPosition, writeCondition, lastCheckpointWrite);
+    }
+
+    // A refused write is thrown, so the wrapped model ends delivery on a node whose lease moved, as it does for an
+    // event. Any other failure is logged and tried again after the interval, since the subscription has lost nothing
+    private void saveQuietPosition(String subscriptionId, Checkpoint quietPosition, CheckpointWriteCondition writeCondition, AtomicLong lastCheckpointWrite) {
+        synchronized (lockFor(subscriptionId)) {
+            if (lastCheckpointWrites.get(subscriptionId) != lastCheckpointWrite) {
+                return;
+            }
+            lastCheckpointWrite.set(System.nanoTime());
+            try {
+                storage.save(subscriptionId, quietPosition, writeCondition);
+            } catch (CheckpointWriteConditionNotFulfilledException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                log.warn("Failed to save the quiet position of subscription {}. Trying again in {}.", subscriptionId, config.quietPositionSaveInterval, e);
+            }
+        }
     }
 
     // Stored now rather than with the next event, since a process stopping before that event would restart from
@@ -245,6 +295,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                             ? getWrappedSubscriptionModel().subscribePaused(subscriptionId, filter, startAt, action)
                             : getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
                     checkpointedSubscriptions.remove(subscriptionId);
+                    lastCheckpointWrites.remove(subscriptionId);
                     return optedOut;
                 } catch (Throwable t) {
                     if (!alreadyMarked) {
@@ -256,6 +307,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
             // One per subscription, so an EveryN configured for the whole model counts this subscription's events only
             Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
+            // Starts now, so the first quiet position is saved one interval after the subscribe
+            AtomicLong lastCheckpointWrite = new AtomicLong(System.nanoTime());
             Consumer<CloudEvent> checkpointingAction = cloudEvent -> {
                 // Read before the action runs, so the write uses the token of the lease this event was
                 // delivered under, even if this node lost that lease and won a newer one meanwhile
@@ -264,6 +317,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 if (persistCheckpoint.test(cloudEvent)) {
                     Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
                     storage.save(subscriptionId, checkpoint, writeCondition);
+                    lastCheckpointWrite.set(System.nanoTime());
                 }
             };
             Subscription subscription = holdPaused
@@ -274,6 +328,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             // must leave that active subscription's marker alone rather than losing it to this failed attempt.
             notCheckpointedSubscriptions.remove(subscriptionId);
             checkpointedSubscriptions.add(subscriptionId);
+            lastCheckpointWrites.put(subscriptionId, lastCheckpointWrite);
             return subscription;
         }
     }
@@ -498,6 +553,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             storage.delete(subscriptionId);
             notCheckpointedSubscriptions.remove(subscriptionId);
             checkpointedSubscriptions.remove(subscriptionId);
+            lastCheckpointWrites.remove(subscriptionId);
         }
     }
 
@@ -510,6 +566,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             subscriptionModel.shutdown();
         } finally {
             HistoryLossReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.removeHistoryLossListener(historyLossListener));
+            QuietPositionReportingSubscriptions.findIn(subscriptionModel).ifPresent(model -> model.removeQuietPositionListener(quietPositionListener));
         }
     }
 
