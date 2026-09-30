@@ -35,6 +35,7 @@ import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
+import org.occurrent.subscription.api.blocking.DeliveryCheckingSubscriptions;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
@@ -47,12 +48,15 @@ import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStr
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.aggregation.PrefixingDelegatingAggregationOperationContext;
+import org.springframework.scheduling.concurrent.ConcurrentTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import java.util.List;
 import java.util.Set;
@@ -74,7 +78,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, DeliveryCheckingSubscriptions, SmartLifecycle {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -151,6 +155,22 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                 config.restartSubscriptionsOnChangeStreamHistoryLost, null, config.maxAwaitTime, config.autoStartup);
     }
 
+    // False for an executor it can't ask, and for a Spring executor not yet initialized, which isn't shut down
+    static boolean isShutDown(Executor executor) {
+        try {
+            return switch (executor) {
+                case ExecutorService executorService -> executorService.isShutdown();
+                case ThreadPoolTaskExecutor taskExecutor -> taskExecutor.getThreadPoolExecutor().isShutdown();
+                case ThreadPoolTaskScheduler taskScheduler -> taskScheduler.getScheduledExecutor().isShutdown();
+                case SimpleAsyncTaskExecutor taskExecutor -> !taskExecutor.isActive();
+                case ConcurrentTaskExecutor taskExecutor -> isShutDown(taskExecutor.getConcurrentExecutor());
+                default -> false;
+            };
+        } catch (IllegalStateException notInitialized) {
+            return false;
+        }
+    }
+
     private static ThreadPoolTaskExecutor newTaskExecutor(boolean virtualThreads) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setQueueCapacity(0);
@@ -188,7 +208,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
         @Override
         public boolean executorIsShutDown() {
-            return executor instanceof ExecutorService executorService && executorService.isShutdown();
+            return isShutDown(executor);
         }
 
         @Override
@@ -448,6 +468,11 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public void removeQuietPositionListener(QuietPositionListener listener) {
         subscriptions.removeQuietPositionListener(listener);
+    }
+
+    @Override
+    public void checkStillDelivering() {
+        subscriptions.checkStillDelivering();
     }
 
     @Override

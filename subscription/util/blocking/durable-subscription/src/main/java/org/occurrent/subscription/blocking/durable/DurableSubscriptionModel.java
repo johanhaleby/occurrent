@@ -87,6 +87,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private final CheckpointStorage storage;
     private final DurableSubscriptionModelConfig config;
     private final @Nullable CheckpointWriteVersionSource writeVersionSource;
+    // Asked right before the subscriber's action, since reading the write condition can outlast a pause or a cancel
+    private final @Nullable DeliveryCheckingSubscriptions deliveryChecking;
     // subscribe(..) records a subscription id here when its StartAt resolved to null, opting it out of this model's
     // checkpoint management (the same "not allowed to start" case CompetingConsumerSubscriptionModel has its own
     // set for). resumeSubscription reads this so it forwards such a subscription unchanged too, rather than
@@ -193,6 +195,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         this.subscriptionModel = subscriptionModel;
         this.config = config;
         this.writeVersionSource = writeVersionSource;
+        this.deliveryChecking = DeliveryCheckingSubscriptions.findIn(subscriptionModel).orElse(null);
         HistoryLossReportingSubscriptions.findIn(subscriptionModel)
                 .ifPresent(model -> model.addHistoryLossListener(historyLossListener));
         if (config.quietPositionSaveInterval != null) {
@@ -325,6 +328,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 // Read before the action runs, so the write uses the token of the lease this event was
                 // delivered under, even if this node lost that lease and won a newer one meanwhile
                 CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
+                if (deliveryChecking != null) {
+                    deliveryChecking.checkStillDelivering();
+                }
                 long delivery = registration.delivering();
                 action.accept(cloudEvent);
                 if (persistCheckpoint.test(cloudEvent)) {

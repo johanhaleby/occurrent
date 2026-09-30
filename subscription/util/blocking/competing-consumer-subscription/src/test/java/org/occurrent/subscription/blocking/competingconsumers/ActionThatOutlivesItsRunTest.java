@@ -32,6 +32,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -44,6 +45,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -57,6 +59,7 @@ import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -66,11 +69,13 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -301,6 +306,75 @@ class ActionThatOutlivesItsRunTest {
         // Then
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).as("handled once the thread is free").extracting(CloudEvent::getId).contains(afterTheResume.eventId()));
         assertThat(thrownByTheResume).as("what resumeSubscription(..) threw").isNull();
+    }
+
+    @Test
+    void a_resume_on_a_spring_task_executor_that_was_shut_down_throws_and_the_subscription_stays_paused() {
+        // Given a subscription on a task executor the caller shut down while the subscription was paused
+        ThreadPoolTaskExecutor taskExecutor = new ThreadPoolTaskExecutor();
+        taskExecutor.initialize();
+        SpringMongoSubscriptionModel subscriptionModel = new SpringMongoSubscriptionModel(template, SpringMongoSubscriptionModelConfig.withConfig(eventCollection, TimeRepresentation.RFC_3339_STRING)
+                .maxAwaitTime(Duration.ofMillis(100)).executor(taskExecutor));
+        started.add(subscriptionModel);
+        subscriptionModel.subscribe("a", null, StartAt.now(), __ -> {
+        }).waitUntilStarted(Duration.ofSeconds(10));
+        subscriptionModel.pauseSubscription("a");
+        taskExecutor.shutdown();
+
+        // When
+        Throwable thrownByTheResume = catchThrowable(() -> subscriptionModel.resumeSubscription("a"));
+
+        // Then
+        assertThat(thrownByTheResume).as("what resumeSubscription(..) threw").isInstanceOf(RejectedExecutionException.class);
+        assertThat(subscriptionModel.isPaused("a")).as("paused").isTrue();
+    }
+
+    @ParameterizedTest
+    @EnumSource(Model.class)
+    void the_action_of_a_durable_subscription_does_not_start_once_a_cancel_has_returned_during_its_read_of_the_write_version(Model model) throws InterruptedException {
+        // Given a durable subscription that is cancelled while it reads the version to write the checkpoint for an event with
+        CountDownLatch readingTheWriteVersion = new CountDownLatch(1);
+        CountDownLatch answerTheWriteVersion = new CountDownLatch(1);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(model(model), storage, new DurableSubscriptionModelConfig(everyEvent()),
+                writeVersionHeldOnce(readingTheWriteVersion, answerTheWriteVersion));
+        started.addFirst(durable);
+        CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        durable.subscribe("cancelled", null, StartAt.now(), handled::add).waitUntilStarted(Duration.ofSeconds(10));
+        eventStore.write("first", serialize(nameDefined()));
+        assertThat(readingTheWriteVersion.await(10, SECONDS)).isTrue();
+        durable.cancelSubscription("cancelled");
+
+        // When
+        answerTheWriteVersion.countDown();
+
+        // Then
+        await().during(Duration.ofMillis(500)).atMost(2, SECONDS).untilAsserted(() -> assertThat(handled).as("events handled after cancelSubscription(..) returned").isEmpty());
+    }
+
+    @ParameterizedTest
+    @EnumSource(Model.class)
+    void the_action_of_a_durable_subscription_does_not_start_once_a_pause_has_returned_during_its_read_of_the_write_version(Model model) throws InterruptedException {
+        // Given a durable subscription whose read of the version to write the checkpoint for an event with outlasts the
+        // second a pause waits
+        CountDownLatch readingTheWriteVersion = new CountDownLatch(1);
+        CountDownLatch answerTheWriteVersion = new CountDownLatch(1);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(model(model), storage, new DurableSubscriptionModelConfig(everyEvent()),
+                writeVersionHeldOnce(readingTheWriteVersion, answerTheWriteVersion));
+        started.addFirst(durable);
+        CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        durable.subscribe("paused", null, StartAt.now(), handled::add).waitUntilStarted(Duration.ofSeconds(10));
+        NameDefined first = nameDefined();
+        eventStore.write("first", serialize(first));
+        assertThat(readingTheWriteVersion.await(10, SECONDS)).isTrue();
+        durable.pauseSubscription("paused");
+
+        // When
+        answerTheWriteVersion.countDown();
+
+        // Then the event is handled once the subscription is resumed, and not before
+        await().during(Duration.ofMillis(500)).atMost(2, SECONDS).untilAsserted(() -> assertThat(handled).as("events handled after pauseSubscription(..) returned").isEmpty());
+        durable.resumeSubscription("paused").waitUntilStarted(Duration.ofSeconds(10));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).as("events handled after the resume").extracting(CloudEvent::getId).containsExactly(first.eventId()));
     }
 
     @ParameterizedTest
@@ -544,6 +618,22 @@ class ActionThatOutlivesItsRunTest {
                 }
                 slowActionReturned.set(true);
             }
+        };
+    }
+
+    // Holds the first read only, and answers no version
+    private static CheckpointWriteVersionSource writeVersionHeldOnce(CountDownLatch reading, CountDownLatch answer) {
+        AtomicBoolean held = new AtomicBoolean();
+        return subscriptionId -> {
+            if (held.compareAndSet(false, true)) {
+                reading.countDown();
+                try {
+                    answer.await(10, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return OptionalLong.empty();
         };
     }
 

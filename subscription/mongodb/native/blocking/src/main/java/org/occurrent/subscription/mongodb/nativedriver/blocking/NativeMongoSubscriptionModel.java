@@ -38,6 +38,7 @@ import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
+import org.occurrent.subscription.api.blocking.DeliveryCheckingSubscriptions;
 import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -71,7 +72,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * module.
  */
 @NullMarked
-public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions {
+public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, DeliveryCheckingSubscriptions {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -107,9 +108,10 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
      *                             A pause or a stop returns without waiting for a read that is waiting on the server, so the thread of a paused
      *                             subscription can stay busy for up to the change stream's {@code maxAwaitTime} after it returns, and for as long as an
-     *                             action still runs once the pause has stopped waiting for it. A start right after a stop, or a pause followed at once
-     *                             by a resume of many subscriptions, can therefore need up to twice as many threads as you have subscriptions until
-     *                             those reads return. When an executor with a fixed number of threads has no thread free for a resume or a start, the
+     *                             action still runs once the pause has stopped waiting for it. So the model needs a thread for each running
+     *                             subscription, and one more for each closed run that is still reading or still running its action. Every pause and
+     *                             resume of a subscription, and every stop and start of the model, can add such a run, so no fixed number of threads
+     *                             is always enough. When an executor with a fixed number of threads has no thread free for a resume or a start, the
      *                             subscription counts as running and is handed to the executor again, 100 ms and then up to 2 seconds apart, until a
      *                             thread is free, the subscription is paused or cancelled, or the model shuts down. So a smaller executor delays the
      *                             resume rather than leaving the subscription paused. A subscribe the executor has no thread for throws.
@@ -128,9 +130,10 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
      *                             A pause or a stop returns without waiting for a read that is waiting on the server, so the thread of a paused
      *                             subscription can stay busy for up to the change stream's {@code maxAwaitTime} after it returns, and for as long as an
-     *                             action still runs once the pause has stopped waiting for it. A start right after a stop, or a pause followed at once
-     *                             by a resume of many subscriptions, can therefore need up to twice as many threads as you have subscriptions until
-     *                             those reads return. When an executor with a fixed number of threads has no thread free for a resume or a start, the
+     *                             action still runs once the pause has stopped waiting for it. So the model needs a thread for each running
+     *                             subscription, and one more for each closed run that is still reading or still running its action. Every pause and
+     *                             resume of a subscription, and every stop and start of the model, can add such a run, so no fixed number of threads
+     *                             is always enough. When an executor with a fixed number of threads has no thread free for a resume or a start, the
      *                             subscription counts as running and is handed to the executor again, 100 ms and then up to 2 seconds apart, until a
      *                             thread is free, the subscription is paused or cancelled, or the model shuts down. So a smaller executor delays the
      *                             resume rather than leaving the subscription paused. A subscribe the executor has no thread for throws.
@@ -150,9 +153,10 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
      *                             A pause or a stop returns without waiting for a read that is waiting on the server, so the thread of a paused
      *                             subscription can stay busy for up to the change stream's {@code maxAwaitTime} after it returns, and for as long as an
-     *                             action still runs once the pause has stopped waiting for it. A start right after a stop, or a pause followed at once
-     *                             by a resume of many subscriptions, can therefore need up to twice as many threads as you have subscriptions until
-     *                             those reads return. When an executor with a fixed number of threads has no thread free for a resume or a start, the
+     *                             action still runs once the pause has stopped waiting for it. So the model needs a thread for each running
+     *                             subscription, and one more for each closed run that is still reading or still running its action. Every pause and
+     *                             resume of a subscription, and every stop and start of the model, can add such a run, so no fixed number of threads
+     *                             is always enough. When an executor with a fixed number of threads has no thread free for a resume or a start, the
      *                             subscription counts as running and is handed to the executor again, 100 ms and then up to 2 seconds apart, until a
      *                             thread is free, the subscription is paused or cancelled, or the model shuts down. So a smaller executor delays the
      *                             resume rather than leaving the subscription paused. A subscribe the executor has no thread for throws.
@@ -172,9 +176,10 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
      *                             A pause or a stop returns without waiting for a read that is waiting on the server, so the thread of a paused
      *                             subscription can stay busy for up to the change stream's {@code maxAwaitTime} after it returns, and for as long as an
-     *                             action still runs once the pause has stopped waiting for it. A start right after a stop, or a pause followed at once
-     *                             by a resume of many subscriptions, can therefore need up to twice as many threads as you have subscriptions until
-     *                             those reads return. When an executor with a fixed number of threads has no thread free for a resume or a start, the
+     *                             action still runs once the pause has stopped waiting for it. So the model needs a thread for each running
+     *                             subscription, and one more for each closed run that is still reading or still running its action. Every pause and
+     *                             resume of a subscription, and every stop and start of the model, can add such a run, so no fixed number of threads
+     *                             is always enough. When an executor with a fixed number of threads has no thread free for a resume or a start, the
      *                             subscription counts as running and is handed to the executor again, 100 ms and then up to 2 seconds apart, until a
      *                             thread is free, the subscription is paused or cancelled, or the model shuts down. So a smaller executor delays the
      *                             resume rather than leaving the subscription paused. A subscribe the executor has no thread for throws.
@@ -194,9 +199,10 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
      *                             A pause or a stop returns without waiting for a read that is waiting on the server, so the thread of a paused
      *                             subscription can stay busy for up to the change stream's {@code maxAwaitTime} after it returns, and for as long as an
-     *                             action still runs once the pause has stopped waiting for it. A start right after a stop, or a pause followed at once
-     *                             by a resume of many subscriptions, can therefore need up to twice as many threads as you have subscriptions until
-     *                             those reads return. When an executor with a fixed number of threads has no thread free for a resume or a start, the
+     *                             action still runs once the pause has stopped waiting for it. So the model needs a thread for each running
+     *                             subscription, and one more for each closed run that is still reading or still running its action. Every pause and
+     *                             resume of a subscription, and every stop and start of the model, can add such a run, so no fixed number of threads
+     *                             is always enough. When an executor with a fixed number of threads has no thread free for a resume or a start, the
      *                             subscription counts as running and is handed to the executor again, 100 ms and then up to 2 seconds apart, until a
      *                             thread is free, the subscription is paused or cancelled, or the model shuts down. So a smaller executor delays the
      *                             resume rather than leaving the subscription paused. A subscribe the executor has no thread for throws.
@@ -303,6 +309,11 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public void removeQuietPositionListener(QuietPositionListener listener) {
         subscriptions.removeQuietPositionListener(listener);
+    }
+
+    @Override
+    public void checkStillDelivering() {
+        subscriptions.checkStillDelivering();
     }
 
     private static List<Bson> createPipeline(TimeRepresentation timeRepresentation, @Nullable SubscriptionFilter filter) {
