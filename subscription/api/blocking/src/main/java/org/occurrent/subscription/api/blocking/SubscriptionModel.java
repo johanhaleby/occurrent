@@ -42,16 +42,13 @@ public interface SubscriptionModel extends Subscribable, SubscriptionModelLifeCy
      * It starts from the position such a subscription starts from, and delivers nothing until
      * {@link #resumeSubscription(String)} or {@link #start(boolean) start(true)} resumes it.
      * <p>
-     * The default implementation calls {@code subscribe(..)} while this model is stopped and throws
-     * {@link UnsupportedOperationException} while it is running, since pausing a subscription after subscribing it
-     * could deliver an event before the pause.
+     * The default implementation throws {@link UnsupportedOperationException}. Subscribing when {@link #isRunning()}
+     * returns {@code false} would not hold the subscription paused if another thread starts this model in between, and
+     * pausing a subscription after subscribing it could deliver an event before the pause.
      *
-     * @throws UnsupportedOperationException if this model is running and cannot hold a new subscription paused
+     * @throws UnsupportedOperationException if this model cannot hold a new subscription paused
      */
     default Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-        if (isRunning()) {
-            throw new UnsupportedOperationException(getClass().getName() + " cannot hold subscription " + subscriptionId + " paused while it is running.");
-        }
-        return subscribe(subscriptionId, filter, startAt, action);
+        throw new UnsupportedOperationException(getClass().getName() + " cannot hold subscription " + subscriptionId + " paused.");
     }
 }
