@@ -30,7 +30,6 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
-import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -269,13 +268,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     private void runEnded(InternalSubscription internalSubscription, Run run, Throwable throwable) {
         String subscriptionId = internalSubscription.subscriptionId;
-        boolean checkpointWriteRefused = throwable instanceof CheckpointWriteConditionNotFulfilledException;
-        if (checkpointWriteRefused) {
-            // Stays known and running, as in the blocking models, so whatever pauses the subscription still can
-            log.error("Checkpoint write for subscription {} was refused: {}. Another node has already written this subscription's checkpoint, so delivery stops here rather than retrying. The subscription stays known and running until it's paused or cancelled. The refused write was for a position reached while no event matched.", subscriptionId, throwable.getMessage(), throwable);
-        } else {
-            log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
-        }
+        log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
         // No-op if the subscription had already started, otherwise this keeps waitUntilStarted() from hanging forever
         run.failedToStart(throwable);
         run.close();
@@ -283,7 +276,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             // A dead subscription must not count as running, or isRunning(id) would lie and the id couldn't be reused
             // without an explicit cancelSubscription(). Only while this run is still the subscription's, since a pause
             // and a resume, or a cancel and a new subscription with the same id, start a newer run.
-            if (!checkpointWriteRefused && internalSubscription.run == run) {
+            if (internalSubscription.run == run) {
                 internalSubscription.run = null;
                 runningSubscriptions.remove(subscriptionId, internalSubscription);
             }
@@ -293,8 +286,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     private Flux<Void> reads(InternalSubscription internalSubscription, Run run) {
         AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
         return Flux.defer(() -> readsQuietPositions.get() ? readsWithQuietPositions(internalSubscription, run) : readsAhead(internalSubscription, run))
-                .retryWhen(unboundedBackoff().filter(throwable -> !(throwable instanceof CheckpointWriteConditionNotFulfilledException)
-                        && shouldRestart(internalSubscription.subscriptionId, throwable, () -> run.move(currentStartAt, StartAt.now()))));
+                .retryWhen(unboundedBackoff().filter(throwable -> shouldRestart(internalSubscription.subscriptionId, throwable, () -> run.move(currentStartAt, StartAt.now()))));
     }
 
     // How subscriptions with an id read before the model read the driver's cursor

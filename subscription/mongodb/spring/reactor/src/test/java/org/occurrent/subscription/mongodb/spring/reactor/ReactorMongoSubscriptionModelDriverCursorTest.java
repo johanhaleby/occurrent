@@ -29,6 +29,7 @@ import com.mongodb.reactivestreams.client.MongoClients;
 import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.BsonDocument;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -52,6 +53,7 @@ import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -208,36 +210,43 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     }
 
     @Test
-    void a_quiet_position_handler_that_refuses_the_checkpoint_write_makes_the_model_open_no_change_stream_again() {
+    void a_quiet_position_handler_that_keeps_refusing_the_checkpoint_write_makes_the_model_read_again_from_the_quiet_position() {
         // Given
-        AtomicInteger handedOver = refusingCheckpointWrites();
-        subscriptionModel.subscribe("refused", NAME_DEFINED_ONLY, StartAt.now(), __ -> Mono.empty());
-        write(nameWasChanged());
+        CopyOnWriteArrayList<Checkpoint> handedOver = new CopyOnWriteArrayList<>();
+        subscriptionModel.addQuietPositionListener(subscriptionId -> Mono.just(quietPosition -> {
+            handedOver.add(quietPosition);
+            return refusedCheckpointWrite(subscriptionId);
+        }));
+        waitUntilStarted(subscriptionModel.subscribe("refused", NAME_DEFINED_ONLY, StartAt.now(), __ -> Mono.empty()));
 
         // When
-        await().atMost(30, SECONDS).until(() -> handedOver.get() > 0);
+        write(nameWasChanged());
 
         // Then
-        await().during(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(8)).untilAsserted(() -> {
-            assertThat(commands.changeStreamsOpened()).as("change streams opened").hasSize(1);
-            assertThat(handedOver).as("quiet positions handed over").hasValue(1);
+        await().atMost(30, SECONDS).untilAsserted(() -> {
+            assertThat(handedOver).as("quiet positions handed over").hasSizeGreaterThan(1);
+            assertThat(commands.changeStreamsOpened()).as("change streams opened").hasSizeGreaterThan(1);
         });
+        assertThat(CommandLog.changeStreamField(commands.changeStreamsOpened().get(1), "startAfter")).as("position the second change stream opens after").isEqualTo(resumeTokenOf(handedOver.getFirst()));
     }
 
     @Test
-    void a_quiet_position_handler_that_refuses_the_checkpoint_write_makes_the_subscription_deliver_nothing_more() {
+    void a_quiet_position_handler_that_refuses_the_checkpoint_write_once_is_retried_and_the_subscription_keeps_delivering_events() {
         // Given
-        AtomicInteger handedOver = refusingCheckpointWrites();
+        AtomicInteger handedOver = new AtomicInteger();
+        subscriptionModel.addQuietPositionListener(subscriptionId -> Mono.just(quietPosition -> handedOver.incrementAndGet() == 1 ? refusedCheckpointWrite(subscriptionId) : Mono.empty()));
         CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
-        subscriptionModel.subscribe("refused", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> delivered.add(event.getId())));
+        waitUntilStarted(subscriptionModel.subscribe("refused-once", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> delivered.add(event.getId()))));
         write(nameWasChanged());
         await().atMost(30, SECONDS).until(() -> handedOver.get() > 0);
 
         // When
-        write(nameDefined());
+        NameDefined matched = nameDefined();
+        write(matched);
 
         // Then
-        await().during(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(8)).untilAsserted(() -> assertThat(delivered).as("events delivered").isEmpty());
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).as("events delivered").containsExactly(matched.eventId()));
+        assertThat(commands.changeStreamsOpened()).as("change streams opened").hasSizeGreaterThan(1);
     }
 
     @Test
@@ -255,7 +264,7 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     }
 
     @Test
-    void a_subscription_that_stopped_on_a_refused_checkpoint_write_can_be_paused() {
+    void a_subscription_whose_quiet_position_handler_refuses_the_checkpoint_write_can_be_paused() {
         // Given
         AtomicInteger handedOver = refusingCheckpointWrites();
         subscriptionModel.subscribe("refused", NAME_DEFINED_ONLY, StartAt.now(), __ -> Mono.empty());
@@ -350,7 +359,8 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
 
         // When
         reference.set(null);
-        await().pollDelay(Duration.ofSeconds(4)).until(() -> true);
+        // Four looks, so at least three token reads find the reference empty, or until the model stops reading quiet positions
+        await().atMost(30, SECONDS).until(() -> looks.get() - looksBeforeTheWindow >= 4 || !subscriptionModel.readsQuietPositions());
         reference.set(commandCursor);
 
         // Then
@@ -374,9 +384,17 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
         AtomicInteger handedOver = new AtomicInteger();
         subscriptionModel.addQuietPositionListener(subscriptionId -> Mono.just(quietPosition -> {
             handedOver.incrementAndGet();
-            return Mono.error(new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.empty(), CheckpointWriteCondition.any()));
+            return refusedCheckpointWrite(subscriptionId);
         }));
         return handedOver;
+    }
+
+    private static Mono<Void> refusedCheckpointWrite(String subscriptionId) {
+        return Mono.error(new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.empty(), CheckpointWriteCondition.any()));
+    }
+
+    private static BsonDocument resumeTokenOf(Checkpoint checkpoint) {
+        return ((MongoResumeTokenCheckpoint) checkpoint).resumeToken;
     }
 
     private static ReactorMongoSubscriptionModelConfig configuration() {
