@@ -33,7 +33,7 @@ description: >-
   Also changes a Java cancelSubscription(String) that implements the reactor CancellableSubscriptions or
   DcbSubscriptionModel and returns void to return Mono<Void>, which both interfaces now declare. A body that ends by
   calling the wrapped model's cancelSubscription returns that call, and any other returns Mono.empty(). That is right
-  for an implementation that stores nothing, and section 19 of doc/migration/upgrading-to-0.34.0.md has the manual
+  for an implementation that stores nothing, and section 20 of doc/migration/upgrading-to-0.34.0.md has the manual
   steps for one that deletes stored state in the background. A declaration of the method with no body, abstract or in
   an interface, only changes its return type.
   A projection, a subscription, a query, a snapshot view and a saga now all refuse a declared event type whose

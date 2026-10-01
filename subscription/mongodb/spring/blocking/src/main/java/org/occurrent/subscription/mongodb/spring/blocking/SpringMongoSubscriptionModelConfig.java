@@ -4,7 +4,6 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
-import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.time.Duration;
@@ -22,7 +21,9 @@ public class SpringMongoSubscriptionModelConfig {
     final TimeRepresentation timeRepresentation;
     final RetryStrategy retryStrategy;
     final boolean restartSubscriptionsOnChangeStreamHistoryLost;
-    final Executor executor;
+    // Null when the model makes its own executor
+    final @Nullable Executor executor;
+    final boolean virtualThreads;
     final @Nullable Duration maxAwaitTime;
     final boolean autoStartup;
 
@@ -34,15 +35,14 @@ public class SpringMongoSubscriptionModelConfig {
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
     public SpringMongoSubscriptionModelConfig(String eventCollection, TimeRepresentation timeRepresentation) {
-        this(eventCollection, timeRepresentation, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), false, defaultExecutor(), null, true);
+        this(eventCollection, timeRepresentation, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), false, null, false, null, true);
     }
 
     private SpringMongoSubscriptionModelConfig(String eventCollection, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy, boolean restartSubscriptionsOnChangeStreamHistoryLost,
-                                               Executor executor, @Nullable Duration maxAwaitTime, boolean autoStartup) {
+                                               @Nullable Executor executor, boolean virtualThreads, @Nullable Duration maxAwaitTime, boolean autoStartup) {
         requireNonNull(eventCollection, "eventCollection cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
         requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
-        requireNonNull(executor, Executor.class.getSimpleName() + " cannot be null");
         if (maxAwaitTime != null && maxAwaitTime.toMillis() <= 0) {
             throw new IllegalArgumentException("maxAwaitTime must be at least 1 ms but was " + maxAwaitTime);
         }
@@ -51,6 +51,7 @@ public class SpringMongoSubscriptionModelConfig {
         this.retryStrategy = retryStrategy;
         this.restartSubscriptionsOnChangeStreamHistoryLost = restartSubscriptionsOnChangeStreamHistoryLost;
         this.executor = executor;
+        this.virtualThreads = virtualThreads;
         this.maxAwaitTime = maxAwaitTime;
         this.autoStartup = autoStartup;
     }
@@ -83,7 +84,7 @@ public class SpringMongoSubscriptionModelConfig {
      * @return A new instance of {@code SpringSubscriptionModelConfig}
      */
     public SpringMongoSubscriptionModelConfig restartSubscriptionsOnChangeStreamHistoryLost(boolean restartSubscriptionsOnChangeStreamHistoryLost) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime, autoStartup);
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, virtualThreads, maxAwaitTime, autoStartup);
     }
 
     /**
@@ -93,29 +94,34 @@ public class SpringMongoSubscriptionModelConfig {
      * @return A new instance of {@code SpringSubscriptionModelConfig}
      */
     public SpringMongoSubscriptionModelConfig retryStrategy(RetryStrategy retryStrategy) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime, autoStartup);
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, virtualThreads, maxAwaitTime, autoStartup);
     }
 
     /**
-     * Specify the executor to use for this subscription model. Under the hood the {@link SpringMongoSubscriptionModel} will use this executor when initializing the {@link DefaultMessageListenerContainer}
-     * to listen to events written MongoDB. By default a {@link ThreadPoolTaskExecutor} will be used with queue size {@code 0}, which effectively will make behave as unbounded
-     * {@link java.util.concurrent.Executors#newCachedThreadPool()}.
+     * Specify the executor to use for this subscription model. The {@link SpringMongoSubscriptionModel} reads the change stream of each subscription on a thread from this executor,
+     * so it needs a thread per subscription. A pause or a stop returns without waiting for a read that is waiting on the server, so the thread of a paused subscription can stay
+     * busy for up to {@link #maxAwaitTime(Duration)} after it returns, and for as long as an action still runs once the pause has stopped waiting for it. So the model needs a thread
+     * for each running subscription, and one more for each closed run that is still reading or still running its action. Every pause and resume of a subscription, and every
+     * stop and start of the model, can add such a run, so no fixed number of threads is always enough.
+     * When an executor with a fixed number of threads has no thread free for a resume or a start, the subscription counts as running and is handed to the executor again, 100 ms
+     * and then up to 2 seconds apart, until a thread is free, the subscription is paused or cancelled, or the model shuts down. So a smaller executor delays the resume rather
+     * than leaving the subscription paused. A subscribe the executor has no thread for throws. By default each model creates a {@link ThreadPoolTaskExecutor} with queue size
+     * {@code 0}, which makes it behave as an unbounded
+     * {@link java.util.concurrent.Executors#newCachedThreadPool()}, and shuts it down when the model is shut down.
      * <br/><br/>
-     * Note that if you're using a non-spring implementation, for example an {@link java.util.concurrent.ExecutorService}, you need to shut it down your self after
-     * {@link SpringMongoSubscriptionModel} is shutdown.
+     * An executor you pass here is yours, so you need to shut it down yourself after the {@link SpringMongoSubscriptionModel} is shut down.
      *
      * @param executor The executor to use
      * @return A new instance of {@code SpringMongoSubscriptionModelConfig}
      * @see ThreadPoolTaskExecutor
      */
     public SpringMongoSubscriptionModelConfig executor(Executor executor) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime, autoStartup);
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, requireNonNull(executor, Executor.class.getSimpleName() + " cannot be null"), false, maxAwaitTime, autoStartup);
     }
 
     /**
      * Configure the maximum amount of time the server waits for new change-stream documents before returning a
-     * (possibly empty) batch. This maps to the {@code maxAwaitTime} of the underlying MongoDB change stream (set
-     * on Spring Data's {@code ChangeStreamRequestOptions}). A smaller value lowers delivery latency at the cost of
+     * (possibly empty) batch. This maps to the {@code maxAwaitTime} of the underlying MongoDB change stream. A smaller value lowers delivery latency at the cost of
      * more frequent {@code getMore} round-trips when the stream is idle. A larger value keeps an idle cursor
      * waiting longer and reduces chatter.
      * <p>
@@ -123,27 +129,25 @@ public class SpringMongoSubscriptionModelConfig {
      * existing). Values between 200 ms and 1000 ms strike a reasonable balance between latency and resource
      * usage for most workloads.
      * <p>
-     * Note that, unlike the {@code NativeMongoSubscriptionModel}, this model does <em>not</em> expose a
-     * {@code batchSize} option. It reads the change stream through Spring Data's {@link DefaultMessageListenerContainer},
-     * whose {@code ChangeStreamRequest}/{@code ChangeStreamRequestOptions} API does not carry a batch size (Spring's
-     * {@code ChangeStreamTask} never applies one), so there is no supported way to set it on this path. Use the
+     * Note that, unlike the {@code NativeMongoSubscriptionModel}, this model has no {@code batchSize} option. Use the
      * {@code NativeMongoSubscriptionModel} if you need to tune the batch size.
      *
      * @param maxAwaitTime The maximum wait time. Must be greater than {@code 0}.
      * @return A new instance of {@code SpringMongoSubscriptionModelConfig}
      */
     public SpringMongoSubscriptionModelConfig maxAwaitTime(Duration maxAwaitTime) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, requireNonNull(maxAwaitTime, "maxAwaitTime cannot be null"), autoStartup);
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, virtualThreads, requireNonNull(maxAwaitTime, "maxAwaitTime cannot be null"), autoStartup);
     }
 
     /**
-     * Use virtual threads for blocking MongoDB change stream listener tasks while keeping Spring's
-     * {@link ThreadPoolTaskExecutor} lifecycle semantics.
+     * Read the change streams on virtual threads. Each model creates a {@link ThreadPoolTaskExecutor} that uses
+     * virtual threads, and shuts it down when the model is shut down. This replaces an executor set with
+     * {@link #executor(Executor)}.
      *
      * @return A new instance of {@code SpringMongoSubscriptionModelConfig}
      */
     public SpringMongoSubscriptionModelConfig useVirtualThreads() {
-        return executor(virtualThreadExecutor());
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, null, true, maxAwaitTime, autoStartup);
     }
 
     /**
@@ -159,22 +163,6 @@ public class SpringMongoSubscriptionModelConfig {
      * @return A new instance of {@code SpringMongoSubscriptionModelConfig}
      */
     public SpringMongoSubscriptionModelConfig autoStartup(boolean autoStartup) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime, autoStartup);
-    }
-
-    private static Executor defaultExecutor() {
-        return newTaskExecutor(false);
-    }
-
-    private static Executor virtualThreadExecutor() {
-        return newTaskExecutor(true);
-    }
-
-    private static Executor newTaskExecutor(boolean virtualThreads) {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setQueueCapacity(0);
-        executor.setVirtualThreads(virtualThreads);
-        executor.initialize();
-        return executor;
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, virtualThreads, maxAwaitTime, autoStartup);
     }
 }

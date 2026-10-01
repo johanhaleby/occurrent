@@ -88,7 +88,7 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
     private static final String BLOCKING_CANCELLABLE_SUBSCRIPTIONS = "org.occurrent.subscription.api.blocking.CancellableSubscriptions";
     private static final String SPLIT_THE_TWO_CANCELS = " TODO: split this class into a blocking and a reactor adapter, since from Occurrent 0.34.0 " +
                                                         "the blocking cancelSubscription(String) returns void and the reactor one Mono<Void>, " +
-                                                        "and no one method implements both. See section 19 of doc/migration/upgrading-to-0.34.0.md";
+                                                        "and no one method implements both. See section 20 of doc/migration/upgrading-to-0.34.0.md";
     private static final String MONO = "reactor.core.publisher.Mono";
     private static final String TARGET = "reactorCancelSubscriptionReturningVoid";
     private static final String HELPERS = "reactorCancelSubscriptionHelpers";
