@@ -1354,19 +1354,21 @@ a `StartAt.dynamic(..)` only then as well, so one that reads the checkpoint itse
 `ResumeBehavior`, also reads it only after the delete. So once the delete has succeeded, a subscribe right after the
 cancel no longer resumes from the cancelled subscription's position.
 
-The cancel also ends a subscribe of the id that has not started yet. The subscribe writes no checkpoint, it is not
-handed to a wrapped model that manages named subscriptions, and its `waitUntilStarted()` fails with
-`CancellationException`. A `StartAt.dynamic(..)` function that was about to run as the cancel came can still run after
-the cancel returned, since the cancel does not wait for your function, and the model discards what it answers. When the durable model drives a subscription itself, a pause or a `stop()` before it has
+The cancel also ends a subscribe of the id that has not started yet. The subscribe writes no checkpoint, and its
+`waitUntilStarted()` fails with `CancellationException`. A `StartAt.dynamic(..)` function that was about to run as the
+cancel came can still run after the cancel returned, since the cancel does not wait for your function, and the model
+discards what it answers. When the durable model drives a subscription itself, a pause or a `stop()` before it has
 started ends it the same way, except that its checkpoint stays stored and the subscription stays paused. Its
 `waitUntilStarted()` fails with `CancellationException` too. In 0.33.0 that wait never ended. If you wait for `waitUntilStarted()` on a subscription that another part of your application may cancel,
 pause or stop, handle that error. A registration made while the model was stopped is the one exception. The handle it
 returned keeps waiting once a resume or `start(true)` has taken the registration over, as in 0.33.0. On a
 `ReactorDurableSubscriptionModel` that wraps a model that manages named subscriptions, a subscribe that is still reading
 its start position when the cancel comes is not ended. It reads its start position again after the delete, and the
-checkpoints it writes after that are kept. One the wrapped model is already taking is handed over first, and the
-cancel waits for that and then cancels it there. A `shutdown()` waits for it the same way, and after a `shutdown()` no
-subscription starts a checkpoint write, including one the wrapped model is still running an event through.
+checkpoints it writes after that are kept. The cancel does not wait for a wrapped model that is taking a subscribe of
+the id when the cancel comes. The durable model cancels that subscription in the wrapped model once the wrapped model
+has taken it, and the cancel's `Mono` completes only after that. A `shutdown()` does not wait for the wrapped model
+either, and after a `shutdown()` no subscription starts a checkpoint write, including one the wrapped model is still
+running an event through.
 
 None of these waits has a time limit, because a store can still apply a write after the model stopped waiting for it. A
 save could then bring the cancelled checkpoint back after the delete, and a delete could remove the checkpoint the next

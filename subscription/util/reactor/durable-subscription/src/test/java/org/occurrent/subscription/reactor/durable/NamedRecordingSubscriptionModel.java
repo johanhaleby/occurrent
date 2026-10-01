@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
@@ -66,6 +67,10 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
      * it returns, so a test can tell whether a cancel or a shutdown arrived while a subscribe was still being taken.
      */
     final List<String> calls = new CopyOnWriteArrayList<>();
+    /**
+     * Calls a dynamic start position it is handed while it takes the subscribe, as the catch-up models do.
+     */
+    volatile boolean resolvesDynamicStartPositions = false;
 
     NamedRecordingSubscriptionModel(String globalCheckpoint) {
         this.feed = new RecordingSubscriptionModel(globalCheckpoint);
@@ -86,6 +91,9 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
                                   Function<CloudEvent, Mono<Void>> action) {
         calls.add("subscribe " + subscriptionId + " began");
         beforeSubscribe.accept(subscriptionId);
+        if (resolvesDynamicStartPositions && startAt.isDynamic()) {
+            startAt.get(new SubscriptionModelContext(NamedRecordingSubscriptionModel.class));
+        }
         subscribedIds.add(subscriptionId);
         actions.add(action);
         // What the durable model hands a named model is the whole of what decides where the subscription begins on

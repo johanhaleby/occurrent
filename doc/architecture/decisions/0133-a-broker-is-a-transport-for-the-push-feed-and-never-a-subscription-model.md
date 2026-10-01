@@ -1511,8 +1511,10 @@ durable model drives the subscription itself, it finds a `subscribe(..)` as soon
 hands the subscription to a wrapped model that manages named subscriptions, it finds one once the call has returned
 to its caller or handed the subscription over. A `subscribe(..)` it does not find is still reading its start position
 on its caller's thread. That call reads the position again after the delete, and the positions it saves after that are
-kept. A hand-over under way when the cancel comes ends first, and the cancel waits for it, so the wrapped model takes
-the subscribe and the cancel of an id one after the other.
+kept. The cancel does not wait for a wrapped model that is taking a subscribe of the id when the cancel comes. The
+durable model cancels that subscription in the wrapped model once the wrapped model has taken it, and the cancel's
+`Mono` completes only after that. A `subscribe(..)` that had not returned to its caller then reads its start position
+again after the delete and hands the subscription over again.
 
 None of these waits has a time limit. A store can apply a write or a delete after its caller stopped waiting for it,
 so a delete that went ahead of a slow save could still have the save put the position back, and a `subscribe(..)` that
@@ -1556,18 +1558,21 @@ A lifecycle call can come in between a decision and the start it leads to, and o
 subscription is a generation with a position writer of its own, and an id has at most one live generation. A cancel, a
 pause, a `stop()`, a `shutdown()`, or a later generation of the same id that takes its place, retires a generation in
 the same step that publishes the change, under the lock that every step toward starting checks. A retired generation
-writes no position, is not handed to a wrapped model that manages named subscriptions, and signals no error to a
-subscriber that the retire disposed. A position write checks its generation and records itself in one step under that
+writes no position and signals no error to a subscriber that the retire disposed. A position write checks its generation and records itself in one step under that
 lock, so it either began before the retire, and the cancel's delete waits for it, or never begins. On the hand-over
-path the last check and the hand-over run under a lock of their own for the id, which a cancel of that id and a
-`shutdown()` take before they retire anything. The wrapped model so takes the subscribe before the cancel or the
-shutdown, or never takes it. A shutdown retires the generations it handed over as well, so an action the wrapped model
+path the last check marks the generation as being handed over in that same step, and the durable model checks the
+generation again under that lock once the wrapped model has taken the subscribe. A cancel or a `shutdown()` that
+retired it in between does not wait for the wrapped model. The subscribe cancels the subscription the wrapped model
+made instead, and the cancel's `Mono` completes only after that. A shutdown retires the generations it handed over as well, so an action the wrapped model
 is still running starts no position save after it. A step that passed its check just before the retire, resolving a dynamic
-`StartAt`, reading the stored position or subscribing to the feed, can still begin after the retiring call returned,
-since no lifecycle call waits for a function the caller supplies. It runs to its end, and the model discards its
-result. A registration made while the model was stopped reads where the feed is before `subscribe(..)` returns, even
-when a resume or `start(true)` has already taken the registration over, so whichever generation starts it begins from
-that position. Its `waitUntilStarted()` completes if it had started, and otherwise
+`StartAt`, reading the stored position, subscribing to the feed or handing the subscription to the wrapped model, can
+still begin after the retiring call returned, since no lifecycle call waits for a function the caller supplies or for
+the wrapped model. It runs to its end, and the model discards its result. When the durable model drives the
+subscription itself, a registration with the subscription-model default or a dynamic `StartAt` asks where the feed is
+before any other lifecycle call can find the registration, on a running model and on a stopped one. Whichever
+generation starts it, after a pause, a `stop()`, a resume or a `start(true)`, begins from that position when no
+position is stored. The read is made before the monitor is taken, since the monitor is never held while calling the
+wrapped model. Its `waitUntilStarted()` completes if it had started, and otherwise
 fails with `SubscriptionModelShutdownException` after a shutdown, or with `CancellationException` after a cancel, a
 pause or a `stop()`. A registration made while the model was stopped is the one exception. The handle it returned
 keeps waiting once a resume or `start(true)` has taken the registration over, as in 0.33.0. On the
