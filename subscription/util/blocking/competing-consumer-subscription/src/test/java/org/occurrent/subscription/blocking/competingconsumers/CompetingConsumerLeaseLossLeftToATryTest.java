@@ -28,7 +28,6 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -53,26 +52,16 @@ class CompetingConsumerLeaseLossLeftToATryTest {
 
     private static final String NODE = "node";
     private static final Duration EVENTUALLY = Duration.ofSeconds(5);
-    private static final int ROUNDS = 5;
-    // The fastest of the rounds, so one slow thread start on a loaded machine does not decide the outcome. A try that
-    // first waits for a backoff takes at least that backoff, which is 100 milliseconds.
-    private static final Duration AT_ONCE = Duration.ofMillis(50);
 
     @Test
     void a_lease_loss_that_finds_its_subscription_busy_is_acted_on_as_soon_as_the_call_holding_it_returns() {
-        List<Duration> latencies = new ArrayList<>();
-        for (int round = 1; round <= ROUNDS; round++) {
-            latencies.add(aLeaseLossWhileAResumeHoldsTheSubscription());
-        }
-        Duration fastest = latencies.stream().min(Duration::compareTo).orElseThrow();
-        assertThat(fastest).as("[the fastest of %d losses left to a try was acted on %d ms after the call holding the subscription returned, all of them %s]",
-                ROUNDS, fastest.toMillis(), latencies).isLessThan(AT_ONCE);
-    }
-
-    private static Duration aLeaseLossWhileAResumeHoldsTheSubscription() {
         WrappedModel wrapped = new WrappedModel();
         Strategy strategy = new Strategy();
         CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
+        // A try that is to act at once never waits for a backoff, so this tells the two apart however fast the
+        // machine is
+        List<String> backedOff = new CopyOnWriteArrayList<>();
+        model.runBeforeATryWaitsForItsBackoff(() -> backedOff.add(Thread.currentThread().getName()));
         Gate isRunningOfS1 = new Gate();
         try {
             subscribe(model, "s1");
@@ -85,13 +74,12 @@ class CompetingConsumerLeaseLossLeftToATryTest {
 
             strategy.holders.remove("s1");
             model.onConsumeProhibited("s1", NODE);
-            long returnedAt = System.nanoTime();
             isRunningOfS1.open();
             assertThat(resuming).as("the resume of a subscription that runs").failsWithin(EVENTUALLY);
 
             await().atMost(EVENTUALLY).untilAsserted(() ->
                     assertThat(wrapped.isRunning("s1")).as("[s1 runs in the wrapped model although this node lost its lease]").isFalse());
-            return Duration.ofNanos(wrapped.pausedAt.get("s1") - returnedAt);
+            assertThat(backedOff).as("[threads that waited for a backoff before the lease loss left to a try was acted on]").isEmpty();
         } finally {
             isRunningOfS1.open();
             model.shutdown();
@@ -209,11 +197,10 @@ class CompetingConsumerLeaseLossLeftToATryTest {
         }
     }
 
-    // A model of a user's own that records when it pauses a subscription. Its next isRunning(id) for an id waits at
+    // A model of a user's own. Its next isRunning(id) for an id waits at
     // that id's gate once, outside the monitor of this model, and its pause throws while the test says so.
     private static final class WrappedModel implements SubscriptionModel {
         private final Map<String, Gate> isRunningGates = new ConcurrentHashMap<>();
-        private final Map<String, Long> pausedAt = new ConcurrentHashMap<>();
         private volatile boolean pauseFails;
         private final Set<String> runningIds = new HashSet<>();
         private final Set<String> pausedIds = new HashSet<>();
@@ -281,7 +268,6 @@ class CompetingConsumerLeaseLossLeftToATryTest {
                 throw new IllegalStateException("Pausing " + subscriptionId + " failed");
             }
             if (runningIds.remove(subscriptionId)) {
-                pausedAt.put(subscriptionId, System.nanoTime());
                 pausedIds.add(subscriptionId);
             }
         }

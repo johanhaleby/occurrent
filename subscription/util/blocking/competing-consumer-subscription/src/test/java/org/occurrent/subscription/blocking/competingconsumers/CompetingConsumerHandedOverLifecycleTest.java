@@ -142,6 +142,150 @@ class CompetingConsumerHandedOverLifecycleTest {
         }
     }
 
+    // A grant that took the lock of s1 before stop() began comes before that stop(), also when s1 was paused for the
+    // lease it had lost, so the stop() pauses s1 as by the user
+    @Test
+    void a_grant_holding_the_lock_of_a_subscription_paused_for_its_lost_lease_when_stop_begins_comes_before_that_stop() {
+        Fixture free = new Fixture(Initially.RUNNING);
+        State expected;
+        try {
+            free.loseTheLeaseOfS1();
+            free.strategy.holders.add("s1");
+            free.model.onConsumeGranted("s1", NODE);
+            free.model.stop();
+            awaitNothingLeftForS1();
+            expected = free.state();
+        } finally {
+            free.model.shutdown();
+        }
+        Fixture fixture = new Fixture(Initially.RUNNING);
+        try {
+            fixture.loseTheLeaseOfS1();
+            fixture.strategy.holders.add("s1");
+            fixture.strategy.leaseHeldAfterTheGate.set(true);
+            Gate grantHoldingTheLock = fixture.grantHoldingTheLockOfS1();
+            fixture.model.stop();
+            grantHoldingTheLock.open();
+            assertThat(fixture.grant).as("the grant of s1").succeedsWithin(EVENTUALLY);
+            awaitNothingLeftForS1();
+
+            assertThat(fixture.state()).as("[s1 once the grant and stop() are applied]").isEqualTo(expected);
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // A grant that took the lock of s1 before stop() began comes before that stop(), also when s1 was waiting for its
+    // lease, so the wrapped model holds s1 paused and the stop() pauses s1 as by the user
+    @Test
+    void a_grant_holding_the_lock_of_a_subscription_waiting_for_its_lease_when_stop_begins_comes_before_that_stop() {
+        Fixture free = new Fixture(Initially.RUNNING, true);
+        Made expected;
+        try {
+            free.strategy.anotherNodeHoldsS1.set(false);
+            free.strategy.holders.add("s1");
+            free.model.onConsumeGranted("s1", NODE);
+            free.model.stop();
+            awaitNothingLeftForS1();
+            expected = free.made();
+        } finally {
+            free.model.shutdown();
+        }
+        Fixture fixture = new Fixture(Initially.RUNNING, true);
+        try {
+            fixture.strategy.anotherNodeHoldsS1.set(false);
+            fixture.strategy.holders.add("s1");
+            fixture.strategy.leaseHeldAfterTheGate.set(true);
+            Gate grantHoldingTheLock = fixture.grantHoldingTheLockOfS1();
+            fixture.model.stop();
+            grantHoldingTheLock.open();
+            assertThat(fixture.grant).as("the grant of s1").succeedsWithin(EVENTUALLY);
+            awaitNothingLeftForS1();
+
+            assertThat(fixture.made()).as("[s1, and whether the wrapped model holds it paused, once the grant and stop() are applied]").isEqualTo(expected);
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // A resume that took the lock of s1 before stop() began comes before that stop(), also when another node takes the
+    // lease once stop() has returned, while the resume still registers s1. So the stop() pauses s1 as by the user, and
+    // s1 does not compete for its lease after start(false).
+    @Test
+    void a_resume_registering_a_subscription_when_stop_begins_comes_before_that_stop() {
+        Fixture free = new Fixture(Initially.RUNNING);
+        Ended expected;
+        try {
+            free.model.pauseSubscription("s1");
+            free.model.resumeSubscription("s1");
+            free.model.stop();
+            free.strategy.anotherNodeHoldsS1.set(true);
+            awaitNothingLeftForS1();
+            expected = new Ended(free.state(), free.strategy.candidates.contains("s1"));
+        } finally {
+            free.model.shutdown();
+        }
+        Fixture fixture = new Fixture(Initially.RUNNING);
+        try {
+            fixture.model.pauseSubscription("s1");
+            Gate resumeHoldingTheLock = new Gate();
+            fixture.strategy.nextRegisterOfS1OnTheTestThread.set(resumeHoldingTheLock);
+            CompletableFuture<Void> resume = runOnTheTestThread(() -> fixture.model.resumeSubscription("s1"));
+            assertThat(resumeHoldingTheLock.awaitEntered()).as("the resume of s1 holds its lock while it registers s1").isTrue();
+
+            fixture.model.stop();
+            fixture.strategy.anotherNodeHoldsS1.set(true);
+            resumeHoldingTheLock.open();
+            assertThat(resume).as("the resume of s1").succeedsWithin(EVENTUALLY);
+            awaitNothingLeftForS1();
+
+            assertThat(new Ended(fixture.state(), fixture.strategy.candidates.contains("s1")))
+                    .as("[s1, and whether it competes for its lease, once the resume, stop() and start(false) are applied]").isEqualTo(expected);
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // A try that took the lock of s1 before stop() began, to pause s1 for the lease it lost, comes before that stop(),
+    // so s1 stays paused for its lease rather than as by the user, and start(false) has it compete for its lease again
+    @Test
+    void a_try_pausing_a_subscription_for_its_lost_lease_when_stop_begins_comes_before_that_stop() {
+        Fixture free = new Fixture(Initially.RUNNING);
+        State expected;
+        try {
+            free.loseTheLeaseOfS1();
+            free.model.stop();
+            awaitNothingLeftForS1();
+            expected = free.state();
+        } finally {
+            free.model.shutdown();
+        }
+        Fixture fixture = new Fixture(Initially.RUNNING);
+        Gate resumeHoldingTheLock = new Gate();
+        Gate pauseOnATry = new Gate();
+        try {
+            // A resume of s1, which runs, holds its lock, so the loss of the lease is left to a try
+            fixture.wrapped.nextIsRunningOfS1OnTheTestThread.set(resumeHoldingTheLock);
+            CompletableFuture<Void> resume = runOnTheTestThread(() -> fixture.model.resumeSubscription("s1"));
+            assertThat(resumeHoldingTheLock.awaitEntered()).as("the resume of s1 holds its lock").isTrue();
+            fixture.wrapped.nextPauseOfS1OnATry.set(pauseOnATry);
+            fixture.loseTheLeaseOfS1();
+            resumeHoldingTheLock.open();
+            assertThat(resume).as("the resume of s1, which runs").failsWithin(EVENTUALLY);
+            assertThat(pauseOnATry.awaitEntered()).as("a try holds the lock of s1 while it pauses s1").isTrue();
+
+            fixture.model.stop();
+            pauseOnATry.open();
+            awaitNothingLeftForS1();
+
+            assertThat(fixture.state()).as("[s1 once the try and stop() are applied]").isEqualTo(expected);
+        } finally {
+            resumeHoldingTheLock.open();
+            pauseOnATry.open();
+            fixture.model.shutdown();
+        }
+    }
+
     // A failure of a start(..) handed over is tried again by the thread it was handed to, also when a later start(..)
     // finds the lock free first and fails to apply it
     @Test
@@ -459,11 +603,20 @@ class CompetingConsumerHandedOverLifecycleTest {
         }
     }
 
+    // Where s1 is once start(false) is applied last, and whether it competes for its lease then
+    private record Ended(State state, boolean competes) {
+    }
+
+    // Whether the wrapped model holds s1 paused, and where s1 is
+    private record Made(boolean heldPausedInTheWrappedModel, State state) {
+    }
+
     // Paused by the user, or by stop(), is a pause that start(false) keeps
     private record State(boolean pausedInThisModel, boolean pausedByTheUser, boolean runsInTheWrappedModel, boolean holdsTheLease, boolean wrappedModelRunning) {
     }
 
-    // A started model with s1 running, which a stop() stops when the model starts out stopped
+    // A started model with s1 running, which a stop() stops when the model starts out stopped. With another node
+    // holding the lease of s1 at first, s1 waits for it instead.
     private static final class Fixture {
         private final WrappedModel wrapped = new WrappedModel();
         private final Strategy strategy = new Strategy();
@@ -471,6 +624,11 @@ class CompetingConsumerHandedOverLifecycleTest {
         private final CompletableFuture<Void> grant = new CompletableFuture<>();
 
         private Fixture(Initially initially) {
+            this(initially, false);
+        }
+
+        private Fixture(Initially initially, boolean anotherNodeHoldsS1) {
+            strategy.anotherNodeHoldsS1.set(anotherNodeHoldsS1);
             model.subscribe(NODE, "s1", null, StartAt.subscriptionModelDefault(), __ -> {
             });
             if (initially == Initially.STOPPED) {
@@ -505,9 +663,19 @@ class CompetingConsumerHandedOverLifecycleTest {
             return grantHoldingTheLock;
         }
 
+        private void loseTheLeaseOfS1() {
+            strategy.holders.remove("s1");
+            model.onConsumeProhibited("s1", NODE);
+        }
+
         private void subscribeN1() {
             model.subscribe(NODE, "n1", null, StartAt.dynamic(__ -> null), __ -> {
             });
+        }
+
+        private Made made() {
+            boolean heldPaused = wrapped.isPaused("s1");
+            return new Made(heldPaused, state());
         }
 
         // Applies start(false) last when s1 is paused, which tells whether the user paused it
@@ -596,14 +764,19 @@ class CompetingConsumerHandedOverLifecycleTest {
         }
     }
 
-    // Grants every lease asked for. The next hasLock for s1 waits at a gate once the test sets one, and then answers
-    // that the lease is not held, unless the test says it is.
+    // Grants every lease asked for, apart from that of s1 while another node holds it, and records which subscriptions
+    // compete for their lease. The next hasLock for s1 waits at a gate once the test sets one, and then answers that the
+    // lease is not held, unless the test says it is. The next register of s1 on the test thread waits at a gate too,
+    // before it decides whether to grant the lease.
     private static final class Strategy implements CompetingConsumerStrategy {
         private final Set<String> holders = ConcurrentHashMap.newKeySet();
         private final List<CompetingConsumerListener> listeners = new CopyOnWriteArrayList<>();
         private final AtomicReference<@Nullable Gate> nextHasLockForS1 = new AtomicReference<>();
         private final AtomicBoolean leaseHeldAfterTheGate = new AtomicBoolean();
         private final AtomicInteger errorsFromRegisteringS1OnALifecycleThread = new AtomicInteger();
+        private final AtomicBoolean anotherNodeHoldsS1 = new AtomicBoolean();
+        private final AtomicReference<@Nullable Gate> nextRegisterOfS1OnTheTestThread = new AtomicReference<>();
+        private final Set<String> candidates = ConcurrentHashMap.newKeySet();
 
         @Override
         public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
@@ -611,12 +784,23 @@ class CompetingConsumerHandedOverLifecycleTest {
                     && errorsFromRegisteringS1OnALifecycleThread.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
                 throw new AssertionError("Registering s1 failed on " + Thread.currentThread().getName());
             }
+            if (subscriptionId.equals("s1") && Thread.currentThread().getName().equals(WrappedModel.TEST_THREAD)) {
+                Gate gate = nextRegisterOfS1OnTheTestThread.getAndSet(null);
+                if (gate != null) {
+                    gate.pass();
+                }
+            }
+            candidates.add(subscriptionId);
+            if (subscriptionId.equals("s1") && anotherNodeHoldsS1.get()) {
+                return false;
+            }
             holders.add(subscriptionId);
             return true;
         }
 
         @Override
         public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
+            candidates.remove(subscriptionId);
             holders.remove(subscriptionId);
         }
 
@@ -657,12 +841,14 @@ class CompetingConsumerHandedOverLifecycleTest {
     private static final class WrappedModel implements SubscriptionModel {
         private static final String TEST_THREAD = "test-calling-thread";
         private static final String LIFECYCLE_THREAD_OF_S1 = "occurrent-competing-consumer-lifecycle-s1";
+        private static final String TRY_OF_S1 = "occurrent-competing-consumer-reconcile-s1";
 
         private final AtomicReference<@Nullable Gate> nextIsRunningOfS1OnAHandedOverThread = new AtomicReference<>();
         private final AtomicReference<@Nullable Gate> nextIsRunningOfS1OnTheTestThread = new AtomicReference<>();
         private final AtomicReference<@Nullable Gate> nextIsPausedOfN1OnTheTestThread = new AtomicReference<>();
         private final AtomicReference<@Nullable Gate> nextResumeOfN1OnTheTestThread = new AtomicReference<>();
         private final AtomicReference<@Nullable Gate> nextCancelOfN1OnTheTestThread = new AtomicReference<>();
+        private final AtomicReference<@Nullable Gate> nextPauseOfS1OnATry = new AtomicReference<>();
         private final AtomicInteger errorsFromIsRunningOfS1OnALifecycleThread = new AtomicInteger();
         private final AtomicInteger failuresFromResumingN1 = new AtomicInteger();
         private final Counter resumeFailuresOfN1 = new Counter();
@@ -782,10 +968,16 @@ class CompetingConsumerHandedOverLifecycleTest {
             }
         }
 
+        // Waits at the gate before it takes the monitor, so the calls a test makes meanwhile are not held up by it
         @Override
-        public synchronized void pauseSubscription(String subscriptionId) {
-            if (runningIds.remove(subscriptionId)) {
-                pausedIds.add(subscriptionId);
+        public void pauseSubscription(String subscriptionId) {
+            if (subscriptionId.equals("s1") && Thread.currentThread().getName().equals(TRY_OF_S1)) {
+                passIfSet(nextPauseOfS1OnATry);
+            }
+            synchronized (this) {
+                if (runningIds.remove(subscriptionId)) {
+                    pausedIds.add(subscriptionId);
+                }
             }
         }
 

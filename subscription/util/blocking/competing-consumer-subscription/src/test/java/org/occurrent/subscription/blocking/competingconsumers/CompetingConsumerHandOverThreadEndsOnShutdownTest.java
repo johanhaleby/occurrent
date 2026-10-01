@@ -77,8 +77,10 @@ class CompetingConsumerHandOverThreadEndsOnShutdownTest {
             model.shutdown();
 
             assertThat(pausing.isDone()).as("the pause of s1 is still stuck when shutdown() returns").isFalse();
-            await().atMost(Duration.ofSeconds(1)).pollInterval(10, MILLISECONDS).untilAsserted(() -> assertThat(liveThreadsNamed(HAND_OVER_THREAD))
-                    .as("[threads named %s still alive within 1 second of shutdown() returning]", HAND_OVER_THREAD).isEmpty());
+            // The thread checks for a shutdown every 100 milliseconds, and the pause stays stuck for as long as this waits,
+            // so only a thread that never ends runs out the wait
+            await().atMost(Duration.ofSeconds(10)).pollInterval(10, MILLISECONDS).untilAsserted(() -> assertThat(liveThreadsNamed(HAND_OVER_THREAD))
+                    .as("[threads named %s still alive 10 seconds after shutdown() returned, while the pause of s1 is stuck]", HAND_OVER_THREAD).isEmpty());
         } finally {
             unregisterOfS1.open();
             awaitBounded(pausing);

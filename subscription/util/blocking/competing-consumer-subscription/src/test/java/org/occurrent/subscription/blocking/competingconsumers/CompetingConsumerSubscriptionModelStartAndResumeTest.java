@@ -302,6 +302,67 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delegate.running).as("a once the strategy answers for it again").containsExactlyInAnyOrder("a", "b"));
     }
 
+    // An Error ends as a RuntimeException does, apart from the caller getting it, so the consumer it was thrown for is
+    // tried again instead of holding its lease with nothing delivering
+    @Test
+    void a_custom_lease_strategy_that_throws_an_error_on_start_has_the_consumer_tried_again() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        model.stop();
+        strategy.hasLockErrorsOnceOn.add("x");
+
+        Throwable thrown = catchThrowable(() -> model.start(true));
+
+        assertThat(thrown).as("start(), whose caller gets the Error").isInstanceOf(AssertionError.class);
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delegate.running).as("[x once the strategy answers for it again]").containsExactly("x"));
+        assertThat(strategy.holders).containsExactly("x");
+    }
+
+    @Test
+    void a_wrapped_model_that_throws_an_error_on_being_asked_about_a_consumer_start_resumes_has_it_tried_again() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        model.pauseSubscription("x");
+        delegate.isRunningErrorsOnceOn.add("x");
+
+        Throwable thrown = catchThrowable(() -> model.start(true));
+
+        assertThat(thrown).as("start(), whose caller gets the Error").isInstanceOf(AssertionError.class);
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delegate.running).as("[x once the wrapped model answers for it again]").containsExactly("x"));
+        assertThat(strategy.holders).containsExactly("x");
+    }
+
+    @Test
+    void a_wrapped_model_that_throws_an_error_on_being_asked_about_a_granted_consumer_has_it_tried_again() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        strategy.loseTheLease("x");
+        delegate.isRunningErrorsOnceOn.add("x");
+
+        Throwable thrown = catchThrowable(() -> strategy.grant("x"));
+
+        assertThat(thrown).as("the grant, whose caller gets the Error").isInstanceOf(AssertionError.class);
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delegate.running).as("[x once the wrapped model answers for it again]").containsExactly("x"));
+        assertThat(strategy.holders).containsExactly("x");
+    }
+
+    // The user paused both, so start(false) resumes neither, whether it competes for a lease or not
+    @Test
+    void a_start_without_resuming_keeps_a_subscription_the_user_paused_paused_whether_it_competes_or_not() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        subscribeNonCompeting("nc");
+        model.pauseSubscription("x");
+        model.pauseSubscription("nc");
+        model.stop();
+
+        model.start(false);
+
+        assertThat(delegate.running).as("[subscriptions the user paused that start(false) resumed]").isEmpty();
+        assertThat(model.isPaused("x")).isTrue();
+        assertThat(model.isPaused("nc")).isTrue();
+    }
+
     @Test
     void a_subscription_that_wins_its_lease_while_the_wrapped_model_is_stopped_is_delivered_once_after_a_start() {
         strategy.grantOnRegister = true;
@@ -501,7 +562,8 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
     /**
      * Keeps track of which subscriptions deliver and which are paused, and throws when starting any subscription in
-     * {@link #throwsOn}. Like {@code SpringMongoSubscriptionModel}, it holds a subscription made while it is stopped
+     * {@link #throwsOn}. Asked whether a subscription in {@link #isRunningErrorsOnceOn} runs, it throws an Error, once.
+     * Like {@code SpringMongoSubscriptionModel}, it holds a subscription made while it is stopped
      * paused, as well as one made with {@code subscribePaused}, and starts itself to resume a subscription. A subscription delivered twice is listed twice in
      * {@link #running}.
      */
@@ -512,6 +574,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         private volatile boolean started = true;
         private volatile boolean startThrows;
         private volatile boolean stopThrows;
+        private final Set<String> isRunningErrorsOnceOn = ConcurrentHashMap.newKeySet();
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -562,6 +625,9 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
         @Override
         public boolean isRunning(String subscriptionId) {
+            if (isRunningErrorsOnceOn.remove(subscriptionId)) {
+                throw new AssertionError("The wrapped model failed with an Error on being asked about " + subscriptionId);
+            }
             return running.contains(subscriptionId) && !paused.contains(subscriptionId);
         }
 
@@ -606,13 +672,15 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
      * thread, as a lease strategy does for a lease that changed hands. {@link #grant(String)} plays a refresh round
      * granting a lease that another node gave up, which, as with the MongoDB lease strategies, only a registered
      * consumer can win. Releasing a lease keeps the consumer registered, unregistering does not. Both tell the listeners
-     * when the consumer held the lease, a release only while {@link #tellsTheListenersAboutARelease} is set.
+     * when the consumer held the lease, a release only while {@link #tellsTheListenersAboutARelease} is set. Asked
+     * whether this node holds the lease of a subscription in {@link #hasLockErrorsOnceOn}, it throws an Error, once.
      */
     private static final class SynchronousLeaseStrategy implements CompetingConsumerStrategy {
         private final List<String> calls = new CopyOnWriteArrayList<>();
         private final Set<String> registered = ConcurrentHashMap.newKeySet();
         private final Set<String> holders = ConcurrentHashMap.newKeySet();
         private final Set<String> hasLockThrowsOn = ConcurrentHashMap.newKeySet();
+        private final Set<String> hasLockErrorsOnceOn = ConcurrentHashMap.newKeySet();
         private final List<CompetingConsumerListener> listeners = new CopyOnWriteArrayList<>();
         private volatile boolean grantOnRegister;
         private volatile boolean registerThrows;
@@ -675,6 +743,9 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
         @Override
         public boolean hasLock(String subscriptionId, String subscriberId) {
+            if (hasLockErrorsOnceOn.remove(subscriptionId)) {
+                throw new AssertionError("A custom lease strategy failed with an Error on " + subscriptionId);
+            }
             if (hasLockThrowsOn.contains(subscriptionId)) {
                 throw new IllegalStateException("A custom lease strategy failed to answer for " + subscriptionId);
             }
