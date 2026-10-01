@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
@@ -347,6 +348,22 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         assertThat(delegate.globalCheckpointReads)
                 .as("the position is read once, at registration, and the outcome of that read is what decides this subscription")
                 .hasValue(1);
+    }
+
+    @Test
+    void a_subscribe_refused_as_a_duplicate_or_on_a_shut_down_model_does_not_read_where_the_feed_is() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
+        int readsOfTheRegistration = delegate.globalCheckpointReads.get();
+
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
+                .isInstanceOf(DuplicateSubscriptionIdException.class);
+        model.shutdown();
+        assertThatThrownBy(() -> model.subscribe("another", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
+                .isInstanceOf(SubscriptionModelShutdownException.class);
+
+        assertThat(delegate.globalCheckpointReads).as("reads of where the feed is after the subscribe that registered").hasValue(readsOfTheRegistration);
     }
 
     @Test

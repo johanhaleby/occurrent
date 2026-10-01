@@ -1507,14 +1507,17 @@ unless the delete failed.
 It resolves a dynamic `StartAt` only after the delete too, since `ResumeStartPositions.replayThenResume(..)` and the
 Spring Boot starter's `BEGINNING` start read the stored position themselves to choose between replaying and resuming.
 The cancel ends every subscription of the id that it finds, and stops their position writes and no others. When the
-durable model drives the subscription itself, it finds a `subscribe(..)` as soon as that call has taken the id. When it
-hands the subscription to a wrapped model that manages named subscriptions, it finds one once the call has returned
-to its caller or handed the subscription over. A `subscribe(..)` it does not find is still reading its start position
-on its caller's thread. That call reads the position again after the delete, and the positions it saves after that are
-kept. The cancel does not wait for a wrapped model that is taking a subscribe of the id when the cancel comes. The
+durable model drives the subscription itself, it finds a `subscribe(..)` as soon as that call has taken the id.
+When it hands the subscription to a wrapped model that manages named subscriptions, it finds a `subscribe(..)` before
+the call reads its start position, so it also ends one that is still reading or that the wrapped model is still taking.
+Starting such a call again after the delete would run its action after the cancel completed. A call that had already
+returned and starts where the feed is would also read that position only once the delete had ended, and skip what was
+written between the return and then. The cancel does not wait for a wrapped model that is taking a subscribe of the id when the cancel comes. The
 durable model cancels that subscription in the wrapped model once the wrapped model has taken it, and the cancel's
-`Mono` completes only after that. A `subscribe(..)` that had not returned to its caller then reads its start position
-again after the delete and hands the subscription over again.
+`Mono` completes only after that. When that cancel fails, the subscription can still be in the wrapped model, so the
+cancel's `Mono` fails with that error, and a `shutdown()`, which returns nothing that could fail, logs it as an error.
+The durable model doesn't run the action of that subscription for anything the wrapped model delivers after the cancel
+or the `shutdown()` returned.
 
 None of these waits has a time limit. A store can apply a write or a delete after its caller stopped waiting for it,
 so a delete that went ahead of a slow save could still have the save put the position back, and a `subscribe(..)` that
@@ -1564,7 +1567,8 @@ path the last check marks the generation as being handed over in that same step,
 generation again under that lock once the wrapped model has taken the subscribe. A cancel or a `shutdown()` that
 retired it in between does not wait for the wrapped model. The subscribe cancels the subscription the wrapped model
 made instead, and the cancel's `Mono` completes only after that. A shutdown retires the generations it handed over as well, so an action the wrapped model
-is still running starts no position save after it. A step that passed its check just before the retire, resolving a dynamic
+is still running starts no position save after it, and the durable model skips the action for an event the wrapped
+model delivers to a retired generation. A step that passed its check just before the retire, resolving a dynamic
 `StartAt`, reading the stored position, subscribing to the feed or handing the subscription to the wrapped model, can
 still begin after the retiring call returned, since no lifecycle call waits for a function the caller supplies or for
 the wrapped model. It runs to its end, and the model discards its result. When the durable model drives the

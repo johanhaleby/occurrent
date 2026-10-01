@@ -1481,14 +1481,16 @@ discards what it answers. When the durable model drives a subscription itself, a
 started ends it the same way, except that its checkpoint stays stored and the subscription stays paused. Its
 `waitUntilStarted()` fails with `CancellationException` too. In 0.33.0 that wait never ended. If you wait for `waitUntilStarted()` on a subscription that another part of your application may cancel,
 pause or stop, handle that error. A registration made while the model was stopped is the one exception. The handle it
-returned keeps waiting once a resume or `start(true)` has taken the registration over, as in 0.33.0. On a
-`ReactorDurableSubscriptionModel` that wraps a model that manages named subscriptions, a subscribe that is still reading
-its start position when the cancel comes is not ended. It reads its start position again after the delete, and the
-checkpoints it writes after that are kept. The cancel does not wait for a wrapped model that is taking a subscribe of
-the id when the cancel comes. The durable model cancels that subscription in the wrapped model once the wrapped model
-has taken it, and the cancel's `Mono` completes only after that. A `shutdown()` does not wait for the wrapped model
-either, and after a `shutdown()` no subscription starts a checkpoint write, including one the wrapped model is still
-running an event through.
+returned keeps waiting once a resume or `start(true)` has taken the registration over, as in 0.33.0.
+On a `ReactorDurableSubscriptionModel` that wraps a model that manages named subscriptions, the cancel also ends a
+subscribe that is still reading its start position or that the wrapped model is still taking when the cancel comes. The
+cancel does not wait for that wrapped model. The durable model cancels the subscription in the wrapped model once the
+wrapped model has taken it, and the cancel's `Mono` completes only after that. When that cancel fails, the subscription
+can still be in the wrapped model, so the cancel's `Mono` fails with that error. A `shutdown()` does not wait for the
+wrapped model either, and logs such a failure as an error. After a `shutdown()` no subscription starts a checkpoint
+write, including one the wrapped model is still running an event through. Once a cancel or a `shutdown()` has returned,
+the durable model doesn't run the action of a subscription it handed to the wrapped model and ended, even when the
+wrapped model still delivers an event to it.
 
 None of these waits has a time limit, because a store can still apply a write after the model stopped waiting for it. A
 save could then bring the cancelled checkpoint back after the delete, and a delete could remove the checkpoint the next
