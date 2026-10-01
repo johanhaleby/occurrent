@@ -27,7 +27,8 @@ description: >-
   Mono.empty(), named so that it hides no method the class could already call, and so that no method of a supertype
   the parser cannot see plausibly has the name. A declaration with no body, abstract or in an interface, only changes
   its return type. A wrapped cancelSubscription call that is not returned gets a TODO
-  comment. An implementation that deletes stored state asynchronously still has to return a Mono that completes once
+  comment. A class that also implements the blocking CancellableSubscriptions stays unchanged apart from a TODO comment, since no
+  one method can implement both, and has to be split into a blocking and a reactor adapter by hand. An implementation that deletes stored state asynchronously still has to return a Mono that completes once
   that delete has, see doc/migration/upgrading-to-0.34.0.md. Java only, a Kotlin implementation needs the manual steps
   instead.
 recipeList:

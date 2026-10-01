@@ -41,7 +41,9 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.occurrent.rewrite.ReactorCancelSubscriptionStubs.BLOCKING_CANCELLABLE_SUBSCRIPTIONS;
 import static org.occurrent.rewrite.ReactorCancelSubscriptionStubs.CANCELLABLE_SUBSCRIPTIONS;
+import static org.occurrent.rewrite.ReactorCancelSubscriptionStubs.CANCELLABLE_SUBSCRIPTIONS_0_33;
 import static org.occurrent.rewrite.ReactorCancelSubscriptionStubs.DCB_SUBSCRIPTION_MODEL;
 import static org.occurrent.rewrite.ReactorCancelSubscriptionStubs.MONO;
 import static org.openrewrite.java.Assertions.java;
@@ -51,7 +53,50 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
     @Override
     public void defaults(RecipeSpec spec) {
         spec.recipe(new MigrateReactorCancelSubscriptionReturnType())
-                .parser(JavaParser.fromJavaVersion().dependsOn(MONO, CANCELLABLE_SUBSCRIPTIONS, DCB_SUBSCRIPTION_MODEL));
+                .parser(JavaParser.fromJavaVersion().dependsOn(MONO, CANCELLABLE_SUBSCRIPTIONS, DCB_SUBSCRIPTION_MODEL, BLOCKING_CANCELLABLE_SUBSCRIPTIONS));
+    }
+
+    @Test
+    void leavesAClassThatAlsoImplementsTheBlockingCancelUnchangedAndMarksIt() {
+        String unchanged = """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                class Model implements CancellableSubscriptions, org.occurrent.subscription.api.blocking.CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    @Override
+                    public void cancelSubscription(String subscriptionId) {
+                        ids.remove(subscriptionId);
+                    }
+                }
+                """;
+        String marked = """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                class Model implements CancellableSubscriptions, org.occurrent.subscription.api.blocking.CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    // TODO: split this class into a blocking and a reactor adapter, since from Occurrent 0.34.0 the blocking cancelSubscription(String) returns void and the reactor one Mono<Void>, and no one method implements both. See section 19 of doc/migration/upgrading-to-0.34.0.md
+                    @Override
+                    public void cancelSubscription(String subscriptionId) {
+                        ids.remove(subscriptionId);
+                    }
+                }
+                """;
+        rewriteRun(java(unchanged, marked));
+        // Left as it was apart from the comment, so it still compiles against the declarations it was written for.
+        // Against 0.34.0 no one method can implement both, which is why it is left for the split by hand.
+        assertCompilesAgainst(Stream.of(MONO, CANCELLABLE_SUBSCRIPTIONS_0_33, BLOCKING_CANCELLABLE_SUBSCRIPTIONS), marked);
     }
 
     @Test
@@ -1528,9 +1573,13 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
     // rewriteRun never compiles the result, so this compiles it against stubs of the 0.34.0 interfaces, and alongside
     // any source the parser was not given
     private static Path assertCompiles(String source, String... alongside) {
+        return assertCompilesAgainst(Stream.of(MONO, CANCELLABLE_SUBSCRIPTIONS, DCB_SUBSCRIPTION_MODEL), source, alongside);
+    }
+
+    private static Path assertCompilesAgainst(Stream<String> declarations, String source, String... alongside) {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-        List<JavaFileObject> sources = Stream.concat(Stream.of(MONO, CANCELLABLE_SUBSCRIPTIONS, DCB_SUBSCRIPTION_MODEL, source), Stream.of(alongside))
+        List<JavaFileObject> sources = Stream.concat(Stream.concat(declarations, Stream.of(source)), Stream.of(alongside))
                 .map(MigrateReactorCancelSubscriptionReturnTypeTest::inMemory)
                 .toList();
         try {

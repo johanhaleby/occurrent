@@ -29,6 +29,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -54,6 +55,12 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
      * What {@link #cancelSubscription(String)} answers, so a test can hold the wrapped model's cancel open.
      */
     Mono<Void> cancelled = Mono.empty();
+    final List<String> cancelledIds = new CopyOnWriteArrayList<>();
+    /**
+     * Runs first in every named subscribe, so a test can hold the wrapped model while it takes one.
+     */
+    volatile Consumer<String> beforeSubscribe = __ -> {
+    };
 
     NamedRecordingSubscriptionModel(String globalCheckpoint) {
         this.feed = new RecordingSubscriptionModel(globalCheckpoint);
@@ -72,6 +79,7 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
                                   Function<CloudEvent, Mono<Void>> action) {
+        beforeSubscribe.accept(subscriptionId);
         subscribedIds.add(subscriptionId);
         actions.add(action);
         // What the durable model hands a named model is the whole of what decides where the subscription begins on
@@ -92,6 +100,7 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
 
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
+        cancelledIds.add(subscriptionId);
         return cancelled;
     }
 

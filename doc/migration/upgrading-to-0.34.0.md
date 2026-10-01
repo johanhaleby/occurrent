@@ -1317,6 +1317,10 @@ What to do:
    `Mono` that completes once the delete has, and caches it, so a second subscriber does not delete again.
 5. A model that wraps another returns a `Mono` that also waits for the `Mono` from the wrapped model's
    `cancelSubscription(..)`.
+6. A class that implements both the blocking and the reactor `CancellableSubscriptions` with one
+   `void cancelSubscription(String)` cannot compile against 0.34.0 in any form, since the two methods now differ only
+   by return type. Split it into a blocking adapter and a reactor adapter, each implementing one of the two, and have
+   both call the code that cancels.
 
 `UpgradeToOccurrent_0_34` changes a Java implementation of either interface that returns `void` to return `Mono<Void>`.
 A declaration with no body, an abstract one or one in an interface that extends either interface, gets the new return
@@ -1336,7 +1340,11 @@ A body that calls a wrapped model's `cancelSubscription(..)` anywhere else, insi
 gets a `TODO` comment, since the `Mono` it returns does not wait for that call. Return that call's `Mono`, as step 5
 describes. Step 4 stays by hand, since the recipe cannot tell a delete that runs in the background from code that
 finishes before the method returns. The recipe does not change a Kotlin implementation, or a lambda or method
-reference that implements `CancellableSubscriptions`.
+reference that implements `CancellableSubscriptions`. It does not change the method of a class that also
+implements the blocking `CancellableSubscriptions`, apart from a `TODO` comment that points here, since changing the return type
+would only swap which of the two the class fails to implement. Step 6 stays by hand. The recipe finds the blocking
+interface only when it can see it among the class's supertypes, so check by hand a class that reaches it through a
+type the recipe cannot see.
 
 `ReactorDurableSubscriptionModel` now deletes the checkpoint only after every checkpoint write the cancelled
 subscription had already started has ended, and a write it had not started by then never runs. A subscribe in the same
@@ -1350,7 +1358,20 @@ position when the cancel came reads it again after the delete, and the checkpoin
 None of these waits has a time limit, because a store can still apply a write after the model stopped waiting for it. A
 save could then bring the cancelled checkpoint back after the delete, and a delete could remove the checkpoint the next
 subscription wrote. The cost is that on a store whose writes hang but whose reads answer, a subscribe right after a
-cancel waits until the store answers those writes, where 0.33.0 started it straight away.
+cancel waits until the store answers those writes, where 0.33.0 started it straight away. No call for another id waits
+for them.
+
+A subscribe with a `StartAt.dynamic(..)` that has to wait for that delete returns right away, since the calling thread
+can be one where Reactor refuses to block, and starts the subscription once the delete has ended. A function that throws, or
+a wrapped model that refuses the subscription, then ends `waitUntilStarted()` with that error instead of making
+`subscribe(..)` throw. If you catch those around `subscribe(..)`, also handle the error from
+`waitUntilStarted()`. Until the subscription starts, `isRunning(id)` answers `true` when `ReactorDurableSubscriptionModel`
+drives the subscription itself, and `false` when it wraps a model that manages named subscriptions, which has not
+received it yet. A `shutdown()` ends such a subscribe. With no delete running, the function runs, and throws, on the
+calling thread as before. A subscribe with the subscription-model default start position on a
+`ReactorDurableSubscriptionModel` that wraps a model that manages named subscriptions still reads the checkpoint on
+the calling thread, as it did in 0.33.0, and so waits there until the delete has ended or the model shuts down, which
+makes it throw `SubscriptionModelShutdownException`.
 
 A reactor catch-up model cancelled before its replay handed the subscription over to the wrapped model now passes the
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has. A wrapped model

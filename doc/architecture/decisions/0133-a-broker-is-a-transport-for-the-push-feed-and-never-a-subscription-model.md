@@ -1517,9 +1517,23 @@ write or the delete would not help either, for the same reason. So the model wai
 
 That has one cost next to 0.33.0, where neither the cancel nor a later `subscribe(..)` waited for the store. On a store
 whose writes hang but whose reads answer, a `subscribe(..)` of the id right after the cancel now waits until the store
-answers those writes, where 0.33.0 started it straight away. Only a caller that waits on the cancel's `Mono` or
-subscribes the same id again waits at all, and a store that answers no reads held up a `subscribe(..)` in 0.33.0 too,
-since a `subscribe(..)` reads the stored position before the subscription starts.
+answers those writes, where 0.33.0 started it straight away. Only a caller that waits on the cancel's `Mono`, and a
+`subscribe(..)` of the same id made after the cancel, wait for those writes and the delete, and no call for another id
+waits for them. The cancel itself returns once it has stopped the subscription and started the delete. A store that answers no reads held up a `subscribe(..)` in 0.33.0 too, since a `subscribe(..)`
+reads the stored position before the subscription starts.
+
+A `subscribe(..)` of the same id with a dynamic `StartAt` does not wait on its caller's thread, since that thread can be
+one where Reactor refuses to block. It returns right away and starts the subscription once the delete has ended, so
+a function that throws, or a wrapped model that refuses the subscription, ends `waitUntilStarted()` with that error
+instead of making `subscribe(..)` throw. Until then `isRunning(id)` answers `true` when the durable model drives the subscription itself, and
+`false` when it hands the subscription to a wrapped model that manages named subscriptions, which has not received it
+yet. A `shutdown()` ends such a subscribe. With a wrapped model that manages named subscriptions `waitUntilStarted()`
+then fails with `SubscriptionModelShutdownException`, and without one it never completes, the same as for any
+subscription that `shutdown()` ends before it starts. With no delete running, the function still runs, and throws, on
+the caller's thread. One with the subscription-model default start position, on a durable model that wraps a model
+that manages named subscriptions, reads the stored position on the caller's thread and waits there for the delete,
+where 0.33.0 blocked that thread on the same read. A `shutdown()` ends that wait too, and the `subscribe(..)` throws
+`SubscriptionModelShutdownException`.
 
 A reactor catch-up model that is cancelled before its replay handed the id over to the wrapped model now passes the
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has, since the wrapped
@@ -1532,7 +1546,9 @@ subscription wrote, and a subscription made after the cancel stores its own. A p
 That costs a breaking change to a released interface. A class that implements `CancellableSubscriptions` or the reactor
 `DcbSubscriptionModel` has to return `Mono<Void>`, and code compiled against 0.33.0 that calls the method has to be
 recompiled. `UpgradeToOccurrent_0_34` changes a Java implementation that returns `void`, and an abstract or interface
-declaration of the method. An implementation that deletes stored state in the background has to be changed by hand. The second method I rejected kept the interface as it was, but it
+declaration of the method. An implementation that deletes stored state in the background has to be changed by hand. So does a class that
+implements the blocking `CancellableSubscriptions` as well, since the two methods now differ only by return type and
+no one method implements both. It has to be split into a blocking and a reactor adapter. The second method I rejected kept the interface as it was, but it
 left `cancelSubscription(..)` itself with the gap, and every wrapping model would have had two cancel methods.
 
 A caller no longer deletes the checkpoint by hand to have an id read its history again, since a cancel does it.

@@ -75,11 +75,20 @@ import java.util.UUID;
  * {@code Mono} returned then completes without waiting for that call's cleanup. See
  * doc/migration/upgrading-to-0.34.0.md for an implementation that deletes stored state asynchronously, which has to
  * return a {@code Mono} that completes once that delete has.
+ * <p>
+ * A method of a class that also implements the blocking {@code CancellableSubscriptions} stays as it is apart from a
+ * {@code TODO} comment, since from 0.34.0 the blocking and the reactor {@code cancelSubscription(String)} differ only by
+ * return type and no one method implements both. Such a class has to be split into a blocking and a reactor adapter
+ * by hand.
  */
 public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
 
     private static final String CANCELLABLE_SUBSCRIPTIONS = "org.occurrent.subscription.api.reactor.CancellableSubscriptions";
     private static final String DCB_SUBSCRIPTION_MODEL = "org.occurrent.subscription.api.reactor.DcbSubscriptionModel";
+    private static final String BLOCKING_CANCELLABLE_SUBSCRIPTIONS = "org.occurrent.subscription.api.blocking.CancellableSubscriptions";
+    private static final String SPLIT_THE_TWO_CANCELS = " TODO: split this class into a blocking and a reactor adapter, since from Occurrent 0.34.0 " +
+                                                        "the blocking cancelSubscription(String) returns void and the reactor one Mono<Void>, " +
+                                                        "and no one method implements both. See section 19 of doc/migration/upgrading-to-0.34.0.md";
     private static final String MONO = "reactor.core.publisher.Mono";
     private static final String TARGET = "reactorCancelSubscriptionReturningVoid";
     private static final String HELPERS = "reactorCancelSubscriptionHelpers";
@@ -120,7 +129,9 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                "method of a supertype the parser cannot see plausibly has the name. A declaration " +
                "with no body only changes its return type. A wrapped `cancelSubscription(String)` call that is not " +
                "returned gets a `TODO` " +
-               "comment. An implementation that deletes stored state asynchronously still has to return a `Mono` " +
+               "comment. A class that also implements the blocking `CancellableSubscriptions` stays unchanged apart " +
+               "from a `TODO` comment, since no one method can implement both, and has to be split into a blocking and a reactor " +
+               "adapter by hand. An implementation that deletes stored state asynchronously still has to return a `Mono` " +
                "that completes once that delete has, see doc/migration/upgrading-to-0.34.0.md. Java only, a Kotlin " +
                "implementation needs the manual steps instead.";
     }
@@ -148,6 +159,14 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
             public J.MethodDeclaration visitMethodDeclaration(J.MethodDeclaration method, ExecutionContext ctx) {
                 if (!isVoidReactorCancelSubscription(method)) {
                     return super.visitMethodDeclaration(method, ctx);
+                }
+                if (alsoImplementsTheBlockingCancel(method)) {
+                    // From 0.34.0 the two differ only by return type, so no one method implements both, and changing it
+                    // to Mono<Void> would only swap which of the two the class fails to implement
+                    J.MethodDeclaration unchanged = super.visitMethodDeclaration(method, ctx);
+                    boolean alreadyFlagged = unchanged.getPrefix().getComments().stream()
+                            .anyMatch(comment -> comment instanceof TextComment text && text.getText().equals(SPLIT_THE_TWO_CANCELS));
+                    return alreadyFlagged ? unchanged : withTodo(unchanged, SPLIT_THE_TWO_CANCELS);
                 }
                 if (method.getBody() == null) {
                     // Abstract or declared by an interface, so only the return type changes
@@ -236,6 +255,12 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                 return TypeUtils.isAssignableTo(CANCELLABLE_SUBSCRIPTIONS, type) || TypeUtils.isAssignableTo(DCB_SUBSCRIPTION_MODEL, type);
             }
 
+            // Every blocking type that declares cancelSubscription(String) extends the blocking CancellableSubscriptions
+            private boolean alsoImplementsTheBlockingCancel(J.MethodDeclaration method) {
+                JavaType.Method methodType = method.getMethodType();
+                return methodType != null && TypeUtils.isAssignableTo(BLOCKING_CANCELLABLE_SUBSCRIPTIONS, methodType.getDeclaringType());
+            }
+
             // UNKNOWN when the call has no type, so it may or may not return the Mono of a wrapped model
             private WrappedCancel wrappedCancel(J.MethodInvocation invocation) {
                 if (!"cancelSubscription".equals(invocation.getSimpleName())
@@ -284,11 +309,15 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
             }
 
             private <S extends Statement> S withTodo(S statement) {
+                return withTodo(statement, RETURN_THE_WRAPPED_CANCEL);
+            }
+
+            private <S extends Statement> S withTodo(S statement, String todo) {
                 Space prefix = statement.getPrefix();
                 String whitespace = prefix.getWhitespace();
                 String indent = whitespace.substring(whitespace.lastIndexOf('\n') + 1);
                 List<Comment> comments = new ArrayList<>();
-                comments.add(new TextComment(false, RETURN_THE_WRAPPED_CANCEL, "\n" + indent, Markers.EMPTY));
+                comments.add(new TextComment(false, todo, "\n" + indent, Markers.EMPTY));
                 comments.addAll(prefix.getComments());
                 return statement.withPrefix(Space.build(whitespace, comments));
             }

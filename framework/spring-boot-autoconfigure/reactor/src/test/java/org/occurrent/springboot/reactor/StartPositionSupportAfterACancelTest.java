@@ -81,7 +81,8 @@ class StartPositionSupportAfterACancelTest {
 
                         // When
                         model.cancelSubscription(SUBSCRIPTION_ID);
-                        model.subscribe(SUBSCRIPTION_ID, null, startAt.apply(new StartPositionSupport(context)), __ -> Mono.empty());
+                        model.subscribe(SUBSCRIPTION_ID, null, startAt.apply(new StartPositionSupport(context)), __ -> Mono.empty())
+                                .waitUntilStarted().block(Duration.ofSeconds(5));
 
                         // Then
                         assertion.accept(delegate.startedAt.get(SUBSCRIPTION_ID));

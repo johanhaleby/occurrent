@@ -45,6 +45,29 @@ final class ReactorCancelSubscriptionStubs {
             }
             """;
 
+    /**
+     * The blocking {@code CancellableSubscriptions}, whose {@code cancelSubscription(String)} returns {@code void} in
+     * 0.33.0 and 0.34.0 alike.
+     */
+    static final String BLOCKING_CANCELLABLE_SUBSCRIPTIONS = """
+            package org.occurrent.subscription.api.blocking;
+
+            public interface CancellableSubscriptions {
+                void cancelSubscription(String subscriptionId);
+            }
+            """;
+
+    /**
+     * The reactor {@code CancellableSubscriptions} as 0.33.0 declares it, for source the recipe does not change.
+     */
+    static final String CANCELLABLE_SUBSCRIPTIONS_0_33 = """
+            package org.occurrent.subscription.api.reactor;
+
+            public interface CancellableSubscriptions {
+                void cancelSubscription(String subscriptionId);
+            }
+            """;
+
     static final String DCB_SUBSCRIPTION_MODEL = """
             package org.occurrent.subscription.api.reactor;
 
