@@ -46,8 +46,10 @@ import static org.awaitility.Awaitility.await;
 /**
  * start(..) and stop() take every subscription while a call for one of them waits for the lease strategy, a start or
  * stop handed over to a thread of its own is tried again until it succeeds, a call that a stop() refuses is refused
- * without waiting for that stop(), a lease callback on the strategy's thread throws nothing into the strategy, and a
- * stop() waits for a subscribe that runs the subscription in the wrapped model.
+ * without waiting for that stop(), and a lease callback on the strategy's thread throws nothing into the strategy.
+ * When a second stop() begins while a subscribe made during the first one is inside the wrapped model, the wrapped
+ * model is stopped once both stop() calls and the subscribe have returned, and the subscription neither runs there nor
+ * holds its lease.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CompetingConsumerStartStopWithoutHoldingUpOtherSubscriptionsTest {
