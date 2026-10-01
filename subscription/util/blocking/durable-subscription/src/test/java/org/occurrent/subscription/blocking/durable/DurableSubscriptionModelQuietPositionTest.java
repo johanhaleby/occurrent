@@ -16,27 +16,34 @@
 
 package org.occurrent.subscription.blocking.durable;
 
+import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
 
 /**
@@ -330,8 +337,140 @@ class DurableSubscriptionModelQuietPositionTest {
         assertThatThrownBy(() -> saveQuietPositionEvery(Duration.ZERO)).isExactlyInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void a_closed_run_whose_read_of_the_write_version_outlasts_the_pause_does_not_let_the_resumed_run_save_a_quiet_position_past_an_event_the_predicate_declined() throws InterruptedException {
+        // Given a closed run whose read of the write version for e2 is held past the pause, and a resumed run that
+        // delivers e2 again and then e3, which the persist predicate declines
+        CountDownLatch reading = new CountDownLatch(1);
+        CountDownLatch answer = new CountDownLatch(1);
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage,
+                new DurableSubscriptionModelConfig(declines("e3")).saveQuietPositionEvery(INTERVAL), secondReadHeld(reading, answer));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        });
+        wrapped.deliver("id", new StringBasedCheckpoint("e1"));
+        Thread closedRun = Thread.ofPlatform().start(() -> wrapped.deliver("id", new StringBasedCheckpoint("e2")));
+        assertThat(reading.await(5, SECONDS)).isTrue();
+        wrapped.deliver("id", new StringBasedCheckpoint("e2"));
+        wrapped.deliver("id", new StringBasedCheckpoint("e3"));
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        boolean savedBeforeTheLateCall = wrapped.readNothing("id", QUIET);
+
+        // When
+        answer.countDown();
+        closedRun.join(5000);
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        boolean savedAfterTheLateCall = wrapped.readNothing("id", QUIET);
+
+        // Then
+        assertThat(savedBeforeTheLateCall).as("quiet save wanted while e3, declined, is the last event the resumed run delivered").isFalse();
+        assertThat(savedAfterTheLateCall).as("quiet save wanted after the closed run's late call, while e3 is still the last event the resumed run delivered").isFalse();
+        assertThat(storage.read("id")).as("checkpoint").isNotEqualTo(QUIET);
+    }
+
+    @Test
+    void the_checkpoint_stays_before_an_event_a_batching_action_has_only_buffered_when_a_closed_run_returns_late() throws InterruptedException {
+        // Given an action that buffers every event and writes the buffer out on an event the persist predicate stores,
+        // a closed run whose read of the write version for e2 is held past the pause, and a resumed run that delivers
+        // e2 again and then e3, which the predicate declines
+        CountDownLatch reading = new CountDownLatch(1);
+        CountDownLatch answer = new CountDownLatch(1);
+        CountDownLatch e3Started = new CountDownLatch(1);
+        CountDownLatch e3MayBeBuffered = new CountDownLatch(1);
+        List<String> buffer = new ArrayList<>();
+        List<String> writtenOut = new CopyOnWriteArrayList<>();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage,
+                new DurableSubscriptionModelConfig(declines("e3")).saveQuietPositionEvery(INTERVAL), secondReadHeld(reading, answer));
+        model.subscribe("id", null, StartAt.checkpoint(START), cloudEvent -> {
+            String position = positionOf(cloudEvent);
+            if (position.equals("e3")) {
+                e3Started.countDown();
+                awaitQuietly(e3MayBeBuffered);
+            }
+            synchronized (buffer) {
+                buffer.add(position);
+                if (!position.equals("e3")) {
+                    writtenOut.addAll(buffer);
+                    buffer.clear();
+                }
+            }
+        });
+        wrapped.deliver("id", new StringBasedCheckpoint("e1"));
+        Thread closedRun = Thread.ofPlatform().start(() -> wrapped.deliver("id", new StringBasedCheckpoint("e2")));
+        assertThat(reading.await(5, SECONDS)).isTrue();
+        wrapped.deliver("id", new StringBasedCheckpoint("e2"));
+        Thread resumedRun = Thread.ofPlatform().start(() -> wrapped.deliver("id", new StringBasedCheckpoint("e3")));
+        assertThat(e3Started.await(5, SECONDS)).isTrue();
+
+        // When the closed run's call returns while e3 is not buffered yet, and the resumed run then reads nothing
+        answer.countDown();
+        closedRun.join(5000);
+        e3MayBeBuffered.countDown();
+        resumedRun.join(5000);
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        wrapped.readNothing("id", QUIET);
+
+        // Then a restart, which loses the buffer, starts from before e3
+        assertThat(writtenOut).as("events the action wrote out").doesNotContain("e3");
+        assertThat(storage.read("id")).as("checkpoint a restart starts after, while e3 is only in the buffer").isNotEqualTo(QUIET);
+    }
+
+    @Test
+    void a_quiet_position_an_earlier_run_read_is_not_saved_while_a_later_run_delivers_an_event() throws InterruptedException {
+        // Given an earlier run that was given a saver for its read, and a later run, opened at an earlier position,
+        // whose action for e1 has not returned
+        CountDownLatch e1Started = new CountDownLatch(1);
+        CountDownLatch e1MayReturn = new CountDownLatch(1);
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+            e1Started.countDown();
+            awaitQuietly(e1MayReturn);
+        });
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        Consumer<Checkpoint> saverOfTheEarlierRun = wrapped.beforeReading("id");
+        Thread laterRun = Thread.ofPlatform().start(() -> wrapped.deliver("id", new StringBasedCheckpoint("e1")));
+        assertThat(e1Started.await(5, SECONDS)).isTrue();
+
+        // When
+        saverOfTheEarlierRun.accept(QUIET);
+        Checkpoint whileE1IsDelivered = storage.read("id");
+        e1MayReturn.countDown();
+        laterRun.join(5000);
+
+        // Then
+        assertThat(whileE1IsDelivered).as("checkpoint while the action for e1 has not returned").isNotEqualTo(QUIET);
+        assertThat(storage.read("id")).as("checkpoint once the action for e1 has returned").isEqualTo(new StringBasedCheckpoint("e1"));
+    }
+
     private static DurableSubscriptionModelConfig saveQuietPositionEvery(Duration interval) {
         return new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(interval);
+    }
+
+    private static Predicate<CloudEvent> declines(String position) {
+        return cloudEvent -> !positionOf(cloudEvent).equals(position);
+    }
+
+    private static String positionOf(CloudEvent cloudEvent) {
+        return CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(cloudEvent).asString();
+    }
+
+    // Holds the second read of the write version, the one for the second event, until answer is counted down
+    private static CheckpointWriteVersionSource secondReadHeld(CountDownLatch reading, CountDownLatch answer) {
+        AtomicInteger reads = new AtomicInteger();
+        return subscriptionId -> {
+            if (reads.incrementAndGet() == 2) {
+                reading.countDown();
+                awaitQuietly(answer);
+            }
+            return OptionalLong.empty();
+        };
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await(10, SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static final class RecordingStorage extends InMemoryCheckpointStorage {

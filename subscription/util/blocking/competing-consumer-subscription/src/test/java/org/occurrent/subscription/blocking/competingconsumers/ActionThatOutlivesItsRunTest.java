@@ -79,6 +79,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -348,8 +349,46 @@ class ActionThatOutlivesItsRunTest {
         answerTheWriteVersion.countDown();
 
         // Then the action can still be called once, and its checkpoint is not saved
-        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).as("events handled after cancelSubscription(..) returned").hasSize(1));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled)
+                .as("the call the durable model can still make after cancelSubscription(..) returned, accepted since it saves no checkpoint and so can only deliver the event again").hasSize(1));
         await().during(Duration.ofMillis(500)).atMost(2, SECONDS).untilAsserted(() -> assertThat(storage.read("cancelled")).as("checkpoint after the cancel").isNull());
+    }
+
+    @ParameterizedTest
+    @EnumSource(Model.class)
+    void a_read_of_the_write_version_that_outlasts_the_pause_does_not_let_the_resumed_run_save_a_quiet_position_past_an_event_the_predicate_declined(Model model) throws InterruptedException {
+        // Given a durable subscription whose read of the write version for the slow event outlasts a pause and a
+        // resume, and whose resumed run then delivers an event the persist predicate declines
+        NameDefined first = nameDefined();
+        NameDefined slow = nameDefined();
+        NameDefined declined = nameDefined();
+        CountDownLatch readingForTheSlowEvent = new CountDownLatch(1);
+        CountDownLatch answer = new CountDownLatch(1);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(model(model), storage,
+                new DurableSubscriptionModelConfig(cloudEvent -> !cloudEvent.getId().equals(declined.eventId())).saveQuietPositionEvery(Duration.ofMillis(100)),
+                secondWriteVersionReadHeld(readingForTheSlowEvent, answer));
+        started.addFirst(durable);
+        CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        durable.subscribe("declining", null, StartAt.now(), handled::add).waitUntilStarted(Duration.ofSeconds(10));
+        eventStore.write("first", serialize(first));
+        eventStore.write("slow", serialize(slow));
+        assertThat(readingForTheSlowEvent.await(10, SECONDS)).isTrue();
+        durable.pauseSubscription("declining");
+        durable.resumeSubscription("declining").waitUntilStarted(Duration.ofSeconds(10));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).containsExactly(first.eventId(), slow.eventId()));
+        Checkpoint afterTheSlowEvent = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(handled.getLast());
+        eventStore.write("declined", serialize(declined));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(handled).extracting(CloudEvent::getId).last().isEqualTo(declined.eventId()));
+        Thread.sleep(500);
+        Checkpoint beforeTheDeclinedEvent = requireNonNull(storage.read("declining"));
+
+        // When the closed run's read of the write version returns, and its action is called
+        answer.countDown();
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(handled).hasSize(4));
+
+        // Then
+        await().during(Duration.ofSeconds(1)).atMost(2, SECONDS).untilAsserted(() -> assertThat(storage.read("declining"))
+                .as("stored checkpoint stays before the declined event while it is the last one the resumed run delivered").isIn(beforeTheDeclinedEvent, afterTheSlowEvent));
     }
 
     @ParameterizedTest
@@ -604,6 +643,22 @@ class ActionThatOutlivesItsRunTest {
                 reading.countDown();
                 try {
                     answer.await(10, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return OptionalLong.empty();
+        };
+    }
+
+    // Holds the second read only, the one for the second event, and answers no version
+    private static CheckpointWriteVersionSource secondWriteVersionReadHeld(CountDownLatch reading, CountDownLatch answer) {
+        AtomicInteger reads = new AtomicInteger();
+        return subscriptionId -> {
+            if (reads.incrementAndGet() == 2) {
+                reading.countDown();
+                try {
+                    answer.await(20, SECONDS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }

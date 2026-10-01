@@ -202,15 +202,15 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     // Answers nothing until the interval has passed since the last checkpoint write, so a subscription that stores a
-    // checkpoint for an event at least once per interval gets no extra write. It also answers nothing while the last
-    // event delivered is one the persist predicate declined to store, since the quiet position would move the
-    // checkpoint past it. The write condition is read here, before the wrapped model reads, so the save uses the token
+    // checkpoint for an event at least once per interval gets no extra write. It also answers nothing while an event
+    // is being delivered, or when the last event delivered is one the persist predicate declined to store, since the
+    // quiet position would move the checkpoint past it. The save checks that again. The write condition is read here, before the wrapped model reads, so the save uses the token
     // of the lease the read was made under, like the write for an event. A source that cannot answer is asked again
     // after the interval rather than before every read
     private @Nullable Consumer<Checkpoint> quietPositionSaverFor(String subscriptionId) {
         Duration interval = config.quietPositionSaveInterval;
         CheckpointRegistration registration = registrations.get(subscriptionId);
-        if (interval == null || registration == null || !registration.quietSaveAllowed || System.nanoTime() - registration.lastWrite.get() < interval.toNanos()) {
+        if (interval == null || registration == null || !registration.quietSaveAllowed() || System.nanoTime() - registration.lastWrite.get() < interval.toNanos()) {
             return null;
         }
         CheckpointWriteCondition writeCondition;
@@ -228,17 +228,19 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // event. Any other failure is logged and tried again after the interval, since the subscription has lost nothing
     private void saveQuietPosition(String subscriptionId, Checkpoint quietPosition, CheckpointWriteCondition writeCondition, CheckpointRegistration registration) {
         runUnderLockFor(subscriptionId, () -> {
-            if (registrations.get(subscriptionId) != registration || !registration.quietSaveAllowed) {
+            if (registrations.get(subscriptionId) != registration) {
                 return;
             }
-            registration.lastWrite.set(System.nanoTime());
-            try {
-                storage.save(subscriptionId, quietPosition, writeCondition);
-            } catch (CheckpointWriteConditionNotFulfilledException e) {
-                throw e;
-            } catch (RuntimeException e) {
-                log.warn("Failed to save the quiet position of subscription {}. Trying again in {}.", subscriptionId, config.quietPositionSaveInterval, e);
-            }
+            registration.saveQuietPositionIfAllowed(() -> {
+                registration.lastWrite.set(System.nanoTime());
+                try {
+                    storage.save(subscriptionId, quietPosition, writeCondition);
+                } catch (CheckpointWriteConditionNotFulfilledException e) {
+                    throw e;
+                } catch (RuntimeException e) {
+                    log.warn("Failed to save the quiet position of subscription {}. Trying again in {}.", subscriptionId, config.quietPositionSaveInterval, e);
+                }
+            });
         });
     }
 
@@ -322,20 +324,23 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
             CheckpointRegistration registration = new CheckpointRegistration();
             Consumer<CloudEvent> checkpointingAction = cloudEvent -> {
-                // Read before the action runs, so the write uses the token of the lease this event was
-                // delivered under, even if this node lost that lease and won a newer one meanwhile
-                CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
+                // Taken before anything the delivery waits on, so no quiet position is saved until it has finished
                 long delivery = registration.delivering();
-                action.accept(cloudEvent);
-                if (persistCheckpoint.test(cloudEvent)) {
-                    Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
-                    registration.saveUnlessCancelled(() -> {
-                        storage.save(subscriptionId, checkpoint, writeCondition);
-                        registration.lastWrite.set(System.nanoTime());
-                        registration.delivered(delivery, true);
-                    });
-                } else {
-                    registration.delivered(delivery, false);
+                boolean stored = false;
+                try {
+                    // Read before the action runs, so the write uses the token of the lease this event was
+                    // delivered under, even if this node lost that lease and won a newer one meanwhile
+                    CheckpointWriteCondition writeCondition = writeConditionFor(subscriptionId);
+                    action.accept(cloudEvent);
+                    if (persistCheckpoint.test(cloudEvent)) {
+                        Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
+                        stored = registration.saveUnlessCancelled(() -> {
+                            storage.save(subscriptionId, checkpoint, writeCondition);
+                            registration.lastWrite.set(System.nanoTime());
+                        });
+                    }
+                } finally {
+                    registration.delivered(delivery, stored);
                 }
             };
             Subscription subscription = holdPaused
@@ -619,32 +624,67 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // When a checkpoint was last written for the id, as System.nanoTime(). Starts now, so the first quiet position
         // is saved one interval after the subscribe
         final AtomicLong lastWrite = new AtomicLong(System.nanoTime());
-        // False while the last event delivered is one the persist predicate declined to store. True before the first
-        // event, since no event can then come before the quiet position without a checkpoint of its own
-        volatile boolean quietSaveAllowed = true;
+        // Held while a delivery starts or finishes and while a quiet position is saved, so no quiet position is saved
+        // while a delivery of any run of this subscribe is under way
+        private final ReentrantLock deliveryLock = new ReentrantLock();
+        // True only while no delivery is under way and the delivery that started last also finished last, with the
+        // checkpoint of its event stored. An action a pause stopped waiting for can still run after a resume has
+        // delivered later events, so a delivery that finished last but started earlier says nothing. True before
+        // the first event, since no event can then come before the quiet position without a checkpoint of its own
+        private volatile boolean quietSaveAllowed = true;
+        private int deliveriesUnderWay;
+        // Counts the deliveries of every run of this subscribe
+        private long deliveries;
         // Held while the checkpoint for an event is written, and by a cancel while it deletes the checkpoint
         private final ReentrantLock saveLock = new ReentrantLock();
         private boolean cancelled;
-        // Counts the deliveries of every run of this subscribe. An action a pause stopped waiting for can return after
-        // a resume has delivered later events, and only the latest delivery says what the last event delivered is
-        private long deliveries;
 
-        synchronized long delivering() {
-            return ++deliveries;
-        }
-
-        synchronized void delivered(long delivery, boolean stored) {
-            if (delivery == deliveries) {
-                quietSaveAllowed = stored;
+        long delivering() {
+            deliveryLock.lock();
+            try {
+                quietSaveAllowed = false;
+                deliveriesUnderWay++;
+                return ++deliveries;
+            } finally {
+                deliveryLock.unlock();
             }
         }
 
-        void saveUnlessCancelled(Runnable save) {
-            saveLock.lock();
+        void delivered(long delivery, boolean stored) {
+            deliveryLock.lock();
             try {
-                if (!cancelled) {
+                deliveriesUnderWay--;
+                quietSaveAllowed = deliveriesUnderWay == 0 && delivery == deliveries && stored;
+            } finally {
+                deliveryLock.unlock();
+            }
+        }
+
+        // Read without the lock only to skip reading the write condition for a save that would be refused
+        boolean quietSaveAllowed() {
+            return quietSaveAllowed;
+        }
+
+        void saveQuietPositionIfAllowed(Runnable save) {
+            deliveryLock.lock();
+            try {
+                if (quietSaveAllowed) {
                     save.run();
                 }
+            } finally {
+                deliveryLock.unlock();
+            }
+        }
+
+        // Whether it saved
+        boolean saveUnlessCancelled(Runnable save) {
+            saveLock.lock();
+            try {
+                if (cancelled) {
+                    return false;
+                }
+                save.run();
+                return true;
             } finally {
                 saveLock.unlock();
             }

@@ -100,16 +100,19 @@ and a resume or a start makes a new run of the same subscription.
 - A pause alone leaves that `BooleanSupplier` returning `true`. Without the stored restart position, the resume would
   open at the position MongoDB no longer has and restart from the present again, skipping the events written during
   the pause.
-- Whether a quiet position may be saved depends on whether the persist predicate stored the last event delivered.
-  `DurableSubscriptionModel` numbers the deliveries of every run of a subscribe, and only the latest one decides it.
-  An action that returns after a resume has delivered later events doesn't change it, so it can't let the resumed run
-  save a quiet position past an event the predicate declined.
+- `DurableSubscriptionModel` saves a quiet position only while no delivery of the subscription is under way in any
+  run, and only when the delivery that started last also finished last, with the persist predicate having stored the
+  checkpoint of its event. A delivery counts as under way from before the read of the write version until it has
+  finished, whether it stored its checkpoint, declined to or failed, and the quiet save checks this and writes under the same lock that a delivery
+  takes when it starts. So a closed run whose read of the write version outlasts a pause can't let the resumed run
+  save a quiet position past an event the predicate declined, and a quiet position that an earlier run read is not
+  saved while a later run, opened at an earlier position, delivers an event.
 - The exception is a checkpoint written after a resume has come. That is after the pause has stopped waiting, or
   while it still waits when another thread resumes the subscription then, since the pause is recorded before its
   wait. A
   `DurableSubscriptionModel` action that returns that late still saves the checkpoint of its event, and a quiet
-  position whose save starts that late is still saved. The model can't tell which run the action or the save belongs
-  to. Every event up to either position has had its action return, so a subscription that restarts from one can
+  position whose save starts that late is still saved when no delivery is under way and the one that started last
+  stored its checkpoint. The model can't tell which run the action or the save belongs to. Every event up to either position has had its action return, so a subscription that restarts from one can
   receive events again but skips none. Closing it needs the wrapped model to give the checkpoint write for an event
   the same `BooleanSupplier`, which is a change to the public subscribe API.
 
@@ -129,7 +132,8 @@ writes the position under a condition reads that condition when it is asked, whi
   gets no extra write. The default is one minute,
   `saveQuietPositionEvery(Duration)` changes it and `neverSaveQuietPosition()` turns the save off.
 - It saves nothing while the last event delivered is one the persist predicate declined to store, since the quiet
-  position comes after that event. A predicate can decline events until a batch the action keeps in memory is
+  position comes after that event. It also saves nothing while an event is being delivered, and nothing after an
+  action returns later than the action of an event delivered after it, until the predicate stores the next event. A predicate can decline events until a batch the action keeps in memory is
   written, and a restart from a position after those events would lose the batch.
 - Before the first event after a subscribe it saves whatever the predicate is. A read that returns nothing then comes
   after no event the subscription hasn't been given. After a restart, the events the predicate declined come after the
