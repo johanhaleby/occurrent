@@ -1283,8 +1283,11 @@ you called again.
 1. Both now log the failure as a warning and return. A thread of its own tries the subscription again, with the backoff
    the MongoDB lease strategies use by default, until it is registered for its lease and runs only while this node
    holds it. Every fifth try that fails is logged as a warning.
-2. `start(..)` still throws the first failure of a subscription that does not compete, since nothing tries that one
-   again. `stop()`, `pauseSubscription(..)` and `cancelSubscription(..)` still throw what failed.
+2. `start(..)` still throws the first failure of a subscription that does not compete. When another call for that
+   subscription is under way, `start(..)` returns instead, and a thread of its own tries the subscription again once
+   that call has returned, until it succeeds. A pause, resume or cancel of the subscription made while it still fails
+   ends those tries and is made all the same. `stop()`, `pauseSubscription(..)` and `cancelSubscription(..)` still
+   throw what failed in their own call.
 3. Remove code that caught the exception from `start(..)` or `resumeSubscription(..)` to call again. The thread does
    that now.
 4. To find out whether a subscription runs, call `isRunning(id)`. It asks the wrapped model, which runs the

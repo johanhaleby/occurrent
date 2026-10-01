@@ -199,6 +199,44 @@ class MongoLeaseNotificationPerSubscriptionTest {
     }
 
     @Test
+    void a_listener_that_throws_an_error_on_a_grant_does_not_keep_the_other_listeners_from_hearing_of_it() {
+        MongoLeaseCompetingConsumerStrategySupport node = rivalThatNeverRefreshes();
+        List<String> told = new CopyOnWriteArrayList<>();
+        node.addListener(ThrowingListener.throwingAnError("first", told));
+        node.addListener(ThrowingListener.throwingAnError("second", told));
+        try {
+            Throwable thrown = catchThrowable(() -> node.registerCompetingConsumer(locks, A, NODE));
+
+            assertThat(told).containsExactlyInAnyOrder("first granted " + A, "second granted " + A);
+            assertThat(thrown).as("what the register threw").isInstanceOf(Error.class);
+            assertThat(thrown.getSuppressed()).as("what the register threw, suppressed").hasSize(1);
+        } finally {
+            node.shutdown();
+        }
+    }
+
+    @Test
+    void a_listener_that_throws_an_error_in_the_background_does_not_keep_the_other_listeners_from_hearing_of_it() throws InterruptedException {
+        MongoLeaseCompetingConsumerStrategySupport node = nodeRefreshingOnItsOwn();
+        MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
+        List<String> told = new CopyOnWriteArrayList<>();
+        try {
+            assertThat(rival.registerCompetingConsumer(locks, A, RIVAL)).isTrue();
+            assertThat(node.registerCompetingConsumer(locks, A, NODE)).isFalse();
+            node.addListener(ThrowingListener.throwingAnError("first", told));
+            node.addListener(ThrowingListener.throwingAnError("second", told));
+
+            rival.unregisterCompetingConsumer(locks, A, RIVAL);
+
+            assertThat(eventually(() -> told.size() >= 2)).as("both listeners heard of the grant of " + A + ", told so far " + told).isTrue();
+            assertThat(told).containsExactlyInAnyOrder("first granted " + A, "second granted " + A);
+        } finally {
+            node.shutdown();
+            rival.shutdown();
+        }
+    }
+
+    @Test
     void a_listener_that_throws_in_the_background_does_not_stop_later_callbacks_for_other_subscriptions() throws InterruptedException {
         MongoLeaseCompetingConsumerStrategySupport node = nodeRefreshingOnItsOwn();
         MongoLeaseCompetingConsumerStrategySupport rival = rivalThatNeverRefreshes();
@@ -338,18 +376,37 @@ class MongoLeaseNotificationPerSubscriptionTest {
         }
     }
 
-    private record ThrowingListener(String name, List<String> told) implements CompetingConsumerListener {
+    /**
+     * Records each call it is told of and then throws, an {@link IllegalStateException} or, made by
+     * {@link #throwingAnError}, an {@link AssertionError}.
+     */
+    private record ThrowingListener(String name, List<String> told, boolean throwsAnError) implements CompetingConsumerListener {
+
+        private ThrowingListener(String name, List<String> told) {
+            this(name, told, false);
+        }
+
+        private static ThrowingListener throwingAnError(String name, List<String> told) {
+            return new ThrowingListener(name, told, true);
+        }
 
         @Override
         public void onConsumeGranted(String subscriptionId, String subscriberId) {
             told.add(name + " granted " + subscriptionId);
-            throw new IllegalStateException(name + " failed on the grant of " + subscriptionId);
+            fail(name + " failed on the grant of " + subscriptionId);
         }
 
         @Override
         public void onConsumeProhibited(String subscriptionId, String subscriberId) {
             told.add(name + " prohibited " + subscriptionId);
-            throw new IllegalStateException(name + " failed on the loss of " + subscriptionId);
+            fail(name + " failed on the loss of " + subscriptionId);
+        }
+
+        private void fail(String message) {
+            if (throwsAnError) {
+                throw new AssertionError(message);
+            }
+            throw new IllegalStateException(message);
         }
     }
 }

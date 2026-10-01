@@ -273,7 +273,11 @@ the subscription as paused by the user. That is where the subscription would be 
 When applying a call fails, a competing subscription is tried again by the thread that tries it again after any failed
 call, and any other subscription by the handed over thread, with the same backoff, until it succeeds or the model is
 shut down. A later `start(..)` or `stop()` that fails to apply such a call lets that thread try it again, together with
-its own call, and never counts it as applied. A handed over thread or a try that is still waiting for the lock when
+its own call, and never counts it as applied. A pause, resume or cancel of the subscription that fails to apply such a
+call gives it up instead, when the call began before the pause, resume or cancel took the lock, so the handed over
+thread does not try it again. It then applies the calls after it and makes its own call, so it throws only what fails
+in its own call. In 0.33.0 a cancel of such a subscription worked, and throwing instead would refuse every pause,
+resume and cancel of it until `shutdown()`. A handed over thread or a try that is still waiting for the lock when
 `shutdown()` runs ends within 100 milliseconds.
 
 A `start(..)` or `stop()` that begins while another one runs waits for it to return, and they run in the order they
@@ -308,8 +312,9 @@ instead.
 `shutdown()` takes neither the monitor nor any subscription's lock. It shuts the lease strategy down, which ends a
 registration waiting between two attempts and makes each later unregister a single attempt, removes the model as a
 listener, and shuts the wrapped model down. It then gives up each lease once, each on a thread of its own, and waits at
-most five seconds for them. A lease that is not given up by then, or whose release throws, expires after the lease time,
-and another node can take the subscription over then. When the wrapped model throws from its own `shutdown()`, no lease
+most five seconds for them. It does not wait for a registration under way, and one that returns once `shutdown()` has
+begun makes one attempt to give up the lease it took. A lease that is not given up by then, or whose release throws,
+expires after the lease time, and another node can take the subscription over then. When the wrapped model throws from its own `shutdown()`, no lease
 is given up, since that model may still deliver, and `shutdown()` throws.
 
 The alternative is one serial executor that runs every change of state, calls the wrapped model and the lease strategy
@@ -372,9 +377,12 @@ MongoDB models already ask for a thread for each subscription they run.
 0.33.0 it waited for the monitor, which a registration retrying through the outage held, and then gave up the leases
 one after another, so the first release that threw left the rest held and the model still registered as a listener.
 
-A call that waits for MongoDB through an outage holds up the calls for its own subscription and no call for any other.
-It still holds up the return of a `start(..)` or `stop()` that applies itself to that subscription, and a `stop()` also
-waits for a call already in the wrapped model for any subscription, as it did in 0.33.0 for every call under the
-monitor. A subscription that `start(..)` or `stop()` handed to a thread of its own gets the call only once the lock is
+A call that waits for MongoDB through an outage holds up the calls for its own subscription and no call for any other,
+except while a `stop()` or `shutdown()` waits for it. It still holds up the return of a `start(..)` or `stop()` that
+applies itself to that subscription, and a `stop()` also waits for a call already in the wrapped model for any
+subscription, as it did in 0.33.0 for every call under the monitor. While a `stop()` waits for such a call, a call for
+another subscription that may run while the model is stopped, such as a resume the user asks for, waits too. While
+`shutdown()` waits for one, a loss of the lease of another subscription is not acted on, and that subscription goes on
+delivering until `shutdown()` has shut the wrapped model down. A subscription that `start(..)` or `stop()` handed to a thread of its own gets the call only once the lock is
 free, and a failure there is tried again until it succeeds. After a `stop()` it can hold its lease until then, so no
 other node can take the subscription over meanwhile, although this node delivers nothing for it.

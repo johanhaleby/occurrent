@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -315,6 +316,90 @@ class CompetingConsumerHandedOverLifecycleTest {
             await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(fixture.wrapped.isRunning("n1")).as("n1 runs in the wrapped model").isTrue());
             assertThat(thrownBySecondStart).as("what the second start(true) threw").isNull();
         } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // A resume that finds a start(true) handed over for a subscription that does not compete still failing is made all
+    // the same, and replaces that start(true), so the thread it was handed to ends without trying it again
+    @Test
+    void a_resume_that_finds_a_start_handed_over_still_failing_is_made_and_replaces_it() {
+        Fixture fixture = new Fixture(Initially.STOPPED);
+        try {
+            // Fails once on the thread n1 is handed to and once when the resume tries the start(true) first, and the
+            // resume's own call then succeeds
+            Gate backingOff = fixture.handOverAStartOfN1ThatFails(2);
+
+            Throwable thrownByResume = catchThrowable(() -> fixture.model.resumeSubscription("n1"));
+            backingOff.open();
+
+            assertThat(thrownByResume).as("what the resume of n1 threw").isNull();
+            assertThat(fixture.wrapped.isRunning("n1")).as("n1 runs in the wrapped model").isTrue();
+            awaitNothingLeftFor("n1");
+            assertThat(fixture.wrapped.resumeFailuresOfN1.awaitCount(2)).as("the resume tried the start(true) first").isTrue();
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // A pause that finds a start(true) handed over for a subscription that does not compete still failing throws only
+    // what its own call threw, and the thread that start(true) was handed to ends without trying it again
+    @Test
+    void a_pause_that_finds_a_start_handed_over_still_failing_throws_only_its_own_failure_and_ends_that_start() {
+        Fixture fixture = new Fixture(Initially.STOPPED);
+        try {
+            Gate backingOff = fixture.handOverAStartOfN1ThatFails(Integer.MAX_VALUE);
+
+            Throwable thrownByPause = catchThrowable(() -> fixture.model.pauseSubscription("n1"));
+            backingOff.open();
+
+            assertThat(thrownByPause).as("what the pause of n1, which is paused already, threw").isInstanceOf(SubscriptionNotRunningException.class);
+            await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(noThreadLeftFor("n1")).as("no thread is left trying start(true) for n1").isTrue());
+            assertThat(fixture.wrapped.holdsPaused("n1")).as("n1 is paused in the wrapped model").isTrue();
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // A cancel that finds a start(true) handed over for a subscription that does not compete still failing is made all
+    // the same, and the thread that start(true) was handed to ends without trying it again
+    @Test
+    void a_cancel_that_finds_a_start_handed_over_still_failing_is_made_and_ends_that_start() {
+        Fixture fixture = new Fixture(Initially.STOPPED);
+        try {
+            Gate backingOff = fixture.handOverAStartOfN1ThatFails(Integer.MAX_VALUE);
+
+            Throwable thrownByCancel = catchThrowable(() -> fixture.model.cancelSubscription("n1"));
+            backingOff.open();
+
+            assertThat(thrownByCancel).as("what the cancel of n1 threw").isNull();
+            assertThat(fixture.wrapped.holdsPaused("n1") || fixture.wrapped.isRunning("n1")).as("whether the wrapped model still holds n1").isFalse();
+            await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(noThreadLeftFor("n1")).as("no thread is left trying start(true) for n1").isTrue());
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // A resume of s1 that registers it with the lease strategy while shutdown() runs gives up the lease it took once that
+    // register returns, so no other node waits for the lease to expire
+    @Test
+    void a_lease_taken_by_a_register_under_way_when_shutdown_begins_is_given_up() {
+        Fixture fixture = new Fixture(Initially.RUNNING);
+        Gate resumeRegistering = new Gate();
+        try {
+            fixture.model.pauseSubscription("s1");
+            fixture.strategy.nextRegisterOfS1OnTheTestThread.set(resumeRegistering);
+            CompletableFuture<Void> resume = runOnTheTestThread(() -> fixture.model.resumeSubscription("s1"));
+            assertThat(resumeRegistering.awaitEntered()).as("the resume of s1 registers it with the lease strategy").isTrue();
+
+            fixture.model.shutdown();
+            resumeRegistering.open();
+            await().atMost(EVENTUALLY).until(resume::isDone);
+
+            assertThat(fixture.strategy.holders).as("the leases this node holds once shutdown() and the resume of s1 returned").doesNotContain("s1");
+            assertThat(fixture.strategy.candidates).as("the subscriptions this node competes for once shutdown() and the resume of s1 returned").doesNotContain("s1");
+        } finally {
+            resumeRegistering.open();
             fixture.model.shutdown();
         }
     }
@@ -671,6 +756,24 @@ class CompetingConsumerHandedOverLifecycleTest {
         private void subscribeN1() {
             model.subscribe(NODE, "n1", null, StartAt.dynamic(__ -> null), __ -> {
             });
+        }
+
+        // Subscribes n1, which does not compete, to a stopped model, and has start(true) handed over for it while a
+        // pause of n1 holds its lock. The pause then fails, since n1 is paused already. Resuming n1 fails as often as
+        // given, and the thread n1 is handed to waits at the returned gate after its first failure, with the lock free.
+        private Gate handOverAStartOfN1ThatFails(int failures) {
+            subscribeN1();
+            Gate backingOff = handedOverThreadAboutToBackOff();
+            Gate pauseHoldingTheLock = new Gate();
+            wrapped.nextIsPausedOfN1OnTheTestThread.set(pauseHoldingTheLock);
+            CompletableFuture<Void> pause = runOnTheTestThread(() -> model.pauseSubscription("n1"));
+            assertThat(pauseHoldingTheLock.awaitEntered()).as("the pause of n1 holds its lock").isTrue();
+            wrapped.failuresFromResumingN1.set(failures);
+            model.start(true);
+            pauseHoldingTheLock.open();
+            assertThat(pause).as("the pause of n1").failsWithin(EVENTUALLY);
+            assertThat(backingOff.awaitEntered()).as("the thread n1 was handed to failed and let go of the lock").isTrue();
+            return backingOff;
         }
 
         private Made made() {

@@ -30,8 +30,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -396,7 +398,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * lock again. The listener then pauses the subscription and gives the lease up, and a later round grants it again.
      * Dropping it could leave this instance refreshing a lease for a subscription that has stopped delivering, which
      * no grant would restart, since the listener finds the consumer running already, and which no other instance
-     * could take over. A listener that throws is logged, and the other listeners are told anyway.
+     * could take over. A listener that throws is logged, and the other listeners are told anyway. Once they all have
+     * been, the first {@link Error} is thrown, with any later one attached as suppressed.
      */
     private void notifyListenersIfStillTrue(Outcome outcome, CompetingConsumer cc) {
         if (!running) {
@@ -412,6 +415,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             logDebug("Dropping {} since the lock status changed before it was delivered (subscriberId={}, subscriptionId={})", outcome.notification(), cc.subscriberId, cc.subscriptionId);
             return;
         }
+        List<Throwable> errors = new ArrayList<>();
         for (CompetingConsumerListener listener : competingConsumerListeners) {
             try {
                 if (outcome.notification() == Notification.GRANTED) {
@@ -419,11 +423,15 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 } else {
                     listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId);
                 }
-            } catch (RuntimeException e) {
+            } catch (Throwable e) {
                 log.warn("Listener {} failed on {} due to {} - {} (subscriberId={}, subscriptionId={})",
                         listener, outcome.notification(), e.getClass().getName(), e.getMessage(), cc.subscriberId, cc.subscriptionId, e);
+                if (e instanceof Error) {
+                    errors.add(e);
+                }
             }
         }
+        throwTheFirstErrorOrFailure(errors);
     }
 
     private Outcome refreshOne(MongoCollection<BsonDocument> collection, CompetingConsumer cc) {
@@ -477,15 +485,16 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * callbacks, while an application thread pausing or registering holds that same monitor before it arrives here.
      * Notifying under the lock closes that cycle, and the refresh thread and the application thread deadlock.
      * <p>
-     * Every listener is told, also when one before it throws. The first failure is thrown once they all have been,
-     * with any later one attached as suppressed.
+     * Every listener is told, also when one before it throws, an {@link Error} included. Once they all have been, the
+     * first {@code Error} is thrown, or the first failure when none was an {@code Error}, with every other failure
+     * attached as suppressed.
      */
     private void notifyListeners(Outcome outcome, String subscriptionId, String subscriberId) {
         if (outcome.notification() == Notification.NONE) {
             return;
         }
         logDebug("Consumption {} (subscriberId={}, subscriptionId={})", outcome.notification(), subscriberId, subscriptionId);
-        @Nullable RuntimeException firstFailure = null;
+        List<Throwable> failures = new ArrayList<>();
         for (CompetingConsumerListener listener : competingConsumerListeners) {
             try {
                 if (outcome.notification() == Notification.GRANTED) {
@@ -493,18 +502,30 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 } else {
                     listener.onConsumeProhibited(subscriptionId, subscriberId);
                 }
-            } catch (RuntimeException e) {
-                if (firstFailure == null) {
-                    firstFailure = e;
-                } else {
-                    firstFailure.addSuppressed(e);
-                }
+            } catch (Throwable e) {
+                failures.add(e);
             }
         }
         logDebug("Completed telling every listener of {} (subscriberId={}, subscriptionId={})", outcome.notification(), subscriberId, subscriptionId);
-        if (firstFailure != null) {
-            throw firstFailure;
+        throwTheFirstErrorOrFailure(failures);
+    }
+
+    // The first Error, or the first failure when none was one, with the rest attached as suppressed. Nothing when the
+    // list is empty.
+    private static void throwTheFirstErrorOrFailure(List<Throwable> failures) {
+        if (failures.isEmpty()) {
+            return;
         }
+        Throwable thrown = failures.stream().filter(Error.class::isInstance).findFirst().orElse(failures.getFirst());
+        for (Throwable failure : failures) {
+            if (failure != thrown) {
+                thrown.addSuppressed(failure);
+            }
+        }
+        if (thrown instanceof Error error) {
+            throw error;
+        }
+        throw (RuntimeException) thrown;
     }
 
     private record CompetingConsumer(String subscriptionId, String subscriberId) {
