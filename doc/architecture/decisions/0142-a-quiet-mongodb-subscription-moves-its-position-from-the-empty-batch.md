@@ -264,8 +264,9 @@ doubles the change streams, and the token of the second one says nothing about w
 and takes the resume token from the driver's own cursor.** `ChangeStreamPublisher` has no method that returns the
 `postBatchResumeToken`, but the cursor behind it has one. The model opens the change stream with
 `BatchCursorPublisher.batchCursor(int)`, the method the driver itself calls when something subscribes to the
-publisher, and reads the driver's `AsyncAggregateResponseBatchCursor` from the private field `wrapped` of the
-`BatchCursor` it gets back. It only reads that field. Every batch, and the close, go through the public
+publisher. It reads the driver's change stream cursor, an `AsyncChangeStreamBatchCursor`, from the private field
+`wrapped` of the `BatchCursor` it gets back, and the cursor that one reads with from the private field `wrapped` of
+`AsyncChangeStreamBatchCursor`. It only reads those fields. Every batch, and the close, go through the public
 `BatchCursor.next()` and `BatchCursor.close()`. So the commands MongoDB gets, the server each one goes to and the
 driver's own resume after a failover or a network error are the same as with `ReactiveMongoTemplate.changeStream(..)`.
 
@@ -278,23 +279,38 @@ two replies apart even when MongoDB sends the same token twice. The model never 
 latest look, because the driver stores a reply before it hands over that reply's documents, so that token can belong
 to events the action hasn't had yet.
 
-The driver writes the reply to a plain field, and the model reads it from another thread without synchronization. The
-Java memory model promises that a later read sees a write at least as new as an earlier read did only for a volatile
-or an opaque read. I rely on HotSpot and the hardware keeping that order for a single field, and no test here proves
-it.
+A look reads the token on another thread than the one the driver stores the reply on. On driver 5.8.0 every field on
+the way is final or volatile. `BatchCursor.wrapped` is final, `AsyncChangeStreamBatchCursor.wrapped` is a final
+`AtomicReference`, `AsyncCommandCursor.commandCursorResult` is volatile and `CommandCursorResult.postBatchResumeToken`
+is final. On 5.5.2 the cursor inside is an `AsyncCommandBatchCursor`, whose `commandCursorResult` is volatile too. The
+looks of one wait come one after the other, so a later look reads a reply at least as new as the one an earlier look
+read. Those modifiers are private to the driver, so the model checks them too.
 
-**At construction the model checks that the field exists, that it can be read, and that both methods exist, and for
-every cursor it checks that the field holds an `AsyncAggregateResponseBatchCursor`.** When a check fails, the model
-logs one warning with the reason and reads through `ReactiveMongoTemplate.changeStream(..)` as before. The events
-delivered are the same either way, and only the position of a quiet subscription stays at its last event. A test in
-the build fails when the route is off on the driver version the build uses.
+**When the model loads, it checks that both methods and the three fields exist, that the two `wrapped` fields can be
+read, and that `BatchCursor.wrapped`, `AsyncChangeStreamBatchCursor.wrapped` and
+`CommandCursorResult.postBatchResumeToken` are final. For every cursor it checks that the driver's change stream
+cursor is an `AsyncChangeStreamBatchCursor`, and that the class of the cursor inside declares a volatile
+`commandCursorResult`.** That class is known only once a cursor is
+open, and the driver builds a cursor it opens again the same way. When a check fails, the model logs one warning with
+the reason and reads through `ReactiveMongoTemplate.changeStream(..)` as before.
 
-**The field can be read when the application runs on the module path too.** The 5.8.0 jars of the driver have no
+**A token read that fails ends in the same warning, unless the driver is opening the change stream again.** The driver
+empties `AsyncChangeStreamBatchCursor.wrapped` while it opens the change stream again, and then puts a new cursor in.
+So a look that finds it empty, or that fails and then finds it empty or holding another cursor, gives no token. Any other failure
+means the driver can't hand over the token, and a subscription that kept waiting for one would keep the position of its
+last event without a word.
+
+The events delivered are the same either way, and only the position of a quiet subscription stays at its last event.
+Tests in the build fail when the route is off on the driver version the build uses, or when a field the token is read
+through is neither final nor volatile there.
+
+**The fields can be read when the application runs on the module path too.** The 5.8.0 jars of the driver have no
 `module-info`, only an `Automatic-Module-Name`, so they are automatic modules, and an automatic module opens every
 package. I checked it with a named module on the module path on Temurin 21.0.12.1, where both
-`MethodHandles.privateLookupIn(..)` and `setAccessible(true)` work on `BatchCursor.wrapped`. A driver version with a
-`module-info` that doesn't open `com.mongodb.reactivestreams.client.internal` makes the check fail, and the model
-then logs the warning.
+`MethodHandles.privateLookupIn(..)` and `setAccessible(true)` work on `BatchCursor.wrapped`, and
+`MethodHandles.privateLookupIn(..)` works on `AsyncChangeStreamBatchCursor.wrapped`. A driver version with a
+`module-info` that doesn't open `com.mongodb.reactivestreams.client.internal` or `com.mongodb.internal.operation`
+makes the check fail, and the model then logs the warning.
 
 **The reads of a subscription with an id from a subscribe, a resume or a start until a pause, a cancel or a shutdown
 are one run, and a new run for the same id reads nothing until every earlier run for that id has ended.** A run has
@@ -378,8 +394,9 @@ A subscription with an id on `ReactorMongoSubscriptionModel` handles one batch a
 trip to MongoDB on top of the time its actions take. `ReactiveMongoTemplate.changeStream(..)` fetched the next batch
 while the action ran.
 
-`ReactorMongoSubscriptionModel` reads a private field of the driver, which a driver release can remove. The model
-then logs a warning, and a quiet subscription keeps the position of its last event, which the oplog can drop. The test
+`ReactorMongoSubscriptionModel` reads private fields of the driver and relies on their modifiers, which a driver
+release can change. The model then logs a warning, and a quiet subscription keeps the position of its last event,
+which the oplog can drop. The test
 of the route fails the build on such a driver version, but an application that runs a newer driver than the build
 gets only the warning.
 

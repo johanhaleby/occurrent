@@ -1419,8 +1419,9 @@ before. A slow action therefore holds back the next `getMore`, where in 0.33.0 t
 the action ran.
 
 The resume token MongoDB sends with a batch that has no event isn't in the driver's public API, so the model reads it
-from a private field of the driver. When the driver in use doesn't have that field, the model logs a warning with the
-reason and reads the change stream as before, and a quiet subscription keeps the position of its last event.
+through private fields of the driver. When the driver in use lacks one of those fields, declares one as neither final
+nor volatile, or fails to hand over the token, the model logs a warning with the reason and reads the change stream as
+before, and a quiet subscription keeps the position of its last event.
 
 A test that makes the model fail by stubbing `changeStream(..)` on a mocked `ReactiveMongoOperations` no longer
 reaches a subscription with an id. Stub `getCollection(..)` as well.
