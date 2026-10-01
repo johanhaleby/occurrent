@@ -7,10 +7,6 @@ Date: 2026-08-02
 Accepted. This is the last slice of #481, after ADR 86. Only the OpenRewrite recipe for the renamed
 property is still outstanding.
 
-Amended on 2026-09-30 by [ADR 133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md)'s
-amendment "a cancel deletes the catch-up marker". A registration with `StartAt.now()` on a stopped reactive durable
-model is read for, and begins from where the feed was when it was registered.
-
 ## Context
 
 ADR 86 shipped `occurrent.subscription.mode` for the blocking stack and said the reactive stack "already

@@ -20,6 +20,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import io.cloudevents.CloudEvent;
@@ -1597,6 +1598,83 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
             // Then
             await().atMost(TIMEOUT).until(() -> startedAt.size() == 2);
             assertThat(startedAt.get(1)).as("start position of the subscription whose start position waited for the delete").hasToString(WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED);
+        } finally {
+            releaseDelete.countDown();
+        }
+    }
+
+    /**
+     * As above, on a model that is stopped when the subscribe comes. StartAt.now() means where the feed is once the
+     * subscription starts on a stopped model, so a function that answers it once the delete has ended does not start
+     * from what the subscribe read.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_dynamic_start_position_that_waited_for_a_delete_on_a_stopped_model_starts_at_the_present(boolean handsOver) throws Exception {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED);
+        RecordingSubscriptionModel feed = handsOver ? wrapped.feed : new RecordingSubscriptionModel(WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED);
+        List<StartAt> startedAt = handsOver ? wrapped.startedAt : feed.startedAt;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(handsOver ? wrapped : feed, storage);
+        runningFromAStoredPosition(model, storage);
+        CountDownLatch releaseDelete = new CountDownLatch(1);
+        storage.releaseHeldDelete = releaseDelete;
+
+        try {
+            // When
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            model.stop();
+            wrapped.running = false;
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::now), __ -> Mono.empty());
+            feed.globalCheckpoint = new StringBasedCheckpoint(WHERE_THE_FEED_IS_ONCE_THE_DELETE_HAS_ENDED);
+            model.start(true);
+            wrapped.running = true;
+            releaseDelete.countDown();
+
+            // Then
+            await().atMost(TIMEOUT).until(() -> startedAt.size() == 2);
+            assertThat(startedAt.get(1)).as("start position of the subscription made while the model was stopped").hasToString("Now");
+        } finally {
+            releaseDelete.countDown();
+        }
+    }
+
+    /**
+     * A start position of the caller's own is the way past a position source that cannot answer, which the refusal
+     * of the model default names. So when the read the subscribe asked for could not answer, StartAt.now() starts at
+     * the present, where it started before the subscribe read for it, rather than being refused.
+     */
+    @ParameterizedTest
+    @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+    void a_dynamic_start_position_that_waited_for_a_delete_starts_at_the_present_when_the_read_could_not_answer(boolean handsOver, boolean readFails) throws Exception {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED);
+        RecordingSubscriptionModel feed = handsOver ? wrapped.feed : new RecordingSubscriptionModel(WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED);
+        List<StartAt> startedAt = handsOver ? wrapped.startedAt : feed.startedAt;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(handsOver ? wrapped : feed, storage);
+        runningFromAStoredPosition(model, storage);
+        CountDownLatch releaseDelete = new CountDownLatch(1);
+        storage.releaseHeldDelete = releaseDelete;
+
+        try {
+            // When
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            if (readFails) {
+                feed.failGlobalCheckpoint = true;
+            } else {
+                feed.globalCheckpoint = null;
+            }
+            Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::now), __ -> Mono.empty());
+            feed.failGlobalCheckpoint = false;
+            feed.globalCheckpoint = new StringBasedCheckpoint(WHERE_THE_FEED_IS_ONCE_THE_DELETE_HAS_ENDED);
+            releaseDelete.countDown();
+            subscription.waitUntilStarted().block(TIMEOUT);
+
+            // Then
+            await().atMost(TIMEOUT).until(() -> startedAt.size() == 2);
+            assertThat(startedAt.get(1)).as("start position of the subscription whose read could not answer").hasToString("Now");
         } finally {
             releaseDelete.countDown();
         }

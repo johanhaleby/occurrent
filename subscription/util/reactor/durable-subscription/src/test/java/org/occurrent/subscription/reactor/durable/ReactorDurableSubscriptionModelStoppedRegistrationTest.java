@@ -353,11 +353,13 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
                 .hasValue(1);
     }
 
-    // The start position resolves when start(true) starts the subscription, after its subscribe returned, so starting
-    // at the present then would skip what was written while the model was stopped
+    // StartAt.now() means where the feed is when the subscription starts, so a registration that asks for it is not
+    // read for. A caller that must not miss what is written while the model is stopped registers with the model
+    // default, which holds where the feed was at registration. A dynamic start position is read for all the same, in
+    // case it answers the model default.
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void a_registration_starting_at_the_present_starts_from_where_the_feed_was_at_registration(boolean dynamic) {
+    void a_registration_starting_at_the_present_starts_where_the_feed_is_once_it_is_started(boolean dynamic) {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
         model.stop();
@@ -367,32 +369,8 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         model.start(true);
 
         await().atMost(TIMEOUT).until(() -> delegate.startedAt.size() == 1);
-        assertThat(delegate.startedAt.getFirst()).as("start position of the subscription registered while the model was stopped").hasToString("at-registration");
-    }
-
-    // A start position of the caller's own is the way past a position source that cannot answer, which the refusal's
-    // message names, so refusing StartAt.now() as well would leave no way past. It starts at the present when it
-    // starts, where it started before it was read for at registration.
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void a_registration_starting_at_the_present_whose_read_could_not_answer_starts_at_the_present(boolean readFails) {
-        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
-        if (readFails) {
-            delegate.failGlobalCheckpoint = true;
-        } else {
-            delegate.globalCheckpoint = null;
-        }
-        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
-        model.stop();
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> Mono.empty());
-
-        delegate.failGlobalCheckpoint = false;
-        delegate.globalCheckpoint = new StringBasedCheckpoint("much-later");
-        model.start(true);
-
-        await().atMost(TIMEOUT).until(() -> delegate.startedAt.size() == 1);
-        assertThat(delegate.startedAt.getFirst()).as("start position of the subscription whose read at registration could not answer").hasToString("Now");
-        assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
+        assertThat(delegate.startedAt.getFirst()).as("start position of the subscription registered while the model was stopped").hasToString("Now");
+        assertThat(delegate.globalCheckpointReads).as("reads of where the feed is").hasValue(dynamic ? 1 : 0);
     }
 
     @Test
