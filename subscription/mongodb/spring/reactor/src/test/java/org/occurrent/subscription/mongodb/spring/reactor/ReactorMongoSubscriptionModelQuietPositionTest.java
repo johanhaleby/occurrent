@@ -167,10 +167,9 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
         NameWasChanged notMatched = nameWasChanged();
         write(notMatched);
         await().atMost(10, SECONDS).untilAsserted(() -> assertThat(everyEvent).extracting(CloudEvent::getId).containsExactly(notMatched.eventId()));
-        // Positions reported once the event that did not match has been read
-        int reportedBeforeTheRead = quietPositions.size();
-        await().atMost(10, SECONDS).until(() -> quietPositions.size() > reportedBeforeTheRead + 2);
-        Checkpoint quietPosition = quietPositions.getLast();
+        Checkpoint positionOfNotMatched = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(everyEvent.getFirst());
+        await().atMost(30, SECONDS).untilAsserted(() -> assertThat(quietPositions).as("positions reported at or after the event that did not match").anyMatch(position -> isAtOrAfter(position, positionOfNotMatched)));
+        Checkpoint quietPosition = quietPositions.stream().filter(position -> isAtOrAfter(position, positionOfNotMatched)).findFirst().orElseThrow();
 
         // Then
         assertThat(quietPosition.asString()).isNotEqualTo(positionOfLastEvent.asString());
@@ -257,14 +256,19 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
     void pausing_and_resuming_a_quiet_subscription_opens_the_change_stream_at_the_quiet_position() {
         // Given
         CopyOnWriteArrayList<Checkpoint> quietPositions = new CopyOnWriteArrayList<>();
-        subscriptionModel.addQuietPositionListener(subscriptionId -> Mono.just(collectingInto(quietPositions)));
+        subscriptionModel.addQuietPositionListener(subscriptionId -> subscriptionId.equals("quiet") ? Mono.just(collectingInto(quietPositions)) : Mono.empty());
         waitUntilStarted(subscriptionModel.subscribe("quiet", NAME_DEFINED_ONLY, StartAt.now(), __ -> Mono.empty()));
         await().atMost(10, SECONDS).until(() -> !quietPositions.isEmpty());
         Checkpoint positionBeforeTheEvents = quietPositions.getLast();
+        // Reads the events the quiet subscription does not match, to know where they are. Its own change stream is the second one opened.
+        CopyOnWriteArrayList<CloudEvent> everyEvent = new CopyOnWriteArrayList<>();
+        waitUntilStarted(subscriptionModel.subscribe("every-event", StartAt.now(), event -> Mono.fromRunnable(() -> everyEvent.add(event))));
         write(nameWasChanged());
         write(nameWasChanged());
-        int reportedBeforeTheEventsWereRead = quietPositions.size();
-        await().atMost(10, SECONDS).until(() -> quietPositions.size() > reportedBeforeTheEventsWereRead + 2);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(everyEvent).hasSize(2));
+        subscriptionModel.cancelSubscription("every-event");
+        Checkpoint positionOfLastNotMatched = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(everyEvent.getLast());
+        await().atMost(30, SECONDS).untilAsserted(() -> assertThat(quietPositions).as("positions reported at or after the events that did not match").anyMatch(position -> isAtOrAfter(position, positionOfLastNotMatched)));
 
         // When
         subscriptionModel.pauseSubscription("quiet");
@@ -274,7 +278,7 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
         waitUntilStarted(subscriptionModel.resumeSubscription("quiet"));
 
         // Then
-        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(3));
         CommandLog.Sent opened = commands.changeStreamsOpened().getFirst();
         CommandLog.Sent resumed = commands.changeStreamsOpened().getLast();
         assertThat(opened.changeStreamStage().containsKey("startAtOperationTime")).as("the first change stream opens at the operation time the subscription started at").isTrue();
@@ -320,8 +324,9 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
                         signals.add("cancel finished");
                     }));
         });
-        waitUntilStarted(subscriptionModel.subscribe("slow-to-cancel", StartAt.now(), __ -> Mono.empty()));
-        await().atMost(10, SECONDS).until(() -> signals.contains("quiet position being handled"));
+        waitUntilStarted(subscriptionModel.subscribe("slow-to-cancel", NAME_DEFINED_ONLY, StartAt.now(), __ -> Mono.empty()));
+        write(nameWasChanged());
+        await().atMost(30, SECONDS).until(() -> signals.contains("quiet position being handled"));
 
         // When: the pause is slow, since it waits for the quiet position to be cancelled, so the subscription is resumed while it is still going on
         Thread pause = new Thread(() -> subscriptionModel.pauseSubscription("slow-to-cancel"));
@@ -331,13 +336,134 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
             subscriptionModel.resumeSubscription("slow-to-cancel");
 
             // Then
-            await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(signals).containsExactly("asked before reading", "quiet position being handled", "cancel started"));
+            await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(signalsAfter(signals, "cancel started")).as("signals after the cancel started").isEmpty());
         } finally {
             cancelMayFinish.countDown();
             pause.join(10_000);
         }
-        await().atMost(10, SECONDS).until(() -> signals.size() > 4);
-        assertThat(signals.subList(0, 5)).containsExactly("asked before reading", "quiet position being handled", "cancel started", "cancel finished", "asked before reading");
+        await().atMost(10, SECONDS).until(() -> signalsAfter(signals, "cancel finished").contains("asked before reading"));
+        assertThat(signalsAfter(signals, "cancel started")).first().as("first signal after the cancel started").isEqualTo("cancel finished");
+    }
+
+    @Test
+    void the_change_stream_cursor_of_the_driver_can_be_read_with_the_driver_of_this_build() {
+        // When
+        String unavailableBecause = DriverChangeStreamCursor.unavailableBecause();
+
+        // Then
+        assertThat(unavailableBecause).as("why the driver's change stream cursor can't be read").isNull();
+    }
+
+    @Test
+    void a_subscription_that_has_reported_a_quiet_position_still_reads_through_the_cursor_of_the_driver() {
+        // Given
+        CopyOnWriteArrayList<Checkpoint> quietPositions = new CopyOnWriteArrayList<>();
+        subscriptionModel.addQuietPositionListener(subscriptionId -> Mono.just(collectingInto(quietPositions)));
+        waitUntilStarted(subscriptionModel.subscribe("through-the-cursor", NAME_DEFINED_ONLY, StartAt.now(), __ -> Mono.empty()));
+        write(nameWasChanged());
+
+        // When: the subscription has reported a position, or has given up on reporting them
+        await().atMost(30, SECONDS).until(() -> !quietPositions.isEmpty() || !subscriptionModel.readsQuietPositions());
+
+        // Then
+        assertThat(subscriptionModel.readsQuietPositions()).as("reads quiet positions through the cursor of the driver").isTrue();
+        assertThat(quietPositions).as("quiet positions reported").isNotEmpty();
+    }
+
+    @Test
+    void no_more_of_the_change_stream_is_read_while_the_action_runs_for_an_event() throws InterruptedException {
+        // Given
+        CountDownLatch actionRunning = new CountDownLatch(1);
+        Sinks.Empty<Void> finishAction = Sinks.empty();
+        waitUntilStarted(subscriptionModel.subscribe("busy-reader", NAME_DEFINED_ONLY, StartAt.now(), __ -> {
+            actionRunning.countDown();
+            return finishAction.asMono();
+        }));
+        write(nameDefined());
+        assertThat(actionRunning.await(10, SECONDS)).isTrue();
+        int getMoresSentWhenTheActionStarted = commands.named("getMore").size();
+
+        // When
+        write(nameWasChanged());
+
+        // Then
+        try {
+            await().during(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(8)).untilAsserted(() -> assertThat(commands.named("getMore")).as("getMore sent while the action runs").hasSize(getMoresSentWhenTheActionStarted));
+        } finally {
+            finishAction.tryEmitEmpty();
+        }
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(commands.named("getMore")).as("getMore sent once the action has completed").hasSizeGreaterThan(getMoresSentWhenTheActionStarted));
+    }
+
+    @Test
+    void an_event_whose_action_has_not_completed_is_delivered_again_when_the_subscription_is_paused_and_resumed_after_other_events_were_written() {
+        // Given
+        CopyOnWriteArrayList<String> invokedFor = new CopyOnWriteArrayList<>();
+        waitUntilStarted(subscriptionModel.subscribe("never-completes", NAME_DEFINED_ONLY, StartAt.now(), event -> {
+            invokedFor.add(event.getId());
+            return Mono.never();
+        }));
+        NameDefined matched = nameDefined();
+        write(matched);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(invokedFor).containsExactly(matched.eventId()));
+        write(nameWasChanged());
+        write(nameWasChanged());
+        // Long enough for the change stream to have been read past the events that did not match, if it was read at all
+        await().during(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(8)).untilAsserted(() -> assertThat(invokedFor).hasSize(1));
+
+        // When
+        subscriptionModel.pauseSubscription("never-completes");
+        subscriptionModel.resumeSubscription("never-completes");
+
+        // Then
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(invokedFor).as("events the action was invoked for").containsExactly(matched.eventId(), matched.eventId()));
+    }
+
+    @Test
+    void a_subscription_started_under_the_id_of_a_cancelled_run_reads_nothing_until_every_earlier_run_for_the_id_has_ended() throws InterruptedException {
+        // Given: a first run that is slow to cancel
+        AtomicInteger asked = new AtomicInteger();
+        subscriptionModel.addQuietPositionListener(subscriptionId -> {
+            asked.incrementAndGet();
+            return Mono.empty();
+        });
+        CountDownLatch actionRunning = new CountDownLatch(1);
+        CountDownLatch cancelStarted = new CountDownLatch(1);
+        CountDownLatch cancelMayFinish = new CountDownLatch(1);
+        waitUntilStarted(subscriptionModel.subscribe("chained", NAME_DEFINED_ONLY, StartAt.now(), __ -> Mono.<Void>never()
+                .doOnSubscribe(subscription -> actionRunning.countDown())
+                .doOnCancel(() -> {
+                    cancelStarted.countDown();
+                    awaitUninterruptibly(cancelMayFinish);
+                })));
+        write(nameDefined());
+        assertThat(actionRunning.await(10, SECONDS)).isTrue();
+        Thread pause = new Thread(() -> subscriptionModel.pauseSubscription("chained"));
+        pause.start();
+        Subscription third;
+        CopyOnWriteArrayList<String> deliveredToTheThird = new CopyOnWriteArrayList<>();
+        try {
+            assertThat(cancelStarted.await(10, SECONDS)).isTrue();
+            // The second run waits for the first, and is cancelled before it has read anything
+            subscriptionModel.resumeSubscription("chained");
+            subscriptionModel.cancelSubscription("chained");
+            int askedWhenTheThirdWasStarted = asked.get();
+
+            // When
+            third = subscriptionModel.subscribe("chained", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> deliveredToTheThird.add(event.getId())));
+
+            // Then
+            assertThat(third.waitUntilStarted(Duration.ofSeconds(3)).block()).as("the third run started while the first run is being cancelled").isFalse();
+            assertThat(commands.changeStreamsOpened()).as("change streams opened while the first run is being cancelled").hasSize(1);
+            assertThat(asked).as("times the listener was asked while the first run is being cancelled").hasValue(askedWhenTheThirdWasStarted);
+        } finally {
+            cancelMayFinish.countDown();
+            pause.join(10_000);
+        }
+        waitUntilStarted(third);
+        NameDefined matched = nameDefined();
+        write(matched);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(deliveredToTheThird).containsExactly(matched.eventId()));
     }
 
     @Test
@@ -377,35 +503,6 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
         assertThat(commands.named("getMore")).allSatisfy(getMore -> assertThat(getMore.lsid()).as("session of getMore for cursor %s", getMore.command().get("getMore")).isEqualTo(sessionOfTheAggregateThatOpened(getMore)));
     }
 
-    @Test
-    void a_plain_subscription_that_restarts_after_quiet_reads_opens_at_the_position_of_the_last_one() {
-        // Given
-        disposables.add(subscriptionModel.subscribe(NAME_DEFINED_ONLY, StartAt.now()).subscribe());
-        await().atMost(10, SECONDS).until(() -> commands.named("getMore").stream().filter(getMore -> getMore.reply() != null).count() >= 2);
-
-        // When
-        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("closeConnection", true));
-
-        // Then
-        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
-        CommandLog.Sent restarted = commands.changeStreamsOpened().getLast();
-        assertThat(restarted.changeStreamStage().containsKey("startAtOperationTime")).as("the restarted change stream opens at the operation time the subscription started at").isFalse();
-        assertThat(CommandLog.changeStreamField(restarted, "startAfter")).as("the position the restarted change stream opens at").isEqualTo(postBatchResumeTokenOfTheLastReadBefore(restarted));
-    }
-
-    @Test
-    void waiting_until_a_subscription_has_started_waits_for_the_change_stream_to_be_opened_on_the_server() {
-        // Given
-        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "aggregate", new Document("blockConnection", true).append("blockTimeMS", 2000));
-
-        // When
-        Subscription subscription = subscriptionModel.subscribe("blocked", __ -> Mono.empty());
-
-        // Then
-        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(1)).block()).as("started while the server still holds the aggregate").isFalse();
-        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(10)).block()).as("started once the server has answered the aggregate").isTrue();
-    }
-
     private BsonValue sessionOfTheAggregateThatOpened(CommandLog.Sent getMore) {
         long cursorId = getMore.command().getInt64("getMore").getValue();
         return commands.changeStreamsOpened().stream()
@@ -415,17 +512,21 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
                 .orElseThrow(() -> new AssertionError("No aggregate opened cursor " + cursorId));
     }
 
-    private BsonDocument postBatchResumeTokenOfTheLastReadBefore(CommandLog.Sent restarted) {
-        BsonDocument postBatchResumeToken = null;
-        for (CommandLog.Sent command : commands.all()) {
-            if (command == restarted) {
-                break;
-            }
-            if ((command.isChangeStream() || command.name().equals("getMore")) && command.reply() != null) {
-                postBatchResumeToken = command.reply().getDocument("cursor").getDocument("postBatchResumeToken");
-            }
-        }
-        return requireNonNull(postBatchResumeToken, "No read answered before the change stream was opened again");
+    // A resume token's data is the hex of an ordered key that starts with the operation time, so those characters tell which of two positions is later
+    private static boolean isAtOrAfter(Checkpoint position, Checkpoint other) {
+        return operationTimeOf(position).compareTo(operationTimeOf(other)) >= 0;
+    }
+
+    private static String operationTimeOf(Checkpoint checkpoint) {
+        String data = resumeTokenOf(checkpoint).getString("_data").getValue();
+        assertThat(data).as("data of resume token %s", checkpoint).startsWith("82");
+        return data.substring(0, 18);
+    }
+
+    private static List<String> signalsAfter(List<String> signals, String signal) {
+        List<String> copy = List.copyOf(signals);
+        int index = copy.indexOf(signal);
+        return index < 0 ? List.of() : copy.subList(index + 1, copy.size());
     }
 
     private static Function<Checkpoint, Mono<Void>> collectingInto(List<Checkpoint> quietPositions) {

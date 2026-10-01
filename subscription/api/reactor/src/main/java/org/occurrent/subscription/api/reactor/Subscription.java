@@ -29,8 +29,9 @@ import static java.util.Objects.requireNonNull;
  * continuing.
  * <p>
  * Unlike the blocking {@code Subscription}, {@link #waitUntilStarted()} returns a {@link Mono} rather than blocking
- * the calling thread. For {@code ReactorMongoSubscriptionModel}, "started" means MongoDB has answered the command that
- * opens the change stream, as for the blocking and native subscription models.
+ * the calling thread. "Started" means the underlying change stream has been subscribed to, not that the server has
+ * acknowledged the command and the cursor is positioned. This is weaker than the blocking and native subscription
+ * models, whose equivalent signal only fires after that blocking round trip has already completed.
  */
 @NullMarked
 public interface Subscription {

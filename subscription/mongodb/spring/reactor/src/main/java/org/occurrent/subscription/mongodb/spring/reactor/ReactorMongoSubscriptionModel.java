@@ -16,25 +16,21 @@
 
 package org.occurrent.subscription.mongodb.spring.reactor;
 
-import com.mongodb.ClientSessionOptions;
 import com.mongodb.MongoCommandException;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
-import com.mongodb.reactivestreams.client.ClientSession;
+import com.mongodb.client.model.changestream.FullDocument;
+import com.mongodb.reactivestreams.client.ChangeStreamPublisher;
 import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
 import org.bson.BsonDocument;
-import org.bson.BsonDocumentReader;
 import org.bson.BsonTimestamp;
-import org.bson.BsonValue;
 import org.bson.Document;
-import org.bson.codecs.Codec;
-import org.bson.codecs.DecoderContext;
-import org.bson.codecs.configuration.CodecRegistry;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -49,11 +45,12 @@ import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder;
-import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
+import org.springframework.data.mongodb.core.ChangeStreamEvent;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
+import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.aggregation.AggregationOperationContext;
 import org.springframework.data.mongodb.core.aggregation.FieldLookupPolicy;
@@ -68,6 +65,7 @@ import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
 import reactor.util.retry.RetryBackoffSpec;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -76,9 +74,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiPredicate;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -95,15 +93,23 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * that includes the checkpoint. Use {@link CheckpointAwareCloudEvent#getCheckpointOrThrowIAE(CloudEvent)}
  * to get the checkpoint.
  * <p>
- * The model reads the change stream itself, with the {@code aggregate} and {@code getMore} commands on a MongoDB
- * session of its own, so it sees the resume token MongoDB sends with a batch that has no event in it. A subscription
- * whose filter matches no event moves its position to that token, so a pause, a restart or a lease handover doesn't
- * resume from a position the oplog has dropped while the subscription was up to date. The model reports that
- * position through {@link QuietPositionReportingSubscriptions}.
+ * A subscription with an id reads its change stream through the MongoDB driver's change stream cursor, one batch at a
+ * time, and asks for the next batch once the action's {@code Mono} has completed for every event of the batch before.
+ * While it waits for a batch, it looks every second at the resume token MongoDB sent with the last one. When the token
+ * of another reply replaces it during the same wait, the batch it came with had no event for the subscription, so the
+ * subscription's position moves to it. A pause or a restart then doesn't resume from a position the oplog has dropped
+ * while the subscription was up to date. The model reports that position through
+ * {@link QuietPositionReportingSubscriptions}.
  * <p>
- * After a replica-set failover, a transient network error and, if configured to, lost change stream history, the
- * model opens the change stream again with a backoff, from the position of the last change stream document the
- * subscription has handled. See {@link ReactorMongoSubscriptionModelConfig}.
+ * The driver's reactive API doesn't hand out that token, so the model reads it from a private field of the driver.
+ * When that doesn't work with the driver in use, the model logs a warning and reads the change stream through
+ * {@link ReactiveMongoOperations#changeStream(String, ChangeStreamOptions, Class)} instead, reading ahead of the
+ * action. Its position then stays at the last event it handled. The plain
+ * {@link #subscribe(SubscriptionFilter, StartAt)} {@link Flux} always reads that way.
+ * <p>
+ * After a replica-set failover or a transient network error, the driver opens the change stream again by itself. After
+ * any other error and, if configured to, lost change stream history, the model opens it again with a backoff, from the
+ * position of the last change stream document the subscription has handled. See {@link ReactorMongoSubscriptionModelConfig}.
  * <p>
  * Also supports named, lifecycle-managed subscriptions, which is what makes it a {@link SubscriptionModel} ({@link Subscribable}
  * plus {@link SubscriptionModelLifeCycle}): pause, resume, and cancel an individual subscription by id, in addition to
@@ -113,10 +119,9 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
 public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions, QuietPositionReportingSubscriptions {
     private static final Logger log = LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
 
-    // MongoDB refuses a getMore from another session than the aggregate that opened the cursor, and a command without
-    // a session of its own takes whichever session the driver's pool hands out. Nothing read on it depends on an
-    // earlier write, so it needs no causal consistency.
-    private static final ClientSessionOptions CHANGE_STREAM_SESSION = ClientSessionOptions.builder().causallyConsistent(false).build();
+    // How long the model waits for a batch before it looks at the token again. A getMore that finds nothing new waits up
+    // to a second on the server by default, so a quiet change stream gets a new token about as often.
+    private static final Duration QUIET_POSITION_CHECK_INTERVAL = Duration.ofSeconds(1);
 
     private final ReactiveMongoOperations mongo;
     private final String eventCollection;
@@ -124,9 +129,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     private final ReactorMongoSubscriptionModelConfig config;
     private final ConcurrentMap<String, InternalSubscription> runningSubscriptions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions = new ConcurrentHashMap<>();
-    // The last run started for each subscription id, kept until it has ended, so the next run for the id starts after it
-    private final ConcurrentMap<String, Run> lastRuns = new ConcurrentHashMap<>();
+    // Completes once every run started so far for the id has ended, kept until then, so the next run for the id waits for all of them
+    private final ConcurrentMap<String, Mono<Void>> runsEnded = new ConcurrentHashMap<>();
     private final List<QuietPositionListener> quietPositionListeners = new CopyOnWriteArrayList<>();
+    private final AtomicBoolean readsQuietPositions;
 
     private volatile boolean shutdown = false;
     private volatile boolean running = true;
@@ -155,27 +161,43 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         this.eventCollection = requireNonNull(eventCollection, "Event collection cannot be null");
         this.timeRepresentation = requireNonNull(timeRepresentation, "Time representation cannot be null");
         this.config = requireNonNull(config, ReactorMongoSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
+        String unavailableBecause = driverCursorUnavailableBecause();
+        this.readsQuietPositions = new AtomicBoolean(unavailableBecause == null);
+        if (unavailableBecause != null) {
+            warnThatQuietPositionsAreNotRead(unavailableBecause);
+        }
+    }
+
+    // Loading the class fails when the driver lacks a class it uses
+    private static @Nullable String driverCursorUnavailableBecause() {
+        try {
+            return DriverChangeStreamCursor.unavailableBecause();
+        } catch (LinkageError e) {
+            return e.toString();
+        }
+    }
+
+    private static void warnThatQuietPositionsAreNotRead(String reason) {
+        log.warn("{} can't read the resume token MongoDB sends with a batch from this MongoDB driver ({}), so it reads change streams through Spring's changeStream instead. A subscription that matches no event for a while keeps the position of the last event it handled, which the oplog can drop.",
+                ReactorMongoSubscriptionModel.class.getSimpleName(), reason);
+    }
+
+    // Whether subscriptions with an id read through the driver's cursor and move a quiet position
+    boolean readsQuietPositions() {
+        return readsQuietPositions.get();
     }
 
     @Override
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
-        // Flux.defer gives each subscriber its own tracked position. It follows the last change stream document handed
-        // to the subscriber or skipped, and the token of the last read that returned none, so a restart below goes on
-        // from there. A batch read ahead of the subscriber doesn't move it, since a restart drops that batch.
+        // currentStartAt tracks the last change-stream document read (even if it produced no delivered
+        // CloudEvent), so a resubscribe from retryWhen resumes gap-free. Safe here since the caller consumes
+        // the Flux directly. The named-subscription paths below advance only on action completion.
+        // Flux.defer gives each subscriber its own tracked position.
         return Flux.defer(() -> {
             AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
-            return withChangeStreamCursor(cursor -> openingPosition(currentStartAt, currentStartAt::compareAndSet)
-                    .flatMap(position -> cursor.open(position, filter))
-                    .concatWith(Mono.defer(cursor::getMore).repeat()))
-                    .concatMapIterable(this::readsIn, 1)
-                    .<CloudEvent>handle((read, sink) -> {
-                        currentStartAt.set(read.position());
-                        if (read.cloudEvent() != null) {
-                            sink.next(read.cloudEvent());
-                        }
-                    })
-                    .retryWhen(unboundedBackoff().filter(throwable -> shouldRestart(null, throwable, () -> currentStartAt.set(StartAt.now()))));
+            return changeStream(filter, currentStartAt, currentStartAt::compareAndSet, currentStartAt::set, () -> {
+            }).retryWhen(unboundedBackoff().filter(throwable -> shouldRestart(null, throwable, () -> currentStartAt.set(StartAt.now()))));
         });
     }
 
@@ -218,20 +240,25 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     // Holds the monitor. Registers the subscription as running before the run is subscribed to, so a run that fails
     // straight away removes an entry that is there.
     private RunStart startRun(InternalSubscription internalSubscription) {
+        String subscriptionId = internalSubscription.subscriptionId;
         Run run = new Run();
         internalSubscription.run = run;
-        runningSubscriptions.put(internalSubscription.subscriptionId, internalSubscription);
-        Run previous = lastRuns.put(internalSubscription.subscriptionId, run);
-        run.ended().doOnTerminate(() -> lastRuns.remove(internalSubscription.subscriptionId, run)).subscribe();
-        return new RunStart(internalSubscription, run, previous == null ? Mono.empty() : previous.ended());
+        runningSubscriptions.put(subscriptionId, internalSubscription);
+        // Covers every earlier run, and not only the last one, since a cancel can end a run that is still waiting for
+        // the one before it
+        Mono<Void> earlierRunsEnded = runsEnded.getOrDefault(subscriptionId, Mono.empty());
+        Mono<Void> allRunsEnded = Mono.when(earlierRunsEnded, run.ended()).cache();
+        runsEnded.put(subscriptionId, allRunsEnded);
+        allRunsEnded.doOnTerminate(() -> runsEnded.remove(subscriptionId, allRunsEnded)).subscribe();
+        return new RunStart(internalSubscription, run, earlierRunsEnded);
     }
 
     // Runs without the monitor, since subscribing resolves the start position, which can call the caller's function
     private Subscription launch(RunStart runStart) {
         InternalSubscription internalSubscription = runStart.internalSubscription();
         Run run = runStart.run();
-        // The run reads nothing until the previous run for the id has ended, so its steps never overlap one of that run
-        Disposable reads = runStart.previousRunEnded()
+        // The run reads nothing until every earlier run for the id has ended, so its steps never overlap one of theirs
+        Disposable reads = runStart.earlierRunsEnded()
                 .thenMany(Flux.defer(() -> reads(internalSubscription, run)))
                 .subscribe(__ -> {
                         }, throwable -> runEnded(internalSubscription, run, throwable),
@@ -241,7 +268,14 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     }
 
     private void runEnded(InternalSubscription internalSubscription, Run run, Throwable throwable) {
-        log.error("Subscription {} terminated with an unrecoverable error", internalSubscription.subscriptionId, throwable);
+        String subscriptionId = internalSubscription.subscriptionId;
+        boolean checkpointWriteRefused = throwable instanceof CheckpointWriteConditionNotFulfilledException;
+        if (checkpointWriteRefused) {
+            // Stays known and running, as in the blocking models, so whatever pauses the subscription still can
+            log.error("Checkpoint write for subscription {} was refused: {}. Another node has already written this subscription's checkpoint, so delivery stops here rather than retrying. The subscription stays known and running until it's paused or cancelled. The refused write was for a position reached while no event matched.", subscriptionId, throwable.getMessage(), throwable);
+        } else {
+            log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
+        }
         // No-op if the subscription had already started, otherwise this keeps waitUntilStarted() from hanging forever
         run.failedToStart(throwable);
         run.close();
@@ -249,29 +283,62 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             // A dead subscription must not count as running, or isRunning(id) would lie and the id couldn't be reused
             // without an explicit cancelSubscription(). Only while this run is still the subscription's, since a pause
             // and a resume, or a cancel and a new subscription with the same id, start a newer run.
-            if (internalSubscription.run == run) {
+            if (!checkpointWriteRefused && internalSubscription.run == run) {
                 internalSubscription.run = null;
-                runningSubscriptions.remove(internalSubscription.subscriptionId, internalSubscription);
+                runningSubscriptions.remove(subscriptionId, internalSubscription);
             }
         }
     }
 
     private Flux<Void> reads(InternalSubscription internalSubscription, Run run) {
         AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
-        BiPredicate<StartAt, StartAt> recordOpeningPosition = (expected, pinned) -> run.compareAndMove(currentStartAt, expected, pinned);
-        return withChangeStreamCursor(cursor -> openingPosition(currentStartAt, recordOpeningPosition)
-                .flatMap(position -> quietPositionHandlers(internalSubscription.subscriptionId, run)
-                        .flatMap(quietPositionHandlers -> cursor.open(position, internalSubscription.filter)
-                                .doOnNext(__ -> run.opened())
-                                .flatMap(batch -> run.step(() -> handle(internalSubscription, run, batch, quietPositionHandlers)))))
-                .thenMany(Mono.defer(() -> quietPositionHandlers(internalSubscription.subscriptionId, run)
-                                .flatMap(quietPositionHandlers -> cursor.getMore()
-                                        .flatMap(batch -> run.step(() -> handle(internalSubscription, run, batch, quietPositionHandlers)))))
-                        .repeat()))
-                .retryWhen(unboundedBackoff().filter(throwable -> shouldRestart(internalSubscription.subscriptionId, throwable, () -> run.move(currentStartAt, StartAt.now()))));
+        return Flux.defer(() -> readsQuietPositions.get() ? readsWithQuietPositions(internalSubscription, run) : readsAhead(internalSubscription, run))
+                .retryWhen(unboundedBackoff().filter(throwable -> !(throwable instanceof CheckpointWriteConditionNotFulfilledException)
+                        && shouldRestart(internalSubscription.subscriptionId, throwable, () -> run.move(currentStartAt, StartAt.now()))));
     }
 
-    // Asked before every read, inside a step, so a listener answers before it knows what the read returns
+    // How subscriptions with an id read before the model read the driver's cursor
+    private Flux<Void> readsAhead(InternalSubscription internalSubscription, Run run) {
+        AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
+        // concatMap can buffer several documents ahead of a slow action, so the position moves only once the action's
+        // Mono has completed, and a pause, a cancel or a restart delivers again at most the event in hand
+        return changeStream(internalSubscription.filter, currentStartAt, (expected, pinned) -> run.compareAndMove(currentStartAt, expected, pinned), __ -> {
+        }, run::opened)
+                .concatMap(cloudEvent -> run.step(() -> deliver(internalSubscription, run, cloudEvent)));
+    }
+
+    private Flux<Void> readsWithQuietPositions(InternalSubscription internalSubscription, Run run) {
+        AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
+        return openingPosition(currentStartAt, (expected, pinned) -> run.compareAndMove(currentStartAt, expected, pinned))
+                .flatMapMany(position -> Flux.usingWhen(
+                        changeStreamAt(position, internalSubscription.filter).flatMap(DriverChangeStreamCursor::open).doOnSubscribe(__ -> run.opened()),
+                        cursor -> Mono.defer(() -> nextBatch(internalSubscription, run, cursor)).repeat(),
+                        cursor -> Mono.fromRunnable(cursor::close)))
+                .onErrorResume(DriverChangeStreamCursor.Unavailable.class, unavailable -> {
+                    if (readsQuietPositions.compareAndSet(true, false)) {
+                        warnThatQuietPositionsAreNotRead(unavailable.getMessage());
+                    }
+                    return readsAhead(internalSubscription, run);
+                });
+    }
+
+    // Waits for the next batch, and every QUIET_POSITION_CHECK_INTERVAL meanwhile looks for a quiet position. Nothing is
+    // read ahead, since a token read while a batch is still being handled could be past an event its action hasn't had.
+    private Mono<Void> nextBatch(InternalSubscription internalSubscription, Run run, DriverChangeStreamCursor cursor) {
+        Sinks.One<List<ChangeStreamDocument<Document>>> batch = Sinks.one();
+        cursor.next().subscribe(batch::tryEmitValue, batch::tryEmitError, () -> batch.tryEmitValue(List.of()));
+        TokenWatch tokenWatch = new TokenWatch();
+        return Mono.defer(() -> quietPositionHandlers(internalSubscription.subscriptionId, run)
+                        .flatMap(quietPositionHandlers -> Mono.firstWithSignal(batch.asMono().map(Optional::of), Mono.delay(QUIET_POSITION_CHECK_INTERVAL).thenReturn(Optional.<List<ChangeStreamDocument<Document>>>empty()))
+                                .flatMap(read -> read.isPresent() ? Mono.just(read)
+                                        : run.step(() -> checkQuietPosition(internalSubscription, run, cursor, tokenWatch, quietPositionHandlers)).thenReturn(read))))
+                .repeat()
+                .filter(Optional::isPresent)
+                .next()
+                .flatMap(read -> run.step(() -> handle(internalSubscription, run, read.get())));
+    }
+
+    // Asked before every wait for a batch, inside a step, so a listener answers before it knows what the wait brings
     private Mono<List<Function<Checkpoint, Mono<Void>>>> quietPositionHandlers(String subscriptionId, Run run) {
         if (quietPositionListeners.isEmpty()) {
             return Mono.just(List.of());
@@ -281,88 +348,108 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 .collectList());
     }
 
-    // Runs inside a step. An empty batch moves the position to the token MongoDB sent with it and hands that position to
-    // the quiet position handlers. Otherwise the action gets each event, and the position moves past an event once the
-    // action's Mono for it has completed, so a pause, a cancel or a restart delivers again at most the event in hand.
-    private Mono<Void> handle(InternalSubscription internalSubscription, Run run, Batch batch, List<Function<Checkpoint, Mono<Void>>> quietPositionHandlers) {
-        if (batch.documents().isEmpty()) {
-            BsonDocument postBatchResumeToken = batch.postBatchResumeToken();
-            if (postBatchResumeToken == null) {
-                return Mono.empty();
-            }
-            Checkpoint quietPosition = new MongoResumeTokenCheckpoint(postBatchResumeToken);
-            run.move(internalSubscription.currentStartAt, StartAt.checkpoint(quietPosition));
-            return Flux.fromIterable(quietPositionHandlers)
-                    .concatMap(quietPositionHandler -> quietPositionHandler.apply(quietPosition))
-                    .then();
+    // Runs inside a step. Moves the position to a token the watch confirms and hands that position to the quiet position handlers.
+    private Mono<Void> checkQuietPosition(InternalSubscription internalSubscription, Run run, DriverChangeStreamCursor cursor, TokenWatch tokenWatch, List<Function<Checkpoint, Mono<Void>>> quietPositionHandlers) {
+        BsonDocument token = tokenWatch.confirmed(cursor.postBatchResumeToken());
+        if (token == null) {
+            return Mono.empty();
         }
-        return Flux.fromIterable(batch.documents())
-                .concatMap(document -> deliver(internalSubscription, run, document))
+        Checkpoint quietPosition = new MongoResumeTokenCheckpoint(token);
+        run.move(internalSubscription.currentStartAt, StartAt.checkpoint(quietPosition));
+        return Flux.fromIterable(quietPositionHandlers)
+                .concatMap(quietPositionHandler -> quietPositionHandler.apply(quietPosition))
                 .then();
     }
 
-    private Mono<Void> deliver(InternalSubscription internalSubscription, Run run, ChangeStreamDocument<Document> document) {
-        MongoResumeTokenCheckpoint checkpoint = new MongoResumeTokenCheckpoint(requireNonNull(document.getResumeToken()));
-        StartAt afterDocument = StartAt.checkpoint(checkpoint);
-        Optional<CloudEvent> cloudEvent = MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(document, timeRepresentation);
-        if (cloudEvent.isEmpty()) {
-            run.move(internalSubscription.currentStartAt, afterDocument);
-            return Mono.empty();
+    // Runs inside a step. The action gets each event, and the position moves past an event once the action's Mono for
+    // it has completed, so a pause, a cancel or a restart delivers again at most the event in hand.
+    private Mono<Void> handle(InternalSubscription internalSubscription, Run run, List<ChangeStreamDocument<Document>> documents) {
+        if (documents.isEmpty()) {
+            return Mono.error(new IllegalStateException("MongoDB closed the change stream cursor on collection " + eventCollection));
         }
-        CloudEvent checkpointAwareCloudEvent = new CheckpointAwareCloudEvent(cloudEvent.get(), checkpoint);
+        return Flux.fromIterable(documents)
+                .concatMap(document -> {
+                    MongoResumeTokenCheckpoint checkpoint = new MongoResumeTokenCheckpoint(requireNonNull(document.getResumeToken()));
+                    Optional<CloudEvent> cloudEvent = MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(document, timeRepresentation);
+                    if (cloudEvent.isEmpty()) {
+                        run.move(internalSubscription.currentStartAt, StartAt.checkpoint(checkpoint));
+                        return Mono.empty();
+                    }
+                    return deliver(internalSubscription, run, new CheckpointAwareCloudEvent(cloudEvent.get(), checkpoint));
+                })
+                .then();
+    }
+
+    private Mono<Void> deliver(InternalSubscription internalSubscription, Run run, CloudEvent cloudEvent) {
+        StartAt afterEvent = StartAt.checkpoint(CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(cloudEvent));
         String subscriptionId = internalSubscription.subscriptionId;
         // The action's own error is retried here, with the same backoff the change stream restarts with, mirroring the
         // blocking models' RetryStrategy around the handler (no attempt cap by default). Mono.defer, because a retry must
         // call the action again the way the blocking RetryStrategy calls the handler again: subscribing again to whatever
         // Mono the first call returned would replay that attempt's failure forever. A pause cancels a pending retry.
-        return Mono.defer(() -> internalSubscription.action.apply(checkpointAwareCloudEvent))
+        return Mono.defer(() -> internalSubscription.action.apply(cloudEvent))
                 .retryWhen(unboundedBackoff()
                         .doBeforeRetry(retrySignal -> log.warn("Action for subscription {} failed, will retry (attempt {})", subscriptionId, retrySignal.totalRetries() + 1, retrySignal.failure())))
-                .then(Mono.fromRunnable(() -> run.move(internalSubscription.currentStartAt, afterDocument)));
+                .then(Mono.fromRunnable(() -> run.move(internalSubscription.currentStartAt, afterEvent)));
     }
 
-    // The plain subscribe(filter, startAt) moves its position for every read, the empty ones included
-    private List<Read> readsIn(Batch batch) {
-        if (batch.documents().isEmpty()) {
-            BsonDocument postBatchResumeToken = batch.postBatchResumeToken();
-            return postBatchResumeToken == null ? List.of() : List.of(new Read(StartAt.checkpoint(new MongoResumeTokenCheckpoint(postBatchResumeToken)), null));
-        }
-        List<Read> reads = new ArrayList<>(batch.documents().size());
-        for (ChangeStreamDocument<Document> document : batch.documents()) {
-            MongoResumeTokenCheckpoint checkpoint = new MongoResumeTokenCheckpoint(requireNonNull(document.getResumeToken()));
-            CloudEvent cloudEvent = MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(document, timeRepresentation)
-                    .map(deserialized -> (CloudEvent) new CheckpointAwareCloudEvent(deserialized, checkpoint))
-                    .orElse(null);
-            reads.add(new Read(StartAt.checkpoint(checkpoint), cloudEvent));
-        }
-        return reads;
-    }
-
-    // Opens a session for one opening of the change stream, and once the reads have ended kills the cursor on the
-    // server and closes the session. Every command on the cursor goes through that session.
-    private <T> Flux<T> withChangeStreamCursor(Function<ChangeStreamCursor, Publisher<T>> reads) {
-        return Flux.defer(() -> {
-            AtomicLong cursorId = new AtomicLong();
-            return mongo.withSession(CHANGE_STREAM_SESSION)
-                    .execute(operations -> reads.apply(new ChangeStreamCursor(operations, cursorId)), session -> killCursorAndClose(session, cursorId.get()));
+    // Built the way ReactiveMongoOperations.changeStream builds it
+    private Mono<ChangeStreamPublisher<Document>> changeStreamAt(StartAt position, @Nullable SubscriptionFilter filter) {
+        return mongo.getCollection(eventCollection).map(collection -> {
+            List<Document> pipeline = ApplyFilterToChangeStreamOptionsBuilder.changeStreamPipeline(timeRepresentation, filter, filterContext());
+            ChangeStreamPublisher<Document> changeStream = collection.watch(pipeline, Document.class).fullDocument(FullDocument.DEFAULT);
+            // A position at an operation time maps to startAtOperationTime, which includes an operation at exactly the
+            // given time.
+            return MongoCommons.applyStartPosition(changeStream, ChangeStreamPublisher::startAfter, ChangeStreamPublisher::startAtOperationTime, position, new SubscriptionModelContext(ReactorMongoSubscriptionModel.class));
         });
     }
 
-    // An error is only logged, since MongoDB closes a cursor nobody reads after its idle timeout anyway
-    private void killCursorAndClose(ClientSession session, long cursorId) {
-        if (cursorId == 0) {
-            session.close();
-            return;
-        }
-        mongo.withSession(session).executeCommand(new Document("killCursors", eventCollection).append("cursors", List.of(cursorId)))
-                .doFinally(__ -> session.close())
-                .subscribe(__ -> {
-                }, throwable -> log.debug("Failed to kill change stream cursor {} on collection {}, MongoDB closes it after its idle timeout.", cursorId, eventCollection, throwable));
+    // The same mapping of filter values ReactiveMongoOperations.changeStream uses
+    private AggregationOperationContext filterContext() {
+        MongoConverter converter = mongo.getConverter();
+        return new TypeBasedAggregationOperationContext(Object.class, converter.getMappingContext(), new QueryMapper(converter), FieldLookupPolicy.relaxed());
     }
 
     // One spec for both retry sites, so the action retry cannot drift from the backoff the change stream restarts with.
     private RetryBackoffSpec unboundedBackoff() {
         return Retry.backoff(Long.MAX_VALUE, config.minBackoff).maxBackoff(config.maxBackoff);
+    }
+
+    // Reads through ReactiveMongoOperations.changeStream. recordOpeningPosition compares and sets the position, and
+    // onSubscribe runs when the change stream is subscribed to.
+    private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, BiPredicate<StartAt, StartAt> recordOpeningPosition,
+                                          Consumer<StartAt> onDocumentRead, Runnable onSubscribe) {
+        SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
+        return openingPosition(currentStartAt, recordOpeningPosition).flatMapMany(openingPosition -> {
+            // builder::resumeAt maps to the driver's startAtOperationTime here rather than to a resume token,
+            // and that includes an operation stamped at exactly the given time.
+            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, openingPosition, subscriptionModelContext);
+            final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
+            Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
+            // "Started" only means the change stream Flux was subscribed to, not that the server acknowledged
+            // the command and the cursor is positioned. Weaker than NativeMongoSubscriptionModel's latch,
+            // which only fires after that round trip completes.
+            return changeStream
+                    .doOnSubscribe(subscription -> onSubscribe.run())
+                    .flatMap(changeEvent -> {
+                        ChangeStreamDocument<Document> raw = changeEvent.getRaw();
+                        if (raw == null) {
+                            // Mirrors SpringMongoSubscriptionModel's defensive check. Not expected, but skipping
+                            // this event beats an NPE that retries the whole subscription.
+                            log.error("Internal error: ChangeStreamEvent for collection {} had a null raw document", eventCollection);
+                            return Mono.empty();
+                        }
+                        MongoResumeTokenCheckpoint checkpoint = new MongoResumeTokenCheckpoint(requireNonNull(raw.getResumeToken()));
+                        // Advances the tracked position for every document received, even ones that don't
+                        // deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel, so
+                        // a resubscribe resumes gap-free.
+                        onDocumentRead.accept(StartAt.checkpoint(checkpoint));
+                        return MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
+                                .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, checkpoint))
+                                .map(Mono::just)
+                                .orElse(Mono.empty());
+                    });
+        });
     }
 
     // Does what MongoCommons.resolveOpeningPosition does without blocking. Its javadoc says why a position that
@@ -375,7 +462,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             if (!MongoCommons.opensAtThePresent(resolved)) {
                 return Mono.just(requireNonNull(resolved));
             }
-            // An empty reply would end the reads with no error, so nothing would restart them
+            // An empty reply would complete the change stream Flux with no error, so nothing would restart it
             return mongo.executeCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND)
                     .switchIfEmpty(Mono.error(() -> new IllegalStateException("MongoDB returned no reply to " + MongoCommons.CURRENT_OPERATION_TIME_COMMAND.toJson())))
                     .flatMap(reply -> {
@@ -393,8 +480,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     }
 
     // ChangeStreamHistoryLost (286) restarts from StartAt.now() only when configured to. Everything else
-    // (failover, transient network error, a cursor MongoDB closed) restarts from the tracked position. Mirrors
-    // NativeMongoSubscriptionModel and SpringMongoSubscriptionModel.
+    // (failover, transient network error, anything the driver itself couldn't resume) restarts from the
+    // tracked position. Mirrors NativeMongoSubscriptionModel and SpringMongoSubscriptionModel.
     private boolean shouldRestart(@Nullable String subscriptionId, Throwable throwable, Runnable restartAtThePresent) {
         String subscription = subscriptionId == null ? "the subscription" : "subscription " + subscriptionId;
         if (isChangeStreamHistoryLost(throwable)) {
@@ -411,20 +498,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return true;
     }
 
-    // Spring wraps the driver's exception, so the cause chain is searched
+    // Spring wraps the driver's exception, and the driver's cursor hands it over as it is
     private static boolean isChangeStreamHistoryLost(Throwable throwable) {
-        for (Throwable cause = throwable; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
-            if (cause instanceof MongoCommandException mongoCommandException && mongoCommandException.getErrorCode() == MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // The same mapping of filter values Spring Data's ReactiveMongoTemplate.changeStream used
-    private AggregationOperationContext filterContext() {
-        MongoConverter converter = mongo.getConverter();
-        return new TypeBasedAggregationOperationContext(Object.class, converter.getMappingContext(), new QueryMapper(converter), FieldLookupPolicy.relaxed());
+        Throwable cause = throwable instanceof UncategorizedMongoDbException ? throwable.getCause() : throwable;
+        return cause instanceof MongoCommandException mongoCommandException && mongoCommandException.getErrorCode() == MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE;
     }
 
     /**
@@ -513,14 +590,15 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * Delivery is <i>at least once</i> across a pause: an event whose action's {@code Mono} had not completed when
      * the subscription was paused, and every event another consumer of the same subscription id handled in the
      * meantime, is handed to this action again on resume. That is deliberate, since wasted work is the cheaper
-     * mistake, and it means actions must be idempotent. A read that returned no event for the subscription moves its
-     * position to the token MongoDB sent with that read, so a subscription that matched nothing for a while resumes
-     * from there rather than from its last event. This model asks MongoDB for its operation time right before the
-     * change stream of a subscription started at the present opens, and records it as that subscription's position.
-     * One paused before it read anything resumes from that time, so the events written since are delivered too, as long
-     * as the oplog still holds that time. When it no longer does, the resume gets the handling that
-     * {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has no operation time, or the
-     * subscription was paused before MongoDB answered, nothing is recorded and the resume opens at the present.
+     * mistake, and it means actions must be idempotent. While the model reads through the driver's change stream
+     * cursor, a subscription that matched nothing for a while has moved its position to the token MongoDB sent with a
+     * batch that had no event for it, so it resumes from there rather than from its last event. This model asks MongoDB
+     * for its operation time right before the change stream of a subscription started at the present opens, and records
+     * it as that subscription's position. One paused before it read anything resumes from that time, so the events
+     * written since are delivered too, as long as the oplog still holds that time. When it no longer does, the resume
+     * gets the handling that {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has
+     * no operation time, or the subscription was paused before MongoDB answered, nothing is recorded and the resume
+     * opens at the present.
      *
      * @see #pauseSubscription(String)
      */
@@ -661,7 +739,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         final @Nullable SubscriptionFilter filter;
         final AtomicReference<StartAt> currentStartAt;
         final Function<CloudEvent, Mono<Void>> action;
-        // The run that reads for the subscription while it's running, guarded by the model's monitor
+        // The run that reads for the subscription while it's running. Read and written only while holding the model's monitor
         @Nullable Run run;
 
         private InternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Function<CloudEvent, Mono<Void>> action) {
@@ -672,26 +750,53 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         }
     }
 
-    private record RunStart(InternalSubscription internalSubscription, Run run, Mono<Void> previousRunEnded) {
+    private record RunStart(InternalSubscription internalSubscription, Run run, Mono<Void> earlierRunsEnded) {
     }
 
-    // What one aggregate or getMore of the change stream returned
-    private record Batch(List<ChangeStreamDocument<Document>> documents, @Nullable BsonDocument postBatchResumeToken) {
-    }
+    /**
+     * The tokens seen during one wait for a batch. The driver asks MongoDB for more within the same wait only after a
+     * batch came back with no event for the subscription, and the batch that ends the wait comes last. So a token that
+     * a later look during the same wait finds replaced came with a batch that had no event, and the action has
+     * completed for every event before it. The token of the batch that ends the wait is never confirmed, since that
+     * batch's events haven't been handled yet.
+     * <p>
+     * The driver decodes a token of its own from every reply, so a look tells a new reply from the one before by the
+     * instance it reads, even when MongoDB sent the same token again. A token is confirmed once per value.
+     * <p>
+     * Used by one wait at a time, one look after the other.
+     */
+    static final class TokenWatch {
+        private @Nullable BsonDocument seen;
+        private @Nullable BsonDocument confirmed;
 
-    private record Read(StartAt position, @Nullable CloudEvent cloudEvent) {
+        /**
+         * @param token The token the driver's cursor holds now, or {@code null} when there is none to read.
+         * @return The token this look confirms, or {@code null} when it confirms none.
+         */
+        @Nullable BsonDocument confirmed(@Nullable BsonDocument token) {
+            if (token == null) {
+                return null;
+            }
+            BsonDocument previous = seen;
+            seen = token;
+            if (previous == null || previous == token || previous.equals(confirmed)) {
+                return null;
+            }
+            confirmed = previous;
+            return previous;
+        }
     }
 
     /**
      * The reads of one subscription from subscribe, resume or start until a pause, a cancel, a shutdown, or an error
-     * the model doesn't restart on. What the run does for the subscription between two reads is a step: asking the
-     * quiet position listeners, calling the action, and handing over a quiet position. A step starts only while the
+     * the model doesn't restart on. Each thing the run does for the subscription between two reads is a step, such as
+     * asking the quiet position listeners, calling the action, or handing over a quiet position. A step starts only while the
      * run is open, and the position moves only while the run is open or a step is under way. The run has ended once it
      * is closed and no step is under way, and the next run for the subscription reads nothing before that.
      * <p>
      * The monitor of the run guards only its own fields, and no code of the caller runs while it's held.
      */
-    private static final class Run {
+    static final class Run {
         private final Sinks.Empty<Void> started = Sinks.empty();
         private final Sinks.Empty<Void> ended = Sinks.empty();
         private final Disposable.Swap reads = Disposables.swap();
@@ -707,7 +812,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             return ended.asMono();
         }
 
-        // The cursor is open
+        // The change stream was subscribed to
         void opened() {
             started.tryEmitEmpty();
         }
@@ -786,55 +891,6 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 hasEnded = true;
             }
             ended.tryEmitEmpty();
-        }
-    }
-
-    // One opened change stream. Every command goes through the session the cursor belongs to.
-    private final class ChangeStreamCursor {
-        private final ReactiveMongoOperations operations;
-        private final AtomicLong cursorId;
-
-        private ChangeStreamCursor(ReactiveMongoOperations operations, AtomicLong cursorId) {
-            this.operations = operations;
-            this.cursorId = cursorId;
-        }
-
-        Mono<Batch> open(StartAt position, @Nullable SubscriptionFilter filter) {
-            // A position at an operation time maps to startAtOperationTime, which includes an operation at exactly
-            // the given time.
-            Document changeStream = MongoCommons.applyStartPosition(new Document(), (stage, resumeToken) -> stage.append("startAfter", resumeToken),
-                    (stage, operationTime) -> stage.append("startAtOperationTime", operationTime), position, new SubscriptionModelContext(ReactorMongoSubscriptionModel.class));
-            List<Document> pipeline = new ArrayList<>();
-            pipeline.add(new Document("$changeStream", changeStream));
-            pipeline.addAll(ApplyFilterToChangeStreamOptionsBuilder.changeStreamPipeline(timeRepresentation, filter, filterContext()));
-            return run(new Document("aggregate", eventCollection).append("pipeline", pipeline).append("cursor", new Document()), "firstBatch");
-        }
-
-        // Waits on the server for up to its default of one second when nothing new matches
-        Mono<Batch> getMore() {
-            long id = cursorId.get();
-            if (id == 0) {
-                return Mono.error(new IllegalStateException("MongoDB closed the change stream cursor on collection " + eventCollection));
-            }
-            return run(new Document("getMore", id).append("collection", eventCollection), "nextBatch");
-        }
-
-        private Mono<Batch> run(Document command, String batchField) {
-            return operations.execute(database -> Mono.from(database.runCommand(command, BsonDocument.class))
-                            .map(reply -> batch(reply, batchField, database.getCodecRegistry())))
-                    .next()
-                    .switchIfEmpty(Mono.error(() -> new IllegalStateException("MongoDB returned no reply to " + command.keySet().iterator().next() + " on collection " + eventCollection)));
-        }
-
-        private Batch batch(BsonDocument reply, String batchField, CodecRegistry codecRegistry) {
-            BsonDocument cursor = reply.getDocument("cursor");
-            cursorId.set(cursor.getNumber("id").longValue());
-            Codec<ChangeStreamDocument<Document>> codec = ChangeStreamDocument.createCodec(Document.class, codecRegistry);
-            List<ChangeStreamDocument<Document>> documents = new ArrayList<>();
-            for (BsonValue document : cursor.getArray(batchField)) {
-                documents.add(codec.decode(new BsonDocumentReader(document.asDocument()), DecoderContext.builder().build()));
-            }
-            return new Batch(documents, cursor.isDocument("postBatchResumeToken") ? cursor.getDocument("postBatchResumeToken") : null);
         }
     }
 }

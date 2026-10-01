@@ -41,6 +41,7 @@ final class CommandLog implements CommandListener {
         private final String name;
         private final BsonDocument command;
         private volatile BsonDocument reply;
+        private volatile Throwable failure;
 
         private Sent(String name, BsonDocument command) {
             this.name = name;
@@ -62,6 +63,11 @@ final class CommandLog implements CommandListener {
         // Null until the server has answered, and for a command that failed
         BsonDocument reply() {
             return reply;
+        }
+
+        // Null until the command has failed, and for a command that succeeded
+        Throwable failure() {
+            return failure;
         }
 
         long cursorId() {
@@ -103,7 +109,10 @@ final class CommandLog implements CommandListener {
 
     @Override
     public void commandFailed(CommandFailedEvent event) {
-        byRequestId.remove(event.getRequestId());
+        Sent command = byRequestId.remove(event.getRequestId());
+        if (command != null) {
+            command.failure = event.getThrowable();
+        }
     }
 
     /**
@@ -115,6 +124,13 @@ final class CommandLog implements CommandListener {
 
     List<Sent> named(String commandName) {
         return sent.stream().filter(command -> command.name().equals(commandName)).toList();
+    }
+
+    /**
+     * @return The commands named {@code commandName} that failed, in the order they were sent.
+     */
+    List<Sent> failed(String commandName) {
+        return sent.stream().filter(command -> command.name().equals(commandName) && command.failure() != null).toList();
     }
 
     /**

@@ -68,18 +68,21 @@ public interface QuietPositionReportingSubscriptions extends SubscriptionModelCa
     @FunctionalInterface
     interface QuietPositionListener {
         /**
-         * Called before the model reads more events for the subscription, and the model waits for the returned
-         * {@code Mono} before it reads. When that read returns no event for the subscription, the model calls the
-         * function the {@code Mono} completed with, passing the quiet position, and reads nothing more for the
-         * subscription until the {@code Mono} that function returns has completed. When the read returns an event,
-         * the model drops the function.
+         * Called before the model waits for more events for the subscription, and the model waits for the returned
+         * {@code Mono} before that. When the wait ends with no event for the subscription and the model has found a
+         * new quiet position meanwhile, the model calls the function the {@code Mono} completed with, passing the
+         * quiet position, and hands the subscription nothing more until the {@code Mono} that function returns has
+         * completed. Otherwise the model drops the function.
          * <p>
          * The model calls the action, or such a function, for one subscription at a time. After a pause, the resumed
          * subscription reads nothing until every {@code Mono} the model subscribed to for it before the pause has
          * completed, failed or been cancelled, and a pause cancels the ones still running.
          * <p>
          * An error from either {@code Mono} is handled like an error reading the subscription's events, so the
-         * model reads again from the subscription's position after its backoff.
+         * model reads again from the subscription's position after its backoff. A
+         * {@link org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException} instead ends delivery
+         * for the subscription on this node, and the subscription stays known and running until it's paused or
+         * cancelled.
          *
          * @param subscriptionId The subscription about to be read.
          * @return A {@code Mono} with a function for the quiet position, or an empty {@code Mono} when the listener
