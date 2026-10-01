@@ -37,4 +37,6 @@ nbdist/
 # private repository of its own. A checkout of a commit from before the move recreates the
 # old tracked copies here, so keep the path ignored to stop them showing as untracked.
 # Those recreated files are inert and are not the live memory.
-.context/
+.context/*
+# The policy file is the one tracked file, because a policy only counts when it is tracked
+!.context/orchestrator-policy.yml
