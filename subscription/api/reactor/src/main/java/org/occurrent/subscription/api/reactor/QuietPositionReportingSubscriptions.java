@@ -78,11 +78,10 @@ public interface QuietPositionReportingSubscriptions extends SubscriptionModelCa
          * subscription reads nothing until every {@code Mono} the model subscribed to for it before the pause has
          * completed, failed or been cancelled, and a pause cancels the ones still running.
          * <p>
-         * An error from either {@code Mono} is handled like an error reading the subscription's events, so the
-         * model reads again from the subscription's position after its backoff. A
-         * {@link org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException} instead ends delivery
-         * for the subscription on this node, and the subscription stays known and running until it's paused or
-         * cancelled.
+         * An error from either {@code Mono} is handled like an error reading the subscription's events. The model
+         * reads again from the subscription's position after its backoff, and keeps doing so while the error comes
+         * back, as it keeps calling an action that fails. A
+         * {@link org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException} is handled the same way.
          *
          * @param subscriptionId The subscription about to be read.
          * @return A {@code Mono} with a function for the quiet position, or an empty {@code Mono} when the listener

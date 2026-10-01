@@ -322,8 +322,12 @@ comes after every event an earlier run's action completed for.
 **A listener gets the quiet position through the reactor `QuietPositionReportingSubscriptions`.** It mirrors the
 blocking capability, with a `Mono` in place of a blocking call. Before each look the model asks each listener for a
 function, calls it when the look finds a new quiet position, and hands the subscription nothing more until the `Mono`
-it returns has completed. A `CheckpointWriteConditionNotFulfilledException` from that `Mono` ends delivery for the
-subscription on this node, as it does in the blocking models.
+it returns has completed. An error from that `Mono`, a `CheckpointWriteConditionNotFulfilledException` included, is
+retried forever like an error from an action, by reading again from the subscription's position after the backoff
+rather than calling the function again in place. That loses no event, since the position only moves to a token a later
+look found replaced, and such a token never comes after an event whose action hasn't completed. The blocking models end
+delivery on that exception, since there the quiet save is conditional on the version of the lease and fails once a
+node with a newer lease has written. The reactor stack has no lease, so only a listener of your own can raise it.
 
 The `Flux` that `subscribe(filter, startAt)` returns reads through `ReactiveMongoTemplate.changeStream(..)` as before.
 Nothing listens for its quiet position.
