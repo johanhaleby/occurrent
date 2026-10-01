@@ -1352,8 +1352,14 @@ process reads and writes the checkpoint only after a delete that a cancel of the
 a `StartAt.dynamic(..)` only then as well, so one that reads the checkpoint itself, such as
 `ResumeStartPositions.replayThenResume(..)` or the Spring Boot starter's `BEGINNING` start with the default
 `ResumeBehavior`, also reads it only after the delete. So once the delete has succeeded, a subscribe right after the
-cancel no longer resumes from the cancelled subscription's position. A subscribe that was still reading its start
-position when the cancel came reads it again after the delete, and the checkpoints it writes after that are kept.
+cancel no longer resumes from the cancelled subscription's position.
+
+The cancel also ends a subscribe of the id that has not started yet. Its `StartAt.dynamic(..)` function does not run
+after the cancel, the subscribe starts nothing and writes no checkpoint, and its `waitUntilStarted()` fails with
+`CancellationException`. If you wait for `waitUntilStarted()` on a subscription that something else may cancel, handle
+that error. On a `ReactorDurableSubscriptionModel` that wraps a model that manages named subscriptions, a subscribe
+that has not returned to its caller when the cancel comes is not ended. It reads its start position again after the
+delete, and the checkpoints it writes after that are kept.
 
 None of these waits has a time limit, because a store can still apply a write after the model stopped waiting for it. A
 save could then bring the cancelled checkpoint back after the delete, and a delete could remove the checkpoint the next
@@ -1367,7 +1373,8 @@ a wrapped model that refuses the subscription, then ends `waitUntilStarted()` wi
 `subscribe(..)` throw. If you catch those around `subscribe(..)`, also handle the error from
 `waitUntilStarted()`. Until the subscription starts, `isRunning(id)` answers `true` when `ReactorDurableSubscriptionModel`
 drives the subscription itself, and `false` when it wraps a model that manages named subscriptions, which has not
-received it yet. A `shutdown()` ends such a subscribe, and its `waitUntilStarted()` then fails with
+received it yet. A cancel of the id ends such a subscribe as described above, and the cancel's `Mono` completes only
+once it has stopped. A `shutdown()` ends it too, and its `waitUntilStarted()` then fails with
 `SubscriptionModelShutdownException`. So does that of any subscription `shutdown()` ends before it starts, such as one
 registered while the model was stopped, where in 0.33.0 that wait never ended when `ReactorDurableSubscriptionModel`
 drove the subscription itself. With no delete running, the function runs, and throws, on the calling thread as

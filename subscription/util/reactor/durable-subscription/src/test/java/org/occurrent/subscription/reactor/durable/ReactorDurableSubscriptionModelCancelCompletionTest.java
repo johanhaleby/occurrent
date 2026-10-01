@@ -19,6 +19,8 @@ package org.occurrent.subscription.reactor.durable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
@@ -29,7 +31,9 @@ import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionModelShutdownException;
+import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.ResumeStartPositions;
 import org.occurrent.subscription.api.reactor.Subscription;
@@ -46,6 +50,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -70,6 +75,7 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     private static final StringBasedCheckpoint HANDLED_BY_THE_NEW_SUBSCRIPTION = new StringBasedCheckpoint("handled-by-the-new-subscription");
     private static final StringBasedCheckpoint REBUILT_UP_TO_3 = new StringBasedCheckpoint("rebuilt-up-to-3");
     private static final StringBasedCheckpoint BEGINNING = new StringBasedCheckpoint("beginning");
+    private static final StringBasedCheckpoint SLOW_TO_CANCEL = new StringBasedCheckpoint("slow-to-cancel");
     // How long the storage holds a save or a delete before the test lets it through
     private static final Duration HELD_BY_THE_STORAGE = Duration.ofMillis(500);
 
@@ -864,6 +870,250 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         assertThat(catchThrowable(() -> notStarted.waitUntilStarted().block(TIMEOUT))).as("how waiting for the start of the subscription the model shut down before it started ended")
                 .isInstanceOf(SubscriptionModelShutdownException.class);
         assertThat(catchThrowable(() -> started.waitUntilStarted().block(TIMEOUT))).as("failure of waiting for the start of the subscription that started before the shutdown").isNull();
+    }
+
+    /**
+     * The caller cancels the id without waiting, subscribes it again with a dynamic start position, which has to wait
+     * for the delete and so returns right away, and then cancels the id once more and waits for that cancel.
+     */
+    @Test
+    void a_cancel_ends_a_subscribe_that_has_returned_and_waits_for_the_delete_of_an_earlier_cancel() {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage);
+        runningFromAStoredPosition(model, storage);
+        storage.beforeDelete = Mono.delay(HELD_BY_THE_STORAGE).then();
+        model.cancelSubscription(SUBSCRIPTION_ID);
+        AtomicBoolean startPositionResolved = new AtomicBoolean();
+        Subscription waitingForTheDelete = model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(() -> {
+            startPositionResolved.set(true);
+            return StartAt.checkpoint(BEGINNING);
+        }), __ -> Mono.empty());
+
+        // When
+        model.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
+
+        // Then
+        int subscribesWhenTheCancelCompleted = wrapped.subscribedIds.size();
+        // Nothing signals a hand-over that never happens, so this looks once the storage has had as long again
+        waitFor(HELD_BY_THE_STORAGE);
+        assertThat(wrapped.subscribedIds).as("subscribes the wrapped model received after the cancel completed").hasSize(subscribesWhenTheCancelCompleted);
+        assertThat(startPositionResolved).as("start position of the cancelled subscribe resolved").isFalse();
+        assertThat(catchThrowable(() -> waitingForTheDelete.waitUntilStarted().block(TIMEOUT))).as("how waiting for the start of the cancelled subscribe ended")
+                .isInstanceOf(CancellationException.class);
+        // What the wrapped model was handed last, run the way it would deliver an event
+        wrapped.actions.get(wrapped.actions.size() - 1).apply(eventAt(REACHED_BY_THE_CANCELLED_SUBSCRIPTION)).block(TIMEOUT);
+        assertThat(storedPosition(storage)).as("position stored once the cancel completed").isNull();
+    }
+
+    /**
+     * The caller cancels a subscription and, without waiting, subscribes the id again with a dynamic start position,
+     * which has to wait for the delete and so returns right away. The caller then cancels or pauses that subscribe
+     * before the delete has ended.
+     */
+    // A shutdown is covered by a_shutdown_ends_a_subscribe_still_waiting_for_the_delete_of_its_id_when_this_model_drives_the_feed
+    @ParameterizedTest
+    @EnumSource(names = {"CANCEL", "PAUSE"})
+    void a_cancel_or_a_pause_ends_the_wait_for_a_subscribe_that_waits_for_a_delete_when_this_model_drives_the_feed(EndedBy endedBy) {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        runningFromAStoredPosition(model, storage);
+        CountDownLatch releaseDelete = new CountDownLatch(1);
+        storage.releaseHeldDelete = releaseDelete;
+        AtomicBoolean startPositionResolved = new AtomicBoolean();
+
+        try {
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            Subscription waitingForTheDelete = model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(() -> {
+                startPositionResolved.set(true);
+                return StartAt.checkpoint(BEGINNING);
+            }), __ -> Mono.empty());
+
+            // When
+            endedBy.end(model, SUBSCRIPTION_ID);
+
+            // Then
+            assertThat(catchThrowable(() -> waitingForTheDelete.waitUntilStarted().block(TIMEOUT))).as("how waiting for the start of the subscribe ended")
+                    .isInstanceOf(CancellationException.class);
+            releaseDelete.countDown();
+            // Nothing signals a start that never happens, so this looks once the storage has had as long again
+            waitFor(HELD_BY_THE_STORAGE);
+            assertThat(startPositionResolved).as("start position of the subscribe resolved").isFalse();
+            assertThat(feed.startedAt).as("subscriptions the feed started").hasSize(1);
+        } finally {
+            releaseDelete.countDown();
+        }
+    }
+
+    /**
+     * start(true) has reserved every subscription it starts and is held in the dynamic start position of the first
+     * one while the caller cancels or pauses another, or shuts the model down.
+     */
+    @ParameterizedTest
+    @EnumSource
+    void a_subscription_that_start_has_reserved_and_not_started_yet_never_resolves_its_start_position_once_ended(EndedBy endedBy) throws Exception {
+        // Given
+        RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+        CountDownLatch functionEntered = new CountDownLatch(1);
+        CountDownLatch releaseFunction = new CountDownLatch(1);
+        AtomicBoolean startPositionOfAResolved = new AtomicBoolean();
+        model.stop();
+        // Started first, since start(true) goes through the ids in the order the map holds them and "0" comes before
+        // "a" there
+        model.subscribe("0", null, StartAt.dynamic(() -> {
+            functionEntered.countDown();
+            awaitLatch(releaseFunction);
+            return StartAt.checkpoint(BEGINNING);
+        }), __ -> Mono.empty());
+        model.subscribe("a", null, StartAt.dynamic(() -> {
+            startPositionOfAResolved.set(true);
+            return StartAt.checkpoint(REACHED_BEFORE_THE_CANCEL);
+        }), __ -> Mono.empty());
+        CompletableFuture<Void> started = CompletableFuture.runAsync(() -> model.start(true));
+        assertThat(functionEntered.await(5, TimeUnit.SECONDS)).as("start(true) resolves the start position of 0").isTrue();
+
+        try {
+            // When
+            endedBy.end(model, "a");
+            releaseFunction.countDown();
+            started.get(5, TimeUnit.SECONDS);
+
+            // Then
+            assertThat(startPositionOfAResolved).as("start position of a resolved after it was ended").isFalse();
+            assertThat(feed.startedAt).as("start positions the feed was subscribed from").noneMatch(startAt -> startAt.toString().equals(REACHED_BEFORE_THE_CANCEL.asString()));
+        } finally {
+            releaseFunction.countDown();
+        }
+    }
+
+    /**
+     * stop() is held cancelling the feed of one subscription, a feed slow to cancel, before it disposes a second one
+     * whose generation it has retired. start(true) is held in the dynamic start position of a third before it
+     * disposes the second one's old generation. The caller cancels the second one in between and an event reaches its
+     * old generation afterwards.
+     */
+    @Test
+    void a_generation_that_stop_retired_and_start_replaced_writes_no_position_after_a_cancel_completed() throws Exception {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        Sinks.Many<CloudEvent> feedOfA = Sinks.many().multicast().directBestEffort();
+        CountDownLatch slowCancelEntered = new CountDownLatch(1);
+        CountDownLatch releaseSlowCancel = new CountDownLatch(1);
+        AtomicBoolean cancelSlowly = new AtomicBoolean();
+        CheckpointAwareSubscriptionModel feed = new CheckpointAwareSubscriptionModel() {
+            @Override
+            public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+                if (startAt.toString().equals(SLOW_TO_CANCEL.asString())) {
+                    return Flux.<CloudEvent>never().doOnCancel(() -> {
+                        if (cancelSlowly.get()) {
+                            slowCancelEntered.countDown();
+                            awaitLatch(releaseSlowCancel);
+                        }
+                    });
+                }
+                return startAt.toString().equals(BEGINNING.asString()) ? feedOfA.asFlux() : Flux.never();
+            }
+
+            @Override
+            public Mono<Checkpoint> globalCheckpoint() {
+                return Mono.just(new StringBasedCheckpoint(WHERE_THE_FEED_IS_NOW));
+            }
+        };
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        AtomicBoolean holdTheFunction = new AtomicBoolean();
+        CountDownLatch functionEntered = new CountDownLatch(1);
+        CountDownLatch releaseFunction = new CountDownLatch(1);
+        model.stop();
+        // Started first by start(true), and before "@" and "a" in the order stop() goes through, since the map holds
+        // "0" and "@" ahead of "a"
+        model.subscribe("0", null, StartAt.dynamic(() -> {
+            if (holdTheFunction.get()) {
+                functionEntered.countDown();
+                awaitLatch(releaseFunction);
+            }
+            return StartAt.checkpoint(REACHED_BEFORE_THE_CANCEL);
+        }), __ -> Mono.empty());
+        model.start(false);
+        model.subscribe("@", null, StartAt.checkpoint(SLOW_TO_CANCEL), __ -> Mono.empty());
+        model.subscribe("a", null, StartAt.checkpoint(BEGINNING), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
+        cancelSlowly.set(true);
+        holdTheFunction.set(true);
+        CompletableFuture<Void> stopped = CompletableFuture.runAsync(model::stop);
+        assertThat(slowCancelEntered.await(5, TimeUnit.SECONDS)).as("stop() cancels the feed of @").isTrue();
+        CompletableFuture<Void> started = CompletableFuture.runAsync(() -> model.start(true));
+        assertThat(functionEntered.await(5, TimeUnit.SECONDS)).as("start(true) resolves the start position of 0").isTrue();
+
+        try {
+            // When
+            model.cancelSubscription("a").block(TIMEOUT);
+            feedOfA.tryEmitNext(eventAt(REACHED_BY_THE_CANCELLED_SUBSCRIPTION));
+
+            // Then
+            assertThat(storage.read("a").map(Checkpoint::asString).block(TIMEOUT)).as("position of a stored after its cancel completed").isNull();
+        } finally {
+            releaseSlowCancel.countDown();
+            releaseFunction.countDown();
+            stopped.get(5, TimeUnit.SECONDS);
+            started.get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    /**
+     * Two of three subscriptions registered while the model was stopped have a dynamic start position that throws.
+     */
+    @Test
+    void start_keeps_each_subscription_whose_start_position_throws_paused_and_starts_the_rest() {
+        // Given
+        RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+        model.stop();
+        IllegalStateException firstFailure = new IllegalStateException("x cannot answer");
+        IllegalStateException secondFailure = new IllegalStateException("z cannot answer");
+        model.subscribe("x", null, StartAt.dynamic(() -> {
+            throw firstFailure;
+        }), __ -> Mono.empty());
+        model.subscribe("y", null, StartAt.checkpoint(BEGINNING), __ -> Mono.empty());
+        model.subscribe("z", null, StartAt.dynamic(() -> {
+            throw secondFailure;
+        }), __ -> Mono.empty());
+
+        // When
+        Throwable thrown = catchThrowable(() -> model.start(true));
+
+        // Then
+        assertThat(model.isRunning("y")).as("y running").isTrue();
+        assertThat(model.isPaused("x")).as("x paused").isTrue();
+        assertThat(model.isPaused("z")).as("z paused").isTrue();
+        assertThat(feed.startedAt).as("start positions the feed was subscribed from").map(StartAt::toString).containsExactly(BEGINNING.asString());
+        assertThat(thrown).as("what start(true) threw").isIn(firstFailure, secondFailure);
+        assertThat(thrown.getSuppressed()).as("what start(true) suppressed").containsExactly(thrown == firstFailure ? secondFailure : firstFailure);
+    }
+
+    private enum EndedBy {
+        CANCEL {
+            @Override
+            void end(ReactorDurableSubscriptionModel model, String subscriptionId) {
+                model.cancelSubscription(subscriptionId);
+            }
+        },
+        PAUSE {
+            @Override
+            void end(ReactorDurableSubscriptionModel model, String subscriptionId) {
+                model.pauseSubscription(subscriptionId);
+            }
+        },
+        SHUTDOWN {
+            @Override
+            void end(ReactorDurableSubscriptionModel model, String subscriptionId) {
+                model.shutdown();
+            }
+        };
+
+        abstract void end(ReactorDurableSubscriptionModel model, String subscriptionId);
     }
 
     private static void subscribePauseResumeAndCancel(ReactorDurableSubscriptionModel model, String subscriptionId) {

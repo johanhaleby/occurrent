@@ -1506,9 +1506,11 @@ or not anything waited for the `Mono`, so it does not start from the position of
 unless the delete failed.
 It resolves a dynamic `StartAt` only after the delete too, since `ResumeStartPositions.replayThenResume(..)` and the
 Spring Boot starter's `BEGINNING` start read the stored position themselves to choose between replaying and resuming.
-The cancel stops the position writes of the subscription it removes and no others. A `subscribe(..)` of the same id
-that was still reading its start position when the cancel came reads it again after the delete, and the positions it
-saves after that are kept.
+The cancel ends every subscription of the id that it finds, and stops their position writes and no others. When the
+durable model drives the subscription itself, it finds a `subscribe(..)` as soon as that call has taken the id. When it
+hands the subscription to a wrapped model that manages named subscriptions, it finds one only once the call has
+returned to its caller. A `subscribe(..)` it does not find is still reading its start position on its caller's thread.
+That call reads the position again after the delete, and the positions it saves after that are kept.
 
 None of these waits has a time limit. A store can apply a write or a delete after its caller stopped waiting for it,
 so a delete that went ahead of a slow save could still have the save put the position back, and a `subscribe(..)` that
@@ -1527,8 +1529,9 @@ one where Reactor refuses to block. It returns right away and starts the subscri
 a function that throws, or a wrapped model that refuses the subscription, ends `waitUntilStarted()` with that error
 instead of making `subscribe(..)` throw. Until then `isRunning(id)` answers `true` when the durable model drives the subscription itself, and
 `false` when it hands the subscription to a wrapped model that manages named subscriptions, which has not received it
-yet. A `shutdown()` ends such a subscribe, and `waitUntilStarted()` then fails with
-`SubscriptionModelShutdownException`, the same as for any subscription that `shutdown()` ends before it starts. In
+yet. A cancel of the id ends such a subscribe, `waitUntilStarted()` then fails with `CancellationException`, and the
+cancel's `Mono` completes only once the subscribe has stopped. A `shutdown()` ends it too, and `waitUntilStarted()` then
+fails with `SubscriptionModelShutdownException`, the same as for any subscription that `shutdown()` ends before it starts. In
 0.33.0 the wait of a subscription that `shutdown()` ended before it started never ended when the durable model drove
 the subscription itself. With no delete running, the function still runs, and throws, on
 the caller's thread. One with the subscription-model default start position, on a durable model that wraps a model
@@ -1543,10 +1546,24 @@ start it at the beginning or at an explicit position.
 
 When the durable model drives the subscription itself, no lifecycle call holds its monitor while it calls the storage,
 the wrapped model or a function the caller supplies, or while it cancels the feed of a subscription. Each call decides
-under the monitor what to start or stop, and starts or stops it after releasing the monitor. A cancel or a shutdown
-that comes in between still stops what the call goes on to start. So a storage read or a function slow to answer for
-one id, or a wrapped model slow to cancel the feed of one id, holds up no call for another id, where 0.33.0 held the
-monitor across all of them. A `subscribe(..)` with an id already in use is refused under the monitor, before its
+under the monitor what to start or stop, and starts or stops it after releasing the monitor. So a storage read or a
+function slow to answer for one id, or a wrapped model slow to cancel the feed of one id, holds up no call for another
+id, where 0.33.0 held the monitor across all of them.
+
+A lifecycle call can come in between a decision and the start it leads to, and one rule covers that on both paths. Each run of a
+subscription is a generation with a position writer of its own, and an id has at most one live generation. A cancel, a
+pause, a `stop()`, a `shutdown()`, or a later generation of the same id that takes its place, retires a generation in
+the same step that publishes the change, under the lock that every step toward starting checks. A retired generation
+begins no step toward starting. It resolves no dynamic `StartAt`, it neither subscribes to the feed nor reaches a
+wrapped model that manages named subscriptions, and it writes no position. A step already under way when it is retired
+runs to its end, and what it produced is dropped. Its `waitUntilStarted()` completes if it had started, and otherwise
+fails with `SubscriptionModelShutdownException` after a shutdown, or with `CancellationException` after a cancel, a
+pause or a `stop()`. The handle that a registration made while the model was stopped returns is the one exception. It
+keeps waiting once a resume or `start(true)` has taken it over, as in 0.33.0. On the
+hand-over path only a cancel and a shutdown retire a generation, since the wrapped model keeps the subscription across
+a pause.
+
+A `subscribe(..)` with an id already in use is refused under the monitor, before its
 function runs. `start(true)` starts the paused subscriptions one after another on the calling thread, so a slow
 function delays the ones after it in that call. One whose function throws stays paused while the others start, and
 `start(true)` throws the first error once it has tried them all.
