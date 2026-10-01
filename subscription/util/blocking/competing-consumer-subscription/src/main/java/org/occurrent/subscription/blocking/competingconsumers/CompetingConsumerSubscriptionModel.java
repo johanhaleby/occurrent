@@ -265,6 +265,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // first. An entry whose thread is done stays while a start(..) or stop() is being applied, so that one finds itself
     // applied already instead of applying itself again or handing the subscription over again.
     private final Map<String, HandedOver> handedOver = new HashMap<>();
+    // Runs on such a thread once it has failed and let go of the lock, before it waits out its backoff. Exists so a
+    // test can stand there, which nothing outside this model can.
+    private volatile Runnable beforeAHandedOverThreadBacksOff = () -> {
+    };
     // The start(..) or stop() being applied to every subscription, or 0, read and written under the monitor only
     private long lifecycleBeingApplied;
 
@@ -746,6 +750,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                         log.warn("Could not start or stop subscription {} once the call that held it had returned, so it is tried again", subscriptionId, e);
                     }
                 }
+                beforeAHandedOverThreadBacksOff.run();
                 try {
                     Thread.sleep(backoff);
                 } catch (InterruptedException e) {
@@ -758,6 +763,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 backoff = doubled.compareTo(RECONCILE_MAX_BACKOFF) > 0 ? RECONCILE_MAX_BACKOFF : doubled;
             }
         });
+    }
+
+    // Package-private for the test that stands where the field describes. Not public, and not part of this model's
+    // contract.
+    void runBeforeAHandedOverThreadBacksOff(Runnable hook) {
+        this.beforeAHandedOverThreadBacksOff = requireNonNull(hook, "hook cannot be null");
     }
 
     // Applies every start(..) and stop() handed over for the subscription, oldest first, under one hold of its lock, so

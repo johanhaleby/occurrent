@@ -99,15 +99,18 @@ class CompetingConsumerHandedOverLifecycleTest {
     void a_stop_that_applies_a_start_handed_over_before_it_pauses_the_subscription_as_by_the_user() {
         Fixture fixture = new Fixture(Initially.STOPPED);
         try {
+            Gate backingOff = fixture.handedOverThreadAboutToBackOff();
             Gate grantHoldingTheLock = fixture.grantHoldingTheLockOfS1();
-            // The thread s1 is handed to throws twice, and waits for its backoff before it takes the lock again
-            fixture.wrapped.errorsFromIsRunningOfS1OnALifecycleThread.set(2);
+            // A RuntimeException would go to the try of s1 and count as applied, so the thread s1 is handed to gets an
+            // Error, and then stands before its backoff with the lock of s1 free
+            fixture.wrapped.errorsFromIsRunningOfS1OnALifecycleThread.set(1);
             fixture.model.start(true);
             grantHoldingTheLock.open();
-            assertThat(fixture.wrapped.errorsThrown.awaitCount(2)).as("the thread s1 was handed to failed twice").isTrue();
+            assertThat(backingOff.awaitEntered()).as("the thread s1 was handed to failed and let go of the lock").isTrue();
 
             fixture.model.stop();
             fixture.model.start(false);
+            backingOff.open();
             awaitNothingLeftForS1();
 
             assertThat(fixture.state()).as("s1 once start(true), stop() and start(false) are applied")
@@ -140,25 +143,30 @@ class CompetingConsumerHandedOverLifecycleTest {
     }
 
     // A failure of a start(..) handed over is tried again by the thread it was handed to, also when a later start(..)
-    // finds the lock free first
+    // finds the lock free first and fails to apply it
     @Test
     void a_start_handed_over_for_a_subscription_that_does_not_compete_is_tried_until_it_is_applied() {
         Fixture fixture = new Fixture(Initially.STOPPED);
         try {
             fixture.model.subscribe(NODE, "n1", null, StartAt.dynamic(__ -> null), __ -> {
             });
+            Gate backingOff = fixture.handedOverThreadAboutToBackOff();
             Gate pauseHoldingTheLock = new Gate();
             fixture.wrapped.nextIsPausedOfN1OnTheTestThread.set(pauseHoldingTheLock);
             CompletableFuture<Void> pause = runOnTheTestThread(() -> fixture.model.pauseSubscription("n1"));
             assertThat(pauseHoldingTheLock.awaitEntered()).as("the pause of n1 holds its lock").isTrue();
-            // Fails twice on the thread n1 is handed to, which then waits for its backoff, and twice more after that
-            fixture.wrapped.failuresFromResumingN1.set(4);
+            // Fails once on the thread n1 is handed to, which then stands before its backoff with the lock of n1 free,
+            // and twice more, so the second start(true) fails to apply the first and, unless it hands both back to that
+            // thread, its own
+            fixture.wrapped.failuresFromResumingN1.set(3);
             fixture.model.start(true);
             pauseHoldingTheLock.open();
             assertThat(pause).as("the pause of n1").failsWithin(EVENTUALLY);
-            assertThat(fixture.wrapped.resumeFailuresOfN1.awaitCount(2)).as("the thread n1 was handed to failed to resume it twice").isTrue();
+            assertThat(backingOff.awaitEntered()).as("the thread n1 was handed to failed and let go of the lock").isTrue();
 
             Throwable thrownBySecondStart = catchThrowable(() -> fixture.model.start(true));
+            assertThat(fixture.wrapped.resumeFailuresOfN1.awaitCount(2)).as("the second start(true) failed to apply the first").isTrue();
+            backingOff.open();
 
             await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(fixture.wrapped.isRunning("n1")).as("n1 runs in the wrapped model").isTrue());
             assertThat(thrownBySecondStart).as("what the second start(true) threw").isNull();
@@ -318,6 +326,14 @@ class CompetingConsumerHandedOverLifecycleTest {
             if (initially == Initially.STOPPED) {
                 model.stop();
             }
+        }
+
+        // A thread a subscription is handed to waits at the gate each time it has failed and let go of the lock, before
+        // its backoff, until the test opens it
+        private Gate handedOverThreadAboutToBackOff() {
+            Gate backingOff = new Gate();
+            model.runBeforeAHandedOverThreadBacksOff(backingOff::pass);
+            return backingOff;
         }
 
         // A grant for s1 that waits inside hasLock holds the lock of s1, and then finds the lease gone, so the grant
@@ -486,7 +502,6 @@ class CompetingConsumerHandedOverLifecycleTest {
         private final AtomicReference<@Nullable Gate> nextIsRunningOfS1OnTheTestThread = new AtomicReference<>();
         private final AtomicReference<@Nullable Gate> nextIsPausedOfN1OnTheTestThread = new AtomicReference<>();
         private final AtomicInteger errorsFromIsRunningOfS1OnALifecycleThread = new AtomicInteger();
-        private final Counter errorsThrown = new Counter();
         private final AtomicInteger failuresFromResumingN1 = new AtomicInteger();
         private final Counter resumeFailuresOfN1 = new Counter();
         private final Set<String> runningIds = new HashSet<>();
@@ -538,7 +553,6 @@ class CompetingConsumerHandedOverLifecycleTest {
                 String thread = Thread.currentThread().getName();
                 if (thread.equals(LIFECYCLE_THREAD_OF_S1)) {
                     if (errorsFromIsRunningOfS1OnALifecycleThread.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
-                        errorsThrown.increment();
                         throw new AssertionError("isRunning of s1 failed on " + thread);
                     }
                     passIfSet(nextIsRunningOfS1OnAHandedOverThread);
