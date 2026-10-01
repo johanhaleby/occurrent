@@ -26,6 +26,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.DcbStartAt;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionModelShutdownException;
@@ -725,24 +726,152 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
 
         try {
             model.cancelSubscription(SUBSCRIPTION_ID);
-            model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(__ -> {
+            Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(__ -> {
                 startPositionResolved.set(true);
                 return StartAt.checkpoint(BEGINNING);
             }), __ -> Mono.empty());
 
             // When
             model.shutdown();
+
+            // Then
+            assertThat(catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT))).as("how waiting for the start of the subscribe that waited for the delete ended once the model shut down")
+                    .isInstanceOf(SubscriptionModelShutdownException.class);
             releaseDelete.countDown();
             storage.heldDeleteApplied.get(5, TimeUnit.SECONDS);
             // Nothing signals a start that never happens, so this looks once the storage has had as long again
             waitFor(HELD_BY_THE_STORAGE);
-
-            // Then
             assertThat(startPositionResolved).as("start position of the subscribe that waited for the delete resolved after the shutdown").isFalse();
             assertThat(feed.startedAt).as("subscriptions the feed started").hasSize(1);
         } finally {
             releaseDelete.countDown();
         }
+    }
+
+    /**
+     * The storage is slow to answer the read of where one subscription starts, and answers it on the thread that
+     * subscribes, while the caller subscribes, pauses, resumes and cancels another id.
+     */
+    @Test
+    void a_slow_start_position_read_of_one_id_does_not_hold_up_the_calls_for_another_when_this_model_drives_the_feed() throws Exception {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW), storage);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        storage.releaseReadOfA = releaseRead;
+        CompletableFuture<Subscription> subscribedA = CompletableFuture.supplyAsync(() -> model.subscribe("a", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()));
+        assertThat(storage.readOfAEntered.await(5, TimeUnit.SECONDS)).as("the storage is reading where a starts").isTrue();
+
+        try {
+            // When
+            CompletableFuture<Void> callsForB = CompletableFuture.runAsync(() -> subscribePauseResumeAndCancel(model, "b"));
+
+            // Then
+            assertThat(catchThrowable(() -> callsForB.get(5, TimeUnit.SECONDS))).as("failure of the calls for b while the storage reads where a starts").isNull();
+        } finally {
+            releaseRead.countDown();
+            subscribedA.get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    /**
+     * The dynamic start position of one subscription is slow to answer while the caller subscribes, pauses, resumes
+     * and cancels another id, and subscribes the first id again.
+     */
+    @Test
+    void a_dynamic_start_position_of_one_id_slow_to_answer_does_not_hold_up_the_calls_for_another_when_this_model_drives_the_feed() throws Exception {
+        // Given
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW), new InMemoryCheckpointStorage());
+        CountDownLatch functionEntered = new CountDownLatch(1);
+        CountDownLatch releaseFunction = new CountDownLatch(1);
+        CompletableFuture<Subscription> subscribedA = CompletableFuture.supplyAsync(() -> model.subscribe("a", null, StartAt.dynamic(() -> {
+            functionEntered.countDown();
+            awaitLatch(releaseFunction);
+            return StartAt.checkpoint(BEGINNING);
+        }), __ -> Mono.empty()));
+        assertThat(functionEntered.await(5, TimeUnit.SECONDS)).as("the start position of a is being resolved").isTrue();
+        AtomicBoolean duplicateResolved = new AtomicBoolean();
+
+        try {
+            // When
+            CompletableFuture<Void> callsForB = CompletableFuture.runAsync(() -> subscribePauseResumeAndCancel(model, "b"));
+            CompletableFuture<Subscription> duplicate = CompletableFuture.supplyAsync(() -> model.subscribe("a", null, StartAt.dynamic(() -> {
+                duplicateResolved.set(true);
+                return StartAt.checkpoint(BEGINNING);
+            }), __ -> Mono.empty()));
+
+            // Then
+            assertThat(catchThrowable(() -> callsForB.get(5, TimeUnit.SECONDS))).as("failure of the calls for b while the start position of a is resolved").isNull();
+            assertThat(catchThrowable(() -> duplicate.get(5, TimeUnit.SECONDS))).as("failure of the second subscribe of a").hasCauseInstanceOf(DuplicateSubscriptionIdException.class);
+            assertThat(duplicateResolved).as("start position of the second subscribe of a resolved").isFalse();
+        } finally {
+            releaseFunction.countDown();
+            subscribedA.get(5, TimeUnit.SECONDS).waitUntilStarted().block(TIMEOUT);
+        }
+    }
+
+    /**
+     * The wrapped model is slow to cancel the feed of one subscription that the caller pauses, while the caller
+     * subscribes, pauses, resumes and cancels another id.
+     */
+    @Test
+    void a_pause_of_one_id_the_wrapped_model_is_slow_to_cancel_does_not_hold_up_the_calls_for_another_when_this_model_drives_the_feed() throws Exception {
+        // Given
+        RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+        CountDownLatch cancelEntered = new CountDownLatch(1);
+        CountDownLatch releaseCancel = new CountDownLatch(1);
+        AtomicBoolean firstCancel = new AtomicBoolean(true);
+        feed.events = Flux.<CloudEvent>never().doOnCancel(() -> {
+            if (firstCancel.getAndSet(false)) {
+                cancelEntered.countDown();
+                awaitLatch(releaseCancel);
+            }
+        });
+        model.subscribe("a", null, StartAt.checkpoint(BEGINNING), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
+        CompletableFuture<Void> pausedA = CompletableFuture.runAsync(() -> model.pauseSubscription("a"));
+        assertThat(cancelEntered.await(5, TimeUnit.SECONDS)).as("the wrapped model is cancelling the feed of a").isTrue();
+
+        try {
+            // When
+            CompletableFuture<Void> callsForB = CompletableFuture.runAsync(() -> subscribePauseResumeAndCancel(model, "b"));
+
+            // Then
+            assertThat(catchThrowable(() -> callsForB.get(5, TimeUnit.SECONDS))).as("failure of the calls for b while the wrapped model cancels the feed of a").isNull();
+        } finally {
+            releaseCancel.countDown();
+            pausedA.get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    /**
+     * A subscription registered while this model is stopped has not started when the model shuts down, and one
+     * registered while it ran had.
+     */
+    @Test
+    void a_shutdown_ends_the_wait_for_a_subscription_that_has_not_started_when_this_model_drives_the_feed() {
+        // Given
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW), new InMemoryCheckpointStorage());
+        Subscription started = model.subscribe("started", null, StartAt.checkpoint(BEGINNING), __ -> Mono.empty());
+        started.waitUntilStarted().block(TIMEOUT);
+        model.stop();
+        Subscription notStarted = model.subscribe("not-started", null, StartAt.checkpoint(BEGINNING), __ -> Mono.empty());
+
+        // When
+        model.shutdown();
+
+        // Then
+        assertThat(catchThrowable(() -> notStarted.waitUntilStarted().block(TIMEOUT))).as("how waiting for the start of the subscription the model shut down before it started ended")
+                .isInstanceOf(SubscriptionModelShutdownException.class);
+        assertThat(catchThrowable(() -> started.waitUntilStarted().block(TIMEOUT))).as("failure of waiting for the start of the subscription that started before the shutdown").isNull();
+    }
+
+    private static void subscribePauseResumeAndCancel(ReactorDurableSubscriptionModel model, String subscriptionId) {
+        model.subscribe(subscriptionId, null, StartAt.checkpoint(BEGINNING), __ -> Mono.empty());
+        model.pauseSubscription(subscriptionId);
+        model.resumeSubscription(subscriptionId);
+        model.subscriptionIds();
+        model.cancelSubscription(subscriptionId).block(TIMEOUT);
     }
 
     private static StartAt replayThenResume(CheckpointStorage storage) {
@@ -906,6 +1035,9 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         private volatile boolean holdNextRead = false;
         private final CountDownLatch heldReadEntered = new CountDownLatch(1);
         private final CountDownLatch releaseHeldRead = new CountDownLatch(1);
+        // Set, a read of the id a waits for it on the thread that reads, before the read is even handed back
+        private volatile @Nullable CountDownLatch releaseReadOfA;
+        private final CountDownLatch readOfAEntered = new CountDownLatch(1);
 
         private PositionStorage() {
             this(new InMemoryCheckpointStorage());
@@ -917,6 +1049,11 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
 
         @Override
         public Mono<Checkpoint> read(String subscriptionId) {
+            CountDownLatch releaseRead = releaseReadOfA;
+            if (releaseRead != null && subscriptionId.equals("a")) {
+                readOfAEntered.countDown();
+                awaitLatch(releaseRead);
+            }
             if (!holdNextRead) {
                 return backing.read(subscriptionId);
             }

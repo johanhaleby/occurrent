@@ -1367,11 +1367,16 @@ a wrapped model that refuses the subscription, then ends `waitUntilStarted()` wi
 `subscribe(..)` throw. If you catch those around `subscribe(..)`, also handle the error from
 `waitUntilStarted()`. Until the subscription starts, `isRunning(id)` answers `true` when `ReactorDurableSubscriptionModel`
 drives the subscription itself, and `false` when it wraps a model that manages named subscriptions, which has not
-received it yet. A `shutdown()` ends such a subscribe. With no delete running, the function runs, and throws, on the
-calling thread as before. A subscribe with the subscription-model default start position on a
+received it yet. A `shutdown()` ends such a subscribe, and its `waitUntilStarted()` then fails with
+`SubscriptionModelShutdownException`. So does that of any subscription `shutdown()` ends before it starts, such as one
+registered while the model was stopped, where in 0.33.0 that wait never ended when `ReactorDurableSubscriptionModel`
+drove the subscription itself. With no delete running, the function runs, and throws, on the calling thread as
+before. A subscribe with the subscription-model default start position on a
 `ReactorDurableSubscriptionModel` that wraps a model that manages named subscriptions still reads the checkpoint on
 the calling thread, as it did in 0.33.0, and so waits there until the delete has ended or the model shuts down, which
-makes it throw `SubscriptionModelShutdownException`.
+makes it throw `SubscriptionModelShutdownException`. On a thread where Reactor refuses to block, Reactor refuses that
+read and `subscribe(..)` throws, with or without a delete, as in 0.33.0. Starting the subscription after a read that
+ends later would skip the events written in between, so subscribe from a thread that may block.
 
 A reactor catch-up model cancelled before its replay handed the subscription over to the wrapped model now passes the
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has. A wrapped model

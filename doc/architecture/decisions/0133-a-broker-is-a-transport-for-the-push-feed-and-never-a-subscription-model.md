@@ -1527,13 +1527,29 @@ one where Reactor refuses to block. It returns right away and starts the subscri
 a function that throws, or a wrapped model that refuses the subscription, ends `waitUntilStarted()` with that error
 instead of making `subscribe(..)` throw. Until then `isRunning(id)` answers `true` when the durable model drives the subscription itself, and
 `false` when it hands the subscription to a wrapped model that manages named subscriptions, which has not received it
-yet. A `shutdown()` ends such a subscribe. With a wrapped model that manages named subscriptions `waitUntilStarted()`
-then fails with `SubscriptionModelShutdownException`, and without one it never completes, the same as for any
-subscription that `shutdown()` ends before it starts. With no delete running, the function still runs, and throws, on
+yet. A `shutdown()` ends such a subscribe, and `waitUntilStarted()` then fails with
+`SubscriptionModelShutdownException`, the same as for any subscription that `shutdown()` ends before it starts. In
+0.33.0 the wait of a subscription that `shutdown()` ended before it started never ended when the durable model drove
+the subscription itself. With no delete running, the function still runs, and throws, on
 the caller's thread. One with the subscription-model default start position, on a durable model that wraps a model
 that manages named subscriptions, reads the stored position on the caller's thread and waits there for the delete,
 where 0.33.0 blocked that thread on the same read. A `shutdown()` ends that wait too, and the `subscribe(..)` throws
-`SubscriptionModelShutdownException`.
+`SubscriptionModelShutdownException`. On a thread where Reactor refuses to block, Reactor refuses that read and the
+`subscribe(..)` throws, with or without a delete, as in 0.33.0. That refusal stays. A read that ends after
+`subscribe(..)` returns would start the subscription from a position later than the return, so it would skip the
+events the caller writes in between. The Spring Boot reactor autoconfigure depends on the refusal to fail a bean built
+late on such a thread with a `DEFAULT` start, with a message saying to build it on a thread that may block or to
+start it at the beginning or at an explicit position.
+
+When the durable model drives the subscription itself, no lifecycle call holds its monitor while it calls the storage,
+the wrapped model or a function the caller supplies, or while it cancels the feed of a subscription. Each call decides
+under the monitor what to start or stop, and starts or stops it after releasing the monitor. A cancel or a shutdown
+that comes in between still stops what the call goes on to start. So a storage read or a function slow to answer for
+one id, or a wrapped model slow to cancel the feed of one id, holds up no call for another id, where 0.33.0 held the
+monitor across all of them. A `subscribe(..)` with an id already in use is refused under the monitor, before its
+function runs. `start(true)` starts the paused subscriptions one after another on the calling thread, so a slow
+function delays the ones after it in that call. One whose function throws stays paused while the others start, and
+`start(true)` throws the first error once it has tried them all.
 
 A reactor catch-up model that is cancelled before its replay handed the id over to the wrapped model now passes the
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has, since the wrapped
