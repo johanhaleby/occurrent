@@ -260,45 +260,69 @@ doubles the change streams, and the token of the second one says nothing about w
 
 ### `ReactorMongoSubscriptionModel`
 
-**`ReactorMongoSubscriptionModel` reads its change streams with the `aggregate` and `getMore` commands instead of
-`ReactiveMongoTemplate.changeStream(..)`.** The reactive driver hands over the documents of a change stream and
-nothing for an empty batch, as `MessageListenerContainer` did. The reply to each command has a
-`postBatchResumeToken`, and a reply with no document moves the subscription's position to it. That holds for a named
-subscription and for the `Flux` of `subscribe(filter, startAt)`.
+**A subscription with an id reads its change stream through the driver's change stream cursor, one batch at a time,
+and takes the resume token from the driver's own cursor.** `ChangeStreamPublisher` has no method that returns the
+`postBatchResumeToken`, but the cursor behind it has one. The model opens the change stream with
+`BatchCursorPublisher.batchCursor(int)`, the method the driver itself calls when something subscribes to the
+publisher, and reads the driver's `AsyncAggregateResponseBatchCursor` from the private field `wrapped` of the
+`BatchCursor` it gets back. It only reads that field. Every batch, and the close, go through the public
+`BatchCursor.next()` and `BatchCursor.close()`. So the commands MongoDB gets, the server each one goes to and the
+driver's own resume after a failover or a network error are the same as with `ReactiveMongoTemplate.changeStream(..)`.
 
-**Each opening of a change stream gets its own MongoDB session, and every command for that cursor goes through it.**
-MongoDB refuses a `getMore` on another session than the `aggregate` that opened the cursor, with error 50738. Without
-a session of its own, a command picks an implicit session from the driver's pool, and with 20 other queries running on
-the same client, all 20 of the `getMore` commands I sent got another session and were refused. With the session held
-for the cursor, all 20 went through. When the reads end the model sends `killCursors` on that session and closes it.
+**The model asks for the next batch only once the action's `Mono` has completed for every event of the batch before
+it, and looks at the token once a second while it waits.** Within one call to `next()` the driver sends another
+`getMore` only after a reply with no document, and the reply that ends the call comes last. So a token that a later
+look during the same call finds replaced came with a reply that had no document, and the model moves the
+subscription's position to it. The driver decodes a token object of its own from every reply, which lets a look tell
+two replies apart even when MongoDB sends the same token twice. The model never moves to the token it finds at the
+latest look, because the driver stores a reply before it hands over that reply's documents, so that token can belong
+to events the action hasn't had yet.
 
-**The model asks MongoDB for the next batch of a named subscription only once the action's `Mono` has completed for
-every event of the batch before it.** The position then moves past an event only after its action completed, and a
-quiet position comes after every event the action got.
+The driver writes the reply to a plain field, and the model reads it from another thread without synchronization. The
+Java memory model promises that a later read sees a write at least as new as an earlier read did only for a volatile
+or an opaque read. I rely on HotSpot and the hardware keeping that order for a single field, and no test here proves
+it.
 
-**The reads of a named subscription from a subscribe, a resume or a start until a pause, a cancel or a shutdown are
-one run, and a new run for the same id reads nothing until the previous run has ended.** A run has ended once it is
-closed and the work it started between two reads, an action's `Mono` or a listener's, has completed or been cancelled.
-Closing a run cancels that work. The position moves only while the run is open or that work is under way. So the
-`Mono` of a paused run never runs next to the resumed run's, and the resumed run opens at a position that comes after
-every event the paused run's action completed for.
+**At construction the model checks that the field exists, that it can be read, and that both methods exist, and for
+every cursor it checks that the field holds an `AsyncAggregateResponseBatchCursor`.** When a check fails, the model
+logs one warning with the reason and reads through `ReactiveMongoTemplate.changeStream(..)` as before. The events
+delivered are the same either way, and only the position of a quiet subscription stays at its last event. A test in
+the build fails when the route is off on the driver version the build uses.
+
+**The field can be read when the application runs on the module path too.** The 5.8.0 jars of the driver have no
+`module-info`, only an `Automatic-Module-Name`, so they are automatic modules, and an automatic module opens every
+package. I checked it with a named module on the module path on Temurin 21.0.12.1, where both
+`MethodHandles.privateLookupIn(..)` and `setAccessible(true)` work on `BatchCursor.wrapped`. A driver version with a
+`module-info` that doesn't open `com.mongodb.reactivestreams.client.internal` makes the check fail, and the model
+then logs the warning.
+
+**The reads of a subscription with an id from a subscribe, a resume or a start until a pause, a cancel or a shutdown
+are one run, and a new run for the same id reads nothing until every earlier run for that id has ended.** A run has
+ended once it is closed and the work it started between two reads, an action's `Mono` or a listener's, has completed
+or been cancelled. Closing a run cancels that work. The position moves only while the run is open or that work is
+under way. So the `Mono` of a paused run never runs next to a later run's, and the later run opens at a position that
+comes after every event an earlier run's action completed for.
 
 **A listener gets the quiet position through the reactor `QuietPositionReportingSubscriptions`.** It mirrors the
-blocking capability, with a `Mono` in place of a blocking call. Before each read the model asks each listener for a
-function, calls it with the quiet position when the read returns no document, and reads nothing more until the
-`Mono` it returns has completed.
+blocking capability, with a `Mono` in place of a blocking call. Before each look the model asks each listener for a
+function, calls it when the look finds a new quiet position, and hands the subscription nothing more until the `Mono`
+it returns has completed. A `CheckpointWriteConditionNotFulfilledException` from that `Mono` ends delivery for the
+subscription on this node, as it does in the blocking models.
 
-Every error while reading restarts the change stream with the model's backoff. The reactive driver resumed after some
-network errors on its own before, and a cursor the model reads with commands has no such resume.
+The `Flux` that `subscribe(filter, startAt)` returns reads through `ReactiveMongoTemplate.changeStream(..)` as before.
+Nothing listens for its quiet position.
 
 ### What I did not choose for `ReactorMongoSubscriptionModel`
 
-Sending each command through `ReactiveMongoTemplate.executeCommand(..)` without a session would have been the
-smallest change. A `getMore` then goes out on whatever implicit session the pool hands over, which under load is not
-the one the cursor was opened on, and MongoDB refuses it.
+Sending the `aggregate` and `getMore` commands from the model on a cursor of its own fails on a sharded cluster
+behind several `mongos` routers. A `getMore` has to reach the `mongos` that opened the cursor, and the model's
+commands went to whichever one the driver picked. Against two `mongos` over 20 seconds, that model sent 8 `aggregate`
+commands, and 8 of its 21 `getMore` commands failed with `CursorNotFound`. The driver's change stream on the same
+cluster sent 1 `aggregate` and 20 `getMore` commands, and none failed. Reading its own cursor also gave up the
+driver's resume after a failover.
 
-Reading the resume token from the reactive driver's change stream is not possible, since `ChangeStreamPublisher` has
-no method that returns it.
+Moving the position to the token found at the latest look, without waiting to see it replaced, can move past an event
+the action hasn't had. The driver stores the reply of a `getMore` before it hands over the documents in it.
 
 ## Consequences
 
@@ -350,7 +374,16 @@ evaluating the supplier, and the supplier uses the recorded present when it answ
 A subscription model of your own that a `DurableSubscriptionModel` wraps gets no quiet position saved unless it
 implements `QuietPositionReportingSubscriptions`.
 
-`ReactorMongoSubscriptionModel` reads its change streams from the primary whatever the read preference of the
-`MongoClient`, since a `getMore` has to reach the server that holds the cursor. Its `waitUntilStarted()` completes
-once MongoDB has opened the change stream. A test that stubs `changeStream(..)` on a mocked `ReactiveMongoOperations`
-no longer reaches the model.
+A subscription with an id on `ReactorMongoSubscriptionModel` handles one batch at a time, so each batch costs a round
+trip to MongoDB on top of the time its actions take. `ReactiveMongoTemplate.changeStream(..)` fetched the next batch
+while the action ran.
+
+`ReactorMongoSubscriptionModel` reads a private field of the driver, which a driver release can remove. The model
+then logs a warning, and a quiet subscription keeps the position of its last event, which the oplog can drop. The test
+of the route fails the build on such a driver version, but an application that runs a newer driver than the build
+gets only the warning.
+
+While a subscription with an id waits for a batch, the model looks at the token once a second.
+
+A test that stubs `changeStream(..)` on a mocked `ReactiveMongoOperations` no longer reaches a subscription with an id
+on `ReactorMongoSubscriptionModel`, since the model opens its change stream from `getCollection(..)`.
