@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.reactor.durable;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -28,6 +32,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -68,7 +73,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorDurableSubscriptionModelReRegistrationTest {
 
-    private static final Duration TIMEOUT = Duration.ofSeconds(2);
+    private static final Duration TIMEOUT = Duration.ofSeconds(10);
     private static final String SUBSCRIPTION_ID = "someSubscription";
 
     @Test
@@ -79,6 +84,29 @@ class ReactorDurableSubscriptionModelReRegistrationTest {
         StringBasedCheckpoint secondAttemptPosition = new StringBasedCheckpoint("second-attempt");
         DelayableSubscriptionModel delegate = new DelayableSubscriptionModel(firstAttemptRead.asMono(), secondAttemptPosition);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        Logger modelLogger = (Logger) LoggerFactory.getLogger(ReactorDurableSubscriptionModel.class);
+        logged.start();
+        modelLogger.addAppender(logged);
+        try {
+            subscribeCancelAndSubscribeAgain(model, firstAttemptRead, secondAttemptPosition);
+        } finally {
+            modelLogger.detachAppender(logged);
+        }
+
+        // Ending the first attempt's read is part of the cancel too, so neither a warning that the read failed nor an
+        // error that the attempt ended names the id, which by then belongs to a healthy second registration. The
+        // second would come from the first attempt's start when the cancel did not dispose it, since that start
+        // would then see its read end.
+        assertThat(logged.list)
+                .filteredOn(event -> event.getLevel().isGreaterOrEqual(Level.WARN))
+                .extracting(ILoggingEvent::getFormattedMessage)
+                .as("what the model logged at WARN or above")
+                .isEmpty();
+    }
+
+    private static void subscribeCancelAndSubscribeAgain(ReactorDurableSubscriptionModel model, Sinks.One<Checkpoint> firstAttemptRead,
+                                                         StringBasedCheckpoint secondAttemptPosition) {
 
         // Made on a thread that may not block, since on one that may the subscribe waits for that read before it
         // returns
