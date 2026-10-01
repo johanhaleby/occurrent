@@ -70,7 +70,7 @@ Finally, `SpringMongoSubscriptionModel` no longer skips an event whose action ke
 whose history was lost when it is told not to restart it, and no longer builds on Spring Data's
 `MessageListenerContainer`, which removes the `protected` constructor of `SpringMongoSubscription`. A
 `DurableSubscriptionModel` over a MongoDB model also writes a checkpoint once a minute for a subscription that receives
-no events. Read
+no events. `ReactorMongoSubscriptionModel` reads its change streams itself as well, and always from the primary. Read
 [section 19](#19-springmongosubscriptionmodel-reads-its-own-cursor-and-a-quiet-durable-subscription-saves-its-position).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
@@ -1405,6 +1405,23 @@ Change the interval with `saveQuietPositionEvery(Duration)` on `DurableSubscript
 below the oplog window. `neverSaveQuietPosition()` turns the save off, and the stored checkpoint of a subscription
 that matches nothing for longer than the oplog window is then a position MongoDB can no longer start from. The Spring
 Boot starter has no property for the interval, so define your own `SubscriptionModel` bean to change it there.
+
+### `ReactorMongoSubscriptionModel` reads its own cursor too
+
+`ReactorMongoSubscriptionModel` no longer calls `ReactiveMongoTemplate.changeStream(..)`. It sends the `aggregate` and
+`getMore` commands itself, on a MongoDB session it opens for each change stream, so that it can move the position of a
+subscription that matches nothing. Most of it needs nothing from you.
+
+The change stream is now always read from the primary, also when your `MongoClient` is set up to read from
+secondaries. A `getMore` has to reach the server that holds the cursor, and a read preference that picks among several
+servers can send it to another one.
+
+`waitUntilStarted()` now completes once MongoDB has opened the change stream, so it can take a round trip longer than
+in 0.33.0.
+
+A test that makes the model fail by stubbing `changeStream(..)` on a mocked `ReactiveMongoOperations` no longer
+reaches the model. Use MongoDB's `failCommand` fail point on the `aggregate` or `getMore` command instead, which needs
+the server started with `--setParameter enableTestCommands=1`.
 
 There is no recipe for these changes. The removed constructor has no replacement to rewrite to, and the rest is runtime
 behavior that a rewrite of the source cannot see.

@@ -7,7 +7,9 @@ Date: 2026-09-30
 Accepted. Resolves [#1168](https://github.com/johanhaleby/occurrent/issues/1168). Applies to
 `NativeMongoSubscriptionModel`, `SpringMongoSubscriptionModel` and `DurableSubscriptionModel`. Changes one row of
 [ADR 141](0141-a-stopped-subscription-model-holds-a-new-subscription-paused-until-it-is-started.md), which that ADR
-now shows. `ReactorMongoSubscriptionModel` is [#1169](https://github.com/johanhaleby/occurrent/issues/1169).
+now shows. `ReactorMongoSubscriptionModel` does the same through
+[#1169](https://github.com/johanhaleby/occurrent/issues/1169), and `ReactorDurableSubscriptionModel` doesn't save its
+quiet position yet.
 
 ## Context
 
@@ -256,6 +258,48 @@ position saved until its next event.
 Keeping `MessageListenerContainer` and opening a second change stream per subscription only for its resume token
 doubles the change streams, and the token of the second one says nothing about what the first has delivered.
 
+### `ReactorMongoSubscriptionModel`
+
+**`ReactorMongoSubscriptionModel` reads its change streams with the `aggregate` and `getMore` commands instead of
+`ReactiveMongoTemplate.changeStream(..)`.** The reactive driver hands over the documents of a change stream and
+nothing for an empty batch, as `MessageListenerContainer` did. The reply to each command has a
+`postBatchResumeToken`, and a reply with no document moves the subscription's position to it. That holds for a named
+subscription and for the `Flux` of `subscribe(filter, startAt)`.
+
+**Each opening of a change stream gets its own MongoDB session, and every command for that cursor goes through it.**
+MongoDB refuses a `getMore` on another session than the `aggregate` that opened the cursor, with error 50738. Without
+a session of its own, a command picks an implicit session from the driver's pool, and with 20 other queries running on
+the same client, all 20 of the `getMore` commands I sent got another session and were refused. With the session held
+for the cursor, all 20 went through. When the reads end the model sends `killCursors` on that session and closes it.
+
+**The model asks MongoDB for the next batch of a named subscription only once the action's `Mono` has completed for
+every event of the batch before it.** The position then moves past an event only after its action completed, and a
+quiet position comes after every event the action got.
+
+**The reads of a named subscription from a subscribe, a resume or a start until a pause, a cancel or a shutdown are
+one run, and a new run for the same id reads nothing until the previous run has ended.** A run has ended once it is
+closed and the work it started between two reads, an action's `Mono` or a listener's, has completed or been cancelled.
+Closing a run cancels that work. The position moves only while the run is open or that work is under way. So the
+`Mono` of a paused run never runs next to the resumed run's, and the resumed run opens at a position that comes after
+every event the paused run's action completed for.
+
+**A listener gets the quiet position through the reactor `QuietPositionReportingSubscriptions`.** It mirrors the
+blocking capability, with a `Mono` in place of a blocking call. Before each read the model asks each listener for a
+function, calls it with the quiet position when the read returns no document, and reads nothing more until the
+`Mono` it returns has completed.
+
+Every error while reading restarts the change stream with the model's backoff. The reactive driver resumed after some
+network errors on its own before, and a cursor the model reads with commands has no such resume.
+
+### What I did not choose for `ReactorMongoSubscriptionModel`
+
+Sending each command through `ReactiveMongoTemplate.executeCommand(..)` without a session would have been the
+smallest change. A `getMore` then goes out on whatever implicit session the pool hands over, which under load is not
+the one the cursor was opened on, and MongoDB refuses it.
+
+Reading the resume token from the reactive driver's change stream is not possible, since `ChangeStreamPublisher` has
+no method that returns it.
+
 ## Consequences
 
 A quiet subscription behind a `DurableSubscriptionModel` costs one checkpoint write per interval. Keep the interval
@@ -305,3 +349,8 @@ evaluating the supplier, and the supplier uses the recorded present when it answ
 
 A subscription model of your own that a `DurableSubscriptionModel` wraps gets no quiet position saved unless it
 implements `QuietPositionReportingSubscriptions`.
+
+`ReactorMongoSubscriptionModel` reads its change streams from the primary whatever the read preference of the
+`MongoClient`, since a `getMore` has to reach the server that holds the cursor. Its `waitUntilStarted()` completes
+once MongoDB has opened the change stream. A test that stubs `changeStream(..)` on a mocked `ReactiveMongoOperations`
+no longer reaches the model.
