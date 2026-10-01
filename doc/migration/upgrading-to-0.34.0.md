@@ -1499,8 +1499,11 @@ cancel waits until the store answers those writes, where 0.33.0 started it strai
 for them.
 
 A subscribe with a `StartAt.dynamic(..)` that has to wait for that delete returns right away, since the calling thread
-can be one where Reactor refuses to block, and starts the subscription once the delete has ended. A function that throws, or
-a wrapped model that refuses the subscription, then ends `waitUntilStarted()` with that error instead of making
+can be one where Reactor refuses to block, and starts the subscription once the delete has ended. When your function
+then answers `StartAt.now()`, or answers the subscription-model default and no checkpoint is stored, the subscription
+starts from the position `subscribe(..)` asked the wrapped model for before it returned, rather than from where the feed
+is once the delete has ended. A
+function that throws, or a wrapped model that refuses the subscription, then ends `waitUntilStarted()` with that error instead of making
 `subscribe(..)` throw. If you catch those around `subscribe(..)`, also handle the error from
 `waitUntilStarted()`. Until the subscription starts, `isRunning(id)` answers `true` when `ReactorDurableSubscriptionModel`
 drives the subscription itself, and `false` when it wraps a model that manages named subscriptions, which has not
@@ -1520,3 +1523,13 @@ A reactor catch-up model cancelled before its replay handed the subscription ove
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has. A wrapped model
 you wrote yourself can therefore get `cancelSubscription(..)` for an id it was never given in this process. It stops
 nothing then, and deletes what it stores for that id, as `CancellableSubscriptions` describes.
+
+### A durable subscription at `StartAt.now()` made while the model is stopped receives what was written before it starts
+
+A `ReactorDurableSubscriptionModel` subscription at `StartAt.now()`, made while the model is stopped, now starts from
+where the feed was when it was registered. In 0.33.0 it started where the feed was when `start(true)` or
+`resumeSubscription(..)` started it, so the events written in between were skipped. They are delivered now, which is
+more than the action received before. A read of that position that fails or answers nothing doesn't refuse the
+subscription, and it then starts at the present as before. This applies when the durable model drives the feed itself.
+When it wraps a model that manages named subscriptions, `stop()` stops that model, and the subscription follows that
+model's own `StartAt.now()`.

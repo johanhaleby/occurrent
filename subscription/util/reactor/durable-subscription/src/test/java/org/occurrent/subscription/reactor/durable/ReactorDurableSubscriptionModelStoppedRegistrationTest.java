@@ -19,6 +19,8 @@ package org.occurrent.subscription.reactor.durable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -33,6 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Pins where a subscription starts from when it was registered while the model was stopped. Registering reads the
@@ -348,6 +351,48 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         assertThat(delegate.globalCheckpointReads)
                 .as("the position is read once, at registration, and the outcome of that read is what decides this subscription")
                 .hasValue(1);
+    }
+
+    // The start position resolves when start(true) starts the subscription, after its subscribe returned, so starting
+    // at the present then would skip what was written while the model was stopped
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_registration_starting_at_the_present_starts_from_where_the_feed_was_at_registration(boolean dynamic) {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
+        model.stop();
+        model.subscribe(SUBSCRIPTION_ID, null, dynamic ? StartAt.dynamic(StartAt::now) : StartAt.now(), __ -> Mono.empty());
+
+        delegate.globalCheckpoint = new StringBasedCheckpoint("much-later");
+        model.start(true);
+
+        await().atMost(TIMEOUT).until(() -> delegate.startedAt.size() == 1);
+        assertThat(delegate.startedAt.getFirst()).as("start position of the subscription registered while the model was stopped").hasToString("at-registration");
+    }
+
+    // A start position of the caller's own is the way past a position source that cannot answer, which the refusal's
+    // message names, so refusing StartAt.now() as well would leave no way past. It starts at the present when it
+    // starts, where it started before it was read for at registration.
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_registration_starting_at_the_present_whose_read_could_not_answer_starts_at_the_present(boolean readFails) {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        if (readFails) {
+            delegate.failGlobalCheckpoint = true;
+        } else {
+            delegate.globalCheckpoint = null;
+        }
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
+        model.stop();
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> Mono.empty());
+
+        delegate.failGlobalCheckpoint = false;
+        delegate.globalCheckpoint = new StringBasedCheckpoint("much-later");
+        model.start(true);
+
+        await().atMost(TIMEOUT).until(() -> delegate.startedAt.size() == 1);
+        assertThat(delegate.startedAt.getFirst()).as("start position of the subscription whose read at registration could not answer").hasToString("Now");
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
     }
 
     @Test

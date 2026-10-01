@@ -86,6 +86,8 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     private static final String WHERE_THE_FEED_WAS_AT_REGISTRATION = "where-the-feed-was-at-registration";
     private static final StringBasedCheckpoint WHERE_THE_FEED_IS_ONCE_THE_ID_IS_TAKEN = new StringBasedCheckpoint("where-the-feed-is-once-the-id-is-taken");
     private static final Duration HELD_BY_THE_STORAGE = Duration.ofMillis(500);
+    private static final String WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED = "where-the-feed-was-when-the-subscribe-returned";
+    private static final String WHERE_THE_FEED_IS_ONCE_THE_DELETE_HAS_ENDED = "where-the-feed-is-once-the-delete-has-ended";
 
     @Test
     void completes_only_once_the_stored_position_is_deleted() throws Exception {
@@ -1563,6 +1565,58 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         abstract void setAside(ReactorDurableSubscriptionModel model);
 
         abstract void takeUpAgain(ReactorDurableSubscriptionModel model);
+    }
+
+    /**
+     * The subscribe waits for the delete of an earlier cancel before it runs its dynamic start position, so it returns
+     * first. The feed moves on before the delete ends, and the function then answers a start position at the present.
+     * The subscription starts from where the feed was when the subscribe returned, so it gets what was written in
+     * between.
+     */
+    @ParameterizedTest
+    @EnumSource(StartAtThePresent.class)
+    void a_dynamic_start_position_that_waited_for_a_delete_starts_at_the_present_from_where_the_feed_was_when_the_subscribe_returned(StartAtThePresent startAtThePresent) throws Exception {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED);
+        RecordingSubscriptionModel feed = startAtThePresent.handsOver ? wrapped.feed : new RecordingSubscriptionModel(WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED);
+        List<StartAt> startedAt = startAtThePresent.handsOver ? wrapped.startedAt : feed.startedAt;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(startAtThePresent.handsOver ? wrapped : feed, storage);
+        runningFromAStoredPosition(model, storage);
+        CountDownLatch releaseDelete = new CountDownLatch(1);
+        storage.releaseHeldDelete = releaseDelete;
+
+        try {
+            // When
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(() -> startAtThePresent.answer), __ -> Mono.empty());
+            feed.globalCheckpoint = new StringBasedCheckpoint(WHERE_THE_FEED_IS_ONCE_THE_DELETE_HAS_ENDED);
+            releaseDelete.countDown();
+            subscription.waitUntilStarted().block(TIMEOUT);
+
+            // Then
+            await().atMost(TIMEOUT).until(() -> startedAt.size() == 2);
+            assertThat(startedAt.get(1)).as("start position of the subscription whose start position waited for the delete").hasToString(WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED);
+        } finally {
+            releaseDelete.countDown();
+        }
+    }
+
+    // The combinations that resolve a start position at the present after the subscribe returned. Where this model
+    // drives the feed, the model default already started from the read at registration before this was fixed, so it
+    // is not one of them.
+    private enum StartAtThePresent {
+        MODEL_DEFAULT_HANDED_OVER(true, StartAt.subscriptionModelDefault()),
+        NOW_HANDED_OVER(true, StartAt.now()),
+        NOW_DRIVEN_BY_THIS_MODEL(false, StartAt.now());
+
+        final boolean handsOver;
+        final StartAt answer;
+
+        StartAtThePresent(boolean handsOver, StartAt answer) {
+            this.handsOver = handsOver;
+            this.answer = answer;
+        }
     }
 
     private enum EndedBy {
