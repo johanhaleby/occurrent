@@ -185,6 +185,8 @@ public class RetryExecution {
                         retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPrevBackoff, new ResultOfRetryAttempt.Success(), null), lastErr);
                     }
                     return result;
+                } catch (AttemptNotMade e) {
+                    throw e;
                 } catch (Throwable e) {
                     var currentBackoff = nextRetryInfo.getBackoff();
                     boolean shouldRetryAgain = !isExhausted(currentAttempt, retry.maxAttempts) && retry.retryPredicate.test(e);
@@ -218,6 +220,19 @@ public class RetryExecution {
                 }
             }
         };
+    }
+
+    /**
+     * Thrown by the function given to {@code executeWithRetry} when it does not make the attempt it was called for,
+     * for example because the subscription it would deliver to has been closed. {@code executeWithRetry} rethrows it
+     * without another attempt, and without calling the retry predicate, the error mapper or the listeners of the
+     * {@link RetryStrategy}, since the attempt did not fail. When the skipped attempt is a retry, the before-retry
+     * listener has already been called, and no after-retry listener follows.
+     */
+    public static final class AttemptNotMade extends RuntimeException {
+        public AttemptNotMade(String message) {
+            super(message, null, false, false);
+        }
     }
 
     /**

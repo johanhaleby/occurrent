@@ -387,9 +387,9 @@ public class SpringMongoCheckpointStorageTest {
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
-        cancelSubscription(subscriptionModel, subscriberId);
         // The subscription is async so we need to wait for it
         await("state not to be empty").atMost(4, SECONDS).until(not(state::isEmpty));
+        cancelSubscription(subscriptionModel, subscriberId);
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
         subscriptionModel.subscribe(subscriberId, state::add);

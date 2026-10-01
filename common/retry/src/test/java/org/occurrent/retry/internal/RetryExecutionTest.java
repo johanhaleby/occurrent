@@ -19,6 +19,8 @@ package org.occurrent.retry.internal;
 import org.junit.jupiter.api.Test;
 import org.occurrent.retry.RetryStrategy;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -200,5 +202,34 @@ class RetryExecutionTest {
             // Clear the flag we just asserted on so it doesn't leak into whatever runs next on this thread.
             Thread.interrupted();
         }
+    }
+
+    @Test
+    void an_attempt_the_function_does_not_make_ends_the_retry_without_telling_the_retry_strategy() {
+        List<String> told = new ArrayList<>();
+        AtomicInteger calls = new AtomicInteger();
+        RetryStrategy retryStrategy = RetryStrategy.fixed(1).maxAttempts(5)
+                .retryIf(e -> told.add("retryIf " + e.getMessage()))
+                .mapError(e -> {
+                    told.add("mapError " + e.getMessage());
+                    return e;
+                })
+                .onError((info, e) -> told.add("onError " + e.getMessage()))
+                .onRetryableError((info, e) -> told.add("onRetryableError " + e.getMessage()))
+                .onBeforeRetry((info, e) -> told.add("onBeforeRetry " + e.getMessage()))
+                .onAfterRetry((info, e) -> told.add("onAfterRetry " + e.getMessage()));
+        Runnable function = () -> {
+            if (calls.incrementAndGet() == 1) {
+                throw new IllegalStateException("failed");
+            }
+            throw new RetryExecution.AttemptNotMade("not made");
+        };
+
+        Runnable retrying = RetryExecution.executeWithRetry(function, __ -> true, retryStrategy, millis -> {
+        });
+
+        assertThatThrownBy(retrying::run).isInstanceOf(RetryExecution.AttemptNotMade.class).hasMessage("not made");
+        assertThat(calls).as("calls of the function").hasValue(2);
+        assertThat(told).as("what the retry strategy was told").containsExactly("retryIf failed", "onError failed", "onRetryableError failed", "onBeforeRetry failed");
     }
 }

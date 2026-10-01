@@ -20,15 +20,18 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.Mockito.mock;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -70,14 +73,14 @@ class SpringMongoSubscriptionModelConfigTest {
     }
 
     @Test
-    void use_virtual_threads_runs_executor_tasks_on_virtual_threads() throws InterruptedException {
+    void use_virtual_threads_makes_the_model_run_its_tasks_on_virtual_threads() throws InterruptedException {
         SpringMongoSubscriptionModelConfig config = withConfig("events", TimeRepresentation.DATE).useVirtualThreads();
-        ThreadPoolTaskExecutor executor = (ThreadPoolTaskExecutor) config.executor;
+        SpringMongoSubscriptionModel model = new SpringMongoSubscriptionModel(mock(MongoTemplate.class), config);
         CountDownLatch executed = new CountDownLatch(1);
         AtomicBoolean virtual = new AtomicBoolean(false);
 
         try {
-            executor.execute(() -> {
+            model.executor.execute(() -> {
                 virtual.set(Thread.currentThread().isVirtual());
                 executed.countDown();
             });
@@ -85,7 +88,16 @@ class SpringMongoSubscriptionModelConfigTest {
             assertThat(executed.await(5, TimeUnit.SECONDS)).isTrue();
             assertThat(virtual).isTrue();
         } finally {
-            executor.shutdown();
+            model.shutdown();
         }
+        assertThat(((ThreadPoolTaskExecutor) model.executor).getThreadPoolExecutor().isShutdown()).isTrue();
+    }
+
+    @Test
+    void an_executor_replaces_virtual_threads_and_virtual_threads_replace_an_executor() {
+        Executor executor = Runnable::run;
+
+        assertThat(withConfig("events", TimeRepresentation.DATE).useVirtualThreads().executor(executor).virtualThreads).isFalse();
+        assertThat(withConfig("events", TimeRepresentation.DATE).executor(executor).useVirtualThreads().executor).isNull();
     }
 }

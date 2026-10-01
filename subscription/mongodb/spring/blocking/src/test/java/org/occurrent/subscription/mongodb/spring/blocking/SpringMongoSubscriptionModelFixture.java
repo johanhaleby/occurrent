@@ -98,10 +98,9 @@ class SpringMongoSubscriptionModelFixture implements SubscriptionModelFixture {
     }
 
     /**
-     * Wider than the 10 second default (#781). This model resumes through Spring Data's
-     * {@code DefaultMessageListenerContainer}, which reopens a change-stream cursor and hands it to a task
-     * executor rather than resuming on the calling thread, so a pause/resume round trip pays for a hop through
-     * that machinery on top of the change-stream reconnect itself. On a CI runner sharing its two vCPUs with
+     * Wider than the 10 second default (#781). This model reopens a change-stream cursor on a thread of its
+     * executor rather than on the calling thread, so a pause/resume round trip pays for that hop on top of the
+     * change-stream reconnect itself. On a CI runner sharing its two vCPUs with
      * everything else in the job, that hop is occasionally slow enough to brush the 10 second default, which
      * this suite's own pause-then-redeliver assertions are the most exposed to. 12 seconds keeps the six-way
      * stop/start test's twelve chained waits under its own 150 second method timeout without raising the

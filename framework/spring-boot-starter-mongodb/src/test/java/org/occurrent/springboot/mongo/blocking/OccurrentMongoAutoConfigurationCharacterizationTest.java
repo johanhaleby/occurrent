@@ -50,7 +50,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.lang.reflect.Field;
@@ -401,8 +400,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                 )
                 .run(context -> {
                     SpringMongoSubscriptionModel springMongoSubscriptionModel = findDelegate(context.getBean(SubscriptionModel.class), SpringMongoSubscriptionModel.class);
-                    DefaultMessageListenerContainer container = getField(springMongoSubscriptionModel, "messageListenerContainer", DefaultMessageListenerContainer.class);
-                    ThreadPoolTaskExecutor executor = getField(container, "taskExecutor", ThreadPoolTaskExecutor.class);
+                    ThreadPoolTaskExecutor executor = getField(springMongoSubscriptionModel, "executor", ThreadPoolTaskExecutor.class);
                     CountDownLatch executed = new CountDownLatch(1);
                     AtomicBoolean virtual = new AtomicBoolean(false);
 

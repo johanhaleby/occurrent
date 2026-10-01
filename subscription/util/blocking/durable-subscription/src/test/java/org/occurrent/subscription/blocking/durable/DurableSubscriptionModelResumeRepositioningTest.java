@@ -52,7 +52,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * real Mongo.
  * <p>
  * {@code subscribe}, {@code cancelSubscription} and {@code resumeSubscription} for one id are mutually exclusive
- * under {@code subscriptionIdLock}, so the concurrency tests here assert that a call blocks while another for the
+ * under the lock for the id, so the concurrency tests here assert that a call blocks while another for the
  * same id is still in flight, and that it sees the correct, settled state once released, rather than asserting
  * against a specific unsynchronized interleaving.
  */
@@ -344,6 +344,46 @@ class DurableSubscriptionModelResumeRepositioningTest {
                             + "checkpoint-managed subscription for this id is not left looking opted out")
                     .isInstanceOf(StartAt.StartAtCheckpoint.class);
         } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_cancel_does_not_wait_for_a_call_for_another_id_that_hangs_in_the_checkpoint_storage() throws Exception {
+        // Given a cancel of one id whose checkpoint storage hangs while it deletes the checkpoint. The other id's hash
+        // code equals the first one's modulo 1024, so a lock picked from 1024 by hash code would be the same for both
+        CountDownLatch deleting = new CountDownLatch(1);
+        CountDownLatch releaseDelete = new CountDownLatch(1);
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public void delete(String subscriptionId) {
+                if (subscriptionId.equals("hanging")) {
+                    deleting.countDown();
+                    try {
+                        releaseDelete.await(10, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                super.delete(subscriptionId);
+            }
+        };
+        DurableSubscriptionModel model = new DurableSubscriptionModel(new RecordingSubscriptionModel(), storage);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> hanging = pool.submit(() -> model.cancelSubscription("hanging"));
+            assertThat(deleting.await(10, TimeUnit.SECONDS)).as("deleting").isTrue();
+
+            // When
+            Future<?> other = pool.submit(() -> model.cancelSubscription("other-140"));
+
+            // Then the cancel of the other id returns while the first one still hangs
+            other.get(2, TimeUnit.SECONDS);
+            assertThat(hanging).as("the cancel that hangs").isNotDone();
+            releaseDelete.countDown();
+            hanging.get(10, TimeUnit.SECONDS);
+        } finally {
+            releaseDelete.countDown();
             pool.shutdownNow();
         }
     }
