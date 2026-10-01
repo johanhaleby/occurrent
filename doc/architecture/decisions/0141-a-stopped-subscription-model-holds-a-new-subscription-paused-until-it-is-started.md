@@ -256,13 +256,26 @@ was free and released that lock. So a call for one subscription that waits for t
 through an outage holds up no other subscription, and holds up the return of `start(..)` or `stop()` for as long as it
 waits. A lease callback right after `start(..)` or `stop()` returns finds the lock free. A subscription whose lock is
 taken is handed to a thread of its own. That thread waits for the lock and applies each `start(..)` and `stop()` not
-yet applied to the subscription, oldest first, so the subscription ends where it would have with its lock free. A
-`start(true)` and then a `stop()` that both find the lock taken leave the subscription paused, the same as when both
-find it free. A resume that such a `start(..)` asks for never lets the subscription run while the model is stopped.
-Only a resume the user asks for does that. When applying a call fails, a competing subscription is tried again by the thread that tries it again after
-any failed call, and any other subscription by the handed over thread, with the same backoff, until it succeeds or the
-model is shut down. A handed over thread or a try that is still waiting for the lock when `shutdown()` runs ends
-within 100 milliseconds.
+yet applied to the subscription, oldest first, without letting go of the lock in between. The subscription then ends
+where it would have with its lock free. That covers whether it is paused, whether a later `start(false)` keeps it
+paused, whether the wrapped model runs it, whether this node holds its lease, and whether the wrapped model runs at
+all. A later `start(..)` or `stop()` that finds the lock free before that thread does applies those calls first, and
+then its own. A resume that such a `start(..)` asks for never lets the subscription run while the model is stopped.
+Only a resume the user asks for does that.
+
+`start(..)` and `stop()` calls are ordered by when they began. Any other call for a subscription, a grant, a try or a
+resume, is ordered by when it took the subscription's lock. So a call that holds the lock when a `stop()` begins comes
+before that `stop()`, and so does a `start(..)` that began before it. Once the `stop()` has begun, such a call runs
+nothing in the wrapped model, also when a `start(..)` after the `stop()` has begun too, and the `stop()` then pauses
+the subscription as paused by the user. That is where the subscription would be had the call run first and the
+`stop()` paused it after. Letting the call run instead would start the wrapped model after a `stop()` and a
+`start(false)` that leave it stopped with their lock free.
+
+When applying a call fails, a competing subscription is tried again by the thread that tries it again after any failed
+call, and any other subscription by the handed over thread, with the same backoff, until it succeeds or the model is
+shut down. A later `start(..)` or `stop()` that fails to apply such a call lets that thread try it again, together with
+its own call, and never counts it as applied. A handed over thread or a try that is still waiting for the lock when
+`shutdown()` runs ends within 100 milliseconds.
 
 A `start(..)` or `stop()` that begins while another one runs waits for it to return, and they run in the order they
 began. The one exception is a `start(..)` waiting behind a `stop()` that has calls already in the wrapped model to
@@ -286,8 +299,9 @@ subscription straight away. For a `DurableSubscriptionModel` over
 MongoDB cannot be reached, so the wait has no upper bound during an outage. That was already so in 0.33.0, where
 `stop()` and every lease callback held the monitor, so `stop()` waited for a grant's resume just as long, and for a
 registration retrying through the outage too. Now it waits only for calls in the wrapped model. A call that `stop()` refuses is refused at
-once. Only a call allowed while stopped, such as a resume the user asks for after `stop()` began, waits until the
-wrapped model is stopped, and then runs. `stop()` waits for those calls only while no `start(..)` is waiting behind
+once. Only a call allowed while stopped, such as a resume that takes the subscription's lock after `stop()` began,
+waits until the wrapped model is stopped, and then runs. A resume that took the lock before `stop()` began ends paused
+by the user, as in 0.33.0, where `stop()` waited for the monitor the resume held and then paused the subscription. `stop()` waits for those calls only while no `start(..)` is waiting behind
 it. Once one is, also one that was waiting before `stop()` got to those calls, `stop()` returns without stopping
 anything, since the `start(..)` then decides for every subscription. A second `stop()` waits for the first to return
 instead.
