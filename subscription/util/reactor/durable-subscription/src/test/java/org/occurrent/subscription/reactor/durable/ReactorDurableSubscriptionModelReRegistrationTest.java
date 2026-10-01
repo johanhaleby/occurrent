@@ -31,6 +31,7 @@ import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
@@ -79,7 +80,11 @@ class ReactorDurableSubscriptionModelReRegistrationTest {
         DelayableSubscriptionModel delegate = new DelayableSubscriptionModel(firstAttemptRead.asMono(), secondAttemptPosition);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
 
-        Subscription first = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        // Made on a thread that may not block, since on one that may the subscribe waits for that read before it
+        // returns
+        Subscription first = Mono.fromCallable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.<Void>empty()))
+                .subscribeOn(Schedulers.parallel())
+                .block(TIMEOUT);
         assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
 
         // Cancelling and registering again under the same id is the documented recovery from a registration that
