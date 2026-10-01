@@ -100,22 +100,22 @@ and a resume or a start makes a new run of the same subscription.
 - A pause alone leaves that `BooleanSupplier` returning `true`. Without the stored restart position, the resume would
   open at the position MongoDB no longer has and restart from the present again, skipping the events written during
   the pause.
-- `DurableSubscriptionModel` saves a quiet position only when no delivery of the subscription is under way in any
-  run and the delivery that started last, in any run, stored the checkpoint of its event. Item 4 of the rule below
-  states it in full. A delivery counts as under way from before the read of the write version until it has finished,
-  whether it stored its checkpoint, declined to or failed, and the quiet save checks this and writes under the same
-  lock that a delivery takes when it starts. So a closed run whose read of the write version outlasts a pause can't
-  let the resumed run save a quiet position past an event the predicate declined, and a quiet position that an
-  earlier run read is not saved while a later run, opened at an earlier position, delivers an event. A closed run's
-  action that never returns keeps the quiet save off for as long as it hangs.
-- The exception is a checkpoint written after a resume has come. That is after the pause has stopped waiting, or
-  while it still waits when another thread resumes the subscription then, since the pause is recorded before its
-  wait. A `DurableSubscriptionModel` action that returns that late still saves the checkpoint of its event, and a
-  quiet position whose save starts that late is still saved when no delivery is under way and the one that started
-  last stored its checkpoint. The model can't tell which run the action or the save belongs to. Every event up to
-  either position has had its action return, so a subscription that restarts from one can receive events again but
-  skips none. Closing it needs the wrapped model to give the checkpoint write for an event the same
-  `BooleanSupplier`, which is a change to the public subscribe API.
+- `DurableSubscriptionModel` saves a quiet position only when no delivery of the subscription is under way in any run
+  and the current delivery that started last stored the checkpoint of its event. Item 4 of the rule below states it in
+  full, with what makes a delivery current. A delivery counts as under way from before the read of the write version
+  until it has finished, whether it stored its checkpoint, declined to or failed, and the quiet save checks this and
+  writes under the same lock that a delivery takes when it starts. So a closed run whose read of the write version
+  outlasts a pause can't let the resumed run save a quiet position past an event the predicate declined, and a quiet
+  position that an earlier run read is not saved while a later run, opened at an earlier position, delivers an event.
+  A closed run's action that never returns keeps the quiet save off for as long as it hangs.
+- The exception is a checkpoint written after a resume has come. That is after the pause has stopped waiting, or while
+  it still waits when another thread resumes the subscription then, since the pause is recorded before its wait. A
+  `DurableSubscriptionModel` action that returns that late still saves the checkpoint of its event, and a quiet
+  position whose save starts that late is still saved when no delivery is under way and the current one that started
+  last stored its checkpoint. The model doesn't know whether a run is still open, only which read each delivery came
+  from. Every event up to either position has had its action return, so a subscription that restarts from one can
+  receive events again but skips none. Closing it needs the wrapped model to give the checkpoint write for an event
+  the same `BooleanSupplier`, which is a change to the public subscribe API.
 
 **A model tells the quiet position to a listener through the new `QuietPositionReportingSubscriptions`.** The model
 asks each listener before a read whether it wants the position, and the listener answers with a consumer or with
@@ -132,11 +132,11 @@ writes the position under a condition reads that condition when it is asked, whi
   quiet position can't be read. So a subscription that stores a checkpoint for an event at least once per interval
   gets no extra write. The default is one minute,
   `saveQuietPositionEvery(Duration)` changes it and `neverSaveQuietPosition()` turns the save off.
-- It saves nothing while the delivery that started last is of an event the persist predicate declined to store, since
-  the quiet position comes after that event. It also saves nothing while an event is being delivered in any run, so
-  an action a pause stopped waiting for keeps the save off until it returns. A predicate can decline events until a
-  batch the action keeps in memory is written, and a restart from a position after those events would lose the
-  batch.
+- It saves nothing while the current delivery that started last is of an event the persist predicate declined to
+  store, since the quiet position comes after that event. It also saves nothing while an event is being delivered in
+  any run, so an action a pause stopped waiting for keeps the save off until it returns. A predicate can decline
+  events until a batch the action keeps in memory is written, and a restart from a position after those events would
+  lose the batch.
 - Before the first event after a subscribe it saves whatever the predicate is. A read that returns nothing then comes
   after no event the subscription hasn't been given. After a restart, the events the predicate declined come after the
   stored checkpoint, so the change stream returns them before any empty read, and the first one the predicate declines
@@ -171,27 +171,58 @@ A quiet position is saved when all of these hold, and only then:
    write once the node that holds the lease now has written a checkpoint of its own, and accepts it before then.
 3. The interval has passed since the subscribe, the last checkpoint written for an event, the last quiet position
    save that went ahead, or the last failed read of the write condition for one.
-4. No delivery of the subscription is under way in any run, and the delivery that started last since the subscribe,
-   in any run, stored the checkpoint of its event, or none has started. A delivery stores it when the persist
-   predicate accepts the event, no cancel has come and the write succeeds. This must hold when the model asks before
-   the read, and again when the position is written.
+4. No delivery of the subscription is under way in any run, and the current delivery that started last since the
+   subscribe stored the checkpoint of its event, or none has started. A delivery is current unless a current delivery
+   that started before it came from a later read. A delivery stores it when the persist predicate accepts the event,
+   no cancel has come and the write succeeds. This must hold when the model asks before the read, and again when the
+   position is written.
 5. The registration the save was asked for is still current, so no cancel, and no new subscribe of the id, has come
    since.
 
-Item 4 asks about the delivery that started last rather than the one that finished last. A quiet position comes from
-an open run that delivered every event before it on its own thread. An action a pause stopped waiting for, returning
-after the resumed run has delivered later events, is for an event the resumed run delivers too before any quiet
-position it reads, so it can only repeat that event, and what it stored says nothing about the events before the
+Item 4 asks about the current delivery that started last rather than the one that finished last. A quiet position
+comes from an open run that delivered every event before it on its own thread. An action a pause stopped waiting for,
+returning after the resumed run has delivered later events, is for an event the resumed run delivers too before any
+quiet position it reads, so it can only repeat that event, and what it stored says nothing about the events before the
 quiet position. While such an action runs, its delivery is under way, so a closed run's action that never returns
 keeps the quiet save off for as long as it hangs.
 
-Item 4 has one gap. The loop checks that the run is open before it calls the action, and `DurableSubscriptionModel`
-counts the delivery as started only once its action is called. If a closed run's thread stalls in between while the
-resumed run delivers an event the predicate declines, the closed run's delivery is the one that started last, and
-when the predicate stores its checkpoint the quiet save is allowed again. A quiet position the resumed run reads next
-is then saved past the declined event, and a restart from it loses what a batching action kept in memory for that
-event. Closing it needs the model to know which run a delivery belongs to, which the `BooleanSupplier` the exception
-for closed runs needs would also give it.
+A delivery can also start late. The loop checks that the run is open before it calls the action, and
+`DurableSubscriptionModel` counts the delivery as started only once its action is called. A closed run's thread can
+stall in between, and its action is then called after the resumed run has delivered later events. If the last of those
+is one the predicate declines and the late delivery stores its checkpoint, a model that took the late delivery as the
+one that started last would allow the quiet save again, and a quiet position the resumed run reads next would be saved
+past the declined event. A restart from it loses what a batching action kept in memory for that event.
+
+So the model numbers the reads. Each time the wrapped model asks it before a read, it takes the next number and keeps
+it for the thread that asked. A delivery comes from the last read on its own thread, since a run reads and calls the
+action for what it read on the same thread. That rests on how a run is executed:
+
+- A run is one task on the executor. A restart after an error, or after lost history, retries inside that task on the
+  same thread.
+- A resume makes a new run and hands it to the executor as a new task, and a resume is only accepted for a paused,
+  so closed, run.
+- A closed run's thread that has stalled is still running its task, so an executor that runs each task on a thread
+  of its own can't hand that thread to the resumed run. A thread pool, a thread per task and virtual threads all do
+  that, and so does the `ThreadPoolTaskExecutor` the Spring model makes when none is given, with or without virtual
+  threads. The number is kept on the virtual thread, not on its carrier. The native model takes any
+  `ExecutorService`. One that runs a task on the thread that hands it over could run a resumed run on a run's thread
+  only from inside an action, whose delivery has then already started and stays under way until the nested run ends.
+
+A closed run reads the event it delivers late before the pause closes it, and the resumed run reads only after the
+resume, so every read of the resumed run has a higher number. Every delivery of the open run is therefore current, and
+a late delivery of a closed run is not current once the open run has delivered anything. A late delivery that is not
+current still counts as under way, and still stores its checkpoint, which can move the stored position back but never
+past an event whose action has not returned. It never decides whether the quiet save is allowed. Before the open run
+has delivered anything, the late delivery is current. The open run opened at the stored checkpoint, or where the
+closed run had read to, and both come before the late event, so the open run delivers that event again before any
+read that returns nothing after it, and that delivery is current.
+
+A closed run's thread can also read once more after the resume, before it sees that the run was closed, and then
+delivers nothing. A delivery of the open run that comes after such a read still came from a later read than every
+current delivery before it, so it is current.
+
+Without a quiet position interval the model is never asked before a read, so no read is numbered and every delivery
+is current. Nothing then reads whether the quiet save is allowed.
 
 A pause that comes while a quiet position is being written waits up to a second for the write, as it does for an
 action. A write that takes longer can finish after the pause has returned, and after another node has taken the lease.
@@ -212,9 +243,15 @@ is once a second with the driver's default.
 Asking MongoDB for its operation time on a timer, and saving that, needs no access to the cursor. The operation time
 can be later than what the change stream has delivered, so a subscription restarted from it can miss an event.
 
-Waiting for a quiet position's write for as long as it takes would close the gap described above. A checkpoint store
+Waiting for a quiet position's write for as long as it takes would close the window described above, for a write that
+outlasts the pause. A checkpoint store
 that hangs would then block a pause of that subscription, and a pause is what takes a subscription away from a node
 that lost its lease.
+
+Taking the last thread that read as the open run, and treating a delivery on any other thread as late, would need no
+numbers. A closed run's thread that reads once more after the resume would then make the open run's next delivery
+late, and if the delivery before that was of an event the predicate declined, a quiet subscription would get no quiet
+position saved until its next event.
 
 Keeping `MessageListenerContainer` and opening a second change stream per subscription only for its resume token
 doubles the change streams, and the token of the second one says nothing about what the first has delivered.

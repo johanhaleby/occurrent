@@ -203,14 +203,18 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     // Answers nothing until the interval has passed since the last checkpoint write, so a subscription that stores a
     // checkpoint for an event at least once per interval gets no extra write. It also answers nothing while an event
-    // is being delivered, or when the delivery that started last is of an event the persist predicate declined to
-    // store, since the quiet position would move the checkpoint past it. The save checks that again. The write
+    // is being delivered, or when the current delivery that started last is of an event the persist predicate declined
+    // to store, since the quiet position would move the checkpoint past it. The save checks that again. The read is
+    // numbered first, whatever the answer, so the next delivery on this thread is known to come from it. The write
     // condition is read here, before the wrapped model reads, so the save uses the token of the lease the read was
     // made under, like the write for an event. A source that cannot answer is asked again after the interval rather
     // than before every read
     private @Nullable Consumer<Checkpoint> quietPositionSaverFor(String subscriptionId) {
         Duration interval = config.quietPositionSaveInterval;
         CheckpointRegistration registration = registrations.get(subscriptionId);
+        if (registration != null) {
+            registration.reading();
+        }
         if (interval == null || registration == null || !registration.quietSaveAllowed() || System.nanoTime() - registration.lastWrite.get() < interval.toNanos()) {
             return null;
         }
@@ -628,27 +632,45 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // Held while a delivery starts or finishes and while a quiet position is saved, so no quiet position is saved
         // while a delivery of any run of this subscribe is under way
         private final ReentrantLock deliveryLock = new ReentrantLock();
-        // True only while no delivery is under way and the delivery that started last stored the checkpoint of its
-        // event. True before the first event, since no event can then come before the quiet position without a
+        // True only while no delivery is under way and the current delivery that started last stored the checkpoint
+        // of its event. True before the first event, since no event can then come before the quiet position without a
         // checkpoint of its own
         private volatile boolean quietSaveAllowed = true;
         private int deliveriesUnderWay;
         // Counts the deliveries of every run of this subscribe
         private long deliveries;
-        // Whether the delivery that started last stored its checkpoint, once it has finished. An action a pause stopped
-        // waiting for can still return after a resume has delivered later events, and what it stored says nothing
-        // about them
+        // Numbers the reads of every run of this subscribe. A run reads and delivers on one thread, and asks the
+        // listener before each read, so a delivery belongs to the read its thread made last
+        private final AtomicLong reads = new AtomicLong();
+        private final ThreadLocal<Long> lastReadOnThisThread = ThreadLocal.withInitial(() -> 0L);
+        // A delivery is current unless a current delivery started before it belongs to a later read. One that isn't
+        // comes from a run a pause closed after it read, and the run that resumed has read and delivered past it
+        private long readOfLatestCurrentDelivery;
+        private long latestCurrentDelivery;
+        // Whether the current delivery that started last stored its checkpoint, once it has finished. An action a
+        // pause stopped waiting for can still return, or still be called, after a resume has delivered later events,
+        // and what it stored says nothing about them
         private boolean latestStored = true;
         // Held while the checkpoint for an event is written, and by a cancel while it deletes the checkpoint
         private final ReentrantLock saveLock = new ReentrantLock();
         private boolean cancelled;
 
+        void reading() {
+            lastReadOnThisThread.set(reads.incrementAndGet());
+        }
+
         long delivering() {
+            long read = lastReadOnThisThread.get();
             deliveryLock.lock();
             try {
                 quietSaveAllowed = false;
                 deliveriesUnderWay++;
-                return ++deliveries;
+                long delivery = ++deliveries;
+                if (read >= readOfLatestCurrentDelivery) {
+                    readOfLatestCurrentDelivery = read;
+                    latestCurrentDelivery = delivery;
+                }
+                return delivery;
             } finally {
                 deliveryLock.unlock();
             }
@@ -658,7 +680,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             deliveryLock.lock();
             try {
                 deliveriesUnderWay--;
-                if (delivery == deliveries) {
+                if (delivery == latestCurrentDelivery) {
                     latestStored = stored;
                 }
                 quietSaveAllowed = deliveriesUnderWay == 0 && latestStored;

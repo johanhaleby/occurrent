@@ -35,6 +35,8 @@ import java.util.List;
 import java.util.OptionalLong;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -506,6 +508,63 @@ class DurableSubscriptionModelQuietPositionTest {
         assertThat(storage.read("id")).as("checkpoint once the closed run's action for e1 has returned").isEqualTo(QUIET);
     }
 
+    @Test
+    void a_closed_run_whose_action_is_called_after_the_resumed_run_delivered_an_event_the_predicate_declined_does_not_let_a_quiet_position_past_that_event_be_saved() throws Exception {
+        // Given a closed run that read e1 before the pause, and a resumed run that reads and delivers e1 again and then
+        // e2, which the persist predicate declines
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage,
+                new DurableSubscriptionModelConfig(declines("e2")).saveQuietPositionEvery(INTERVAL));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        });
+        ExecutorService closedRun = Executors.newSingleThreadExecutor();
+        try {
+            on(closedRun, () -> wrapped.beforeReading("id"));
+            wrapped.beforeReading("id");
+            wrapped.deliver("id", new StringBasedCheckpoint("e1"));
+            wrapped.beforeReading("id");
+            wrapped.deliver("id", new StringBasedCheckpoint("e2"));
+
+            // When the closed run's action is called with e1 only now, and the resumed run then reads nothing
+            on(closedRun, () -> wrapped.deliver("id", new StringBasedCheckpoint("e1")));
+            Thread.sleep(INTERVAL.toMillis() + 50);
+            boolean saved = wrapped.readNothing("id", QUIET);
+
+            // Then
+            assertThat(saved).as("quiet save wanted while e2, declined, is the last event the resumed run delivered").isFalse();
+            assertThat(storage.read("id")).as("checkpoint").isEqualTo(new StringBasedCheckpoint("e1"));
+        } finally {
+            closedRun.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_closed_run_that_reads_once_more_without_delivering_does_not_keep_the_resumed_run_from_saving_its_quiet_position() throws Exception {
+        // Given a resumed run that delivers e1, which the persist predicate declines, and then e2, which it stores, and
+        // a closed run that reads once more between the resumed run's read of e2 and its delivery of it
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage,
+                new DurableSubscriptionModelConfig(declines("e1")).saveQuietPositionEvery(INTERVAL));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        });
+        ExecutorService closedRun = Executors.newSingleThreadExecutor();
+        try {
+            wrapped.beforeReading("id");
+            wrapped.deliver("id", new StringBasedCheckpoint("e1"));
+            wrapped.beforeReading("id");
+            on(closedRun, () -> wrapped.beforeReading("id"));
+            wrapped.deliver("id", new StringBasedCheckpoint("e2"));
+
+            // When the resumed run then reads nothing
+            Thread.sleep(INTERVAL.toMillis() + 50);
+            boolean saved = wrapped.readNothing("id", QUIET);
+
+            // Then
+            assertThat(saved).as("quiet save wanted once the resumed run has stored e2").isTrue();
+            assertThat(storage.read("id")).as("checkpoint").isEqualTo(QUIET);
+        } finally {
+            closedRun.shutdownNow();
+        }
+    }
+
     private static DurableSubscriptionModelConfig saveQuietPositionEvery(Duration interval) {
         return new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(interval);
     }
@@ -528,6 +587,11 @@ class DurableSubscriptionModelQuietPositionTest {
             }
             return OptionalLong.empty();
         };
+    }
+
+    // Runs the step on the thread of the run and waits for it, so the test decides the order of what each run does
+    private static void on(ExecutorService run, Runnable step) throws Exception {
+        run.submit(step).get(5, SECONDS);
     }
 
     private static void awaitQuietly(CountDownLatch latch) {
