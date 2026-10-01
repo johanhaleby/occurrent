@@ -17,9 +17,10 @@
 package org.occurrent.subscription.mongodb.spring.reactor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mongodb.ClientSessionOptions;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.MongoCommandException;
-import com.mongodb.MongoSocketReadException;
 import com.mongodb.ServerAddress;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
@@ -40,8 +41,6 @@ import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
-import org.springframework.data.mongodb.core.ChangeStreamOptions;
-import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.springframework.transaction.ReactiveTransactionManager;
@@ -68,8 +67,9 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
@@ -82,16 +82,22 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 @Timeout(20)
 public class ReactorMongoSubscriptionModelResilienceTest {
 
+    private static final String SUBSCRIBER_APPLICATION_NAME = "resilience-subscriber";
+
     @Container
     private static final MongoDBContainer mongoDBContainer =
             ReplicaSetReadyMongoDBContainer.withDefaultVersion()
-                    .withReuse(true);
+                    .withCommand("--replSet", "docker-rs", "--setParameter", "enableTestCommands=1");
 
     @RegisterExtension
     OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
+    // The client that writes the events, which the fail points never touch
     private MongoClient mongoClient;
-    private ReactiveMongoOperations realMongoOperations;
+    // The client the subscription models read with, and the only one the fail points break
+    private MongoClient subscriberClient;
+    private ReactiveMongoTemplate subscriberOperations;
+    private CommandLog commands;
     private ReactorMongoEventStore mongoEventStore;
     private ObjectMapper objectMapper;
     private CopyOnWriteArrayList<Disposable> disposables;
@@ -100,10 +106,14 @@ public class ReactorMongoSubscriptionModelResilienceTest {
     void createEventStore() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reactiveresilience");
         mongoClient = MongoClients.create(connectionString);
-        realMongoOperations = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        commands = new CommandLog();
+        subscriberClient = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString)
+                .applicationName(SUBSCRIBER_APPLICATION_NAME).addCommandListener(commands).build());
+        subscriberOperations = new ReactiveMongoTemplate(subscriberClient, requireNonNull(connectionString.getDatabase()));
+        ReactiveMongoTemplate eventStoreOperations = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
-        mongoEventStore = new ReactorMongoEventStore((ReactiveMongoTemplate) realMongoOperations, eventStoreConfig);
+        mongoEventStore = new ReactorMongoEventStore(eventStoreOperations, eventStoreConfig);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }
@@ -111,44 +121,40 @@ public class ReactorMongoSubscriptionModelResilienceTest {
     @AfterEach
     void shutdown() {
         disposables.forEach(Disposable::dispose);
+        FailPoint.off(mongoClient);
+        subscriberClient.close();
         mongoClient.close();
     }
 
     /**
-     * Wraps {@code realMongoOperations} so that the very first {@code changeStream(...)} call errors with
-     * {@code exception}, simulating a change-stream disruption (a failover, a transient network error, history
-     * lost, ...), while every subsequent call behaves exactly like the real operations. Mirrors how
-     * {@code SpringMongoSubscriptionModelTest} and {@code NativeMongoSubscriptionModelResilienceTest} inject the
-     * same class of failure.
+     * Makes the very first {@code aggregate} that opens the change stream fail with the server error
+     * {@code errorCode}, simulating a change-stream disruption such as history lost, while every subsequent
+     * aggregate behaves exactly like the real one. Mirrors how {@code SpringMongoSubscriptionModelTest} and
+     * {@code NativeMongoSubscriptionModelResilienceTest} inject the same class of failure.
      */
-    @SuppressWarnings("unchecked")
-    private ReactiveMongoOperations operationsThatFailOnce(RuntimeException exception) {
-        ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
-        when(throwingOperations.executeCommand(any(Document.class))).thenAnswer(invocation -> realMongoOperations.executeCommand(invocation.<Document>getArgument(0)));
-        when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class)))
-                .thenReturn(Flux.error(exception))
-                .thenAnswer(invocation -> realMongoOperations.changeStream("events", invocation.getArgument(1), Document.class));
-        return throwingOperations;
+    private void failTheFirstAggregateWithErrorCode(int errorCode) {
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "aggregate", new Document("errorCode", errorCode));
     }
 
     /**
-     * Wraps {@code realMongoOperations} so that the very first {@code changeStream(...)} call delivers exactly one
-     * real event and then errors with {@code exception}, simulating a disruption that happens right after a
-     * subscription has genuinely delivered something, while every subsequent call behaves exactly like the real
-     * operations. Used to prove a retry resumes from the position of that delivered event rather than replaying it.
+     * Makes the very first {@code aggregate} that opens the change stream fail with a closed connection, which the
+     * driver reports as a socket error, simulating a disruption such as a replica-set primary election/failover, while
+     * every subsequent aggregate behaves exactly like the real one.
      */
-    @SuppressWarnings("unchecked")
-    private ReactiveMongoOperations operationsThatFailAfterDeliveringOneEvent(RuntimeException exception) {
-        ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
-        when(throwingOperations.executeCommand(any(Document.class))).thenAnswer(invocation -> realMongoOperations.executeCommand(invocation.<Document>getArgument(0)));
-        when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class)))
-                .thenAnswer(invocation -> realMongoOperations.changeStream("events", invocation.getArgument(1), Document.class).take(1).concatWith(Flux.error(exception)))
-                .thenAnswer(invocation -> realMongoOperations.changeStream("events", invocation.getArgument(1), Document.class));
-        return throwingOperations;
+    private void failTheFirstAggregateWithAClosedConnection() {
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "aggregate", new Document("closeConnection", true));
     }
 
-    // Answers the operation time read before a change stream opens without a round trip, so a change stream that
-    // throws while it is built still throws inside subscribe().
+    /**
+     * Makes the next {@code getMore} fail with a closed connection, simulating a disruption that happens right after
+     * a subscription has genuinely delivered something, while every subsequent getMore behaves exactly like the real
+     * one. Used to prove a retry resumes from the position of that delivered event rather than replaying it.
+     */
+    private void failTheNextGetMoreWithAClosedConnection() {
+        FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "getMore", new Document("closeConnection", true));
+    }
+
+    // Answers the operation time read before a change stream opens without a round trip
     private static Mono<Document> operationTimeReply() {
         return Mono.just(new Document("ok", 1.0).append("operationTime", new BsonTimestamp(1, 1)));
     }
@@ -163,14 +169,6 @@ public class ReactorMongoSubscriptionModelResilienceTest {
         return new UncategorizedMongoDbException("expected", new MongoCommandException(new BsonDocument(elements), new ServerAddress()));
     }
 
-    /**
-     * Simulates the class of error a driver surfaces during a replica-set primary election/failover: the change
-     * stream cursor becomes unusable and a socket-level read fails until a new primary is elected.
-     */
-    private static MongoSocketReadException failoverLikeException() {
-        return new MongoSocketReadException("expected: simulated primary election/failover", new ServerAddress(), new java.io.IOException("Connection reset by peer"));
-    }
-
     @Nested
     @DisplayName("ChangeStreamHistoryLost")
     class ChangeStreamHistoryLostTest {
@@ -178,18 +176,18 @@ public class ReactorMongoSubscriptionModelResilienceTest {
         @Test
         void restarts_subscription_from_now_when_configured_to_do_so() {
             // Given
-            ReactiveMongoOperations throwingOperations = operationsThatFailOnce(changeStreamHistoryLostException());
-            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING,
+            failTheFirstAggregateWithErrorCode(286);
+            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(subscriberOperations, "events", TimeRepresentation.RFC_3339_STRING,
                     ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(true).backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)));
 
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             disposables.add(subscriptionModel.subscribe().subscribe(state::add));
 
-            // When: wait for the retry to actually happen (the second changeStream(...) call, delegating to the real
-            // operations) before writing, since the retry is scheduled asynchronously with backoff and there is no
-            // readiness signal on the bare Flux to synchronize against otherwise.
-            verify(throwingOperations, timeout(5000).times(2)).changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class));
+            // When: wait for the retry to actually happen (the second aggregate that opens the change stream, which
+            // the server answers for real) before writing, since the retry is scheduled asynchronously with backoff and
+            // there is no readiness signal on the bare Flux to synchronize against otherwise.
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
 
             // Then: keep writing new events until one is observed. The restart resumes from "now" with no resume
             // marker, so a single write can race ahead of the server actually establishing the new cursor and be
@@ -205,8 +203,8 @@ public class ReactorMongoSubscriptionModelResilienceTest {
         @Test
         void does_not_restart_subscription_when_not_configured_to_do_so() {
             // Given
-            ReactiveMongoOperations throwingOperations = operationsThatFailOnce(changeStreamHistoryLostException());
-            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING,
+            failTheFirstAggregateWithErrorCode(286);
+            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(subscriberOperations, "events", TimeRepresentation.RFC_3339_STRING,
                     ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)));
 
             LocalDateTime now = LocalDateTime.now();
@@ -230,8 +228,8 @@ public class ReactorMongoSubscriptionModelResilienceTest {
         @Test
         void restarts_and_resumes_gap_free_after_a_failover_like_error() {
             // Given
-            ReactiveMongoOperations throwingOperations = operationsThatFailOnce(failoverLikeException());
-            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING,
+            failTheFirstAggregateWithAClosedConnection();
+            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(subscriberOperations, "events", TimeRepresentation.RFC_3339_STRING,
                     ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)));
 
             LocalDateTime now = LocalDateTime.now();
@@ -239,7 +237,7 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             disposables.add(subscriptionModel.subscribe().subscribe(state::add));
 
             // When: wait for the retry to actually happen before writing, see the comment in ChangeStreamHistoryLostTest.
-            verify(throwingOperations, timeout(5000).times(2)).changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class));
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
 
             // Then: keep writing new events until one is observed, see the comment in ChangeStreamHistoryLostTest.
             await().atMost(10, SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() -> {
@@ -260,15 +258,14 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             // Given: subscribe from an explicit position (an operation time from before event 1 exists, not "now",
             // which is a no-op that applies no explicit position at all) so every (re)connect genuinely resumes from
             // whatever position is currently tracked, rather than opening a plain, position-less change stream that
-            // happens to pick up recent writes regardless of tracking. The first changeStream(...) call delivers
-            // event 1 for real, then errors, forcing a retry.
+            // happens to pick up recent writes regardless of tracking. The change stream delivers event 1 for real,
+            // then its next getMore fails, forcing a retry.
             LocalDateTime now = LocalDateTime.now();
-            ReactorMongoSubscriptionModel realModel = new ReactorMongoSubscriptionModel(realMongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
+            ReactorMongoSubscriptionModel realModel = new ReactorMongoSubscriptionModel(subscriberOperations, "events", TimeRepresentation.RFC_3339_STRING);
             StartAt beforeEvent1 = StartAt.checkpoint(realModel.globalCheckpoint()
                     .blockOptional()
                     .orElseThrow(() -> new IllegalStateException("globalCheckpoint() completed empty, the server may be prohibiting the hostInfo command")));
-            ReactiveMongoOperations throwingOperations = operationsThatFailAfterDeliveringOneEvent(failoverLikeException());
-            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING,
+            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(subscriberOperations, "events", TimeRepresentation.RFC_3339_STRING,
                     ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)));
 
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -276,10 +273,11 @@ public class ReactorMongoSubscriptionModelResilienceTest {
 
             mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1"))).block();
             await().atMost(5, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+            failTheNextGetMoreWithAClosedConnection();
 
-            // When: the retry's changeStream(...) call (the second one) has to actually happen before writing event
-            // 2, so the retry's own resumeAt/startAfter position is what's being exercised here, not the original.
-            verify(throwingOperations, timeout(5000).times(2)).changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class));
+            // When: the retry's aggregate that opens the change stream (the second one) has to actually happen before
+            // writing event 2, so the retry's own startAfter position is what's being exercised here, not the original.
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(commands.changeStreamsOpened()).hasSize(2));
             mongoEventStore.write("2", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(1), "name2", "name2"))).block();
 
             // Then: event 2 is delivered, and event 1 is not replayed by the retry resuming from the original,
@@ -296,19 +294,15 @@ public class ReactorMongoSubscriptionModelResilienceTest {
         @Test
         void a_request_for_the_operation_time_that_answers_nothing_restarts_the_change_stream() {
             // Given
-            ReactiveMongoOperations operations = mock(ReactiveMongoOperations.class);
-            when(operations.executeCommand(any(Document.class)))
-                    .thenReturn(Mono.empty())
-                    .thenAnswer(invocation -> realMongoOperations.executeCommand(invocation.<Document>getArgument(0)));
-            when(operations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class)))
-                    .thenAnswer(invocation -> realMongoOperations.changeStream("events", invocation.getArgument(1), Document.class));
+            ReactiveMongoTemplate operations = spy(subscriberOperations);
+            doReturn(Mono.empty()).doCallRealMethod().when(operations).executeCommand(any(Document.class));
             ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(operations, "events", TimeRepresentation.RFC_3339_STRING,
                     ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)));
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             disposables.add(subscriptionModel.subscribe().subscribe(state::add));
 
             // When
-            verify(operations, timeout(5000)).changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class));
+            await().atMost(5, SECONDS).until(() -> !commands.changeStreamsOpened().isEmpty());
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
             mongoEventStore.write(UUID.randomUUID().toString(), 0, serialize(nameDefined)).block();
 
@@ -323,15 +317,15 @@ public class ReactorMongoSubscriptionModelResilienceTest {
 
         @Test
         void fails_instead_of_hanging_when_the_change_stream_cannot_even_be_created() {
-            // Given: changeStream(...) throws synchronously (not a Flux that errors on subscription), simulating a
-            // failure while building the change stream itself, e.g. an invalid filter. doOnSubscribe never gets a
-            // chance to complete the started signal since the change stream Flux is never created to subscribe to.
+            // Given: opening the session the change stream reads with throws synchronously (not a Publisher that errors
+            // on subscription), simulating a failure while building the change stream itself, e.g. an invalid filter.
+            // The started signal never gets a chance to complete since the change stream is never opened.
             // Uses a non-restartable error (history lost, restart-on-history-lost off by default) so the failure is
             // terminal instead of retried forever, matching the only way a real failure here can actually terminate.
             UncategorizedMongoDbException historyLost = changeStreamHistoryLostException();
-            ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
-            when(throwingOperations.executeCommand(any(Document.class))).thenReturn(operationTimeReply());
-            when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class))).thenThrow(historyLost);
+            ReactiveMongoTemplate throwingOperations = spy(subscriberOperations);
+            doReturn(operationTimeReply()).when(throwingOperations).executeCommand(any(Document.class));
+            doThrow(historyLost).when(throwingOperations).withSession(any(ClientSessionOptions.class));
             ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING);
 
             // When
@@ -349,9 +343,9 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             // rather than waitUntilStarted(), since the error handler runs before subscribe() itself returns and
             // could otherwise remove an entry that was never put in yet, leaving the real, dead one behind.
             UncategorizedMongoDbException historyLost = changeStreamHistoryLostException();
-            ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
-            when(throwingOperations.executeCommand(any(Document.class))).thenReturn(operationTimeReply());
-            when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class))).thenThrow(historyLost);
+            ReactiveMongoTemplate throwingOperations = spy(subscriberOperations);
+            doReturn(operationTimeReply()).when(throwingOperations).executeCommand(any(Document.class));
+            doThrow(historyLost).when(throwingOperations).withSession(any(ClientSessionOptions.class));
             ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING);
             String subscriptionId = UUID.randomUUID().toString();
 

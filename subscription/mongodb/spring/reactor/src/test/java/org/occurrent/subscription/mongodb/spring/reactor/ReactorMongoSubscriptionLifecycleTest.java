@@ -113,9 +113,8 @@ public class ReactorMongoSubscriptionLifecycleTest {
 
     @Test
     void named_subscription_delivers_events_to_the_action() {
-        // Given: an explicit position from before the write, since waitUntilStarted() only signals that the change
-        // stream Flux was subscribed to, not that the server has acknowledged the command and the cursor is
-        // positioned, so a write right after it could otherwise land before the cursor is actually watching.
+        // Given: an explicit position from before the write, so the write is delivered whether it lands before or
+        // after the cursor is positioned.
         LocalDateTime now = LocalDateTime.now();
         StartAt beforeWrite = StartAt.checkpoint(subscriptionModel.globalCheckpoint().block());
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -172,10 +171,9 @@ public class ReactorMongoSubscriptionLifecycleTest {
     void subscribing_with_a_start_position_the_model_cannot_parse_is_refused_by_subscribe_itself() {
         // Given: a checkpoint whose string form contains "resumeToken" (steering MongoCommons.applyStartPosition
         // into its legacy string-parsing branch) but isn't valid BSON, so parsing it fails. Before subscribe made
-        // this eager check, the same failure only happened later, inside the Flux.defer built by
-        // resilientChangeStream/changeStream: shouldRestart sent it round the unbounded retry forever, so
-        // waitUntilStarted() never completed and isRunning(id) kept saying yes for a subscription that would
-        // never deliver anything.
+        // this eager check, the same failure only happened later, while the model opened the change stream in the
+        // background: the model sent it round the unbounded retry forever, so waitUntilStarted() never completed
+        // and isRunning(id) kept saying yes for a subscription that would never deliver anything.
         String subscriptionId = UUID.randomUUID().toString();
         StartAt unparsableStartAt = StartAt.checkpoint(new StringBasedCheckpoint("not-a-valid-resumeToken-document"));
 
@@ -190,9 +188,8 @@ public class ReactorMongoSubscriptionLifecycleTest {
 
     @Test
     void pausing_a_subscription_stops_delivery_and_resuming_continues_without_replay() {
-        // Given: an explicit position from before the write, since waitUntilStarted() only signals that the change
-        // stream Flux was subscribed to, not that the server has acknowledged the command and the cursor is
-        // positioned, so a write right after it could otherwise land before the cursor is actually watching.
+        // Given: an explicit position from before the write, so the write is delivered whether it lands before or
+        // after the cursor is positioned.
         LocalDateTime now = LocalDateTime.now();
         StartAt beforeWrite = StartAt.checkpoint(subscriptionModel.globalCheckpoint().block());
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -313,9 +310,8 @@ public class ReactorMongoSubscriptionLifecycleTest {
 
     @Test
     void cancelling_a_subscription_forgets_it_and_stops_delivery() {
-        // Given: an explicit position from before the write, since waitUntilStarted() only signals that the change
-        // stream Flux was subscribed to, not that the server has acknowledged the command and the cursor is
-        // positioned, so a write right after it could otherwise land before the cursor is actually watching.
+        // Given: an explicit position from before the write, so the write is delivered whether it lands before or
+        // after the cursor is positioned.
         LocalDateTime now = LocalDateTime.now();
         StartAt beforeWrite = StartAt.checkpoint(subscriptionModel.globalCheckpoint().block());
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
