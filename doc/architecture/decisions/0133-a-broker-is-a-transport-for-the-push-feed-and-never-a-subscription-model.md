@@ -1556,10 +1556,10 @@ pause, a `stop()`, a `shutdown()`, or a later generation of the same id that tak
 the same step that publishes the change, under the lock that every step toward starting checks. A retired generation
 begins no step toward starting. It resolves no dynamic `StartAt`, it neither subscribes to the feed nor reaches a
 wrapped model that manages named subscriptions, and it writes no position. A step already under way when it is retired
-runs to its end, and what it produced is dropped. Its `waitUntilStarted()` completes if it had started, and otherwise
+runs to its end, and the model discards its result. Its `waitUntilStarted()` completes if it had started, and otherwise
 fails with `SubscriptionModelShutdownException` after a shutdown, or with `CancellationException` after a cancel, a
-pause or a `stop()`. The handle that a registration made while the model was stopped returns is the one exception. It
-keeps waiting once a resume or `start(true)` has taken it over, as in 0.33.0. On the
+pause or a `stop()`. A registration made while the model was stopped is the one exception. The handle it returned
+keeps waiting once a resume or `start(true)` has taken the registration over, as in 0.33.0. On the
 hand-over path only a cancel and a shutdown retire a generation, since the wrapped model keeps the subscription across
 a pause.
 

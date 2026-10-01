@@ -94,13 +94,12 @@ class ReactorDurableSubscriptionModelReRegistrationTest {
         // acceptance alone says nothing about delivery; what matters is observed below, on the model itself.
         firstAttemptRead.tryEmitError(new IllegalStateException("first attempt: cannot read the position"));
 
-        // A cancelled subscription's own handle never settles either way: cancelling severed it from
-        // firstAttemptRead before this error was emitted, so nothing carries the error to startedSink. Asserted as
-        // a timeout on the handle itself, not by catching whichever exception type block(Duration) happens to throw
-        // when it gives up.
+        // The cancel ended the first attempt before it started, so its handle fails with the cancellation and not
+        // with this later error. Cancelling severed the handle from firstAttemptRead before the error was emitted,
+        // and a wait that never ends would leave a caller blocked on a subscription nobody will start.
         StepVerifier.create(first.waitUntilStarted())
-                .expectTimeout(TIMEOUT)
-                .verify();
+                .expectError(java.util.concurrent.CancellationException.class)
+                .verify(TIMEOUT);
 
         assertThat(model.isRunning(SUBSCRIPTION_ID))
                 .as("the first attempt's cancelled, undelivered error must not affect the second registration")

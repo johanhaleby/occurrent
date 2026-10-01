@@ -1356,10 +1356,14 @@ cancel no longer resumes from the cancelled subscription's position.
 
 The cancel also ends a subscribe of the id that has not started yet. Its `StartAt.dynamic(..)` function does not run
 after the cancel, the subscribe starts nothing and writes no checkpoint, and its `waitUntilStarted()` fails with
-`CancellationException`. If you wait for `waitUntilStarted()` on a subscription that something else may cancel, handle
-that error. On a `ReactorDurableSubscriptionModel` that wraps a model that manages named subscriptions, a subscribe
-that has not returned to its caller when the cancel comes is not ended. It reads its start position again after the
-delete, and the checkpoints it writes after that are kept.
+`CancellationException`. When the durable model drives a subscription itself, a pause or a `stop()` before it has
+started ends it the same way, except that its checkpoint stays stored and the subscription stays paused. Its
+`waitUntilStarted()` fails with `CancellationException` too. In 0.33.0 that wait never ended. If you wait for `waitUntilStarted()` on a subscription that another part of your application may cancel,
+pause or stop, handle that error. A registration made while the model was stopped is the one exception. The handle it
+returned keeps waiting once a resume or `start(true)` has taken the registration over, as in 0.33.0. On a
+`ReactorDurableSubscriptionModel` that wraps a model that manages named subscriptions, a subscribe that has not returned
+to its caller when the cancel comes is not ended. It reads its start position again after the delete, and the
+checkpoints it writes after that are kept.
 
 None of these waits has a time limit, because a store can still apply a write after the model stopped waiting for it. A
 save could then bring the cancelled checkpoint back after the delete, and a delete could remove the checkpoint the next

@@ -967,9 +967,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     /**
      * Pause a subscription.
      * <p>
-     * When this model drives the subscription itself, a pause ends a subscription that has not started yet, because it
-     * still resolves its start position or waits for a checkpoint delete, in the same way that
-     * {@link #cancelSubscription(String)} does, except that its checkpoint stays stored and it stays paused. The
+     * When this model drives the subscription itself, a pause ends a subscription that is still resolving its start
+     * position or waiting for a checkpoint delete, in the same way that {@link #cancelSubscription(String)} does,
+     * except that its checkpoint stays stored and the subscription stays paused. The
      * {@link Subscription#waitUntilStarted()} it returned fails with {@link java.util.concurrent.CancellationException},
      * and resuming it returns a new {@link Subscription} to wait on. When this model hands subscriptions to a wrapped
      * model that manages named subscriptions, the pause is that model's.
@@ -1083,11 +1083,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * dynamic} start position only after it too, so one that reads the checkpoint itself, as
      * {@code ResumeStartPositions.replayThenResume(..)} does, reads it only after the delete as well.
      * <p>
-     * This cancel ends every subscription of the id that it finds, including one that has not started yet because it
-     * still resolves its start position or waits for an earlier delete. No step toward starting such a subscription
+     * This cancel ends every subscription of the id that it finds, including one that has not started yet since it is
+     * still resolving its start position or waiting for an earlier delete. No step toward starting such a subscription
      * begins after this is called. Its dynamic start position is not resolved, it does not subscribe to the feed or
      * reach a wrapped model that manages named subscriptions, and it writes no checkpoint. A step already under way
-     * runs to its end, and what it produced is dropped. Its {@link Subscription#waitUntilStarted()} fails with
+     * runs to its end, and this model discards its result. Its {@link Subscription#waitUntilStarted()} fails with
      * {@link java.util.concurrent.CancellationException}, unless the subscription had started by then. When this model
      * drives the subscription itself, it finds a subscribe as soon as that subscribe has taken the id, before the
      * start position is resolved. When this model hands the subscription to a wrapped model that manages named
@@ -1232,7 +1232,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * {@link Subscription#waitUntilStarted()} with {@link SubscriptionModelShutdownException}. One that already started
      * keeps that outcome. No step toward starting either of them begins after this is called. No dynamic start
      * position is resolved, nothing subscribes to the feed or reaches the wrapped model, and no checkpoint is written.
-     * A step already under way runs to its end, and what it produced is dropped.
+     * A step already under way runs to its end, and this model discards its result.
      */
     @Override
     public void shutdown() {
