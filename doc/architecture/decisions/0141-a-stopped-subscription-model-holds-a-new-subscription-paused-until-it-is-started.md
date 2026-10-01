@@ -150,7 +150,8 @@ under the same id, is not what the call started, so the lease goes back.
 **`CompetingConsumerSubscriptionModel` calls the lease strategy and the wrapped model for a subscription only while it
 holds a lock kept for that subscription, except for two steps of `subscribe(..)` and `shutdown()`, which hold no lock.
 It never holds its monitor during such a call.** The monitor is held only for a moment, to read and write what several
-subscriptions share, such as the ids being made and the latest `start(..)` or `stop()`. These threads act on it:
+subscriptions share, such as the ids being made and the `start(..)` and `stop()` calls a subscription handed to a
+thread of its own still has to get. These threads act on it:
 
 | Thread | Under the subscription's lock | Without it |
 |---|---|---|
@@ -254,15 +255,18 @@ once, on a thread of its own for each subscription, and returns once it has take
 was free and released that lock. So a call for one subscription that waits for the lease strategy or the wrapped model
 through an outage holds up no other subscription, and holds up the return of `start(..)` or `stop()` for as long as it
 waits. A lease callback right after `start(..)` or `stop()` returns finds the lock free. A subscription whose lock is
-taken is handed to a thread of its own. That thread waits for the lock and applies the latest `start(..)` or `stop()`
-to the subscription. When that fails, a competing subscription is tried again by the thread that tries it again after
+taken is handed to a thread of its own. That thread waits for the lock and applies each `start(..)` and `stop()` not
+yet applied to the subscription, oldest first, so the subscription ends where it would have with its lock free. A
+`start(true)` and then a `stop()` that both find the lock taken leave the subscription paused, the same as when both
+find it free. A resume that such a `start(..)` asks for never lets the subscription run while the model is stopped.
+Only a resume the user asks for does that. When applying a call fails, a competing subscription is tried again by the thread that tries it again after
 any failed call, and any other subscription by the handed over thread, with the same backoff, until it succeeds or the
 model is shut down. A handed over thread or a try that is still waiting for the lock when `shutdown()` runs ends
 within 100 milliseconds.
 
 A `start(..)` or `stop()` that begins while another one runs waits for it to return, and they run in the order they
-began. The one exception is a `start(..)` that begins while a `stop()` waits for calls already in the wrapped model,
-described below. Each `start(..)` and `stop()` takes the subscriptions the model knows under the monitor, in the same
+began. The one exception is a `start(..)` waiting behind a `stop()` that has calls already in the wrapped model to
+wait for, described below. Each `start(..)` and `stop()` takes the subscriptions the model knows under the monitor, in the same
 step that makes it visible to the other calls. A `subscribe(..)` records its subscription before it releases the id,
 which it does under the monitor, so that step finds each id the model knows, recorded or still being made. A
 `subscribe(..)` that reserves its id after that step reads the new `start(..)` or `stop()` at its next step, under the
@@ -283,9 +287,10 @@ MongoDB cannot be reached, so the wait has no upper bound during an outage. That
 `stop()` and every lease callback held the monitor, so `stop()` waited for a grant's resume just as long, and for a
 registration retrying through the outage too. Now it waits only for calls in the wrapped model. A call that `stop()` refuses is refused at
 once. Only a call allowed while stopped, such as a resume the user asks for after `stop()` began, waits until the
-wrapped model is stopped, and then runs. A `start(..)` that begins during that wait ends it, and `stop()` returns
-without stopping anything, since the `start(..)` then decides for every subscription. A second `stop()` waits for the
-first to return instead.
+wrapped model is stopped, and then runs. `stop()` waits for those calls only while no `start(..)` is waiting behind
+it. Once one is, also one that was waiting before `stop()` got to those calls, `stop()` returns without stopping
+anything, since the `start(..)` then decides for every subscription. A second `stop()` waits for the first to return
+instead.
 
 `shutdown()` takes neither the monitor nor any subscription's lock. It shuts the lease strategy down, which ends a
 registration waiting between two attempts and makes each later unregister a single attempt, removes the model as a

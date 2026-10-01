@@ -113,7 +113,8 @@ import static java.util.Objects.requireNonNull;
  * {@link #start(boolean)} and {@link #stop()} take every subscription at the same time, each on a thread of its own, so
  * a call for one subscription that waits for the lease strategy or the wrapped model holds up no other. They return once
  * each subscription whose lock was free has been taken care of. One whose lock another call holds is handed to a thread
- * of its own, which applies the latest {@code start(..)} or {@code stop()} once it has the lock. When that fails, a
+ * of its own. Once it has the lock, that thread applies each {@code start(..)} and {@code stop()} not yet applied to the
+ * subscription, oldest first, so the subscription ends where it would have with its lock free. When that fails, a
  * competing subscription is tried again like after any other failed call, and any other subscription by that thread,
  * until it succeeds or this model is shut down. A {@code start(..)} or {@code stop()} takes every subscription this
  * model knows in the same step that makes it visible to the other calls, so a subscription that a {@code subscribe(..)}
@@ -160,9 +161,10 @@ import static java.util.Objects.requireNonNull;
  * long as the call takes. For a {@code DurableSubscriptionModel} that includes reading the stored position, which the
  * MongoDB checkpoint storages retry by default for as long as the database cannot be reached. A call {@code stop()}
  * refuses is refused at once, and only a call allowed while stopped, such as a resume the user asks for after
- * {@code stop()} began, waits until the wrapped model is stopped and then runs. A {@code start(..)} that begins while
- * {@code stop()} waits for such a call is the exception. {@code stop()} then returns without stopping anything, and the
- * {@code start(..)} decides for every subscription. A second {@code stop()} waits for the first to return instead.
+ * {@code stop()} began, waits until the wrapped model is stopped and then runs. {@code stop()} waits for such a call
+ * only while no {@code start(..)} is waiting behind it. Once one is, also one that was waiting before {@code stop()}
+ * got to the call, {@code stop()} returns without stopping anything, and the {@code start(..)} decides for every
+ * subscription. A second {@code stop()} waiting behind it waits for it to return instead.
  */
 @NullMarked
 public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrapper, SubscriptionModel, SubscriptionModelLifeCycle, IntrospectableSubscriptions, CompetingConsumerListener {
@@ -217,13 +219,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // the database. The entry goes once no thread holds or waits for it, so ids cancelled long ago keep no lock.
     private final ConcurrentMap<String, SubscriptionLock> subscriptionLocks = new ConcurrentHashMap<>();
     // Held for the whole of start(..) and stop(), so a second one waits for the first to return instead of taking over
-    // from it part way, in the order they came. Taken before any other lock. The one exception is a start(..) that
-    // comes while a stop() waits for calls under way in the wrapped model, which that stop() then returns for, see
+    // from it part way, in the order they came. Taken before any other lock. The one exception is a start(..) waiting
+    // behind a stop() that has calls under way in the wrapped model to wait for, which that stop() returns for, see
     // startsWaiting.
     private final ReentrantLock lifecycleLock = new ReentrantLock(true);
-    // The start(..) calls waiting for lifecycleLock, read and written under wrappedModelStart only. A stop() waiting for
-    // calls under way in the wrapped model returns without stopping anything once one comes, since the start(..) it
-    // lets in decides for every subscription this model knows. Anything else waiting for the lock waits for the stop().
+    // The start(..) calls waiting for lifecycleLock, read and written under wrappedModelStart only. A stop() with calls
+    // under way in the wrapped model to wait for returns without stopping anything while one waits, since the start(..)
+    // it lets in decides for every subscription this model knows. Anything else waiting for the lock waits for the stop().
     private int startsWaiting;
     // Held while stop() records that this model is stopped, and while a call checks that it is not before it starts
     // the wrapped model or runs a subscription there, which it counts in runsInTheWrappedModel
@@ -245,12 +247,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private final ThreadLocal<@Nullable SubscriptionIdAndSubscriberId> triedOnThisThread = new ThreadLocal<>();
     // Counts every start(..) and stop(), read and written under the monitor only
     private long lifecycleCalls;
-    // The latest start(..) or stop(), read and written under the monitor only
-    private Lifecycle lifecycle = new Lifecycle(0, true, false);
-    // Subscription ids a start(..) or stop() found another thread holding the lock of, each with the latest start(..)
-    // or stop() applied to it since, or 0. Read and written under the monitor only. A thread of their own waits for the
-    // lock, applies the latest start(..) or stop() unless it is applied already, and removes the entry as it ends.
-    private final Map<String, Long> lifecycleHandedOver = new HashMap<>();
+    // Subscription ids a start(..) or stop() found another thread holding the lock of, read and written under the
+    // monitor only. A thread of their own takes the lock and applies each start(..) and stop() handed over, oldest
+    // first. An entry whose thread is done stays while a start(..) or stop() is being applied, so that one finds itself
+    // applied already instead of applying itself again or handing the subscription over again.
+    private final Map<String, HandedOver> handedOver = new HashMap<>();
+    // The start(..) or stop() being applied to every subscription, or 0, read and written under the monitor only
+    private long lifecycleBeingApplied;
 
     public CompetingConsumerSubscriptionModel(SubscriptionModel subscriptionModel, CompetingConsumerStrategy strategy) {
         requireNonNull(subscriptionModel, "Subscription model cannot be null");
@@ -490,8 +493,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     // Called under the monitor
     private Lifecycle beginLifecycle(boolean started, boolean resumeSubscriptionsAutomatically) {
-        lifecycle = new Lifecycle(++lifecycleCalls, started, resumeSubscriptionsAutomatically);
-        return lifecycle;
+        return new Lifecycle(++lifecycleCalls, started, resumeSubscriptionsAutomatically);
     }
 
     // A start(..) or a stop(), numbered in the order they began
@@ -520,9 +522,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * began has returned, so none of them starts it or runs a subscription there after this {@code stop()} has
      * returned. A call that would do so since waits for the wrapped model to be stopped, and is then refused, unless it
      * resumes a consumer the user resumed after this {@code stop()} began. A {@code stop()} that begins meanwhile waits
-     * for this {@code stop()} to return. A {@code start(..)} that begins while this waits for those calls ends the wait, and this
-     * returns false without stopping anything, since the {@code start(..)} decides for every subscription this model
-     * knows once this {@code stop()} has returned.
+     * for this {@code stop()} to return. While a {@code start(..)} is waiting behind this {@code stop()}, also one that
+     * was waiting before this got to those calls, this does not wait for them and returns false without stopping
+     * anything, since the {@code start(..)} decides for every subscription this model knows once this {@code stop()}
+     * has returned.
      * <p>
      * A call for any subscription that waits inside the wrapped model holds this up for as long as it waits. Stopping
      * the wrapped model before it returns would let a late resume start that model again after this {@code stop()}
@@ -567,7 +570,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * subscription holds up no other. Returns once each subscription whose lock was free has been taken care of, with
      * the first failure and any later one attached as suppressed. A subscription whose lock another call holds, which
      * can be a try or a call waiting for the database through an outage, is handed over instead, see
-     * {@link #handOver(String)}, and neither waited for nor reported here.
+     * {@link #handOver(String, Lifecycle)}, and neither waited for nor reported here.
      * <p>
      * For a {@code stop()}, each running consumer is paused and each consumer unregistered, so none of them competes for
      * the lock. A consumer left registered keeps competing through the strategy's refresh thread, so a stopped model can
@@ -589,49 +592,60 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * as the {@code start(..)} or {@code stop()} runs.
      */
     private @Nullable RuntimeException applyToEverySubscription(Lifecycle applied, Set<String> subscriptionIds, List<String> paused, @Nullable RuntimeException firstFailure) {
-        List<String> pausedMeanwhile = Collections.synchronizedList(new ArrayList<>());
-        List<CompletableFuture<@Nullable RuntimeException>> applications = new ArrayList<>();
-        for (String subscriptionId : subscriptionIds) {
-            CompletableFuture<@Nullable RuntimeException> application = new CompletableFuture<>();
-            Thread.ofPlatform().daemon().name("occurrent-competing-consumer-lifecycle-" + subscriptionId)
-                    .start(() -> applyIfTheLockIsFree(subscriptionId, applied, pausedMeanwhile, application));
-            applications.add(application);
+        synchronized (this) {
+            lifecycleBeingApplied = applied.id();
+            handedOver.values().forEach(handed -> handed.notApplied.addLast(applied));
         }
-        @Nullable Error error = null;
-        for (CompletableFuture<@Nullable RuntimeException> application : applications) {
-            try {
-                RuntimeException failure = application.join();
-                if (failure != null) {
-                    firstFailure = withSuppressed(firstFailure, failure);
-                }
-            } catch (CompletionException e) {
-                if (e.getCause() instanceof RuntimeException failure) {
-                    firstFailure = withSuppressed(firstFailure, failure);
-                } else if (e.getCause() instanceof Error failure && error == null) {
-                    error = failure;
+        try {
+            List<String> pausedMeanwhile = Collections.synchronizedList(new ArrayList<>());
+            List<CompletableFuture<@Nullable RuntimeException>> applications = new ArrayList<>();
+            for (String subscriptionId : subscriptionIds) {
+                CompletableFuture<@Nullable RuntimeException> application = new CompletableFuture<>();
+                Thread.ofPlatform().daemon().name("occurrent-competing-consumer-lifecycle-" + subscriptionId)
+                        .start(() -> applyIfTheLockIsFree(subscriptionId, applied, pausedMeanwhile, application));
+                applications.add(application);
+            }
+            @Nullable Error error = null;
+            for (CompletableFuture<@Nullable RuntimeException> application : applications) {
+                try {
+                    RuntimeException failure = application.join();
+                    if (failure != null) {
+                        firstFailure = withSuppressed(firstFailure, failure);
+                    }
+                } catch (CompletionException e) {
+                    if (e.getCause() instanceof RuntimeException failure) {
+                        firstFailure = withSuppressed(firstFailure, failure);
+                    } else if (e.getCause() instanceof Error failure && error == null) {
+                        error = failure;
+                    }
                 }
             }
+            paused.addAll(pausedMeanwhile);
+            if (error != null) {
+                throw error;
+            }
+            return firstFailure;
+        } finally {
+            synchronized (this) {
+                lifecycleBeingApplied = 0;
+                handedOver.values().removeIf(handed -> handed.done);
+            }
         }
-        paused.addAll(pausedMeanwhile);
-        if (error != null) {
-            throw error;
-        }
-        return firstFailure;
     }
 
     private void applyIfTheLockIsFree(String subscriptionId, Lifecycle applied, List<String> paused, CompletableFuture<@Nullable RuntimeException> application) {
         try {
             @Nullable SubscriptionLock lock = tryLockSubscription(subscriptionId);
             if (lock == null) {
+                // Handed over before completing, so the next start(..) or stop() finds this call still to be applied,
+                // and is applied after it
+                handOver(subscriptionId, applied);
                 application.complete(null);
-                handOver(subscriptionId);
                 return;
             }
-            @Nullable RuntimeException failure = null;
+            @Nullable RuntimeException failure;
             try {
-                if (!appliedByItsHandOver(subscriptionId, applied)) {
-                    failure = applyLifecycle(subscriptionId, applied, paused, null);
-                }
+                failure = applyInTurn(subscriptionId, applied, paused);
             } finally {
                 lock.unlock();
             }
@@ -642,39 +656,64 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
     }
 
-    // Called under the subscription's lock. True when the thread a subscription was handed over to has applied this
-    // start(..) or stop() already, and otherwise records it as applied, so that thread does not apply it again.
-    private synchronized boolean appliedByItsHandOver(String subscriptionId, Lifecycle applied) {
-        @Nullable Long appliedSoFar = lifecycleHandedOver.get(subscriptionId);
-        if (appliedSoFar == null) {
-            return false;
+    // Called under the subscription's lock. For a subscription handed over, first applies each start(..) and stop() its
+    // thread has not applied yet, oldest first, and does nothing when that thread has applied the given call already.
+    private @Nullable RuntimeException applyInTurn(String subscriptionId, Lifecycle applied, List<String> paused) {
+        @Nullable RuntimeException failure = null;
+        while (true) {
+            @Nullable HandedOver handed;
+            @Nullable Lifecycle next;
+            synchronized (this) {
+                handed = handedOver.get(subscriptionId);
+                if (handed == null) {
+                    next = applied;
+                } else if (handed.appliedThrough >= applied.id()) {
+                    return failure;
+                } else {
+                    next = handed.notApplied.peekFirst();
+                }
+            }
+            if (next == null) {
+                return failure;
+            }
+            boolean thisOne = next.id() == applied.id();
+            failure = applyLifecycle(subscriptionId, next, thisOne ? paused : new ArrayList<>(), failure);
+            if (handed == null) {
+                return failure;
+            }
+            synchronized (this) {
+                handed.applied(next);
+            }
+            if (thisOne) {
+                return failure;
+            }
         }
-        if (appliedSoFar == applied.id()) {
-            return true;
-        }
-        lifecycleHandedOver.put(subscriptionId, applied.id());
-        return false;
     }
 
     /**
-     * Applies the latest {@code start(..)} or {@code stop()} to a subscription once the call holding its lock has
-     * returned, on a thread of its own, one per subscription id at a time. A competing consumer that this fails for is
-     * tried again by its try, as with any other call. For any other subscription this thread tries again itself, with
-     * the backoff a try uses, until the latest {@code start(..)} or {@code stop()} has been applied or this model is shut
+     * Applies each {@code start(..)} and {@code stop()} handed over for a subscription, oldest first, once the call
+     * holding its lock has returned, on a thread of its own, one per subscription id at a time. A competing consumer
+     * that this fails for is tried again by its try, as with any other call. For any other subscription this thread
+     * tries the same call again itself, with the backoff a try uses, until it has been applied or this model is shut
      * down.
      */
-    private void handOver(String subscriptionId) {
+    private void handOver(String subscriptionId, Lifecycle applied) {
+        HandedOver handed;
         synchronized (this) {
-            if (shutDown || lifecycleHandedOver.putIfAbsent(subscriptionId, 0L) != null) {
+            // One already there has this start(..) or stop() still to apply, or has applied it
+            if (shutDown || handedOver.containsKey(subscriptionId)) {
                 return;
             }
+            handed = new HandedOver();
+            handed.notApplied.addLast(applied);
+            handedOver.put(subscriptionId, handed);
         }
         Thread.ofPlatform().daemon().name("occurrent-competing-consumer-lifecycle-" + subscriptionId).start(() -> {
             Duration backoff = RECONCILE_FIRST_BACKOFF;
             int failures = 0;
             while (true) {
                 try {
-                    if (appliedTheLatestLifecycle(subscriptionId)) {
+                    if (appliedEverythingHandedOver(subscriptionId, handed)) {
                         return;
                     }
                     failures = 0;
@@ -682,7 +721,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     continue;
                 } catch (InterruptedException e) {
                     synchronized (this) {
-                        lifecycleHandedOver.remove(subscriptionId);
+                        handedOver.remove(subscriptionId, handed);
                     }
                     return;
                 } catch (Throwable e) {
@@ -694,7 +733,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     Thread.sleep(backoff);
                 } catch (InterruptedException e) {
                     synchronized (this) {
-                        lifecycleHandedOver.remove(subscriptionId);
+                        handedOver.remove(subscriptionId, handed);
                     }
                     return;
                 }
@@ -704,28 +743,36 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         });
     }
 
-    // True once the latest start(..) or stop() is applied to the subscription, or this model is shut down, and the
-    // subscription is then no longer handed over. Deciding that and removing the entry happen in one block under the
-    // monitor, so a hand over after it starts a new thread. Throws what failed for a subscription no try covers.
-    private boolean appliedTheLatestLifecycle(String subscriptionId) throws InterruptedException {
+    // True once every start(..) and stop() handed over is applied to the subscription, or this model is shut down.
+    // Otherwise applies the oldest one not applied yet and returns false. Throws what failed for a subscription no try
+    // covers, and keeps that call to be applied again.
+    private boolean appliedEverythingHandedOver(String subscriptionId, HandedOver handed) throws InterruptedException {
         @Nullable SubscriptionLock lock = lockSubscriptionUnlessShutDown(subscriptionId);
         if (lock == null) {
             synchronized (this) {
-                lifecycleHandedOver.remove(subscriptionId);
+                handedOver.remove(subscriptionId, handed);
             }
             return true;
         }
         try {
-            Lifecycle latest;
+            @Nullable Lifecycle next;
             synchronized (this) {
-                latest = lifecycle;
-                if (shutDown || Objects.equals(lifecycleHandedOver.get(subscriptionId), latest.id())) {
-                    lifecycleHandedOver.remove(subscriptionId);
+                if (shutDown) {
+                    handedOver.remove(subscriptionId, handed);
+                    return true;
+                }
+                next = handed.notApplied.peekFirst();
+                if (next == null) {
+                    if (lifecycleBeingApplied == 0) {
+                        handedOver.remove(subscriptionId, handed);
+                    } else {
+                        handed.done = true;
+                    }
                     return true;
                 }
             }
             @Nullable CompetingConsumer cc = findFirstCompetingConsumerMatching(c -> c.hasSubscriptionId(subscriptionId)).orElse(null);
-            RuntimeException failure = applyLifecycle(subscriptionId, latest, new ArrayList<>(), null);
+            RuntimeException failure = applyLifecycle(subscriptionId, next, new ArrayList<>(), null);
             if (failure != null && cc == null && nonCompetingConsumersSubscriptions.contains(subscriptionId)) {
                 throw failure;
             }
@@ -734,11 +781,26 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 reconcileLater(cc.subscriptionIdAndSubscriberId, false);
             }
             synchronized (this) {
-                lifecycleHandedOver.put(subscriptionId, latest.id());
+                handed.applied(next);
             }
             return false;
         } finally {
             lock.unlock();
+        }
+    }
+
+    // The start(..) and stop() calls handed over for one subscription id, read and written under the monitor only
+    private static final class HandedOver {
+        // Oldest first
+        private final ArrayDeque<Lifecycle> notApplied = new ArrayDeque<>();
+        // The id of the last one applied, or 0
+        private long appliedThrough;
+        // Its thread has applied every one and ended while a start(..) or stop() was being applied
+        private boolean done;
+
+        private void applied(Lifecycle lifecycle) {
+            notApplied.remove(lifecycle);
+            appliedThrough = lifecycle.id();
         }
     }
 
@@ -884,7 +946,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 registerAndStartIfGranted(cc);
             } else if (cc.isPaused() && (resumeSubscriptionsAutomatically || cc.isPausedByTheLossOfItsLease())) {
                 logDebug("Starting CompetingConsumer subscription (subscriberId={}, subscriptionId={}, state={})", cc.getSubscriberId(), cc.getSubscriptionId(), cc.state.getClass().getSimpleName());
-                resume(cc.getSubscriptionId());
+                resume(cc.getSubscriptionId(), false);
             }
         } catch (RuntimeException e) {
             triedAgainAfter(cc.subscriptionIdAndSubscriberId, e);
@@ -946,10 +1008,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
-        return actOn(subscriptionId, () -> resume(subscriptionId));
+        return actOn(subscriptionId, () -> resume(subscriptionId, true));
     }
 
-    private Subscription resume(String subscriptionId) {
+    // Only a resume the user asks for lets a subscription run while this model is stopped. A start(..) applied to a
+    // subscription handed over can come after a later stop() began, which must still pause it after that resume.
+    private Subscription resume(String subscriptionId, boolean askedForByTheUser) {
         logDebug("Trying to resume CompetingConsumer subscription (subscriptionId={})", subscriptionId);
         requireKnown(subscriptionId);
         boolean running;
@@ -980,7 +1044,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         return findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId))
                 .map(competingConsumer -> {
                     synchronized (wrappedModelStart) {
-                        if (stoppedByUser.get()) {
+                        if (askedForByTheUser && stoppedByUser.get()) {
                             mayRunWhileStopped.add(competingConsumer.subscriptionIdAndSubscriberId);
                         }
                     }
@@ -1716,7 +1780,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     logDebug("Won't resume system-paused CompetingConsumer because subscription model was explicitly stopped by user (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
                     handBackGrantedLock(competingConsumer);
                 } else {
-                    resume(subscriptionId);
+                    resume(subscriptionId, true);
                 }
             }
             case CompetingConsumerState.PausedWhileWaiting pausedWhileWaiting -> {
