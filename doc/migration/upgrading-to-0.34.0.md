@@ -1422,7 +1422,9 @@ cancelled subscription's position, or skipped its history.
 
 Now it returns `Mono<Void>`. The cancel still takes effect when you call the method, whether or not anything subscribes
 to the `Mono`. The `Mono` completes once the state stored for that id is deleted, in the model you called and in every
-model it wraps, and it fails when a delete fails.
+model it wraps, and it fails when a delete fails. Neither the method nor the `Mono` has to wait for a call of the
+subscription's action that is already running, so that call may still be running after the `Mono` completes. Waiting
+for it would let one action that never ends hold up the cancel.
 
 What to do:
 
@@ -1492,18 +1494,48 @@ write, including one the wrapped model is still running an event through. Once a
 the durable model doesn't run the action of a subscription it handed to the wrapped model and ended, even when the
 wrapped model still delivers an event to it.
 
+Neither a cancel nor a `shutdown()` of `ReactorDurableSubscriptionModel` waits for a call of the action that is already
+running, so that call can still be running after the cancel's `Mono` completes or `shutdown()` returns. The durable
+model writes no checkpoint for the event that call handles. After a `shutdown()` the checkpoint stored before that
+event stays, so the next subscribe of the id that resumes from it delivers the event again, in a new model or after a
+restart. After a cancel the checkpoint is deleted, so a later subscribe of the id delivers the event again only when
+its own `StartAt` begins before it. If that call must have ended before you go on, have the action signal it.
+
 None of these waits has a time limit, because a store can still apply a write after the model stopped waiting for it. A
 save could then bring the cancelled checkpoint back after the delete, and a delete could remove the checkpoint the next
 subscription wrote. The cost is that on a store whose writes hang but whose reads answer, a subscribe right after a
 cancel waits until the store answers those writes, where 0.33.0 started it straight away. No call for another id waits
 for them.
 
-A subscribe with a `StartAt.dynamic(..)` that has to wait for that delete returns right away, since the calling thread
-can be one where Reactor refuses to block, and starts the subscription once the delete has ended. When your function
-then answers the subscription-model default and no checkpoint is stored, the subscription starts from the position
-`subscribe(..)` asked the wrapped model for before it returned, rather than from where the feed is once the delete has
-ended. So does a function that answers `StartAt.now()` when the model was running at that `subscribe(..)`. A function
-that throws, or a wrapped model that refuses the subscription, then ends `waitUntilStarted()` with that error instead of making
+A subscribe with a `StartAt.dynamic(..)` that has to wait for that delete does not wait for the delete on the calling
+thread. It returns, and starts the subscription once the delete has ended, which is when your function runs. When the
+function answers the subscription-model default and no checkpoint is stored, the subscription starts from the position
+`subscribe(..)` asked the wrapped model for, as it does without a delete, rather than from where the feed is once the
+delete has ended. When it answers `StartAt.now()`, the subscription starts from that position too if the model was
+running at that `subscribe(..)`. Otherwise it starts from the position asked for by the `start(..)` or the
+`resumeSubscription(..)` that started it, since `StartAt.now()` for a subscription registered on a stopped model means
+where the feed is once it starts, also without a delete. A wrapped model that manages named subscriptions and is still
+stopped when the delete ends gets `StartAt.now()` as it is, and applies it when it starts. One that was started from a
+thread where Reactor refuses to block, or other than by `ReactorDurableSubscriptionModel.start(..)`, starts the
+subscription from the position `subscribe(..)` asked for, which can also deliver what was written between that call and
+the start.
+
+On a thread that may block, the call that registers or starts the subscription waits for the position it asked for
+before it returns. When `ReactorDurableSubscriptionModel` drives the subscription itself, that call is `subscribe(..)`
+on a running model and `start(..)` or `resumeSubscription(..)` otherwise. When it wraps a model that manages named
+subscriptions, it is `subscribe(..)`, and `start(..)` for `StartAt.now()` on a stopped model. So an event you write
+after that call returned reaches the subscription, also from a wrapped model that answers asynchronously, as
+`ReactorMongoSubscriptionModel` does. On a thread where Reactor refuses to block, the read cannot be awaited and could
+answer with a position after events you wrote once the call returned. So a function that answers `StartAt.now()` from
+such a read ends `waitUntilStarted()` with an `IllegalStateException`, and so does one that answers the
+subscription-model default on a model that wraps one that manages named subscriptions. Without a delete, that default is
+refused on such a thread too, see below. `StartAt.now()` is not, since the wrapped model then gets it before
+`subscribe(..)` returns, which a function that runs after the delete cannot do. When the durable model drives the
+subscription itself, the default reads where the feed is without waiting for the answer on such a thread, with or
+without a delete, as in 0.33.0. Subscribe and start from a thread that may block when a cancel of the same id can still
+be deleting.
+
+A function that throws, or a wrapped model that refuses the subscription, then ends `waitUntilStarted()` with that error instead of making
 `subscribe(..)` throw. If you catch those around `subscribe(..)`, also handle the error from
 `waitUntilStarted()`. Until the subscription starts, `isRunning(id)` answers `true` when `ReactorDurableSubscriptionModel`
 drives the subscription itself, and `false` when it wraps a model that manages named subscriptions, which has not

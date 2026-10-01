@@ -28,9 +28,13 @@ import reactor.core.publisher.Mono;
 public interface CancellableSubscriptions extends SubscriptionModelCapability {
 
     /**
-     * Cancel a subscription so it receives no further events, and release its id for reuse. Cancelling an id that is
-     * unknown or already cancelled stops nothing, and still deletes what a store holds for that id, as described
-     * below.
+     * Cancel a subscription so its action is not called for any further event, and release its id for reuse.
+     * Cancelling an id that is unknown or already cancelled stops nothing, and still deletes what a store holds for that
+     * id, as described below.
+     * <p>
+     * A call of the action that is already running when this is called may still be running after this returns and
+     * after the returned {@code Mono} completes, since neither is required to wait for it. A wait would let one action
+     * that never ends hold up the cancel.
      * <p>
      * The cancel takes effect when this method is called, whether or not anything subscribes to the returned
      * {@code Mono}. A caller that ignores the return value therefore gets the same cancel as before this method

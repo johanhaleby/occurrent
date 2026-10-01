@@ -89,6 +89,7 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     private static final Duration HELD_BY_THE_STORAGE = Duration.ofMillis(500);
     private static final String WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED = "where-the-feed-was-when-the-subscribe-returned";
     private static final String WHERE_THE_FEED_IS_ONCE_THE_DELETE_HAS_ENDED = "where-the-feed-is-once-the-delete-has-ended";
+    private static final String WHERE_THE_FEED_WAS_WHEN_THE_MODEL_WAS_STARTED = "where-the-feed-was-when-the-model-was-started";
 
     @Test
     void completes_only_once_the_stored_position_is_deleted() throws Exception {
@@ -1604,13 +1605,15 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     }
 
     /**
-     * As above, on a model that is stopped when the subscribe comes. StartAt.now() means where the feed is once the
-     * subscription starts on a stopped model, so a function that answers it once the delete has ended does not start
-     * from what the subscribe read.
+     * As above, on a model that is stopped when the subscribe comes. StartAt.now() on a stopped model means where the
+     * feed is once the model is started. When the delete ends after the start, the function answers it only then, so
+     * the subscription starts from where the feed was when the model was started, and gets what was written after the
+     * start returned. When the delete ends first, the function answers it while the model is still stopped, and
+     * StartAt.now() is applied as the model starts, as it is without a delete.
      */
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void a_dynamic_start_position_that_waited_for_a_delete_on_a_stopped_model_starts_at_the_present(boolean handsOver) throws Exception {
+    @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+    void a_dynamic_start_position_that_waited_for_a_delete_on_a_stopped_model_starts_where_the_feed_was_when_the_model_was_started(boolean handsOver, boolean deleteEndsFirst) throws Exception {
         // Given
         PositionStorage storage = new PositionStorage();
         NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED);
@@ -1623,18 +1626,27 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
 
         try {
             // When
-            model.cancelSubscription(SUBSCRIPTION_ID);
+            Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
             model.stop();
             wrapped.running = false;
             model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::now), __ -> Mono.empty());
-            feed.globalCheckpoint = new StringBasedCheckpoint(WHERE_THE_FEED_IS_ONCE_THE_DELETE_HAS_ENDED);
+            if (deleteEndsFirst) {
+                releaseDelete.countDown();
+                cancelled.block(TIMEOUT);
+                if (handsOver) {
+                    await().atMost(TIMEOUT).until(() -> startedAt.size() == 2);
+                }
+            }
+            feed.globalCheckpoint = new StringBasedCheckpoint(WHERE_THE_FEED_WAS_WHEN_THE_MODEL_WAS_STARTED);
             model.start(true);
             wrapped.running = true;
+            feed.globalCheckpoint = new StringBasedCheckpoint(WHERE_THE_FEED_IS_ONCE_THE_DELETE_HAS_ENDED);
             releaseDelete.countDown();
 
             // Then
             await().atMost(TIMEOUT).until(() -> startedAt.size() == 2);
-            assertThat(startedAt.get(1)).as("start position of the subscription made while the model was stopped").hasToString("Now");
+            assertThat(startedAt.get(1)).as("start position of the subscription made while the model was stopped")
+                    .hasToString(deleteEndsFirst ? "Now" : WHERE_THE_FEED_WAS_WHEN_THE_MODEL_WAS_STARTED);
         } finally {
             releaseDelete.countDown();
         }
