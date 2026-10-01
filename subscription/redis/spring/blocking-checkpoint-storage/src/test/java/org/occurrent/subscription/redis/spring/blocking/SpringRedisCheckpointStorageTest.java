@@ -169,9 +169,9 @@ class SpringRedisCheckpointStorageTest {
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
-        cancelSubscription(redisSubscription, subscriberId);
         // The subscription is async so we need to wait for it
         await().atMost(ONE_SECOND).until(Not.not(state::isEmpty));
+        cancelSubscription(redisSubscription, subscriberId);
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
         redisSubscription.subscribe(subscriberId, state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));

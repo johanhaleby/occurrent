@@ -11,6 +11,7 @@
     <artifactId>subscription-mongodb-common-blocking</artifactId>
 
     <modules>
+        <module>change-stream</module>
         <module>competing-consumer-strategy</module>
     </modules>
 

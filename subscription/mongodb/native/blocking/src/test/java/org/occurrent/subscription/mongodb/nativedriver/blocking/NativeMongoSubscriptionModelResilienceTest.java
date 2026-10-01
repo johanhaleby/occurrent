@@ -167,7 +167,7 @@ public class NativeMongoSubscriptionModelResilienceTest {
     @SuppressWarnings("unchecked")
     private MongoCollection<Document> collectionThatFailsDuringIteration(RuntimeException exception) {
         MongoChangeStreamCursor<ChangeStreamDocument<Document>> throwingCursor = mock(MongoChangeStreamCursor.class);
-        doThrow(exception).when(throwingCursor).forEachRemaining(any());
+        doThrow(exception).when(throwingCursor).tryNext();
         ChangeStreamIterable<Document> throwingIterable = iterableOf(throwingCursor);
         MongoCollection<Document> throwingCollection = mock(MongoCollection.class);
         when(throwingCollection.watch(anyList(), eq(Document.class))).thenReturn(throwingIterable);
@@ -193,7 +193,7 @@ public class NativeMongoSubscriptionModelResilienceTest {
     @SuppressWarnings("unchecked")
     private MongoCollection<Document> collectionThatFailsDuringIterationOnce(CountDownLatch failed, AtomicInteger reopened) {
         MongoChangeStreamCursor<ChangeStreamDocument<Document>> throwingCursor = mock(MongoChangeStreamCursor.class);
-        doThrow(failoverLikeException()).when(throwingCursor).forEachRemaining(any());
+        doThrow(failoverLikeException()).when(throwingCursor).tryNext();
         doAnswer(invocation -> {
             failed.countDown();
             return null;
@@ -366,7 +366,7 @@ public class NativeMongoSubscriptionModelResilienceTest {
             }
         };
         MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = mock(MongoChangeStreamCursor.class);
-        doThrow(historyLost).when(cursor).forEachRemaining(any());
+        doThrow(historyLost).when(cursor).tryNext();
         doAnswer(invocation -> {
             closed.countDown();
             return null;
@@ -385,11 +385,15 @@ public class NativeMongoSubscriptionModelResilienceTest {
     @SuppressWarnings("unchecked")
     private MongoCollection<Document> collectionThatHasFetched(List<ChangeStreamDocument<Document>> batch) {
         MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = mock(MongoChangeStreamCursor.class);
+        java.util.Iterator<ChangeStreamDocument<Document>> fetched = batch.iterator();
         doAnswer(invocation -> {
-            java.util.function.Consumer<ChangeStreamDocument<Document>> consumer = invocation.getArgument(0);
-            batch.forEach(consumer);
+            if (fetched.hasNext()) {
+                return fetched.next();
+            }
+            // An empty batch, after the wait the server would have made
+            Thread.sleep(50);
             return null;
-        }).when(cursor).forEachRemaining(any());
+        }).when(cursor).tryNext();
         ChangeStreamIterable<Document> iterable = iterableOf(cursor);
         MongoCollection<Document> collection = mock(MongoCollection.class);
         when(collection.watch(anyList(), eq(Document.class)))
@@ -656,6 +660,22 @@ public class NativeMongoSubscriptionModelResilienceTest {
 
             // Then
             await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+        }
+
+        @Test
+        void restarts_when_the_driver_says_the_cursor_is_no_longer_open_and_the_model_did_not_close_it() {
+            // Given
+            MongoCollection<Document> throwingCollection = collectionThatFailsOnce(new IllegalStateException("Cursor com.mongodb.client.internal.MongoChangeStreamCursorImpl@3ab4fcd8 is not longer open"));
+            subscriptionModel = new NativeMongoSubscriptionModel(database, throwingCollection, TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(exponentialBackoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS), 2)));
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.ofSeconds(10));
+
+            // When
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+
+            // Then
+            await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).as("delivered after the change stream was opened again").hasSize(1));
         }
     }
 

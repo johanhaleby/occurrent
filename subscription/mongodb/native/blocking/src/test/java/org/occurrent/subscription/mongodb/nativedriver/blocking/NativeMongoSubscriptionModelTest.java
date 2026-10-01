@@ -403,6 +403,27 @@ public class NativeMongoSubscriptionModelTest {
         }
 
         @Test
+        void a_dynamic_start_position_is_evaluated_once_to_open_the_change_stream() {
+            // Given
+            AtomicInteger evaluations = new AtomicInteger();
+            StartAt countsItsEvaluations = StartAt.dynamic(() -> {
+                evaluations.incrementAndGet();
+                return StartAt.now();
+            });
+            NameDefined written = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+            CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
+
+            // When
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), countsItsEvaluations, handled::add).waitUntilStarted(Duration.ofSeconds(10));
+            mongoEventStore.write("1", 0, serialize(written));
+
+            // Then
+            await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(handled).extracting(CloudEvent::getId).containsExactly(written.eventId()));
+            assertThat(evaluations).describedAs("evaluations of the start position").hasValue(1);
+        }
+
+        @Test
         void subscribe_returns_and_the_subscription_delivers_once_mongodb_can_be_reached() {
             // Given
             AtomicBoolean unreachable = new AtomicBoolean(true);

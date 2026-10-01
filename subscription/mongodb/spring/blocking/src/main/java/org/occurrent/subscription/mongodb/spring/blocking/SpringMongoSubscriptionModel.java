@@ -17,80 +17,67 @@
 package org.occurrent.subscription.mongodb.spring.blocking;
 
 import com.mongodb.MongoCommandException;
-import com.mongodb.MongoQueryException;
-import com.mongodb.client.model.changestream.ChangeStreamDocument;
+import com.mongodb.client.ChangeStreamIterable;
+import com.mongodb.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
-import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
-import org.occurrent.subscription.CheckpointAwareCloudEvent;
-import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
-import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
+import org.occurrent.subscription.api.blocking.QuietPositionReportingSubscriptions;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
-import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
-import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
+import org.occurrent.subscription.mongodb.blocking.changestream.internal.ChangeStreamSubscriptions;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
-import org.springframework.dao.DataAccessException;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
-import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
-import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.messaging.ChangeStreamRequest;
-import org.springframework.data.mongodb.core.messaging.ChangeStreamRequest.ChangeStreamRequestOptions;
-import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
-import org.springframework.data.mongodb.core.messaging.MessageListener;
-import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.PrefixingDelegatingAggregationOperationContext;
+import org.springframework.scheduling.concurrent.ConcurrentTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
-import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
 import java.util.StringJoiner;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-import java.util.function.Predicate;
-import java.util.function.Supplier;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
-import static org.occurrent.subscription.internal.ExecutorShutdown.shutdownSafely;
-import static org.occurrent.subscription.mongodb.internal.MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalCheckpointErrorMessage;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
 /**
- * This is a subscription that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
+ * This is a subscription that uses Spring's {@link MongoTemplate} to listen to changes from an event store. It reads
+ * each subscription's change stream on a thread of its own from the configured executor.
  * This Subscription doesn't maintain the checkpoint, you need to store it yourself in order to continue the stream
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, HistoryLossReportingSubscriptions, QuietPositionReportingSubscriptions, SmartLifecycle {
 
     /**
      * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
@@ -110,37 +97,17 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
 
+    // The change stream fields that a filter on the event already names in full, so they get no fullDocument prefix
+    private static final Set<String> CHANGE_STREAM_FIELDS = Set.of("operationType", "fullDocument", "documentKey", "updateDescription", "ns");
+
     private final String eventCollection;
-    private final MessageListenerContainer messageListenerContainer;
-    private final ConcurrentMap<String, InternalSubscription> runningSubscriptions;
-    private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions;
     private final TimeRepresentation timeRepresentation;
-    private final MongoOperations mongoOperations;
-    private final RetryStrategy retryStrategy;
-    private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
+    private final MongoTemplate mongoTemplate;
+    final Executor executor;
+    // Whether this model made the executor itself, and so shuts it down
+    private final boolean ownsExecutor;
     private final boolean autoStartup;
-    private final @Nullable Duration maxAwaitTime;
-    // Shared executor for restart loops so a failing subscription backs off (via retryStrategy) instead of
-    // spawning a thread per restart attempt. One virtual thread per currently-restarting subscription,
-    // released on recovery, pause/cancel, or shutdown. Virtual threads matter because restartOnce() blocks
-    // on failureSignal.join() for the whole restart duration, and a blocked virtual thread unmounts from
-    // its carrier instead of pinning a platform thread.
-    private final ExecutorService restartExecutor;
-    // Tracks the in-flight "wait for next failure or stop signal" future for a restarting subscription, so
-    // pause/cancel/shutdown can wake a blocked restart loop instead of leaving it parked forever.
-    private final ConcurrentMap<String, CompletableFuture<@Nullable RestartSignal>> activeRestartSignal;
-    private final List<HistoryLossListener> historyLossListeners = new CopyOnWriteArrayList<>();
-    // The Spring subscription this model stopped restarting, per subscription id, so start(..) stops waiting for it.
-    // The subscription itself stays running, and a pause and resume replaces the Spring subscription.
-    private final ConcurrentMap<String, org.springframework.data.mongodb.core.messaging.Subscription> stoppedRestarting;
-
-    private volatile boolean shutdown = false;
-
-    // A refused checkpoint write must never be retried, on the per-event delivery below. The call site already
-    // passes its own predicate, which RetryExecution combines with the strategy's own. The restart loop is
-    // excluded separately, in registerNewSpringSubscription's error handler, since it never runs a retried
-    // delivery action itself.
-    private final Predicate<Throwable> RETRYABLE = e -> !shutdown && !(e instanceof CheckpointWriteConditionNotFulfilledException);
+    private final ChangeStreamSubscriptions subscriptions;
 
     /**
      * Create a blocking subscription using Spring. It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively
@@ -173,158 +140,150 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * @param config        The configuration to use
      */
     public SpringMongoSubscriptionModel(MongoTemplate mongoTemplate, SpringMongoSubscriptionModelConfig config) {
-        requireNonNull(mongoTemplate, MongoOperations.class.getSimpleName() + " cannot be null");
+        requireNonNull(mongoTemplate, MongoTemplate.class.getSimpleName() + " cannot be null");
         requireNonNull(config, SpringMongoSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
-        this.mongoOperations = mongoTemplate;
+        this.mongoTemplate = mongoTemplate;
         this.timeRepresentation = config.timeRepresentation;
         this.eventCollection = config.eventCollection;
-        this.runningSubscriptions = new ConcurrentHashMap<>();
-        this.pausedSubscriptions = new ConcurrentHashMap<>();
-        this.retryStrategy = config.retryStrategy;
-        this.restartSubscriptionsOnChangeStreamHistoryLost = config.restartSubscriptionsOnChangeStreamHistoryLost;
-        this.maxAwaitTime = config.maxAwaitTime;
-        this.restartExecutor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("spring-mongo-subscription-restart-", 0).factory());
-        this.activeRestartSignal = new ConcurrentHashMap<>();
-        this.stoppedRestarting = new ConcurrentHashMap<>();
         this.autoStartup = config.autoStartup;
-        this.messageListenerContainer = new DefaultMessageListenerContainer(mongoTemplate, config.executor);
-        // Left stopped when autoStartup is false, so subscribe(..) registers into pausedSubscriptions and no change
-        // stream is opened until the caller starts one. Starting here and stopping again would open and close them.
-        if (autoStartup) {
-            this.messageListenerContainer.start();
+        this.ownsExecutor = config.executor == null;
+        this.executor = config.executor == null ? newTaskExecutor(config.virtualThreads) : config.executor;
+        // Left stopped when autoStartup is false, so subscribe(..) holds every subscription paused and no change
+        // stream is opened until the caller starts one
+        this.subscriptions = new ChangeStreamSubscriptions(this, new ChangeStreams(), SpringMongoSubscriptionModel.class, log, config.timeRepresentation, config.retryStrategy,
+                config.restartSubscriptionsOnChangeStreamHistoryLost, null, config.maxAwaitTime, config.autoStartup);
+    }
+
+    // False for an executor it can't ask, and for a Spring executor not yet initialized, which isn't shut down
+    static boolean isShutDown(Executor executor) {
+        try {
+            return switch (executor) {
+                case ExecutorService executorService -> executorService.isShutdown();
+                case ThreadPoolTaskExecutor taskExecutor -> taskExecutor.getThreadPoolExecutor().isShutdown();
+                case ThreadPoolTaskScheduler taskScheduler -> taskScheduler.getScheduledExecutor().isShutdown();
+                case SimpleAsyncTaskExecutor taskExecutor -> !taskExecutor.isActive();
+                case ConcurrentTaskExecutor taskExecutor -> isShutDown(taskExecutor.getConcurrentExecutor());
+                default -> false;
+            };
+        } catch (IllegalStateException notInitialized) {
+            return false;
+        }
+    }
+
+    private static ThreadPoolTaskExecutor newTaskExecutor(boolean virtualThreads) {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setQueueCapacity(0);
+        executor.setVirtualThreads(virtualThreads);
+        executor.initialize();
+        return executor;
+    }
+
+    // What the subscriptions ask of this model. The three calls at the end go to this model's own methods, so a
+    // subclass that overrides one also sees the calls start(..), stop() and shutdown() make.
+    private final class ChangeStreams implements ChangeStreamSubscriptions.Model {
+        @Override
+        public ChangeStreamIterable<Document> watch(List<Bson> pipeline) {
+            MongoCollection<Document> collection = mongoTemplate.getDb().getCollection(eventCollection);
+            return pipeline.isEmpty() ? collection.watch(Document.class) : collection.watch(pipeline, Document.class);
+        }
+
+        @Override
+        public Document runCommand(Document command) {
+            return mongoTemplate.executeCommand(command);
+        }
+
+        @Override
+        public void execute(Runnable task) {
+            executor.execute(() -> {
+                try {
+                    task.run();
+                } catch (RuntimeException e) {
+                    // A refused checkpoint write or a retry strategy that gave up, both logged where delivery stopped.
+                    // This model has never thrown either on the executor
+                    log.debug("Delivery stopped for a subscription", e);
+                }
+            });
+        }
+
+        @Override
+        public boolean executorIsShutDown() {
+            return isShutDown(executor);
+        }
+
+        @Override
+        public void shutdownExecutor() {
+            // Five seconds for a running action to return, as in the native model, since the executor's own shutdown
+            // interrupts it
+            if (ownsExecutor) {
+                ExecutorShutdown.shutdownSafely(((ThreadPoolTaskExecutor) executor).getThreadPoolExecutor(), 5, TimeUnit.SECONDS);
+            }
+        }
+
+        @Override
+        public Subscription subscription(String subscriptionId, CountDownLatch started) {
+            return new SpringMongoSubscription(subscriptionId, started, () -> subscriptions.isShutdown());
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return SpringMongoSubscriptionModel.this.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            SpringMongoSubscriptionModel.this.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            SpringMongoSubscriptionModel.this.cancelSubscription(subscriptionId);
         }
     }
 
     @Override
     public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-        return subscribe(subscriptionId, filter, startAt, action, false);
+        return subscriptions.subscribe(subscriptionId, () -> pipelineFor(filter), startAt, action, false);
     }
 
     /**
      * Holds the subscription paused as a subscription made while this model is stopped, so its change stream opens on
-     * {@link #resumeSubscription(String)} or {@link #start(boolean) start(true)}. A {@link StartAt#now()} or
-     * {@link StartAt#subscriptionModelDefault()} position is decided when the change stream opens, as for a
-     * subscription made while this model is stopped.
+     * {@link #resumeSubscription(String)} or {@link #start(boolean) start(true)}. A subscription started at the present
+     * is delivered the events written from this call on.
      */
     @Override
     public synchronized Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-        return subscribe(subscriptionId, filter, startAt, action, true);
+        return subscriptions.subscribe(subscriptionId, () -> pipelineFor(filter), startAt, action, true);
     }
 
-    private Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
-        requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        requireNonNull(action, "Action cannot be null");
-        requireNonNull(startAt, "StartAt cannot be null");
-
-        if (isKnown(subscriptionId)) {
-            throw new DuplicateSubscriptionIdException(subscriptionId);
+    // The pipeline Spring Data builds for the same filter, where a field of the event gets the fullDocument prefix
+    @SuppressWarnings("unchecked")
+    private List<Bson> pipelineFor(@Nullable SubscriptionFilter filter) {
+        ChangeStreamOptions options = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, ChangeStreamOptions.builder());
+        Object changeStreamFilter = options.getFilter().orElse(null);
+        if (changeStreamFilter == null) {
+            return List.of();
+        } else if (changeStreamFilter instanceof Aggregation aggregation) {
+            return List.copyOf(aggregation.toPipeline(new PrefixingDelegatingAggregationOperationContext(Aggregation.DEFAULT_CONTEXT, "fullDocument", CHANGE_STREAM_FIELDS)));
+        } else if (changeStreamFilter instanceof List<?> stages) {
+            return List.copyOf((List<Document>) stages);
         }
-
-        logDebug("Subscribing ({})", subscriptionId);
-
-        // The options are built on the container's thread when the change stream opens, where a failure goes round the
-        // restart loop forever, so a filter or a start position this model can't apply is refused here instead
-        ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, ChangeStreamOptions.builder());
-        MongoCommons.checkStartPosition(startAt, new StartAt.SubscriptionModelContext(SpringMongoSubscriptionModel.class));
-
-        // Tracks the change-stream position this subscription has read to, seeded with the StartAt it was
-        // created with. Every request rebuild (pause/resume, restart after an error) starts from here rather
-        // than from the original StartAt, which for the default resolves to the present all over again and
-        // drops everything written while the subscription was away (#522). Mirrors the currentStartAt of
-        // NativeMongoSubscriptionModel and ReactorMongoSubscriptionModel.
-        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
-
-        // Wraps ChangeStreamRequestOptions creation in a supplier so it's recomputed on pause/resume, not just
-        // once at subscribe time. OpensWhenStartedChangeStreamRequest calls it when the change stream opens, and a
-        // tracked position of the present is replaced there by MongoDB's operation time, so a rebuild before the
-        // first event opens at that time rather than at a later present.
-        Supplier<ChangeStreamRequestOptions> requestOptionsSupplier = () -> {
-            var subscriptionModelContext = new StartAt.SubscriptionModelContext(SpringMongoSubscriptionModel.class);
-            StartAt openingPosition = MongoCommons.resolveOpeningPosition(currentStartAt, subscriptionModelContext, this::currentOperationTime);
-            // builder::resumeAt maps to the driver's startAtOperationTime here rather than to a resume token,
-            // and that includes an operation stamped at exactly the given time.
-            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, openingPosition, subscriptionModelContext);
-            final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
-            return maxAwaitTime == null
-                    ? new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions)
-                    : new ChangeStreamRequestOptions(null, eventCollection, maxAwaitTime, changeStreamOptions);
-        };
-
-        MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
-            ChangeStreamDocument<Document> raw = change.getRaw();
-            if (raw == null) {
-                log.error("[{}] Internal Error: ChangeStreamDocument in collection {} was null", subscriptionId, eventCollection);
-                return;
-            }
-
-            if (log.isDebugEnabled()) {
-                log.debug("[{}] Received event with for operation {} in namespace {}. Document: {}, Document Key: {}, Update Description: {}", subscriptionId, raw.getOperationTypeString(), raw.getNamespace(), raw.getFullDocument(), raw.getDocumentKey(), raw.getUpdateDescription());
-            }
-
-            BsonDocument resumeToken = raw.getResumeToken();
-            MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
-                    .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, new MongoResumeTokenCheckpoint(resumeToken)))
-                    .ifPresentOrElse(executeWithRetry(action, RETRYABLE, retryStrategy), () -> {
-                        if (log.isDebugEnabled()) {
-                            log.debug("Won't deserialize document to cloud event for operation type {} in namespace {}: {}", raw.getOperationTypeString(), raw.getNamespace(), raw.getFullDocument());
-                        }
-                    });
-            // Advanced after the action rather than before it, so a pause or a change-stream error between two
-            // documents can at worst hand the one in flight over again, never skip it. Advanced for a document
-            // that didn't deserialize into a CloudEvent too, since there is nothing left to deliver for it.
-            currentStartAt.set(StartAt.checkpoint(new MongoResumeTokenCheckpoint(resumeToken)));
-        };
-
-        Supplier<ChangeStreamRequest<Document>> requestBuilder = () -> new OpensWhenStartedChangeStreamRequest(listener, eventCollection, requestOptionsSupplier);
-        boolean opensNow = messageListenerContainer.isRunning() && !holdPaused;
-        // A running container opens every request registered with it, so one held paused there is registered on resume
-        final org.springframework.data.mongodb.core.messaging.Subscription subscription = !messageListenerContainer.isRunning() || opensNow
-                ? registerNewSpringSubscription(subscriptionId, requestBuilder.get(), null)
-                : new NotYetRegistered();
-        SpringMongoSubscription springMongoSubscription = new SpringMongoSubscription(subscriptionId, subscription);
-        logDebug("MessageListenerContainer running (subscriptionId={}): {}", subscriptionId, messageListenerContainer.isRunning());
-        if (opensNow) {
-            runningSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, currentStartAt, requestBuilder));
-        } else {
-            pausedSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, currentStartAt, requestBuilder));
-        }
-        return springMongoSubscription;
+        throw new IllegalArgumentException("Cannot turn " + changeStreamFilter.getClass().getName() + " into a change stream pipeline");
     }
 
     @Override
     public synchronized void cancelSubscription(String subscriptionId) {
-        logDebug("Cancelling subscription for {}", subscriptionId);
-        InternalSubscription subscription = runningSubscriptions.remove(subscriptionId);
-        if (subscription == null) {
-            // A paused one too, or its id could never be subscribed again and a resume or start(true) would deliver to
-            // it. Removing it from the container keeps a change stream registered while the container was stopped
-            // from opening once the container starts.
-            subscription = pausedSubscriptions.remove(subscriptionId);
-        }
-        stoppedRestarting.remove(subscriptionId);
-        if (subscription == null) {
-            logDebug("Subscription {} not found when cancelling", subscriptionId);
-        } else {
-            stopRestartLoop(subscriptionId);
-            messageListenerContainer.remove(subscription.getSpringSubscription());
-        }
+        subscriptions.cancelSubscription(subscriptionId);
     }
 
+    /**
+     * Cancels every subscription and shuts down the executor this model made for itself. An executor given to
+     * {@link SpringMongoSubscriptionModelConfig#executor(Executor)} is left running.
+     */
+    // Takes the monitor itself while it cancels, and waits for the executor without it
     @PreDestroy
     @Override
-    public synchronized void shutdown() {
-        logDebug("Shutting down subscription model");
-        shutdown = true;
-        runningSubscriptions.forEach((subscriptionId, internalSubscription) -> {
-            stopRestartLoop(subscriptionId);
-            internalSubscription.shutdown();
-        });
-        runningSubscriptions.clear();
-        pausedSubscriptions.forEach((__, internalSubscription) -> internalSubscription.shutdown());
-        pausedSubscriptions.clear();
-        stoppedRestarting.clear();
-        stopMessageListenerContainer();
-        shutdownSafely(restartExecutor, 5, TimeUnit.SECONDS);
+    public void shutdown() {
+        subscriptions.shutdown();
     }
 
     @Override
@@ -332,7 +291,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         // Increment by 1 to avoid clashing with an existing event, preventing duplicates in rare replay cases.
         BsonTimestamp currentOperationTime;
         try {
-            currentOperationTime = MongoCommons.getServerOperationTime(mongoOperations.executeCommand(new Document("hostInfo", 1)), 1);
+            currentOperationTime = MongoCommons.getServerOperationTime(mongoTemplate.executeCommand(new Document("hostInfo", 1)), 1);
         } catch (UncategorizedMongoDbException e) {
             if (e.getCause() instanceof MongoCommandException) {
                 log.warn(cannotFindGlobalCheckpointErrorMessage(e.getCause()));
@@ -346,15 +305,6 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         return new MongoOperationTimeCheckpoint(currentOperationTime);
     }
 
-    private @Nullable BsonTimestamp currentOperationTime() {
-        Document reply = mongoOperations.executeCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND);
-        BsonTimestamp operationTime = MongoCommons.operationTimeAfter(reply);
-        if (operationTime == null) {
-            log.warn(MongoCommons.noOperationTimeToPinToMessage(reply));
-        }
-        return operationTime;
-    }
-
     // Life-cycle implementation
 
     /**
@@ -365,17 +315,14 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * @see #resumeSubscription(String)
      */
     @Override
-    public synchronized void pauseSubscription(String subscriptionId) {
-        logDebug("Pausing subscription for {}", subscriptionId);
-        requireKnown(subscriptionId);
-        InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
-        if (internalSubscription == null) {
-            throw new SubscriptionNotRunningException(subscriptionId);
+    public void pauseSubscription(String subscriptionId) {
+        Runnable waitForTheRunningAction;
+        synchronized (this) {
+            requireNotShutdown(subscriptionId);
+            waitForTheRunningAction = subscriptions.pauseSubscription(subscriptionId);
         }
-        stopRestartLoop(subscriptionId);
-        messageListenerContainer.remove(internalSubscription.getSpringSubscription());
-        pausedSubscriptions.put(subscriptionId, internalSubscription);
-        logDebug("Subscription {} paused", subscriptionId);
+        // Without the monitor, so a call for another subscription doesn't wait for the paused one's action
+        waitForTheRunningAction.run();
     }
 
     /**
@@ -385,17 +332,20 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * Delivery is <i>at least once</i> across a pause: an event whose handler had not finished when the subscription
      * was paused, and every event another consumer of the same subscription id handled in the meantime, is handed to
      * this handler again on resume. That is deliberate, since wasted work is the cheaper mistake, and it means
-     * handlers must be idempotent. This model asks MongoDB for its operation time right before the change stream of a
-     * subscription started at the present opens, and records it as that subscription's position. One paused before it
-     * handled any event resumes from that time, so the events written since are delivered too, as long as the oplog
-     * still holds that time. When it no longer does, the resume gets the handling that
-     * {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has no operation time, or the
-     * subscription was paused before this model asked for it, nothing is recorded and the resume opens at the present.
+     * handlers must be idempotent. For a subscription started at the present, this model asks MongoDB for its
+     * operation time on the executor once {@code subscribe(..)} has registered it, and records the answer as that
+     * subscription's position before its change stream opens. A pause doesn't stop the question, so one paused before
+     * it handled any event, even before MongoDB answered, resumes from that time, and the events written since are
+     * delivered too, as long as the oplog still holds that time. When it no longer does, the resume gets the handling
+     * that {@code restartSubscriptionsOnChangeStreamHistoryLost} configures. When MongoDB's reply has no operation
+     * time, nothing is recorded and the resume opens at the present.
      * <p>
-     * A subscription whose {@code RetryStrategy} gave up restarting its change stream still counts as running, and
-     * pausing it and then resuming it starts it again. So does one whose change stream history was lost with
-     * {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off, except that the resume has to be
-     * {@link #resumeSubscription(String, StartAt)} at a position the oplog still holds.
+     * A subscription whose {@code RetryStrategy} gave up opening its change stream, or delivering an event, still counts
+     * as running, and pausing it and then resuming it starts it again. The give-up is logged as an error. When the
+     * strategy gives up asking MongoDB for its operation time, the give-up is logged, and it can keep a change stream
+     * from opening the same way. Pausing and resuming the subscription after that starts it again. A subscription whose change stream
+     * history was lost with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off is removed from this
+     * model, so its id can be subscribed again.
      * <p>
      * That is what this call does on its own. A {@code DurableSubscriptionModel} wrapping this model calls
      * {@link #resumeSubscription(String, StartAt)} with a stored checkpoint instead whenever one exists, so a
@@ -407,7 +357,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      */
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
-        return doResumeSubscription(subscriptionId, null);
+        requireNotShutdown(subscriptionId);
+        return subscriptions.resumeSubscription(subscriptionId, null);
     }
 
     /**
@@ -418,37 +369,16 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
         requireNonNull(startAt, "StartAt cannot be null");
-        MongoCommons.checkStartPosition(startAt, new StartAt.SubscriptionModelContext(SpringMongoSubscriptionModel.class));
-        return doResumeSubscription(subscriptionId, startAt);
+        subscriptions.checkStartPosition(startAt);
+        requireNotShutdown(subscriptionId);
+        return subscriptions.resumeSubscription(subscriptionId, startAt);
     }
 
-    // The shared resume path. repositionTo is the caller's explicit position from the two-arg overload, or null
-    // from the one-arg overload, in which case currentStartAt is left untouched and the resume continues from
-    // whatever it already holds.
-    private Subscription doResumeSubscription(String subscriptionId, @Nullable StartAt repositionTo) {
-        logDebug("Resuming subscription for {}", subscriptionId);
-        requireKnown(subscriptionId);
-        InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
-        if (internalSubscription == null) {
-            throw new SubscriptionAlreadyRunningException(subscriptionId);
+    // A model that is shut down has no subscriptions, so it answers as for an id it never had
+    private void requireNotShutdown(String subscriptionId) {
+        if (subscriptions.isShutdown()) {
+            throw new UnknownSubscriptionException(subscriptionId);
         }
-        if (repositionTo != null) {
-            internalSubscription.currentStartAt().set(repositionTo);
-        }
-
-        messageListenerContainer.remove(internalSubscription.getSpringSubscription());
-        if (!messageListenerContainer.isRunning()) {
-            logDebug("Subscription was not running, will start (subscriptionId={})", subscriptionId);
-            startMessageListenerContainer();
-        }
-
-        org.springframework.data.mongodb.core.messaging.Subscription newSubscription = registerNewSpringSubscription(subscriptionId, internalSubscription.newChangeStreamRequest(), null);
-        InternalSubscription newInternalSubscription = internalSubscription.copy(newSubscription);
-        runningSubscriptions.put(subscriptionId, newInternalSubscription);
-        stoppedRestarting.remove(subscriptionId);
-        logDebug("Subscription {} resumed", subscriptionId);
-        // The handle this model keeps, since a restart points that one at the replacement change stream
-        return newInternalSubscription.occurrentSubscription();
     }
 
     /**
@@ -458,83 +388,50 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      */
     @Override
     public synchronized Set<String> subscriptionIds() {
-        return Stream.concat(runningSubscriptions.keySet().stream(), pausedSubscriptions.keySet().stream())
-                .collect(Collectors.toUnmodifiableSet());
+        return subscriptions.subscriptionIds();
     }
 
     @Override
     public boolean isRunning(String subscriptionId) {
-        return !shutdown && runningSubscriptions.containsKey(subscriptionId);
+        return subscriptions.isRunning(subscriptionId);
     }
 
     @Override
     public boolean isPaused(String subscriptionId) {
-        return !shutdown && pausedSubscriptions.containsKey(subscriptionId);
-    }
-
-    private boolean isKnown(String subscriptionId) {
-        return runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId);
-    }
-
-    // Separates "no such subscription here" from "wrong state for this call", which a caller holding several models
-    // needs in order to tell "keep looking" from "this is the owner and the answer is no".
-    private void requireKnown(String subscriptionId) {
-        if (!isKnown(subscriptionId)) {
-            throw new UnknownSubscriptionException(subscriptionId);
-        }
+        return subscriptions.isPaused(subscriptionId);
     }
 
     // SmartLifecycle
 
+    /**
+     * Start the model and, when {@code resumeSubscriptionsAutomatically} is {@code true}, resume every paused
+     * subscription through {@link #resumeSubscription(String)} and wait until the {@link Subscription} each call
+     * returns has started. Pausing, cancelling and listing subscriptions keep working while it waits.
+     * <p>
+     * The wait for a subscription ends early when it's paused or cancelled, when the model shuts down, or when its
+     * change stream won't open at all, because its {@code RetryStrategy} gave up or its change stream history was lost
+     * with {@code restartSubscriptionsOnChangeStreamHistoryLost} turned off.
+     * <p>
+     * When a resume or a wait throws, every other subscription is still resumed and waited for, and then this method
+     * throws the first exception with the others added as suppressed.
+     * <p>
+     * A subscription made while the model is stopped is paused until this call or a resume starts it. For one given
+     * {@link StartAt#now()}, no position, or a {@code StartAt.dynamic(..)} position that resolves to one of those,
+     * {@code subscribe(..)} asks MongoDB for its operation time on the executor and returns without waiting for the
+     * answer. The subscription starts at that time, so its position is fixed when MongoDB answers, shortly after
+     * {@code subscribe(..)} returns, and an event written before then isn't delivered to it. To be sure an event is
+     * delivered, call this method and wait for the subscription's {@link Subscription#waitUntilStarted()} before
+     * writing it. While MongoDB can't be reached, the question is retried with the model's {@code RetryStrategy}.
+     */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        List<Subscription> resumed = new ArrayList<>();
-        synchronized (this) {
-            logDebug("Starting subscription model (resumeSubscriptionsAutomatically={}, shutdown={})", resumeSubscriptionsAutomatically, shutdown);
-            if (shutdown) {
-                return;
-            }
-            startMessageListenerContainer();
-            if (resumeSubscriptionsAutomatically) {
-                // Snapshot the keys before iterating: resumeSubscription moves each id out of pausedSubscriptions as it
-                // goes, and forEach over a map that its own callback mutates can visit an entry that has already
-                // moved, or miss one that has not. Mirrors the reactor twin.
-                new ArrayList<>(pausedSubscriptions.keySet()).forEach(subscriptionId -> resumed.add(resumeSubscription(subscriptionId)));
-            }
-        }
-        // Waited for outside the lock, which the restart loop needs to reopen a change stream that failed to open,
-        // and which pause and cancel need while a change stream is still opening
-        resumed.forEach(this::waitUntilStartedOrNoLongerRunning);
+        subscriptions.start(resumeSubscriptionsAutomatically);
     }
 
-    // A subscription registered while the container was stopped is still registered with it, and starting the
-    // container would open that change stream too while this model holds the subscription as paused
-    private void startMessageListenerContainer() {
-        pausedSubscriptions.values().forEach(paused -> messageListenerContainer.remove(paused.getSpringSubscription()));
-        messageListenerContainer.start();
-    }
-
-    // Stops waiting once the subscription has been paused, cancelled or shut down, or this model has stopped restarting
-    // it, since nothing starts it after that
-    private void waitUntilStartedOrNoLongerRunning(Subscription subscription) {
-        while (!subscription.waitUntilStarted(Duration.ofMillis(100))) {
-            InternalSubscription running = runningSubscriptions.get(subscription.id());
-            if (shutdown || running == null || running.occurrentSubscription() != subscription || stoppedRestarting.get(subscription.id()) == running.getSpringSubscription()) {
-                return;
-            }
-        }
-    }
-
+    // Takes the monitor itself while it pauses, and waits for the running actions without it
     @Override
-    public synchronized void stop() {
-        logDebug("Stopping subscription model (shutdown={})", shutdown);
-        if (!shutdown) {
-            // Snapshot the keys before iterating: pauseSubscription moves each id from runningSubscriptions to
-            // pausedSubscriptions as it goes, and forEach over a map that its own callback mutates can visit an entry
-            // that has already moved, or miss one that has not. Mirrors the reactor twin.
-            new ArrayList<>(runningSubscriptions.keySet()).forEach(this::pauseSubscription);
-            stopMessageListenerContainer();
-        }
+    public void stop() {
+        subscriptions.stop();
     }
 
     @Override
@@ -544,7 +441,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
     @Override
     public boolean isRunning() {
-        return !shutdown && messageListenerContainer.isRunning();
+        return subscriptions.isRunning();
     }
 
     @Override
@@ -552,373 +449,34 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         return autoStartup;
     }
 
-    private void stopMessageListenerContainer() {
-        logDebug("Stopping MessageListenerContainer");
-        CountDownLatch countDownLatch = new CountDownLatch(1);
-        messageListenerContainer.stop(countDownLatch::countDown);
-        try {
-            boolean success = countDownLatch.await(10, TimeUnit.SECONDS);
-            if (!success) {
-                log.warn("Failed to stop {} after 10 seconds", SpringMongoSubscriptionModel.class.getSimpleName());
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    private org.springframework.data.mongodb.core.messaging.Subscription registerNewSpringSubscription(String subscriptionId, ChangeStreamRequest<Document> documentChangeStreamRequest, @Nullable CompletableFuture<@Nullable RestartSignal> failureSignal) {
-        logDebug("registerNewSpringSubscription for subscription {}", subscriptionId);
-        AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> registration = new AtomicReference<>();
-        registration.set(messageListenerContainer.register(documentChangeStreamRequest, Document.class, throwable -> {
-            if (throwable instanceof CheckpointWriteConditionNotFulfilledException) {
-                // Stays known and running, so a pause and a resume start it again. Logged at error level because
-                // nothing else would say why the node went quiet.
-                // Spring reads the next document after a listener throws, so the change stream is stopped here, and
-                // reportFailure with a null signal ends this subscription's restart loop, or never starts one,
-                // instead of running it unbounded.
-                stopAfterRefusedCheckpointWrite(subscriptionId, registration);
-                log.error("Checkpoint write for subscription {} was refused: {}. This node's lease has moved to another one, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it, and a resume redelivers the event once this node holds the lease again.", subscriptionId, throwable.getMessage(), throwable);
-                reportFailure(subscriptionId, failureSignal, registration, null);
-            } else if (throwable instanceof DataAccessException) {
-                Throwable cause = throwable.getCause();
-                if (cause instanceof MongoQueryException) {
-                    log.warn("Caught {} ({}) for subscription {}, will restart!", MongoQueryException.class.getSimpleName(), cause.getMessage(), subscriptionId, throwable);
-                    reportFailure(subscriptionId, failureSignal, registration, new RestartSignal(throwable));
-                } else if (cause instanceof MongoCommandException && ((MongoCommandException) cause).getErrorCode() == CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
-                    String restartMessage = restartSubscriptionsOnChangeStreamHistoryLost ? "will restart subscription from current time." :
-                            "will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.";
-                    if (restartSubscriptionsOnChangeStreamHistoryLost) {
-                        log.warn("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
-                        reportFailure(subscriptionId, failureSignal, registration, RestartSignal.afterHistoryLost(throwable));
-                    } else {
-                        log.error("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
-                        reportFailure(subscriptionId, failureSignal, registration, null);
-                        recordStoppedRestarting(subscriptionId, registration);
-                    }
-                } else if (shutdown) {
-                    if (log.isDebugEnabled()) {
-                        log.debug("Subscription {} is shutting down, ignoring {}.", subscriptionId, throwable.getClass().getName(), throwable);
-                    }
-                    reportFailure(subscriptionId, failureSignal, registration, null);
-                } else {
-                    log.error("Error caught for subscription {}: {} {}. Will restart!", subscriptionId, cause.getClass().getName(), cause.getMessage(), throwable);
-                    reportFailure(subscriptionId, failureSignal, registration, new RestartSignal(throwable));
-                }
-            } else if (isCursorNoLongerOpen(throwable)) {
-                if (log.isDebugEnabled()) {
-                    log.debug("Cursor is no longer open for subscription {}, this may happen if you pause a subscription very soon after subscribing.", subscriptionId, throwable);
-                }
-                reportFailure(subscriptionId, failureSignal, registration, null);
-            } else {
-                log.error("An error occurred for subscription {}, will restart", subscriptionId, throwable);
-                reportFailure(subscriptionId, failureSignal, registration, new RestartSignal(throwable));
-            }
-        }));
-        return requireNonNull(registration.get());
-    }
-
-    // "refused" is read under the lock, which the caller registering it holds until it has stored it. Stopped only
-    // while the subscription still runs it, because after a pause and a resume it runs one that hasn't been refused.
-    // Removing it cancels the task and closes its cursor without waiting for the thread that delivers, which is the
-    // thread calling this.
-    private synchronized void stopAfterRefusedCheckpointWrite(String subscriptionId, AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> refused) {
-        org.springframework.data.mongodb.core.messaging.Subscription refusedSubscription = refused.get();
-        InternalSubscription running = runningSubscriptions.get(subscriptionId);
-        if (refusedSubscription != null && running != null && running.getSpringSubscription() == refusedSubscription) {
-            messageListenerContainer.remove(refusedSubscription);
-        }
-    }
-
-    // "failed" is read under the lock, which the caller registering it holds until it has stored it. Recorded only
-    // while the subscription still runs it, because after a pause and a resume it runs one that hasn't failed.
-    private synchronized void recordStoppedRestarting(String subscriptionId, AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> failed) {
-        org.springframework.data.mongodb.core.messaging.Subscription failedSubscription = failed.get();
-        InternalSubscription running = runningSubscriptions.get(subscriptionId);
-        if (failedSubscription != null && running != null && running.getSpringSubscription() == failedSubscription) {
-            stoppedRestarting.put(subscriptionId, failedSubscription);
-        }
-    }
-
-    // Tells a restart attempt to reconnect because "cause" triggered it, from the present when "historyLost"
-    // says the position the subscription has read to is gone, and otherwise from that position. A completed
-    // future holding null instead means "stop restarting" (paused/cancelled/shut down, or history lost with
-    // restarting disabled).
-    private record RestartSignal(boolean historyLost, Throwable cause) {
-        private RestartSignal(Throwable cause) {
-            this(false, cause);
-        }
-
-        private static RestartSignal afterHistoryLost(Throwable cause) {
-            return new RestartSignal(true, cause);
-        }
-    }
-
     @Override
     public void addHistoryLossListener(HistoryLossListener listener) {
-        requireNonNull(listener, HistoryLossListener.class.getSimpleName() + " cannot be null");
-        historyLossListeners.add(listener);
+        subscriptions.addHistoryLossListener(listener);
     }
 
     @Override
     public void removeHistoryLossListener(HistoryLossListener listener) {
-        requireNonNull(listener, HistoryLossListener.class.getSimpleName() + " cannot be null");
-        historyLossListeners.remove(listener);
-    }
-
-    // Tells the listeners the present before restarting from it, unless the subscription no longer runs the Spring
-    // subscription this restart loop is responsible for. Called outside this model's monitor, since a listener takes a
-    // lock that a subscribe holds while it waits for this monitor. Without an operation time in the reply to ping,
-    // restarts from now and tells nobody
-    private StartAt restartPositionAfterHistoryLost(String subscriptionId, AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> restarted) {
-        InternalSubscription running = runningSubscriptions.get(subscriptionId);
-        BsonTimestamp operationTime = running != null && running.getSpringSubscription() == restarted.get() ? currentOperationTime() : null;
-        if (operationTime == null) {
-            return StartAt.now();
-        }
-        Checkpoint present = new MongoOperationTimeCheckpoint(operationTime);
-        historyLossListeners.forEach(listener -> listener.restartingAfterHistoryLoss(subscriptionId, present));
-        return StartAt.checkpoint(present);
-    }
-
-    // Delivers a change-stream error to whichever restart loop is responsible for this subscription: wakes
-    // an already-waiting loop, or starts a new one on the shared restart executor if this is the first
-    // failure since subscribe/resume.
-    private void reportFailure(String subscriptionId, @Nullable CompletableFuture<@Nullable RestartSignal> failureSignal, AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> failed, @Nullable RestartSignal signal) {
-        if (failureSignal != null) {
-            failureSignal.complete(signal);
-        } else if (signal != null) {
-            restartExecutor.execute(() -> runRestartLoop(subscriptionId, signal, failed));
-        }
-    }
-
-    // Runs on the shared restart executor, retrying with the backoff from "retryStrategy" instead of
-    // restarting immediately and unconditionally. Ends without throwing once a restart attempt reports no
-    // further restart needed.
-    private void runRestartLoop(String subscriptionId, RestartSignal firstSignal, AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> failed) {
-        AtomicReference<RestartSignal> next = new AtomicReference<>(firstSignal);
-        AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> restarted = new AtomicReference<>();
-        // "failed" is read under the lock, which the caller registering it holds until it has stored it
-        synchronized (this) {
-            restarted.set(failed.get());
-        }
-        try {
-            executeWithRetry((Runnable) () -> {
-                RestartSignal signal = requireNonNull(next.get());
-                RestartSignal outcome = restartOnce(subscriptionId, signal, restarted);
-                if (outcome == null) {
-                    next.set(null);
-                    return;
-                }
-                next.set(outcome);
-                throw outcome.cause() instanceof RuntimeException runtimeException ? runtimeException : new RuntimeException(outcome.cause());
-            }, __ -> !shutdown, retryStrategy).run();
-        } catch (RuntimeException e) {
-            // An interrupted backoff sleep (executor shutting down) restores the thread's interrupt status
-            // before rethrowing, see RetryExecution. Reported distinctly from retry exhaustion, and the
-            // interrupt status isn't cleared since the executor thread is being torn down.
-            if (Thread.currentThread().isInterrupted()) {
-                log.warn("Restart loop for subscription {} was interrupted, likely because the restart executor is shutting down", subscriptionId, e);
-            } else if (shutdown) {
-                logDebug("Stopped restarting subscription {} because the subscription model is shutting down", subscriptionId);
-            } else {
-                log.error("Giving up restarting subscription {}, retries exhausted", subscriptionId, e);
-                recordStoppedRestarting(subscriptionId, restarted);
-            }
-        }
-    }
-
-    // Performs one restart attempt, then blocks (without the model's lock) until the subscription fails
-    // again or is told to stop. Returns the next failure signal for the caller to retry, or null if done.
-    // "restarted" holds the Spring subscription this loop is responsible for. When the subscription runs another one, a
-    // pause and a resume replaced it while this loop waited to retry, and a failure of the new one starts its own loop.
-    private @Nullable RestartSignal restartOnce(String subscriptionId, RestartSignal signal, AtomicReference<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> restarted) {
-        CompletableFuture<@Nullable RestartSignal> failureSignal = new CompletableFuture<>();
-        @Nullable StartAt restartFrom = signal.historyLost() ? restartPositionAfterHistoryLost(subscriptionId, restarted) : null;
-        synchronized (this) {
-            InternalSubscription internalSubscription = runningSubscriptions.get(subscriptionId);
-            if (internalSubscription == null || shutdown || internalSubscription.getSpringSubscription() != restarted.get()) {
-                logDebug("Couldn't find a running subscription {} to restart, it was resumed since, or model is shut down", subscriptionId);
-                return null;
-            }
-            org.springframework.data.mongodb.core.messaging.Subscription oldSpringSubscription = internalSubscription.getSpringSubscription();
-            if (restartFrom != null) {
-                // Only change stream history loss names a position, and it names the present because the
-                // position this subscription had read to is no longer in the oplog. Every other error restarts
-                // from that position, so a transient failure doesn't skip whatever committed while the
-                // subscription was down.
-                internalSubscription.currentStartAt().set(restartFrom);
-            }
-            ChangeStreamRequest<Document> newChangeStreamRequest = internalSubscription.newChangeStreamRequest();
-            activeRestartSignal.put(subscriptionId, failureSignal);
-            // Removed before the replacement is registered, not after. Both share the listener that advances the
-            // tracked position, so a straggling delivery from the old cursor would move it back to an older token
-            // and replay from there. Nothing is lost either way, since the replacement starts from the position
-            // rather than from the present.
-            messageListenerContainer.remove(oldSpringSubscription);
-            org.springframework.data.mongodb.core.messaging.Subscription newSpringSubscription = registerNewSpringSubscription(subscriptionId, newChangeStreamRequest, failureSignal);
-            internalSubscription.occurrentSubscription.changeSubscription(newSpringSubscription);
-            restarted.set(newSpringSubscription);
-        }
-        log.info("Subscription {} successfully restarted", subscriptionId);
-        try {
-            return failureSignal.join();
-        } finally {
-            activeRestartSignal.remove(subscriptionId, failureSignal);
-        }
-    }
-
-    // Wakes a restart loop blocked on the next failure of "subscriptionId", if any, so pause/cancel/shutdown
-    // doesn't leave a restart-executor thread parked forever.
-    private void stopRestartLoop(String subscriptionId) {
-        CompletableFuture<@Nullable RestartSignal> pending = activeRestartSignal.remove(subscriptionId);
-        if (pending != null) {
-            pending.complete(null);
-        }
-    }
-
-    private static boolean isCursorNoLongerOpen(Throwable throwable) {
-        return throwable instanceof IllegalStateException && throwable.getMessage().startsWith("Cursor") && throwable.getMessage().endsWith("is not longer open.");
-    }
-
-    // Builds its options when Spring first asks for them, on the container's thread right before the cursor opens.
-    // That keeps the request for MongoDB's operation time off the caller's thread and out of this model's lock, hands
-    // a failure to the error handler and its restart loop, and resolves a StartAt of the present when the stream opens.
-    private static final class OpensWhenStartedChangeStreamRequest extends ChangeStreamRequest<Document> {
-        private final Supplier<ChangeStreamRequestOptions> optionsSupplier;
-        private @Nullable ChangeStreamRequestOptions options;
-
-        private OpensWhenStartedChangeStreamRequest(MessageListener<ChangeStreamDocument<Document>, Document> listener, String eventCollection, Supplier<ChangeStreamRequestOptions> optionsSupplier) {
-            // The options passed here are never read, getRequestOptions() below replaces them
-            super(listener, new ChangeStreamRequestOptions(null, eventCollection, ChangeStreamOptions.empty()));
-            this.optionsSupplier = optionsSupplier;
-        }
-
-        @Override
-        public synchronized ChangeStreamRequestOptions getRequestOptions() {
-            if (options == null) {
-                options = optionsSupplier.get();
-            }
-            return options;
-        }
-    }
-
-    // Stands in for the change stream of a subscription held paused on a running container until a resume registers
-    // one. A wait on it ends when the resume registers it, and goes on to wait for that change stream to open for
-    // whatever is left of its timeout.
-    private static final class NotYetRegistered implements org.springframework.data.mongodb.core.messaging.Subscription {
-        private final CompletableFuture<org.springframework.data.mongodb.core.messaging.@Nullable Subscription> registered = new CompletableFuture<>();
-
-        void registeredAs(org.springframework.data.mongodb.core.messaging.Subscription subscription) {
-            registered.complete(subscription);
-        }
-
-        @Override
-        public boolean isActive() {
-            return false;
-        }
-
-        @Override
-        public boolean await(Duration timeout) throws InterruptedException {
-            long deadline = System.nanoTime() + timeout.toNanos();
-            org.springframework.data.mongodb.core.messaging.@Nullable Subscription subscription;
-            try {
-                subscription = registered.get(timeout.toNanos(), TimeUnit.NANOSECONDS);
-            } catch (TimeoutException | ExecutionException e) {
-                return false;
-            }
-            return subscription != null && subscription.await(Duration.ofNanos(Math.max(0, deadline - System.nanoTime())));
-        }
-
-        @Override
-        public void cancel() {
-            registered.complete(null);
-        }
-    }
-
-    // Holds the spring subscription, the position the subscription has read to, and the change stream request
-    // builder that reads it, so a subscription can be paused (by removing it) and resumed (by starting a new
-    // one from that position).
-    private record InternalSubscription(SpringMongoSubscription occurrentSubscription, AtomicReference<StartAt> currentStartAt, Supplier<ChangeStreamRequest<Document>> changeStreamRequestBuilder) {
-
-        // Keeps the same currentStartAt reference, so the resumed subscription continues from where the paused
-        // one got to rather than from the StartAt it was created with. A handle whose change stream never opened is
-        // pointed at the new one instead of replaced, so the handle subscribe(..) returned while the model was stopped
-        // answers true once the resumed change stream opens.
-        InternalSubscription copy(org.springframework.data.mongodb.core.messaging.Subscription springSubscription) {
-            final SpringMongoSubscription handle;
-            if (occurrentSubscription.hasStarted()) {
-                handle = new SpringMongoSubscription(occurrentSubscription.id(), springSubscription);
-            } else {
-                handle = occurrentSubscription;
-                org.springframework.data.mongodb.core.messaging.Subscription previous = handle.getSubscriptionReference().getAndSet(springSubscription);
-                if (previous instanceof NotYetRegistered placeholder) {
-                    placeholder.registeredAs(springSubscription);
-                }
-            }
-            return new InternalSubscription(handle, currentStartAt, changeStreamRequestBuilder);
-        }
-
-        ChangeStreamRequest<Document> newChangeStreamRequest() {
-            return changeStreamRequestBuilder.get();
-        }
-
-        @Override
-        public boolean equals(@Nullable Object o) {
-            if (this == o) return true;
-            if (!(o instanceof InternalSubscription that)) return false;
-            return Objects.equals(occurrentSubscription, that.occurrentSubscription) && Objects.equals(currentStartAt, that.currentStartAt) && Objects.equals(changeStreamRequestBuilder, that.changeStreamRequestBuilder);
-        }
-
-        org.springframework.data.mongodb.core.messaging.Subscription getSpringSubscription() {
-            return occurrentSubscription.getSubscriptionReference().get();
-        }
-
-        void shutdown() {
-            occurrentSubscription.shutdown();
-        }
-
-        @Override
-        public String toString() {
-            return new StringJoiner(", ", InternalSubscription.class.getSimpleName() + "[", "]")
-                    .add("occurrentSubscription=" + occurrentSubscription)
-                    .add("currentStartAt=" + currentStartAt.get())
-                    .add("changeStreamRequestBuilder=" + changeStreamRequestBuilder)
-                    .toString();
-        }
-    }
-
-    private static void logDebug(String message, Object... params) {
-        if (log.isDebugEnabled()) {
-            log.debug(message, params);
-        }
-    }
-
-
-    @Override
-    public boolean equals(@Nullable Object o) {
-        if (!(o instanceof SpringMongoSubscriptionModel that)) return false;
-        return restartSubscriptionsOnChangeStreamHistoryLost == that.restartSubscriptionsOnChangeStreamHistoryLost && autoStartup == that.autoStartup && shutdown == that.shutdown && Objects.equals(maxAwaitTime, that.maxAwaitTime) && Objects.equals(eventCollection, that.eventCollection) && Objects.equals(messageListenerContainer, that.messageListenerContainer) && Objects.equals(runningSubscriptions, that.runningSubscriptions) && Objects.equals(pausedSubscriptions, that.pausedSubscriptions) && timeRepresentation == that.timeRepresentation && Objects.equals(mongoOperations, that.mongoOperations) && Objects.equals(retryStrategy, that.retryStrategy);
+        subscriptions.removeHistoryLossListener(listener);
     }
 
     @Override
-    public int hashCode() {
-        return Objects.hash(eventCollection, messageListenerContainer, runningSubscriptions, pausedSubscriptions, timeRepresentation, mongoOperations, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, autoStartup, maxAwaitTime, shutdown);
+    public void addQuietPositionListener(QuietPositionListener listener) {
+        subscriptions.addQuietPositionListener(listener);
+    }
+
+    @Override
+    public void removeQuietPositionListener(QuietPositionListener listener) {
+        subscriptions.removeQuietPositionListener(listener);
     }
 
     @Override
     public String toString() {
         return new StringJoiner(", ", SpringMongoSubscriptionModel.class.getSimpleName() + "[", "]")
                 .add("eventCollection='" + eventCollection + "'")
-                .add("messageListenerContainer=" + messageListenerContainer)
-                .add("runningSubscriptions=" + runningSubscriptions)
-                .add("pausedSubscriptions=" + pausedSubscriptions)
                 .add("timeRepresentation=" + timeRepresentation)
-                .add("mongoOperations=" + mongoOperations)
-                .add("retryStrategy=" + retryStrategy)
-                .add("restartSubscriptionsOnChangeStreamHistoryLost=" + restartSubscriptionsOnChangeStreamHistoryLost)
+                .add("executor=" + executor)
                 .add("autoStartup=" + autoStartup)
-                .add("maxAwaitTime=" + maxAwaitTime)
-                .add("shutdown=" + shutdown)
+                .add(subscriptions.toString())
                 .toString();
     }
 }
