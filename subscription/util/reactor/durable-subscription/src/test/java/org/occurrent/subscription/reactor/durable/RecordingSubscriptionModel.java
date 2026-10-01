@@ -46,7 +46,7 @@ final class RecordingSubscriptionModel implements CheckpointAwareSubscriptionMod
      * what a caching model has to avoid doing twice.
      */
     final AtomicInteger globalCheckpointReads = new AtomicInteger();
-    @Nullable Checkpoint globalCheckpoint;
+    volatile @Nullable Checkpoint globalCheckpoint;
     boolean failGlobalCheckpoint = false;
     /**
      * How many reads still fail before the rest succeed. A budget rather than a flag, so a test can prove a

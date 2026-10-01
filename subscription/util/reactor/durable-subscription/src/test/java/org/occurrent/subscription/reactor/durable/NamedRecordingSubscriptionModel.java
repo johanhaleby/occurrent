@@ -61,6 +61,11 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
      */
     volatile Consumer<String> beforeSubscribe = __ -> {
     };
+    /**
+     * Every subscribe, cancel and shutdown in the order they reached this model, a subscribe both as it begins and as
+     * it returns, so a test can tell whether a cancel or a shutdown arrived while a subscribe was still being taken.
+     */
+    final List<String> calls = new CopyOnWriteArrayList<>();
 
     NamedRecordingSubscriptionModel(String globalCheckpoint) {
         this.feed = new RecordingSubscriptionModel(globalCheckpoint);
@@ -79,12 +84,14 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
                                   Function<CloudEvent, Mono<Void>> action) {
+        calls.add("subscribe " + subscriptionId + " began");
         beforeSubscribe.accept(subscriptionId);
         subscribedIds.add(subscriptionId);
         actions.add(action);
         // What the durable model hands a named model is the whole of what decides where the subscription begins on
         // this path, since this model resolves nothing further.
         startedAt.add(startAt);
+        calls.add("subscribe " + subscriptionId + " returned");
         return new Subscription() {
             @Override
             public String id() {
@@ -100,12 +107,18 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
 
     @Override
     public Mono<Void> cancelSubscription(String subscriptionId) {
+        calls.add("cancel " + subscriptionId);
         cancelledIds.add(subscriptionId);
         return cancelled;
     }
 
     @Override
     public void stop() {
+    }
+
+    @Override
+    public void shutdown() {
+        calls.add("shutdown");
     }
 
     @Override

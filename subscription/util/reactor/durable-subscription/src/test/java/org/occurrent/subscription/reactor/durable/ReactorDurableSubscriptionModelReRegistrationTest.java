@@ -51,10 +51,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * A narrower race lives one level down, inside a single registration's own bookkeeping: a late error could, in
  * principle, land between that call installing its map entry and finishing recording its identity, which would let
  * an already-terminated subscription be reported as running with nothing left able to remove it. That gap is
- * closed in {@link ReactorDurableSubscriptionModel#startInternalSubscription} by giving each call one map entry for
+ * closed in {@link ReactorDurableSubscriptionModel#reserveInternalSubscription} by giving each call one map entry for
  * its whole lifetime rather than installing a placeholder and replacing it later, verifiable by reading the method:
- * there is exactly one {@code put}, before the call ever subscribes, so a concurrent reader is never in a position
- * to see one entry while the call's own bookkeeping still names another.
+ * each call makes exactly one {@code put}, under the monitor and before anything subscribes, so a concurrent reader is
+ * never in a position to see one entry while the call's own bookkeeping still names another.
  * <p>
  * That gap was not reproducible here with a racing thread. A background thread armed to fail the position read the
  * instant it saw the read subscribed to, competing against the registering thread's own remaining statements,

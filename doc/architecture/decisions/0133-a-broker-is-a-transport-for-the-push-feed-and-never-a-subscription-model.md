@@ -1508,9 +1508,11 @@ It resolves a dynamic `StartAt` only after the delete too, since `ResumeStartPos
 Spring Boot starter's `BEGINNING` start read the stored position themselves to choose between replaying and resuming.
 The cancel ends every subscription of the id that it finds, and stops their position writes and no others. When the
 durable model drives the subscription itself, it finds a `subscribe(..)` as soon as that call has taken the id. When it
-hands the subscription to a wrapped model that manages named subscriptions, it finds one only once the call has
-returned to its caller. A `subscribe(..)` it does not find is still reading its start position on its caller's thread.
-That call reads the position again after the delete, and the positions it saves after that are kept.
+hands the subscription to a wrapped model that manages named subscriptions, it finds one once the call has returned
+to its caller or handed the subscription over. A `subscribe(..)` it does not find is still reading its start position
+on its caller's thread. That call reads the position again after the delete, and the positions it saves after that are
+kept. A hand-over under way when the cancel comes ends first, and the cancel waits for it, so the wrapped model takes
+the subscribe and the cancel of an id one after the other.
 
 None of these waits has a time limit. A store can apply a write or a delete after its caller stopped waiting for it,
 so a delete that went ahead of a slow save could still have the save put the position back, and a `subscribe(..)` that
@@ -1554,9 +1556,18 @@ A lifecycle call can come in between a decision and the start it leads to, and o
 subscription is a generation with a position writer of its own, and an id has at most one live generation. A cancel, a
 pause, a `stop()`, a `shutdown()`, or a later generation of the same id that takes its place, retires a generation in
 the same step that publishes the change, under the lock that every step toward starting checks. A retired generation
-begins no step toward starting. It resolves no dynamic `StartAt`, it neither subscribes to the feed nor reaches a
-wrapped model that manages named subscriptions, and it writes no position. A step already under way when it is retired
-runs to its end, and the model discards its result. Its `waitUntilStarted()` completes if it had started, and otherwise
+writes no position, is not handed to a wrapped model that manages named subscriptions, and signals no error to a
+subscriber that the retire disposed. A position write checks its generation and records itself in one step under that
+lock, so it either began before the retire, and the cancel's delete waits for it, or never begins. On the hand-over
+path the last check and the hand-over run under a lock of their own for the id, which a cancel of that id and a
+`shutdown()` take before they retire anything. The wrapped model so takes the subscribe before the cancel or the
+shutdown, or never takes it. A shutdown retires the generations it handed over as well, so an action the wrapped model
+is still running starts no position save after it. A step that passed its check just before the retire, resolving a dynamic
+`StartAt`, reading the stored position or subscribing to the feed, can still begin after the retiring call returned,
+since no lifecycle call waits for a function the caller supplies. It runs to its end, and the model discards its
+result. A registration made while the model was stopped reads where the feed is before `subscribe(..)` returns, even
+when a resume or `start(true)` has already taken the registration over, so whichever generation starts it begins from
+that position. Its `waitUntilStarted()` completes if it had started, and otherwise
 fails with `SubscriptionModelShutdownException` after a shutdown, or with `CancellationException` after a cancel, a
 pause or a `stop()`. A registration made while the model was stopped is the one exception. The handle it returned
 keeps waiting once a resume or `start(true)` has taken the registration over, as in 0.33.0. On the
