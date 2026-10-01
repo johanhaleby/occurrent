@@ -30,7 +30,9 @@ import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -44,6 +46,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
@@ -63,16 +66,19 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
@@ -117,6 +123,16 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     private ReactorMongoEventStore mongoEventStore;
     private ReactorMongoSubscriptionModel subscriptionModel;
 
+    @BeforeAll
+    static void installDriverCursorFaults() {
+        DriverCursorFaults.install();
+    }
+
+    @AfterAll
+    static void uninstallDriverCursorFaults() {
+        DriverCursorFaults.uninstall();
+    }
+
     @BeforeEach
     void createClients() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reactivedrivercursor");
@@ -141,6 +157,7 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
         modelLog.stop();
         subscriptionModel.shutdown();
         FailPoint.off(mongoClient);
+        DriverCursorFaults.reset();
         subscriberClient.close();
         mongoClient.close();
     }
@@ -285,6 +302,71 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
 
         // Then
         assertThat(modelLog.list).filteredOn(event -> event.getLevel() == Level.WARN && event.getFormattedMessage().contains(QUIET_POSITIONS_NOT_READ_WARNING)).as("warnings that the resume token can't be read").hasSize(1);
+    }
+
+    @Test
+    void a_model_whose_token_reads_start_failing_after_the_cursor_opened_warns_once_and_delivers_events_through_the_change_stream_of_spring() {
+        // Given
+        DriverCursorFaults.recordCursors = true;
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        waitUntilStarted(subscriptionModel.subscribe("token-reads-fail", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> delivered.add(event.getId()))));
+        await().atMost(10, SECONDS).until(() -> !DriverCursorFaults.cursors.isEmpty());
+
+        // When
+        DriverCursorFaults.failTokenReads = true;
+
+        // Then
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(tokenReadWarnings()).as("warnings that the resume token can't be read").hasSize(1));
+        assertThat(subscriptionModel.readsQuietPositions()).as("reads quiet positions").isFalse();
+        NameDefined matched = nameDefined();
+        write(matched);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).containsExactly(matched.eventId()));
+        assertThat(tokenReadWarnings()).as("warnings that the resume token can't be read").hasSize(1);
+    }
+
+    @Test
+    void a_model_whose_driver_cursor_is_opening_the_change_stream_again_keeps_reading_quiet_positions() throws ReflectiveOperationException {
+        // Given
+        DriverCursorFaults.recordCursors = true;
+        CopyOnWriteArrayList<Checkpoint> quietPositions = new CopyOnWriteArrayList<>();
+        // Asked once before every wait of a second for a batch, so once per look at the token
+        AtomicInteger looks = new AtomicInteger();
+        subscriptionModel.addQuietPositionListener(subscriptionId -> {
+            looks.incrementAndGet();
+            return Mono.just(quietPosition -> Mono.fromRunnable(() -> quietPositions.add(quietPosition)));
+        });
+        CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
+        waitUntilStarted(subscriptionModel.subscribe("opening-again", NAME_DEFINED_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> delivered.add(event.getId()))));
+        write(nameWasChanged());
+        await().atMost(30, SECONDS).until(() -> !quietPositions.isEmpty());
+        // The driver empties this reference while it opens the change stream again, and puts a cursor back when it has
+        Object driverCursor = DriverCursorFaults.cursors.getFirst();
+        Field cursorOfChangeStream = driverCursor.getClass().getDeclaredField("wrapped");
+        cursorOfChangeStream.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        AtomicReference<Object> reference = (AtomicReference<Object>) cursorOfChangeStream.get(driverCursor);
+        Object commandCursor = reference.get();
+        int looksBeforeTheWindow = looks.get();
+
+        // When
+        reference.set(null);
+        await().pollDelay(Duration.ofSeconds(4)).until(() -> true);
+        reference.set(commandCursor);
+
+        // Then
+        assertThat(tokenReadWarnings()).as("warnings that the resume token can't be read").isEmpty();
+        assertThat(subscriptionModel.readsQuietPositions()).as("reads quiet positions").isTrue();
+        assertThat(looks.get() - looksBeforeTheWindow).as("looks at the token while the cursor was empty").isGreaterThanOrEqualTo(3);
+        int quietPositionsBeforeTheNextEvent = quietPositions.size();
+        write(nameWasChanged());
+        await().atMost(30, SECONDS).untilAsserted(() -> assertThat(quietPositions).as("quiet positions reported after the window").hasSizeGreaterThan(quietPositionsBeforeTheNextEvent));
+        NameDefined matched = nameDefined();
+        write(matched);
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered).containsExactly(matched.eventId()));
+    }
+
+    private List<ILoggingEvent> tokenReadWarnings() {
+        return modelLog.list.stream().filter(event -> event.getLevel() == Level.WARN && event.getFormattedMessage().contains(QUIET_POSITIONS_NOT_READ_WARNING)).toList();
     }
 
     // A quiet position handler that is called once per position the model finds, and refuses to write it

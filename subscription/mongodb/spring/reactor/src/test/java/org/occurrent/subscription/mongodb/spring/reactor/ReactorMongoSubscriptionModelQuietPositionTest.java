@@ -80,6 +80,7 @@ import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.filter.Filter.type;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
@@ -352,6 +353,22 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
 
         // Then
         assertThat(unavailableBecause).as("why the driver's change stream cursor can't be read").isNull();
+    }
+
+    @Test
+    void the_driver_of_this_build_declares_the_fields_the_token_read_relies_on_final_or_volatile() throws ClassNotFoundException {
+        // Given
+        Class<?> commandCursor = Class.forName("com.mongodb.internal.operation.AsyncCommandCursor");
+
+        // When
+        String unavailableBecause = DriverChangeStreamCursor.unavailableBecause();
+        String unsafeBecause = DriverChangeStreamCursor.unlessTokenIsReadSafelyThrough(commandCursor);
+
+        // Then
+        assertAll(
+                () -> assertThat(unavailableBecause).as("why a field of the reactive wrapper or the change stream cursor of the driver can't be read safely from another thread").isNull(),
+                () -> assertThat(unsafeBecause).as("why a token read through the driver's command cursor can see an older token than an earlier read").isNull()
+        );
     }
 
     @Test
