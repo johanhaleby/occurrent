@@ -441,6 +441,71 @@ class DurableSubscriptionModelQuietPositionTest {
         assertThat(storage.read("id")).as("checkpoint once the action for e1 has returned").isEqualTo(new StringBasedCheckpoint("e1"));
     }
 
+    @Test
+    void a_closed_run_whose_action_returns_after_the_resumed_run_has_stored_later_events_does_not_stop_the_quiet_position_being_saved() throws InterruptedException {
+        // Given a closed run whose action for e1 returns only after a resumed run has delivered e1 again and then e2,
+        // both stored
+        CountDownLatch e1Started = new CountDownLatch(1);
+        CountDownLatch e1MayReturn = new CountDownLatch(1);
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+            if (firstCall.compareAndSet(true, false)) {
+                e1Started.countDown();
+                awaitQuietly(e1MayReturn);
+            }
+        });
+        Thread closedRun = Thread.ofPlatform().start(() -> wrapped.deliver("id", new StringBasedCheckpoint("e1")));
+        assertThat(e1Started.await(5, SECONDS)).isTrue();
+        wrapped.deliver("id", new StringBasedCheckpoint("e1"));
+        wrapped.deliver("id", new StringBasedCheckpoint("e2"));
+        e1MayReturn.countDown();
+        closedRun.join(5000);
+
+        // When the resumed run then reads nothing for longer than the interval
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        boolean saved = wrapped.readNothing("id", QUIET);
+
+        // Then
+        assertThat(saved).as("quiet save wanted once the closed run's late action has returned").isTrue();
+        assertThat(storage.read("id")).as("checkpoint").isEqualTo(QUIET);
+    }
+
+    @Test
+    void a_closed_run_whose_action_has_not_returned_keeps_the_quiet_position_from_being_saved_until_it_returns() throws InterruptedException {
+        // Given a closed run whose action for e1 has not returned, and a resumed run that delivers e1 again and then
+        // e2, both stored
+        CountDownLatch e1Started = new CountDownLatch(1);
+        CountDownLatch e1MayReturn = new CountDownLatch(1);
+        AtomicBoolean firstCall = new AtomicBoolean(true);
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+            if (firstCall.compareAndSet(true, false)) {
+                e1Started.countDown();
+                awaitQuietly(e1MayReturn);
+            }
+        });
+        Thread closedRun = Thread.ofPlatform().start(() -> wrapped.deliver("id", new StringBasedCheckpoint("e1")));
+        assertThat(e1Started.await(5, SECONDS)).isTrue();
+        wrapped.deliver("id", new StringBasedCheckpoint("e1"));
+        wrapped.deliver("id", new StringBasedCheckpoint("e2"));
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        boolean savedWhileTheActionRuns = wrapped.readNothing("id", QUIET);
+        Checkpoint whileTheActionRuns = storage.read("id");
+
+        // When
+        e1MayReturn.countDown();
+        closedRun.join(5000);
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        boolean savedOnceItHasReturned = wrapped.readNothing("id", QUIET);
+
+        // Then
+        assertThat(savedWhileTheActionRuns).as("quiet save wanted while the closed run's action for e1 has not returned").isFalse();
+        assertThat(whileTheActionRuns).as("checkpoint while the closed run's action for e1 has not returned").isEqualTo(new StringBasedCheckpoint("e2"));
+        assertThat(savedOnceItHasReturned).as("quiet save wanted once the closed run's action for e1 has returned").isTrue();
+        assertThat(storage.read("id")).as("checkpoint once the closed run's action for e1 has returned").isEqualTo(QUIET);
+    }
+
     private static DurableSubscriptionModelConfig saveQuietPositionEvery(Duration interval) {
         return new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(interval);
     }

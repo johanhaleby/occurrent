@@ -366,7 +366,7 @@ class ActionThatOutlivesItsRunTest {
         CountDownLatch answer = new CountDownLatch(1);
         DurableSubscriptionModel durable = new DurableSubscriptionModel(model(model), storage,
                 new DurableSubscriptionModelConfig(cloudEvent -> !cloudEvent.getId().equals(declined.eventId())).saveQuietPositionEvery(Duration.ofMillis(100)),
-                secondWriteVersionReadHeld(readingForTheSlowEvent, answer));
+                secondEventReadHeld(readingForTheSlowEvent, answer));
         started.addFirst(durable);
         CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
         durable.subscribe("declining", null, StartAt.now(), handled::add).waitUntilStarted(Duration.ofSeconds(10));
@@ -651,11 +651,13 @@ class ActionThatOutlivesItsRunTest {
         };
     }
 
-    // Holds the second read only, the one for the second event, and answers no version
-    private static CheckpointWriteVersionSource secondWriteVersionReadHeld(CountDownLatch reading, CountDownLatch answer) {
+    // Holds the read for the second event only, and answers no version. A read made to save a quiet position is
+    // answered at once and not counted, since whether one comes before the first event depends on how long the
+    // subscription took to start
+    private static CheckpointWriteVersionSource secondEventReadHeld(CountDownLatch reading, CountDownLatch answer) {
         AtomicInteger reads = new AtomicInteger();
         return subscriptionId -> {
-            if (reads.incrementAndGet() == 2) {
+            if (!madeToSaveAQuietPosition() && reads.incrementAndGet() == 2) {
                 reading.countDown();
                 try {
                     answer.await(20, SECONDS);
@@ -665,6 +667,11 @@ class ActionThatOutlivesItsRunTest {
             }
             return OptionalLong.empty();
         };
+    }
+
+    private static boolean madeToSaveAQuietPosition() {
+        return StackWalker.getInstance().walk(frames -> frames.anyMatch(frame ->
+                frame.getClassName().equals(DurableSubscriptionModel.class.getName()) && frame.getMethodName().equals("quietPositionSaverFor")));
     }
 
     private CheckpointAwareSubscriptionModel model(Model model) {

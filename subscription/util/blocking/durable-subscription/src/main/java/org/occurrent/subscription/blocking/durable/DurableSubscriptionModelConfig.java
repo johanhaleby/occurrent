@@ -87,9 +87,9 @@ public class DurableSubscriptionModelConfig {
      * {@code interval} gets no extra write.
      * <p>
      * The position is saved from the subscribe on, whatever the {@link #persistCloudEventPositionPredicate} is, but
-     * not while the last event delivered is one the predicate declined to store, and not while an event is being
-     * delivered. After an action that returns later than the action of an event delivered after it, which can happen
-     * after a pause and a resume, nothing is saved until the predicate stores the next event. So with a predicate
+     * not while the event most recently given to the action is one the predicate declined to store, and not while an
+     * event is being delivered. After a pause and a resume, an action of the paused run that is still running keeps
+     * the save off until it returns, for as long as that takes. So with a predicate
      * that declines some events, such as {@link EveryN} with {@code n} above 1, a subscription that goes quiet right
      * after a declined event gets no position saved until the predicate stores one.
      * <p>
