@@ -118,9 +118,13 @@ import static java.util.Objects.requireNonNull;
  * that waits for a running action in {@code pauseSubscription} or that delivers while holding a lock the call takes,
  * never holds the call up, on a platform thread or a virtual one. An event the wrapped model delivers on a thread that
  * is inside a call this model makes into it runs too, and so does one that it hands over once a cancel of the
- * subscription has returned. An event whose thread is interrupted while it waits runs at once, with the interrupt flag
- * clear as it would be without the wait, and the flag is set again once the action returns or throws. Such an event can
- * run while another node holds the lease and runs it as well, so it can be delivered twice, but it is not lost.
+ * subscription has returned. An event also runs once an interrupt of its thread ends a wait between two looks at the
+ * lease, which an interrupt flag already set as such a wait begins does too. When the interrupt that ended the wait came
+ * after the event, the action runs with the interrupt flag clear, and the flag is set again once the action returns or
+ * throws. In every other case this model does not change the flag, so it can be set while the action runs, for
+ * instance when the interrupt comes while this model asks the lease strategy and the strategy then reports the lease
+ * held. An event let through by an interrupt can run while another node holds the lease and runs it as well, so it can
+ * be delivered twice, but it is not lost.
  * <br>
  * <br>
  * So a node stops delivering for a subscription once its lease strategy stops reporting the lease held, also while a
@@ -406,6 +410,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // test can stand there, which nothing outside this model can.
     private volatile Runnable onceAStartOrStopHasBegun = () -> {
     };
+    // Runs on the thread of a cancel once its subscription id is free for a new subscribe, before the cancel has
+    // returned. Exists so a test can stand there, which nothing outside this model can.
+    private volatile Runnable onceACancelHasFreedTheId = () -> {
+    };
     // The start(..) or stop() being applied to every subscription, or 0, read and written under the monitor only
     private long lifecycleBeingApplied;
     // The stop() that a start(..) waiting behind it may still take back, or 0, read and written under the monitor only.
@@ -590,9 +598,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         nonCompetingConsumersSubscriptions.remove(subscriptionId);
         findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId))
                 .ifPresent(cc -> unregisterCompetingConsumer(cc, __ -> {
-                    competingConsumers.remove(cc.subscriptionIdAndSubscriberId);
-                    mayRunWhileStopped.remove(cc.subscriptionIdAndSubscriberId);
+                    // First, while the id is in use, since a subscribe of the same id puts its own delivery once it
+                    // is free and that one must not be forgotten
                     forgetTheDeliveriesOf(subscriptionId);
+                    competingConsumers.remove(cc.subscriptionIdAndSubscriberId);
+                    onceACancelHasFreedTheId.run();
+                    mayRunWhileStopped.remove(cc.subscriptionIdAndSubscriberId);
                 }));
     }
 
@@ -1029,6 +1040,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // contract.
     void runOnceAStartOrStopHasBegun(Runnable hook) {
         this.onceAStartOrStopHasBegun = requireNonNull(hook, "hook cannot be null");
+    }
+
+    // Package-private for the test that stands where the field describes. Not public, and not part of this model's
+    // contract.
+    void runOnceACancelHasFreedTheId(Runnable hook) {
+        this.onceACancelHasFreedTheId = requireNonNull(hook, "hook cannot be null");
     }
 
     // Applies every start(..) and stop() handed over for the subscription, oldest first, under one hold of its lock, so
@@ -2179,8 +2196,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     /**
      * Runs {@code action} for an event once this node may deliver it for the subscription, see
-     * {@link #awaitTheLease}. An interrupt that ended the wait is set again once the action returns or throws, so the
-     * action runs with the interrupt flag it would have had without the wait.
+     * {@link #awaitTheLease}. When an interrupt that came after the event ended the wait, the action runs with the
+     * interrupt flag clear, and the flag is set again once the action returns or throws. Otherwise the flag is not
+     * changed here, so an interrupt that comes after the wait, or while the lease strategy is asked and it then reports
+     * the lease held, can be set while the action runs.
      */
     private Consumer<CloudEvent> deliveredUnderTheLease(SubscriptionIdAndSubscriberId key, Delivery delivery, Consumer<CloudEvent> action) {
         return event -> {
