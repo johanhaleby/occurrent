@@ -48,9 +48,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.SequencedMap;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
@@ -208,8 +210,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // The writers of subscribes still reading where to start or handing the subscription over, by subscription id.
     // They are not registered yet, so a cancel marks them overtaken, which ends the subscribe at its next check.
     private final Map<String, Set<PositionWriter>> positionWritersStarting = new HashMap<>();
-    // The position writes that have started and not ended yet, by subscription id
-    private final Map<String, Set<Mono<Void>>> positionWritesInFlight = new HashMap<>();
+    // The position writes that have started and not ended yet, by subscription id, each with the checkpoint it writes,
+    // in the order they started
+    private final Map<String, SequencedMap<Mono<Void>, Checkpoint>> positionWritesInFlight = new HashMap<>();
     // The latest delete of a stored position that cancelSubscription started for each id, until it has ended. A
     // subscription of the id that starts meanwhile takes it over, see takeOverPositionDelete.
     private final Map<String, PositionDelete> positionDeletes = new HashMap<>();
@@ -292,7 +295,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // the check above and the one below has read for nothing. On a running model storage is asked first, and the
         // wrapped model only when nothing is stored, since a stored checkpoint is where the subscription starts and the
         // read would answer nothing it uses. A delete of the id that a cancel started is taken over before storage is
-        // read, see takeOverPositionDelete.
+        // read, and the read does not wait for that delete, see takeOverPositionDelete.
         Sinks.Empty<Void> readsAbandoned = Sinks.empty();
         final @Nullable Mono<Checkpoint> positionNow;
         @Nullable StoredAtTheCall storedAtTheCall = null;
@@ -301,11 +304,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             positionNow = null;
         } else if (running) {
             takenOverAtTheCall = takeOverPositionDelete(subscriptionId);
-            Mono<Checkpoint> read = takenOverAtTheCall.beforeStorage.then(readStoredPosition(subscriptionId)).cache();
+            Mono<Checkpoint> read = readStoredPosition(subscriptionId, takenOverAtTheCall).cache();
             storedAtTheCall = new StoredAtTheCall(read, takenOverAtTheCall);
-            // A checkpoint written back is where the subscription starts when storage answers nothing
-            @Nullable Checkpoint writtenBack = takenOverAtTheCall.writtenBack;
-            positionNow = capturePositionUnlessStored(subscriptionId, writtenBack == null ? read : read.defaultIfEmpty(writtenBack), readsAbandoned);
+            positionNow = capturePositionUnlessStored(subscriptionId, read, readsAbandoned);
         } else {
             positionNow = capturePositionNow(subscriptionId, readsAbandoned);
         }
@@ -417,6 +418,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // Never runs once a cancel or a shutdown has reached the writer, so a subscription the wrapped model keeps
         // after the cancel below failed delivers nothing to the caller's action
         Function<CloudEvent, Mono<Void>> liveAction = actionWhileLive(writer, action);
+        @Nullable Mono<Void> settled = startAtToUse == null ? null : writer.settled;
         final Subscription delegated;
         try {
             // A null startAtToUse means a dynamic StartAt opted out of starting, so the wrapped model gets the
@@ -424,7 +426,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // the blocking twin does.
             delegated = startAtToUse == null
                     ? delegate.subscribe(subscriptionId, filter, startAt, liveAction)
-                    : delegate.subscribe(subscriptionId, filter, startAtToUse, persistingAction(subscriptionId, writer, liveAction));
+                    : delegate.subscribe(subscriptionId, filter, startAtToUse, settledThen(settled, persistingAction(subscriptionId, writer, liveAction)));
         } catch (RuntimeException | Error e) {
             handedOver(writer, Mono.empty());
             throw e;
@@ -432,7 +434,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         Registration registration = registerDelegated(subscriptionId, writer);
         if (registration == Registration.REGISTERED) {
             handedOver(writer, Mono.empty());
-            return delegated;
+            if (settled == null) {
+                return delegated;
+            }
+            settled.subscribe(unused -> {
+            }, failure -> endUnsettled(delegate, subscriptionId, writer, failure));
+            return new ReactorDurableSubscription(subscriptionId, untilStartedOrShutDown(settled.then(Mono.defer(delegated::waitUntilStarted))));
         }
         // A cancel or a shutdown came while the wrapped model took the subscribe, and may have reached that model
         // before the subscribe did, so the subscription it made is cancelled there now. registerDelegated retired its
@@ -443,6 +450,35 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             throw new SubscriptionModelShutdownException();
         }
         return null;
+    }
+
+    // The action, once settled has ended, see startAtTheCall. A settled that failed retired the writer before the
+    // action hears of it, so the action skips the event then and saves no position for it.
+    private static Function<CloudEvent, Mono<Void>> settledThen(@Nullable Mono<Void> settled, Function<CloudEvent, Mono<Void>> action) {
+        if (settled == null) {
+            return action;
+        }
+        return cloudEvent -> settled.onErrorResume(__ -> Mono.empty()).then(Mono.defer(() -> action.apply(cloudEvent)));
+    }
+
+    // Ends a subscription handed to the wrapped model whose start position could not be recorded, as a subscribe
+    // refused for that reason would have ended, unless a cancel, a shutdown or a subscribe of the id came first. The
+    // subscription is cancelled in the wrapped model, and the delete it took over goes ahead, see
+    // giveBackPositionDelete.
+    private void endUnsettled(SubscriptionModel delegate, String subscriptionId, PositionWriter writer, Throwable failure) {
+        final boolean registered;
+        synchronized (positionLock) {
+            registered = positionWriters.remove(subscriptionId, writer);
+            if (registered) {
+                delegatedSubscriptionIds.remove(subscriptionId);
+            }
+        }
+        if (registered) {
+            log.error("Subscription {} was cancelled in the wrapped model {}, since its start position could not be recorded", subscriptionId,
+                    subscription.getClass().getName(), failure);
+            cancelInWrappedModel(delegate, subscriptionId);
+        }
+        giveBackPositionDelete(subscriptionId, writer.takeOver, writer);
     }
 
     // Called once, and as soon as it is called. Cached, so a cancel of the id that waits for it does not cancel again.
@@ -530,9 +566,13 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // One per subscription, so an EveryN configured for the whole model counts this subscription's events only
         Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
         return cloudEvent -> action.apply(cloudEvent)
-                .then(Mono.defer(() -> persistCheckpoint.test(cloudEvent)
-                        ? writePosition(subscriptionId, writer, () -> savePosition(subscriptionId, writer, getCheckpointOrThrowIAE(cloudEvent)), Mono.empty()).then()
-                        : Mono.empty()));
+                .then(Mono.defer(() -> {
+                    if (!persistCheckpoint.test(cloudEvent)) {
+                        return Mono.empty();
+                    }
+                    Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
+                    return writePosition(subscriptionId, writer, checkpoint, () -> savePosition(subscriptionId, writer, checkpoint), Mono.empty()).then();
+                }));
     }
 
     // On the condition that the takeover of a delete of the id set for the generation, see takeOverPositionDelete, and
@@ -560,13 +600,54 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // than from wherever the feed has reached when it is finally started. A shutdown ends the wait, since a read
             // of where the feed is may never answer, and so does a cancel of the id, with OvertakenByCancel.
             Mono<StartAt> ended = shutDown.asMono().then(Mono.error(SubscriptionModelShutdownException::new));
-            return Mono.firstWithSignal(resolveStartAt(subscriptionId, startAt, null, null, writer, null, null), ended,
-                    writer.overtaken.asMono().then(Mono.empty())).block();
+            Mono<StartAt> resolved = writer.takeOver.waitsForNothing
+                    ? resolveStartAt(subscriptionId, startAt, null, null, writer, null, null)
+                    : startAtTheCall(subscriptionId, startAt, writer);
+            return Mono.firstWithSignal(resolved, ended, writer.overtaken.asMono().then(Mono.empty())).block();
         } else if (startAt.isDynamic()) {
             StartAt nextStartAt = startAt.get(new SubscriptionModelContext(ReactorDurableSubscriptionModel.class));
             return nextStartAt == null ? null : durableStartAt(subscriptionId, nextStartAt, writer);
         }
         return startAt;
+    }
+
+    // resolveStartAt for a subscribe handed to the wrapped model that took over a delete of the id which it would wait
+    // for. The start position is read at the call as with no delete running, from storage, which the delete does not
+    // hold up, or from where the wrapped model is when storage holds nothing. Recording it waits for the delete, so
+    // that write runs once the subscription is handed over, and writer.settled ends when it has. The wrapped model gets
+    // a position at the call, and an event it delivers before writer.settled ends waits for it, see settledThen.
+    // Recording a position other than the one handed over fails writer.settled, since the subscription cannot move to
+    // it.
+    private Mono<StartAt> startAtTheCall(String subscriptionId, StartAt startAt, PositionWriter writer) {
+        TakeOver takeOver = writer.takeOver;
+        Mono<Checkpoint> stored = readStoredPosition(subscriptionId, takeOver).cache();
+        Mono<Checkpoint> wrappedModelAt = Mono.defer(() -> positionOfTheWrappedModel(subscriptionId)).cache();
+        Mono<Checkpoint> handedOver = stored.switchIfEmpty(wrappedModelAt);
+        Mono<Checkpoint> recorded = (takeOver.writtenBack == null ? stored : stored.flatMap(checkpoint -> holdStartPosition(subscriptionId, checkpoint, takeOver, writer)))
+                .switchIfEmpty(Mono.defer(() -> wrappedModelAt.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint, writer))));
+        // A start from the present, which startWhenNoStartPositionCanBeRecorded allows, records nothing and waits for
+        // nothing. One from a checkpoint waits for the deletes taken over too, so a write back that fails ends it.
+        writer.settled = handedOver
+                .flatMap(read -> recorded.flatMap(checkpoint -> read.asString().equals(checkpoint.asString())
+                        ? takeOver.beforeStorage
+                        : Mono.<Void>error(new StartPositionAlreadyPinnedException(subscriptionId, read, checkpoint))))
+                // Before anything that waits for it hears of the failure, so no event reaches the action after it
+                .doOnError(__ -> {
+                    synchronized (positionLock) {
+                        writer.retired = true;
+                    }
+                })
+                .cache();
+        Mono<StartAt> resolved = handedOver.map(StartAt::checkpoint);
+        return config.startWhenNoStartPositionCanBeRecorded ? resolved.defaultIfEmpty(startAt) : resolved;
+    }
+
+    // Where the wrapped model is now, for a subscription from the model default that storage holds nothing for. An
+    // empty answer is refused unless startWhenNoStartPositionCanBeRecorded lets the subscription start without it.
+    private Mono<Checkpoint> positionOfTheWrappedModel(String subscriptionId) {
+        return config.startWhenNoStartPositionCanBeRecorded
+                ? subscription.globalCheckpoint()
+                : subscription.globalCheckpoint().switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)));
     }
 
     // Where the feed is, read once and remembered, so a subscription that is not started yet can begin from here. A
@@ -864,36 +945,38 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // checkpoint never waits for the wrapped model. A thread that may not block cannot wait, and a start of
             // the model waits for no read.
             //
-            // Where the takeover of a delete wrote a checkpoint back at once, see takeOverPositionDelete, storage can
-            // answer the checkpoint the try is about to delete, or nothing before the write back reaches the store. So
-            // holdStartPosition writes what was read, or the checkpoint written back, before the subscription starts,
-            // and before resolveFirstCheckpointRace for a registration with positionAtRegistration.
+            // Storage is read without waiting for a delete taken over, see readStoredPosition(String, TakeOver), and
+            // answers the checkpoint the delete writes back where it holds nothing. Where the takeover wrote it back at
+            // once, see takeOverPositionDelete, storage can answer the checkpoint the try is about to delete, or
+            // nothing before the write back reaches the store. So holdStartPosition writes what was read, or the
+            // checkpoint written back, before the subscription starts, and before resolveFirstCheckpointRace for a
+            // registration with positionAtRegistration.
             @Nullable Mono<Checkpoint> readAtTheCall = positionAtRegistration != null ? positionAtRegistration : positionNow;
             if (readAtTheCall != null && waitEnds != null) {
                 awaitAnswer(readAtTheCall, waitEnds);
             }
             TakeOver readAfter = storedAtTheCall != null ? storedAtTheCall.takeOver() : writer.takeOver;
-            Mono<Checkpoint> stored = storedAtTheCall != null ? storedAtTheCall.read() : writer.takeOver.beforeStorage.then(readStoredPosition(subscriptionId));
-            @Nullable Checkpoint writtenBack = readAfter.writtenBack;
-            Mono<Checkpoint> held = writtenBack == null ? stored
-                    : stored.defaultIfEmpty(writtenBack).flatMap(checkpoint -> holdStartPosition(subscriptionId, checkpoint, readAfter, writer));
-            final Mono<StartAt> resolved;
+            Mono<Checkpoint> stored = storedAtTheCall != null ? storedAtTheCall.read() : readStoredPosition(subscriptionId, readAfter);
+            Mono<Checkpoint> held = readAfter.writtenBack == null ? stored
+                    : stored.flatMap(checkpoint -> holdStartPosition(subscriptionId, checkpoint, readAfter, writer));
+            final Mono<Checkpoint> startsFrom;
             if (positionAtRegistration != null) {
-                resolved = held
+                startsFrom = held
                         .flatMap(checkpointStored -> positionAtRegistration
                                 .onErrorResume(__ -> Mono.empty())
-                                .flatMap(checkpoint -> writePosition(subscriptionId, writer, () -> storage.resolveFirstCheckpointRace(subscriptionId, checkpoint), Mono.just(checkpoint)))
+                                .flatMap(checkpoint -> writePosition(subscriptionId, writer, checkpoint, () -> storage.resolveFirstCheckpointRace(subscriptionId, checkpoint), Mono.just(checkpoint)))
                                 .defaultIfEmpty(checkpointStored))
-                        .switchIfEmpty(Mono.defer(() -> positionAtRegistration.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint, writer))))
-                        .map(StartAt::checkpoint);
+                        .switchIfEmpty(Mono.defer(() -> positionAtRegistration.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint, writer))));
             } else {
-                Mono<Checkpoint> seed = positionNow != null ? positionNow : config.startWhenNoStartPositionCanBeRecorded
-                        ? subscription.globalCheckpoint()
-                        : subscription.globalCheckpoint().switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)));
-                resolved = held
-                        .switchIfEmpty(Mono.defer(() -> seed.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint, writer))))
-                        .map(StartAt::checkpoint);
+                Mono<Checkpoint> seed = positionNow != null ? positionNow : positionOfTheWrappedModel(subscriptionId);
+                startsFrom = held
+                        .switchIfEmpty(Mono.defer(() -> seed.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint, writer))));
             }
+            // A start from a checkpoint waits for the deletes taken over, so a write back that fails refuses it, as a
+            // failed read of storage would. A start from the present records nothing, and opens the feed at once.
+            Mono<StartAt> resolved = startsFrom
+                    .flatMap(checkpoint -> readAfter.beforeStorage.thenReturn(checkpoint))
+                    .map(StartAt::checkpoint);
             // Empty here means nothing is stored and the position source answered nothing, which only the config
             // override lets through (capturePositionNow and the seed above refuse it otherwise). The original
             // default is what starts the subscription then, from wherever the feed is when it opens, with nothing
@@ -920,6 +1003,17 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // Deferred, so storage is asked only when the read is subscribed to, which is never under the monitor
     private Mono<Checkpoint> readStoredPosition(String subscriptionId) {
         return Mono.defer(() -> storage.read(subscriptionId));
+    }
+
+    // What storage holds for the id once the position writes in flight and the deletes taken over have ended, read
+    // without waiting for them. A try under way deletes nothing a takeover does not write back, and the position writes
+    // of the next subscription wait for the write back. Where storage answers nothing, the read answers the checkpoint
+    // that the newest position write in flight is writing, or else the one the takeover writes back. A position write
+    // in flight that reaches the store after the read means the read answered an older checkpoint, and the events after
+    // it are delivered again.
+    private Mono<Checkpoint> readStoredPosition(String subscriptionId, TakeOver readAfter) {
+        @Nullable Checkpoint restored = readAfter.restored;
+        return restored == null ? readStoredPosition(subscriptionId) : readStoredPosition(subscriptionId).defaultIfEmpty(restored);
     }
 
     // For a subscribe that hands the subscription to the wrapped model, which reads where to start before it registers
@@ -969,7 +1063,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // write after its caller stopped waiting, so the write is subscribed here rather than by the caller, and disposing
     // the cancelled subscription does not end the tracking early. It is subscribed after the lock is released, since a
     // storage that blocks while subscribing would otherwise hold up every subscription.
-    private <T> Mono<T> writePosition(String subscriptionId, PositionWriter writer, Supplier<Mono<T>> write, Mono<T> whenRetired) {
+    private <T> Mono<T> writePosition(String subscriptionId, PositionWriter writer, Checkpoint writing, Supplier<Mono<T>> write, Mono<T> whenRetired) {
         return writer.takeOver.beforeStorage.then(Mono.defer(() -> {
             Sinks.Empty<Void> ended = Sinks.empty();
             Mono<Void> writeEnded = ended.asMono();
@@ -979,7 +1073,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 if (writer.retired || writer.overtakenByCancel) {
                     return whenRetired;
                 }
-                positionWritesInFlight.computeIfAbsent(subscriptionId, __ -> new HashSet<>()).add(writeEnded);
+                positionWritesInFlight.computeIfAbsent(subscriptionId, __ -> new LinkedHashMap<>()).put(writeEnded, writing);
             }
             Mono<T> started = Mono.defer(write)
                     .doFinally(__ -> {
@@ -997,8 +1091,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     private void positionWriteEnded(String subscriptionId, Mono<Void> writeEnded) {
         synchronized (positionLock) {
-            Set<Mono<Void>> inFlight = positionWritesInFlight.get(subscriptionId);
-            if (inFlight != null && inFlight.remove(writeEnded) && inFlight.isEmpty()) {
+            @Nullable SequencedMap<Mono<Void>, Checkpoint> inFlight = positionWritesInFlight.get(subscriptionId);
+            if (inFlight != null && inFlight.remove(writeEnded) != null && inFlight.isEmpty()) {
                 positionWritesInFlight.remove(subscriptionId);
             }
         }
@@ -1009,7 +1103,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // checkpoint at a higher version is stored, and the subscription starts from that one.
     private Mono<Checkpoint> holdStartPosition(String subscriptionId, Checkpoint read, TakeOver readAfter, PositionWriter writer) {
         CheckpointWriteCondition condition = requireNonNull(readAfter.writeCondition, "writeCondition");
-        return writePosition(subscriptionId, writer, () -> storage.save(subscriptionId, read, condition), Mono.just(read))
+        return writePosition(subscriptionId, writer, read, () -> storage.save(subscriptionId, read, condition), Mono.just(read))
                 .switchIfEmpty(Mono.error(() -> new IllegalStateException("Checkpoint storage " + storage.getClass().getName() +
                                                                            " answered nothing when asked to write " + read.asString() +
                                                                            " as the start position of subscription " + subscriptionId +
@@ -1047,14 +1141,14 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                      "Answer true from evaluatesWriteConditionsFor(String) on a storage that does evaluate " +
                      "ifAbsent(), or use one of the storages Occurrent ships, to close that.",
                     storage.getClass().getName(), subscriptionId);
-            return writePosition(subscriptionId, writer, () -> storage.save(subscriptionId, positionRead), Mono.just(positionRead));
+            return writePosition(subscriptionId, writer, positionRead, () -> storage.save(subscriptionId, positionRead), Mono.just(positionRead));
         }
-        return writePosition(subscriptionId, writer, () -> storage.save(subscriptionId, positionRead, CheckpointWriteCondition.ifAbsent()), Mono.just(positionRead))
+        return writePosition(subscriptionId, writer, positionRead, () -> storage.save(subscriptionId, positionRead, CheckpointWriteCondition.ifAbsent()), Mono.just(positionRead))
                 .onErrorResume(CheckpointWriteConditionNotFulfilledException.class,
                         // Asked first, because a storage able to compare the two settles this by position instead of
                         // by write order, with no exception either way. Falls through to the older, narrower rule
                         // only when the storage answers empty, meaning it cannot make that comparison.
-                        __ -> writePosition(subscriptionId, writer, () -> storage.resolveFirstCheckpointRace(subscriptionId, positionRead), Mono.just(positionRead))
+                        __ -> writePosition(subscriptionId, writer, positionRead, () -> storage.resolveFirstCheckpointRace(subscriptionId, positionRead), Mono.just(positionRead))
                                 .switchIfEmpty(Mono.defer(() -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, positionRead))));
     }
 
@@ -1231,12 +1325,13 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * a storage that evaluates no condition on a delete, the checkpoint a try under way read is then not written back,
      * when the call failed before that try ended.
      * <p>
-     * How long that subscribe waits depends on the storage. One that evaluates a condition on a delete, see {@link
-     * CheckpointStorage#evaluatesDeleteConditions()}, deletes on the condition that the stored version is not above the
-     * one each try read just before. The subscribe writes the checkpoint back at once, at the version after that one,
-     * so the try under way deletes nothing, or what it deleted is back. The subscription writes its own checkpoints at
-     * once too, at the version after the write back, so neither the try nor the write back removes or replaces them.
-     * Neither the subscribe, the delivery of an event nor a checkpoint write waits for the try or the write back then.
+     * How long the subscription waits for the delete depends on the storage. One that evaluates a condition on a
+     * delete, see {@link CheckpointStorage#evaluatesDeleteConditions()}, deletes on the condition that the stored
+     * version is not above the one each try read just before. The subscribe writes the checkpoint back at once, at the
+     * version after that one, so the try under way deletes nothing, or what it deleted is back. The subscription writes
+     * its own checkpoints at once too, at the version after the write back, so neither the try nor the write back
+     * removes or replaces them. Neither the subscribe, the delivery of an event nor a checkpoint write waits for the
+     * try or the write back then.
      * <p>
      * A read of storage can then answer the checkpoint the try is about to delete, or nothing once the try deleted it
      * and before the write back reached the storage. So a subscription from the subscription-model default writes the
@@ -1247,11 +1342,24 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * reads storage again and starts from that one. When it fails, the subscription fails to start, as it would on a
      * failed read of storage. A write back that fails fails no subscription.
      * <p>
-     * With any other storage, nothing stops the try under way from deleting what is stored, so the subscribe waits for
-     * that try to end and writes the checkpoint back after it. The subscription reads storage and writes a checkpoint
-     * only once that write back has ended. A write back that fails fails a subscription that reads storage to start, as
-     * a failed read of storage would, and fails its first checkpoint write too. Either way the subscription reads
-     * storage and writes a checkpoint only once the checkpoint writes the delete runs after have ended.
+     * With any other storage, nothing stops the try under way from deleting what is stored, so the checkpoint is
+     * written back after that try ends. The subscribe does not wait for it. It reads storage at the call, and when the
+     * try has already deleted the checkpoint, it starts from the checkpoint that try read. The subscription writes a
+     * checkpoint only once the write back has ended, and a resume or a start of the id that comes before then takes the
+     * delete over too. A write back that fails fails the first checkpoint write, and fails a subscription that starts
+     * from a checkpoint, as a failed read of storage would.
+     * <p>
+     * With either storage, that read does not wait for the checkpoint writes the delete runs after. When storage holds
+     * nothing, the subscription starts from the checkpoint the newest of those writes is writing, and with none of them
+     * from where the feed is at the call, as it does with no delete running. A write that reaches the store after the
+     * read makes the subscription start from an earlier checkpoint than the last one the cancelled subscription
+     * wrote, so it handles those events again. The subscription writes a checkpoint only once those writes have ended.
+     * When this model drives the feed itself, a subscription that starts from a checkpoint opens the feed once they
+     * have ended, and with any other storage once the write back has ended too. One that starts from where the feed is
+     * opens it at the call. When the model hands the subscription to a wrapped model that manages named subscriptions,
+     * that model gets the position read at the call, and an event it delivers before the position is recorded waits for
+     * that. When the position cannot be recorded, the subscription is cancelled in that model, and its {@link
+     * Subscription#waitUntilStarted()} fails with the error, since this {@code subscribe(..)} has returned by then.
      * <p>
      * With a storage that evaluates no condition on a delete, the process can end after a try deleted the checkpoint
      * and before the write back reached the storage. The storage then holds no checkpoint for the id, since the
@@ -1280,12 +1388,13 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * <p>
      * Neither the delete nor its tries has a time limit. The delete waits for the checkpoint writes it runs after,
      * however long the storage takes to answer them, and its tries go on until one succeeds or a subscribe of the id
-     * takes the delete over. A storage that does not answer those writes holds up the reads and checkpoint writes of a
-     * subscription of the same id until it answers, until the id is cancelled again or until the model is shut down. So
-     * does one that evaluates no condition on a delete and does not answer the try under way or the write of the
-     * checkpoint back. One that evaluates a condition and does not answer the write back holds up no subscription, but
-     * the delete of a later cancel of the id runs only once it answers, so that cancel's {@code Mono} does not complete
-     * until then or until the model is shut down.
+     * takes the delete over. A storage that does not answer those writes holds up the checkpoint writes of a
+     * subscription of the same id, and its start from a checkpoint or the events a wrapped model delivers to it, until
+     * it answers, until the id is cancelled again or until the model is shut down. So does one that evaluates no
+     * condition on a delete and does not answer the try under way or the write of the checkpoint back. One that
+     * evaluates a condition and does not answer the write back holds up no subscription.
+     * With either storage, the delete of a later cancel of the id runs only once the write back answers, so that
+     * cancel's {@code Mono} does not complete until then or until the model is shut down.
      * <p>
      * The returned {@code Mono} is cached. Each failed try of the delete is also logged as a warning, whether or not
      * anything subscribes to the {@code Mono}.
@@ -1383,7 +1492,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 }
             });
             delegatedSubscriptionIds.remove(subscriptionId);
-            Mono<Void> writesInFlight = Mono.when(new ArrayList<>(positionWritesInFlight.getOrDefault(subscriptionId, Set.of())));
+            Mono<Void> writesInFlight = Mono.when(new ArrayList<>(positionWritesInFlight.getOrDefault(subscriptionId, new LinkedHashMap<>()).sequencedKeySet()));
             delete = new PositionDelete(writesInFlight, conditional, positionDeletes.get(subscriptionId), null);
             positionDeletes.put(subscriptionId, delete);
         }
@@ -1402,24 +1511,20 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         Mono<Void> tries = (requestedAfterShutdown ? endedFirst : Mono.firstWithSignal(endedFirst, shutDown.asMono()))
                 .then(Mono.defer(() -> deleteUntilItSucceeds(subscriptionId, delete, requestedAfterShutdown)));
         // Taken out before the caller hears of the end, so a subscribe made once the cancel completed finds no delete. A
-        // write back that went at once is taken out only after it ended, so a subscription of the id that starts
-        // meanwhile still takes the delete over and writes its positions at a version the write back does not reach,
-        // and a later delete of the id runs after it. One that waits for the try is taken out first, as a
-        // subscription that took the delete over would wait for it. A takeover write that fails reaches the
-        // subscription that took the delete over, not the cancel, see writeBack.
+        // delete taken over is taken out only once what the takeover writes has ended, so a subscribe, a resume or a
+        // start of the id that comes meanwhile takes it over too, and reads and writes as the takeover lets it, and a
+        // later delete of the id runs after that write. A takeover write that fails reaches the subscription that took
+        // the delete over, not the cancel, see writeBack.
         Mono<Void> writtenBack = Mono.defer(() -> {
                     final @Nullable Mono<Void> takeOver;
-                    final boolean wentAtOnce;
                     synchronized (positionLock) {
                         takeOver = delete.takeOver;
-                        wentAtOnce = delete.positionWritesVersion >= 0;
-                        if (!wentAtOnce) {
+                        if (takeOver == null) {
                             positionDeletes.remove(subscriptionId, delete);
                             delete.earlier = null;
                         }
                     }
-                    Mono<Void> ended = takeOver == null ? Mono.<Void>empty() : takeOver.onErrorResume(__ -> Mono.empty());
-                    return !wentAtOnce ? ended : ended.then(Mono.fromRunnable(() -> {
+                    return takeOver == null ? Mono.<Void>empty() : takeOver.onErrorResume(__ -> Mono.empty()).then(Mono.fromRunnable(() -> {
                         synchronized (positionLock) {
                             positionDeletes.remove(subscriptionId, delete);
                             delete.earlier = null;
@@ -1536,13 +1641,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // removes or replaces them. A read of storage can still answer the checkpoint the try is about to delete, or
     // nothing once the try applied and before the write back reaches the store. So a start from the model default
     // writes what it read, or the checkpoint written back where it read nothing, at that version before it starts, see
-    // resolveStartAt. Otherwise the subscription reads storage and writes a position only once the try and the write
-    // back have ended, since nothing stops the try from removing what it stores, and a write back that fails is what
-    // its first read answers.
+    // resolveStartAt. Otherwise the subscription writes a position, and starts from a checkpoint, only once the try and
+    // the write back have ended, since nothing stops the try from removing what it stores.
     //
-    // Either way the subscription reads and writes only once the position writes the delete waits for have ended. The
-    // deletes taken over count this call against them until the subscription that made it is given up, see
-    // giveBackPositionDelete.
+    // Either way storage is read at the call, see readStoredPosition(String, TakeOver), and the subscription writes
+    // only once the position writes the delete waits for have ended. The deletes taken over count this call against
+    // them until the subscription that made it is given up, see giveBackPositionDelete.
     private TakeOver takeOverPositionDelete(String subscriptionId) {
         List<Mono<Void>> beforeStorage = new ArrayList<>();
         List<PositionDelete> counted = new ArrayList<>();
@@ -1550,7 +1654,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         List<Mono<Void>> writes = new ArrayList<>();
         long writeVersion = -1;
         @Nullable Checkpoint writtenBack = null;
+        boolean restoredFound = false;
+        @Nullable Checkpoint restored = null;
+        final @Nullable Checkpoint writing;
         synchronized (positionLock) {
+            @Nullable SequencedMap<Mono<Void>, Checkpoint> inFlight = positionWritesInFlight.get(subscriptionId);
+            writing = inFlight == null || inFlight.isEmpty() ? null : inFlight.lastEntry().getValue();
             for (@Nullable PositionDelete delete = positionDeletes.get(subscriptionId); delete != null; delete = delete.earlier) {
                 delete.takers++;
                 counted.add(delete);
@@ -1588,6 +1697,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 }
                 @Nullable Mono<Void> takeOver = delete.takeOver;
                 if (takeOver != null) {
+                    // The newest delete that a try was under way for, whose try read after every earlier one ended
+                    if (!restoredFound) {
+                        restoredFound = true;
+                        restored = delete.storedWhenTried;
+                    }
                     if (delete.positionWritesVersion < 0) {
                         beforeStorage.add(takeOver);
                     } else if (delete.positionWritesVersion > writeVersion) {
@@ -1606,8 +1720,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         if (counted.isEmpty()) {
             return TakeOver.NONE;
         }
+        // A position write of the cancelled subscription still in flight started before any try of the delete it
+        // waits for, so it writes a newer checkpoint than one a try read
+        @Nullable Checkpoint storedOnceWrittenBack = writing != null ? writing : writtenBack != null ? writtenBack : restored;
         return new TakeOver(Mono.when(beforeStorage).cache(), writeVersion < 0 ? null : CheckpointWriteCondition.notOlderThan(writeVersion),
-                writtenBack, counted);
+                writtenBack, storedOnceWrittenBack, counted);
     }
 
     // A subscribe, a resume or a start that throws once its generation took over a delete of the id has no
@@ -1643,7 +1760,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                     || positionWriters.containsKey(subscriptionId)
                     || positionWritersStarting.getOrDefault(subscriptionId, Set.of()).stream().anyMatch(writer -> writer != refused);
             if (!stillNeeded) {
-                Mono<Void> writesInFlight = Mono.when(new ArrayList<>(positionWritesInFlight.getOrDefault(subscriptionId, Set.of())));
+                Mono<Void> writesInFlight = Mono.when(new ArrayList<>(positionWritesInFlight.getOrDefault(subscriptionId, new LinkedHashMap<>()).sequencedKeySet()));
                 // Not the end of the latest delete, which waits for the new delete
                 Mono<Void> writtenBack = Mono.when(takeOver.counted.stream().map(counted -> counted.writtenBack.asMono()).toList());
                 PositionDelete delete = new PositionDelete(writesInFlight, conditional, latest, writtenBack);
@@ -1670,15 +1787,14 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     // Cached, so it writes once whoever waits for it. A refusal means a newer checkpoint is stored already, written at
     // a higher version or after the try ended, which the try does not delete. Any other failure is logged. Where the
-    // write back waits for the try, it reaches the first read of storage and the first position write of the
-    // subscription of the id, as a failed read of its start position would, since starting it from what storage holds
-    // without this write could skip events. Where it goes at once, the subscription writes its start position itself
-    // before it starts, see takeOverPositionDelete, so nothing waits for it.
+    // write back waits for the try, a failure fails a subscription of the id that starts from a checkpoint, and its
+    // first position write, as a failed read of its start position would. Where it goes at once, the subscription
+    // writes its start position itself before it starts, see takeOverPositionDelete, so nothing waits for it.
     private Mono<Void> writeBack(String subscriptionId, Checkpoint stored, CheckpointWriteCondition condition) {
         return Mono.defer(() -> storage.save(subscriptionId, stored, condition))
                 .then()
                 .onErrorResume(CheckpointWriteConditionNotFulfilledException.class, __ -> Mono.empty())
-                .doOnError(throwable -> log.warn("Could not write back the stored checkpoint of subscription {} while the delete a cancel of it started was under way. Where the subscription of the id that starts now waits for this write, it fails with this error at its first read of storage and at its first checkpoint write.",
+                .doOnError(throwable -> log.warn("Could not write back the stored checkpoint of subscription {} while the delete a cancel of it started was under way. Where the subscription of the id that starts now waits for this write, it fails with this error when it starts from a checkpoint and at its first checkpoint write.",
                         subscriptionId, throwable))
                 .cache();
     }
@@ -1938,26 +2054,37 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // Fails with OvertakenByCancel once overtakenByCancel is set, which ends a wait of the subscribe on the
         // caller's thread and the read it waits for
         private final Sinks.Empty<Void> overtaken = Sinks.empty();
+        // Set by a subscribe handed to the wrapped model that took over a delete of the id, and ends once the start
+        // position it was handed from is recorded, see startAtTheCall. Null otherwise.
+        private volatile @Nullable Mono<Void> settled;
     }
 
-    // What a generation that took over the deletes of its id waits for before it reads storage or writes a position,
-    // the condition its position writes go on, null for none, and the checkpoint written back at once, null for none.
-    // See takeOverPositionDelete.
+    // What a generation that took over the deletes of its id waits for before it writes a position or starts from a
+    // checkpoint, the condition its position writes go on, null for none, the checkpoint written back at once, null for
+    // none, and the checkpoint that storage holds once the position writes in flight and the deletes have ended, null
+    // for none. See takeOverPositionDelete.
     private static final class TakeOver {
-        private static final TakeOver NONE = new TakeOver(Mono.empty(), null, null, List.of());
+        private static final TakeOver NONE = new TakeOver(Mono.empty(), null, null, null, List.of());
         private final Mono<Void> beforeStorage;
         private final @Nullable CheckpointWriteCondition writeCondition;
         private final @Nullable Checkpoint writtenBack;
+        private final @Nullable Checkpoint restored;
         // The deletes this takeover counts itself against, see giveBackPositionDelete
         private final List<PositionDelete> counted;
         // Read and changed under positionLock only
         private boolean givenBack;
+        // Set once beforeStorage has ended, whether it failed or not
+        private volatile boolean waitsForNothing;
 
-        private TakeOver(Mono<Void> beforeStorage, @Nullable CheckpointWriteCondition writeCondition, @Nullable Checkpoint writtenBack, List<PositionDelete> counted) {
+        private TakeOver(Mono<Void> beforeStorage, @Nullable CheckpointWriteCondition writeCondition, @Nullable Checkpoint writtenBack,
+                         @Nullable Checkpoint restored, List<PositionDelete> counted) {
             this.beforeStorage = beforeStorage;
             this.writeCondition = writeCondition;
             this.writtenBack = writtenBack;
+            this.restored = restored;
             this.counted = counted;
+            beforeStorage.subscribe(unused -> {
+            }, __ -> waitsForNothing = true, () -> waitsForNothing = true);
         }
     }
 
@@ -2020,11 +2147,14 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     // What capturePositionUnlessStored answers when storage holds a checkpoint. Reaches a caller only when that
     // checkpoint is gone by the time a later generation of the subscription reads storage, where nothing tells where
-    // the feed was when it was subscribed.
+    // the feed was when it was subscribed. Starting from where the feed is then could skip events, and a cancel deletes
+    // whatever is stored by then, so the only remedy named is a start position of the caller's own.
     private static final class CheckpointStored extends IllegalStateException {
         CheckpointStored(String subscriptionId) {
             super("A checkpoint was stored for subscription " + subscriptionId + " when it was subscribed, so where the feed was " +
-                  "then was not read, and storage holds no checkpoint for it now. Cancel it and subscribe it again.");
+                  "then was not read, and storage holds no checkpoint for it now. It is refused rather than started from " +
+                  "where the feed is now, which could skip events it has not handled. Subscribe it again with a StartAt " +
+                  "of your own, from before the first event it has not handled.");
         }
     }
 

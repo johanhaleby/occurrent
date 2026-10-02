@@ -593,11 +593,13 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     /**
      * With startWhenNoStartPositionCanBeRecorded, a subscription from the model default whose read of where the feed
-     * is answers nothing starts from the present, recording nothing. Nothing is stored for the id, so the feed opens at
-     * the call while the delete of an earlier cancel of it runs, as it does without the delete.
+     * is answers nothing starts from the present, recording nothing. Nothing is stored for the id, so the subscribe
+     * opens the feed at the call while the delete of an earlier cancel of it runs, as it does without the delete, and
+     * returns without waiting for that delete. What is written while the delete runs is delivered.
      */
-    @Test
-    void a_subscription_from_the_model_default_that_may_start_without_a_recorded_position_opens_the_feed_at_the_call_while_a_delete_runs() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_subscription_from_the_model_default_that_may_start_without_a_recorded_position_opens_the_feed_at_the_call_while_a_delete_runs(boolean mayBlock) throws InterruptedException {
         // Given
         HeldDeleteStorage storage = new HeldDeleteStorage();
         Feed feed = new Feed();
@@ -608,15 +610,19 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
         List<String> delivered = new CopyOnWriteArrayList<>();
 
         try {
+            assertThat(storage.deleteHeld.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the storage holds a delete").isTrue();
             // When
-            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered));
+            CompletableFuture<Subscription> subscribed = Mono.fromCallable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)))
+                    .subscribeOn(mayBlock ? Schedulers.boundedElastic() : Schedulers.parallel())
+                    .toFuture();
+            Throwable returnedWhileTheDeleteRan = catchThrowable(() -> subscribed.get(2, TimeUnit.SECONDS));
             List<Long> written = new ArrayList<>(List.of(feed.write(), feed.write()));
             storage.releaseDelete.countDown();
             written.add(feed.write());
 
             // Then
-            await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(written.getLast())));
-            assertThat(delivered).as("events delivered to the subscription").containsExactlyElementsOf(ids(written));
+            assertThat(returnedWhileTheDeleteRan).as("how waiting for the subscribe to return while the delete ran ended").isNull();
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered to the subscription").containsExactlyElementsOf(ids(written)));
         } finally {
             storage.releaseDelete.countDown();
             model.shutdown();
