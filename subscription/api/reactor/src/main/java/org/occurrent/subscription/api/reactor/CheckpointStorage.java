@@ -170,7 +170,8 @@ public interface CheckpointStorage {
      * {@code ReactorDurableSubscriptionModel} uses {@code notOlderThan} when a subscription is cancelled, with the
      * version it read just before. A subscription started with the same id before that delete has finished writes the
      * checkpoint it read back at a higher version, so the delete is refused, or what it removed is stored again,
-     * before the new subscription reads its start position.
+     * before the new subscription reads its start position. The new subscription writes its own checkpoints at a
+     * version above that write, so neither the delete nor that write removes or replaces them.
      * <p>
      * The default deletes for {@code any()} and signals {@link UnsupportedOperationException} for every other
      * condition, the same answer {@link #save(String, Checkpoint, CheckpointWriteCondition)} gives for a condition a
@@ -199,7 +200,8 @@ public interface CheckpointStorage {
      * The default is {@code false}, also for a storage that answers {@code true} from
      * {@link #evaluatesWriteConditions()}. {@code ReactorDurableSubscriptionModel} then deletes a cancelled
      * subscription's checkpoint unconditionally, and a subscription started with the same id while a try of that
-     * delete runs waits for the try to end, and writes back what it deleted, before reading its start position.
+     * delete runs waits for the try to end, and writes back what it deleted, before reading its start position or
+     * writing a checkpoint.
      *
      * @return {@code true} if both {@code notOlderThan} and {@code ifAbsent} are evaluated on a delete, {@code false}
      * if either of them is refused

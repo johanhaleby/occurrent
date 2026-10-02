@@ -1505,35 +1505,50 @@ not started by then never runs, even when the wrapped model runs an event throug
 A caller that wants the id to start clean waits for that `Mono` before subscribing the id again. A `subscribe(..)` of
 the id in the same process that comes before the delete has ended takes the delete over. The delete makes no further
 try, and the `subscribe(..)` writes back the position that a try under way read, so the store holds what it held before
-that try. The subscription then resolves its start position at the call, a dynamic `StartAt` included, and writes its
-positions as it would with no delete running. A subscription from the subscription-model default resumes from the
-position of the cancelled subscription when the store still held it, and so do
-`ResumeStartPositions.replayThenResume(..)` and the Spring Boot starter's `BEGINNING` start with the default resume
-behaviour, which read the stored position themselves to choose between replaying and resuming. A first position that
-fails or is refused ends the `subscribe(..)` as it does with no delete running. The position goes back also for a
-`subscribe(..)` with a `StartAt` of its own, so the store holds what it would hold had the cancel not deleted anything.
+that try. The subscription then resolves its start position at the call, a dynamic `StartAt` included. A subscription
+from the subscription-model default resumes from the position of the cancelled subscription when the store still held
+it, and so do `ResumeStartPositions.replayThenResume(..)` and the Spring Boot starter's `BEGINNING` start with the
+default resume behaviour, which read the stored position themselves to choose between replaying and resuming. A first
+position that fails or is refused ends the `subscribe(..)` as it does with no delete running. The position goes back
+also for a `subscribe(..)` with a `StartAt` of its own, so the store holds what it would hold had the cancel not deleted
+anything.
 
-The subscription reads and writes storage only once the position writes the delete runs after have ended and the
-position is back. Before that, a try under way could still remove a position the subscription reads or writes. A write
-back that fails fails the subscription, the way a failed read of the stored position does, since starting from what the
-store holds without it could skip the events after the position of the cancelled subscription.
+When a `subscribe(..)`, `resumeSubscription(..)` or `start(..)` fails once it has taken the delete over, no subscription
+needs the position any more, so the delete goes ahead and removes it, as in 0.33.0. A `subscribe(..)` that Reactor
+refuses because it would block a thread that may not block is such a call. The delete that goes ahead is a new one,
+which runs after the deletes taken over and their write back. It doesn't start while another subscription of the id is
+starting or registered, while a newer delete of the id runs, or once the model is shut down. When the call fails before
+the delete has ended, the `Mono` of the cancel ends only once the delete that goes ahead has ended. On a storage that
+evaluates no condition on a delete, the write back waits for the try under way, and it isn't made when every call that
+took the delete over has failed by the time that try ends, since what the try removed is then what the cancel asked
+for.
+
+The subscription reads storage only once the position writes the delete runs after have ended and the position is
+back, and writes a position only once those writes have ended. Before that, a try under way could still remove a
+position the subscription reads. A write back that fails fails a subscription that reads storage to start, the way a
+failed read of the stored position does, since starting from what the store holds without it could skip the events
+after the position of the cancelled subscription.
 
 How the position goes back depends on the storage. The reactor `CheckpointStorage` gains `delete(id, condition)`, which
 takes the `CheckpointWriteCondition` that `save(..)` takes and evaluates it against the same stored version, and
 `evaluatesDeleteConditions()`, which says whether a storage evaluates it. The in-memory and MongoDB reactor storages do,
-MongoDB with one remove filtered on the id and the version. On such a storage each try reads the version, then the position, and deletes on
-`notOlderThan` that version. A `subscribe(..)` that takes the delete over writes the position back at once, on
-`notOlderThan` one version higher. Whichever reaches the store first, the try is refused or the position it deleted is
-back, so neither the `subscribe(..)` nor the delivery of an event waits for the try.
+MongoDB with one remove filtered on the id and the version. On such a storage each try reads the version, then the
+position, and deletes on `notOlderThan` that version. A `subscribe(..)` that takes the delete over writes the position
+back at once, on `notOlderThan` one version higher. Whichever reaches the store first, the try is refused or the
+position it deleted is back. The subscription writes its own positions at once too, on `notOlderThan` the version above
+the write back, so neither the try nor the write back removes or replaces them. Neither the `subscribe(..)`, the
+delivery of an event nor a position write waits for the try, and no position write waits for the write back. Each
+position the subscription writes is then a save on that condition, where it is an unconditional save with no delete
+running.
 
 A storage of your own keeps compiling, since both methods have defaults. The default `evaluatesDeleteConditions()`
 answers false, also when `evaluatesWriteConditions()` answers true, and on such a storage nothing stops a try under way
 from deleting what is stored. So a `subscribe(..)` that takes the delete over waits for that try to end, and then writes
-the position back on `ifAbsent()`, or unconditionally when the storage evaluates no write condition. Waiting for the
-delete without writing anything back would lose events. `ResumeStartPositions.replayThenResume(..)` reads the stored
-position at the call and resumes from the position of the cancelled subscription. The delete then removes it, and a
-process that ends before the subscription writes a position of its own restarts from the subscription-model default and
-skips the events in between.
+the position back on `ifAbsent()`, or unconditionally when the storage evaluates no write condition. The position writes
+of the subscription wait for that write back. Waiting for the delete without writing anything back would lose events.
+`ResumeStartPositions.replayThenResume(..)` reads the stored position at the call and resumes from the position of the
+cancelled subscription. The delete then removes it, and a process that ends before the subscription writes a position of
+its own restarts from the subscription-model default and skips the events in between.
 
 A function that reads the store itself at the call can still find nothing while the position is away, between a try
 that deleted it and the write back. `replayThenResume(..)` then replays from the start, which delivers more and skips
@@ -1542,10 +1557,9 @@ nothing.
 I rejected two other designs for the delete. A delete on the condition that the stored position equals the one the try
 read would also remove the position written back, since the two are equal. Queuing the positions of the new subscription
 behind the delete, which an earlier version of this change did, left the store empty whenever the process ended after
-the delete and before the queued write. On a storage that evaluates a condition on a delete the write back goes to the
-store at the takeover, so the store is empty only when a try already under way reaches it first. A pause or a stop of a
-subscription that the durable model drives also dropped what was queued, so a restart could start
-from where the feed was and skip events.
+the delete and before the queued write. On a storage that evaluates a condition on a delete, neither the write back nor
+a position the subscription writes waits for the delete. A pause or a stop of a subscription that the durable model
+drives also dropped what was queued, so a restart could start from where the feed was and skip events.
 
 The cancel ends every subscription of the id that it finds, and stops their position writes and no others. When the
 durable model drives the subscription itself, it finds a `subscribe(..)` as soon as that call has taken the id. When it
@@ -1581,17 +1595,19 @@ the delete would not help either, for the same reason. So the model waits until 
 
 That has a cost next to 0.33.0, where neither the cancel nor a later `subscribe(..)` waited for the store. A
 subscription that takes a delete over waits for the position writes of the cancelled subscription that the delete runs
-after, and for the write of the position back. On a storage that evaluates no condition on a delete, it also waits for
-the try under way, so on such a store whose deletes hang, a subscription of the id made right after the cancel reads and
-writes no position until the store answers. No call for another id waits for any of them. The cancel itself returns once
+after before it reads or writes a position, and for the write of the position back before it reads. On a storage that
+evaluates no condition on a delete, its reads and position writes also wait for the try under way and for the write
+back, so on such a store whose deletes hang, a subscription of the id made right after the cancel reads and writes no
+position until the store answers. No call for another id waits for any of them. The cancel itself returns once
 it has stopped the subscription and started the delete.
 
 The property I hold the durable model to has four parts. Each compares a `subscribe(..)` of an id whose delete, asked
 for by an earlier cancel, is still under way, with the same `subscribe(..)` in 0.33.0.
 
 1. It delivers every event that 0.33.0 delivers, also when the process ends and the id is subscribed again after the
-   restart, apart from a process that ends between a try deleting the position and the write back reaching the store,
-   described below.
+   restart. On a storage that evaluates no condition on a delete, a process that ends between a try deleting the
+   position and the write back reaching the store is the exception, described below, and so is such a process for a
+   subscription from the subscription-model default on any storage.
 2. It waits only where 0.33.0 waits, where a `subscribe(..)` from the subscription-model default on a stopped model that
    the durable model drives waits for its read of where the feed is, and for the storage calls the takeover makes. On a
    storage that evaluates a condition on a delete, no `subscribe(..)`, resume or delivery waits for a delete.
@@ -1600,9 +1616,12 @@ for by an earlier cancel, is still under way, with the same `subscribe(..)` in 0
 
 The takeover keeps the fourth part. By the time the subscription reads, no try is under way and none follows, or the
 try under way was refused, or what it deleted is back, or, on a storage that evaluates no condition on a delete, it has
-ended before the write back. The write back keeps the first part. A start position resolved at the call can rest on the
-position of the cancelled subscription, and the store holds it again before the subscription reads or writes anything,
-so a restart resumes from it until the subscription writes one of its own.
+ended before the write back. On a storage that evaluates a condition on a delete, the subscription writes its positions
+at a version the try cannot delete, and otherwise only once the try has ended. The write back keeps the first part. A
+start position resolved at the call can rest on the position of the cancelled subscription, and the store holds it
+again before the subscription reads anything. The write back never replaces a position the subscription wrote, so a
+restart resumes from the position of the cancelled subscription until the subscription writes one of its own, and from
+the last one the subscription wrote after that.
 
 The second part also gives way on a running model that the durable model drives. There a `subscribe(..)` from the
 subscription-model default waits on a thread that may block for its read of where the feed is when the store holds
@@ -1614,18 +1633,28 @@ needed a read of where the feed is at the call for every dynamic `StartAt`, held
 `StartAt.now()`, which needs no read, and refused a subscription that 0.33.0 started when that read failed. Waiting for
 the `Mono` gives the clean start without any of that.
 
-A process can still end after a try deleted the position and before the write back reached the store. Nothing is stored
-then, and the next run of a subscription from the subscription-model default starts from where the feed is. The
-subscription that took the delete over has written no position by then, since its position writes wait for the write
-back. One that reads nothing to start, such as one from `StartAt.now()`, can have delivered events, though. In 0.33.0
-the next run starts from the same place when its delete reaches the store after the last position the new subscription
-wrote, which a slow delete does. When the delete reaches the store before such a write, 0.33.0 keeps that position and
-its next run resumes from it, where this change keeps nothing. On a storage that evaluates a condition on a delete the
-write back goes to the store as the `subscribe(..)` takes the delete over, so this lasts from a try that was already
-under way reaching the store until the write back does. A subscription that sent its positions at once, on
-`notOlderThan` a version above the one of the write back, would close it, since neither the try nor the write back could
-then remove or replace them. Its positions wait for the write back instead, and save on `any()` as they do with no
-delete running. A subscription registered on a stopped model reconciles the stored position with where the feed was at
+A process can still end after a try deleted the position and before the write back reached the store. On a storage that
+evaluates a condition on a delete, a subscription that reads nothing to start, such as one from `StartAt.now()`, keeps
+every position the store applied by then, since neither the try nor the write back removes or replaces one. Its next run
+resumes from the last of them. 0.33.0 keeps no more, since its delete removes any position the store applied before it.
+
+On a storage that evaluates no condition on a delete, nothing is stored then, and the next run of a subscription from
+the subscription-model default starts from where the feed is. The subscription that took the delete over has written no
+position by then, since its position writes wait for the write back, which waits for the try. One that reads nothing to
+start can have delivered events, though. In 0.33.0 the next run starts from the same place when its delete reaches the
+store after the last position the new subscription wrote, which a slow delete does. When the delete reaches the store
+before such a write, 0.33.0 keeps that position and its next run resumes from it, where this change keeps nothing.
+
+A subscription from the subscription-model default reads the store only once the write back has ended, on any storage.
+When the process ends before the write back reached the store, that subscription has delivered no event, nothing is
+stored for it, and its next run starts from where the feed is. In 0.33.0 the `subscribe(..)` reads the store without
+waiting, so when it read after its delete it started from where the feed was then, and it can have delivered events
+before the process ended, which this change then never delivers. On a storage that evaluates a condition on a delete,
+the write back goes to the store as the `subscribe(..)` takes the delete over. That case then needs the write back to
+take longer to reach the store than 0.33.0 takes to read the store, start and deliver an event, as when the storage
+retries the write back.
+
+A subscription registered on a stopped model reconciles the stored position with where the feed was at
 its registration, through `resolveFirstCheckpointRace(..)` when the storage can. That reconciling runs once the takeover
 has ended, as it would with no delete running.
 
