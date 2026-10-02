@@ -53,6 +53,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -141,7 +142,8 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
 
     /**
      * The caller ignores what the cancel returns and subscribes the same id straight away, while the delete is still
-     * on its way to the storage.
+     * on its way to the storage. The subscription starts at once, and records its start position only once the
+     * delete has ended, so the test reads the storage until that write has reached it.
      */
     @Test
     void a_subscribe_that_did_not_wait_for_the_cancel_starts_from_its_own_start_at() {
@@ -159,7 +161,7 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         // Then
         await().atMost(TIMEOUT).untilAsserted(() -> assertThat(feed.startedAt).hasSize(2));
         assertThat(feed.startedAt.get(1)).as("start position of the subscription made without waiting for the cancel").hasToString(WHERE_THE_FEED_IS_NOW);
-        assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT)).as("position in storage once the new subscription recorded its own").isEqualTo(new StringBasedCheckpoint(WHERE_THE_FEED_IS_NOW));
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT)).as("position in storage once the new subscription recorded its own").isEqualTo(new StringBasedCheckpoint(WHERE_THE_FEED_IS_NOW)));
     }
 
     @Test
@@ -178,6 +180,30 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         assertThat(cancelled.isDone()).as("cancel reported as complete while the wrapped model is still cancelling").isFalse();
         wrappedCancel.tryEmitEmpty();
         await().atMost(TIMEOUT).untilAsserted(() -> assertThat(cancelled).isCompleted());
+    }
+
+    /**
+     * The wrapped model answers its cancel with a Mono that does nothing until it is subscribed to, as a Mono built
+     * with {@code Mono.fromRunnable(..)} does. The caller ignores what the cancel returns, so the model subscribes to
+     * that Mono itself, once, however often the caller then subscribes to what it got back.
+     */
+    @Test
+    void cancels_in_the_wrapped_model_whose_cancel_takes_effect_only_once_subscribed_whether_or_not_the_caller_subscribes() {
+        // Given
+        AtomicInteger cancelsTakenEffect = new AtomicInteger();
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        wrapped.cancelled = Mono.fromRunnable(cancelsTakenEffect::incrementAndGet);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+        subscribe(model);
+
+        // When
+        Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
+
+        // Then
+        assertThat(cancelsTakenEffect).as("cancels that took effect in the wrapped model before anything subscribed to the returned Mono").hasValue(1);
+        cancelled.block(TIMEOUT);
+        cancelled.block(TIMEOUT);
+        assertThat(cancelsTakenEffect).as("cancels that took effect in the wrapped model once the caller subscribed twice").hasValue(1);
     }
 
     /**
@@ -387,15 +413,16 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         // Then
         assertThat(subscribeFailure).as("failure of the subscribe that arrived during the cancel").isNull();
         assertThat(wrapped.startedAt.get(1)).as("start position of the subscribe that arrived during the cancel").hasToString(WHERE_THE_FEED_IS_NOW);
-        assertThat(storage.read(SUBSCRIPTION_ID).map(Checkpoint::asString).block(TIMEOUT)).as("position stored for the subscribe that arrived during the cancel").isEqualTo(WHERE_THE_FEED_IS_NOW);
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(storage.read(SUBSCRIPTION_ID).map(Checkpoint::asString).block(TIMEOUT)).as("position stored for the subscribe that arrived during the cancel").isEqualTo(WHERE_THE_FEED_IS_NOW));
     }
 
     /**
      * The subscribe finds the delete of the cancel before the cancel has started it, and the storage deletes and saves
-     * on the thread that asks it to.
+     * on the thread that asks it to. The subscribe reads no stored position behind that delete, which removes it, and
+     * records its own start position once the delete has ended.
      */
     @Test
-    void a_subscribe_that_finds_a_delete_the_cancel_has_not_started_yet_waits_for_it_and_records_its_own_start_position() throws Exception {
+    void a_subscribe_that_finds_a_delete_the_cancel_has_not_started_yet_records_its_own_start_position_once_it_has_ended() throws Exception {
         // Given
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
@@ -407,7 +434,7 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         // Then
         assertThat(subscribeFailure).as("failure of the subscribe that found the delete").isNull();
         assertThat(wrapped.startedAt.get(0)).as("start position of the subscribe that found the delete").hasToString(WHERE_THE_FEED_IS_NOW);
-        assertThat(storage.read(SUBSCRIPTION_ID).map(Checkpoint::asString).block(TIMEOUT)).as("position stored for the subscribe that found the delete").isEqualTo(WHERE_THE_FEED_IS_NOW);
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(storage.read(SUBSCRIPTION_ID).map(Checkpoint::asString).block(TIMEOUT)).as("position stored for the subscribe that found the delete").isEqualTo(WHERE_THE_FEED_IS_NOW));
     }
 
     /**
@@ -558,10 +585,10 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     /**
      * The storage fails the delete of the cancel a few times before it succeeds, as during a short outage. After a
      * failed delete the checkpoint of the cancelled subscription is still stored, so the model tries the delete again
-     * until it succeeds, and a subscribe of the id waits for that rather than starting from that checkpoint. The
-     * subscription then starts from its own start position, from the beginning for a rebuild that reads the stored
-     * position itself and from where the feed is for the model default, and the cancel completes once the delete
-     * succeeded.
+     * until it succeeds, and a subscribe of the id never starts from that checkpoint. A rebuild, whose start position
+     * reads the stored position itself, waits for the delete to succeed and then starts from the beginning. The model
+     * default reads no stored position while the delete is tried and starts from where the feed is. The cancel
+     * completes once the delete succeeded.
      */
     @ParameterizedTest
     @CsvSource({"false, rebuild", "false, default", "true, rebuild", "true, default"})
@@ -595,8 +622,9 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     /**
      * The storage fails every delete, as during an outage that outlasts the process. The model keeps trying until it
      * is shut down, so the cancel ends neither way before then, and once the shutdown stopped the tries it fails with
-     * what the storage answered last. A subscribe of the id waits for the delete as long as it is tried, and the
-     * shutdown ends that wait too, without starting the subscription.
+     * what the storage answered last. A subscribe of the id whose start position reads the stored position itself
+     * waits for the delete as long as it is tried, and the shutdown ends that wait too, without starting the
+     * subscription.
      */
     @Test
     void a_shutdown_stops_the_tries_of_a_delete_that_keeps_failing_and_the_cancel_then_fails_with_the_last_error() throws Exception {
@@ -624,18 +652,53 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     }
 
     /**
-     * A thread that must not block, a WebFlux request thread for example, subscribes the same id while the storage
-     * still holds the delete of the cancel, with a start position that reads the stored position itself by blocking.
-     * Waiting for the delete there would mean starting from a position read after the subscribe returned, so the
-     * function runs at the call, as it does without a delete and as it did in 0.33.0, and Reactor refuses the block it
-     * makes on that thread.
+     * The storage fails every delete, and the model is shut down while it waits to try again. The shutdown ends that
+     * wait at once, so the storage is asked for no further delete and the cancel fails with what the storage answered
+     * last. A second cancel of the id, whose delete is queued behind the first, makes no try either and fails with the
+     * same error.
      */
     @Test
-    void a_subscribe_on_a_non_blocking_thread_while_the_delete_runs_is_refused_by_a_start_position_that_blocks_as_it_is_without_a_delete() throws Exception {
+    void a_shutdown_while_a_failed_delete_waits_to_be_tried_again_asks_the_storage_for_no_further_delete() {
+        // Given
+        PositionStorage storage = new PositionStorage();
+        RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        runningFromAStoredPosition(model, storage);
+        storage.deleteFailures.set(Integer.MAX_VALUE);
+        CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+        // After four failed tries the next one is due 400 milliseconds or more after the last
+        await().atMost(TIMEOUT).pollInterval(Duration.ofMillis(5)).until(() -> storage.deleteAttempts.get() >= 4);
+        CompletableFuture<Void> cancelledAgain = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+        int deletesAskedForBeforeTheShutdown = storage.deleteAttempts.get();
+
+        // When
+        model.shutdown();
+
+        // Then
+        assertThat(catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS))).as("how the cancel ended once the model shut down")
+                .hasRootCauseMessage(DELETE_FAILED);
+        assertThat(catchThrowable(() -> cancelledAgain.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS))).as("how the cancel queued behind it ended once the model shut down")
+                .hasRootCauseMessage(DELETE_FAILED);
+        assertThat(storage.deleteAttempts).as("deletes the storage was asked for, once both cancels had ended").hasValue(deletesAskedForBeforeTheShutdown);
+    }
+
+    /**
+     * A rebuild with a start position that reads the stored position itself is subscribed while the storage still holds
+     * the delete of a cancel of the id. It covers each place where the function could run before that delete ended,
+     * which are the subscribe when the wrapped model it is handed to is stopped, a start of the model it is registered
+     * with while that model was stopped, and the subscribe on a thread that must not block, a WebFlux request thread
+     * for example. The function runs only once the delete has ended, on a thread that may block, so it finds nothing
+     * stored and replays from the beginning.
+     */
+    @ParameterizedTest
+    @CsvSource({"true, stopped", "true, non-blocking", "false, started-once-subscribed", "false, non-blocking"})
+    void a_rebuild_subscribed_while_the_delete_of_a_cancel_runs_reads_the_stored_position_only_once_the_delete_has_ended(boolean handsOver, String where) throws Exception {
         // Given
         PositionStorage storage = new PositionStorage();
         NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
-        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage);
+        RecordingSubscriptionModel feed = handsOver ? wrapped.feed : new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        List<StartAt> startedAt = handsOver ? wrapped.startedAt : feed.startedAt;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(handsOver ? wrapped : feed, storage);
         runningFromAStoredPosition(model, storage);
         CountDownLatch releaseDelete = new CountDownLatch(1);
         storage.releaseHeldDelete = releaseDelete;
@@ -643,17 +706,31 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         try {
             // When
             model.cancelSubscription(SUBSCRIPTION_ID);
-            CompletableFuture<Subscription> subscribed = Mono.fromCallable(() -> model.subscribe(SUBSCRIPTION_ID, null, replayThenResume(storage), __ -> Mono.empty()))
-                    .subscribeOn(Schedulers.parallel())
-                    .toFuture();
+            if (where.equals("stopped")) {
+                wrapped.running = false;
+            } else if (where.equals("started-once-subscribed")) {
+                model.stop();
+            }
+            Callable<Subscription> subscribe = () -> model.subscribe(SUBSCRIPTION_ID, null, replayThenResume(storage), __ -> Mono.empty());
+            if (where.equals("non-blocking")) {
+                Mono.fromCallable(subscribe).subscribeOn(Schedulers.parallel()).block(TIMEOUT);
+            } else {
+                subscribe.call();
+            }
+            if (where.equals("started-once-subscribed")) {
+                model.start(true);
+            }
+            int startedWhileTheDeleteWasHeld = startedAt.size();
+            releaseDelete.countDown();
 
             // Then
-            assertThat(catchThrowable(() -> subscribed.get(5, TimeUnit.SECONDS))).as("failure of the subscribe made on a non-blocking thread while the delete runs")
-                    .hasRootCauseInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("is blocking");
-            assertThat(wrapped.startedAt).as("start positions handed to the wrapped model").hasSize(1);
+            await().atMost(TIMEOUT).until(() -> startedAt.size() == 2);
+            assertThat(startedWhileTheDeleteWasHeld).as("subscriptions started before the delete ended").isEqualTo(1);
+            assertThat(resolved(startedAt.get(1))).as("start position of the rebuild subscribed while the delete ran")
+                    .hasToString(BEGINNING.asString());
         } finally {
             releaseDelete.countDown();
+            model.shutdown();
         }
     }
 
@@ -824,46 +901,7 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     }
 
     /**
-     * As above with the subscription-model default start position, which this model reads on the thread that
-     * subscribes before it hands the subscription to the wrapped model.
-     */
-    @Test
-    void a_shutdown_ends_a_subscribe_with_the_model_default_start_position_still_waiting_for_the_delete_of_its_id() throws Exception {
-        // Given
-        PositionStorage storage = new PositionStorage();
-        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
-        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage);
-        runningFromAStoredPosition(model, storage);
-        CountDownLatch releaseDelete = new CountDownLatch(1);
-        storage.releaseHeldDelete = releaseDelete;
-
-        try {
-            model.cancelSubscription(SUBSCRIPTION_ID);
-            AtomicReference<@Nullable Thread> subscriber = new AtomicReference<>();
-            CompletableFuture<Subscription> subscribed = CompletableFuture.supplyAsync(() -> {
-                subscriber.set(Thread.currentThread());
-                return model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
-            });
-            await().atMost(TIMEOUT).until(() -> isWaiting(subscriber.get()));
-
-            // When
-            model.shutdown();
-
-            // Then
-            Throwable outcome = catchThrowable(() -> subscribed.get(5, TimeUnit.SECONDS));
-            assertThat(outcome).as("how the subscribe waiting for the delete on its own thread ended once the model shut down").hasRootCauseInstanceOf(SubscriptionModelShutdownException.class);
-            releaseDelete.countDown();
-            storage.heldDeleteApplied.get(5, TimeUnit.SECONDS);
-            // Nothing signals a start that never happens, so this looks once the storage has had as long again
-            waitFor(HELD_BY_THE_STORAGE);
-            assertThat(wrapped.subscribedIds).as("subscribes the wrapped model received").hasSize(1);
-        } finally {
-            releaseDelete.countDown();
-        }
-    }
-
-    /**
-     * As the first of the two above, when this model drives the feed itself.
+     * As above, when this model drives the feed itself.
      */
     @Test
     void a_shutdown_ends_a_subscribe_still_waiting_for_the_delete_of_its_id_when_this_model_drives_the_feed() throws Exception {
@@ -1686,16 +1724,16 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     }
 
     /**
-     * As above, on a model that is stopped when the subscribe comes. StartAt.now() on a stopped model means where the
-     * feed is once the model is started, so the function runs when the model is started, or at the subscribe when the
-     * wrapped model is stopped, and the feed opens at StartAt.now() as the model starts, as it does without a delete.
-     * Only the position writes wait for the delete, whether it ends before the start or after it. A start that waited
-     * for a read of where the feed is would hang on a read that never answers, and opening the feed at StartAt.now()
-     * takes no such read.
+     * As above, on a model that is stopped when the subscribe comes. The function runs only once the delete has
+     * ended, and then StartAt.now() starts from where the feed was when the subscribe returned. On a stopped model that
+     * is earlier than the present at the start, which StartAt.now() means without a delete, so the subscription gets
+     * what was written between the subscribe and the start as well, and misses nothing written after the start. Where
+     * this model drives the feed and the delete ends before the start, the function runs at the start, as it does
+     * without a delete.
      */
     @ParameterizedTest
     @CsvSource({"false, false", "false, true", "true, false", "true, true"})
-    void a_dynamic_start_position_that_would_wait_for_a_delete_on_a_stopped_model_starts_at_the_present_when_the_model_is_started(boolean handsOver, boolean deleteEndsFirst) throws Exception {
+    void a_dynamic_start_position_that_waited_for_a_delete_on_a_stopped_model_starts_from_where_the_feed_was_when_the_subscribe_returned(boolean handsOver, boolean deleteEndsFirst) throws Exception {
         // Given
         PositionStorage storage = new PositionStorage();
         NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED);
@@ -1728,7 +1766,7 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
             // Then
             await().atMost(TIMEOUT).until(() -> startedAt.size() == 2);
             assertThat(resolved(startedAt.get(1))).as("start position of the subscription made while the model was stopped")
-                    .hasToString("Now");
+                    .hasToString(!handsOver && deleteEndsFirst ? "Now" : WHERE_THE_FEED_WAS_WHEN_THE_SUBSCRIBE_RETURNED);
         } finally {
             releaseDelete.countDown();
         }
