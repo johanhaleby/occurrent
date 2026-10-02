@@ -17,7 +17,6 @@
 package org.occurrent.subscription.blocking.competingconsumers;
 
 import io.cloudevents.CloudEvent;
-import org.awaitility.core.ConditionTimeoutException;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -40,7 +39,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -50,16 +48,14 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * A start(..) or stop() decides for every subscription this model knows, also one that a subscribe(..) records while
- * it runs, and a stop() returns only once the wrapped model runs nothing, also when another stop() begins while it
- * waits for that.
+ * it runs, and a stop() does not wait for a resume of a competing subscription, also when another stop() begins
+ * behind it.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CompetingConsumerStartAndStopReachEverySubscriptionTest {
 
     private static final String NODE = "node";
     private static final Duration EVENTUALLY = Duration.ofSeconds(5);
-    // Long enough for a stop() that a later stop() lets go early to have returned, which takes microseconds
-    private static final Duration DOES_NOT_RETURN_WITHIN = Duration.ofSeconds(1);
     // How long a stop() takes the subscriptions it stops depends on the machine, so the subscribe records s1 at each of
     // these delays in turn, and one of them falls in the middle of it
     private static final int MAX_DELAY_MICROS = 300;
@@ -89,8 +85,10 @@ class CompetingConsumerStartAndStopReachEverySubscriptionTest {
         }
     }
 
+    // Neither stop() waits for the grant's resume of s1, since the resume of a competing subscription can no longer
+    // deliver once a stop() has begun
     @Test
-    void a_stop_that_another_stop_begins_behind_returns_only_once_the_wrapped_model_runs_nothing() {
+    void a_stop_that_another_stop_begins_behind_returns_without_waiting_for_a_resume_that_can_no_longer_deliver() {
         WrappedModel wrapped = WrappedModel.pausingWhatItRunsOnStop();
         Strategy strategy = new Strategy();
         CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
@@ -111,15 +109,14 @@ class CompetingConsumerStartAndStopReachEverySubscriptionTest {
                 model.stop();
                 return wrapped.isRunning("s2");
             }, otherThreads);
-            happensWithin(Duration.ofMillis(300), s2RanWhenTheFirstStopReturned::isDone);
-            assertThat(s2RanWhenTheFirstStopReturned).as("the first stop() waits for the resume of s1").isNotDone();
+            assertThat(s2RanWhenTheFirstStopReturned).as("[the first stop() returned while the resume of s1 waits]").succeedsWithin(EVENTUALLY);
+            assertThat(s2RanWhenTheFirstStopReturned.join()).as("[s2 runs in the wrapped model after the first stop() returned]").isFalse();
             CompletableFuture<Void> secondStop = CompletableFuture.runAsync(model::stop, otherThreads);
-            happensWithin(DOES_NOT_RETURN_WITHIN, s2RanWhenTheFirstStopReturned::isDone);
+            assertThat(secondStop).as("[the second stop() returned while the resume of s1 waits]").succeedsWithin(EVENTUALLY);
 
             resumeOfS1.open();
-            assertThat(s2RanWhenTheFirstStopReturned).as("the first stop() once the resume of s1 returned").succeedsWithin(EVENTUALLY);
-            assertThat(s2RanWhenTheFirstStopReturned.join()).as("[s2 runs in the wrapped model after the first stop() returned]").isFalse();
-            assertThat(secondStop).as("the second stop()").succeedsWithin(EVENTUALLY);
+            await().atMost(EVENTUALLY).untilAsserted(() ->
+                    assertThat(wrapped.isPaused("s1")).as("[s1 paused again in the wrapped model once the resume the stop() calls did not wait for returned]").isTrue());
         } finally {
             resumeOfS1.open();
             otherThreads.shutdownNow();
@@ -205,15 +202,6 @@ class CompetingConsumerStartAndStopReachEverySubscriptionTest {
             done.get(EVENTUALLY.toMillis(), MILLISECONDS);
         } catch (Exception e) {
             throw new IllegalStateException("The call on another thread did not return", e);
-        }
-    }
-
-    // Returns as soon as the condition holds, or when the window has passed without it
-    private static void happensWithin(Duration window, BooleanSupplier condition) {
-        try {
-            await().atMost(window).pollInterval(1, MILLISECONDS).until(condition::getAsBoolean);
-        } catch (ConditionTimeoutException ignored) {
-            // The window passed, which the assertions that follow are about
         }
     }
 

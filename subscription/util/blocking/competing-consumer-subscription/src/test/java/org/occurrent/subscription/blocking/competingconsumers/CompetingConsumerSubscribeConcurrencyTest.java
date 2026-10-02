@@ -509,14 +509,58 @@ class CompetingConsumerSubscribeConcurrencyTest {
         List<String> s1Received = new CopyOnWriteArrayList<>();
 
         Throwable failure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId())));
-        delegate.write("e1");
+        Throwable write = catchThrowable(() -> delegate.write("e1"));
         Set<String> ids = model.subscriptionIds();
         Throwable pause = catchThrowable(() -> model.pauseSubscription("s1"));
 
         assertThat(delegate.isRunning("s1")).as("s1 runs in the wrapped model that cannot pause it").isTrue();
+        assertThat(s1Received).as("events s1 received while this model is stopped and holds no lease, write=" + write).isEmpty();
         assertThat(ids).as("subscriptionIds() while the wrapped model runs s1, subscribe failure=" + failure + ", received=" + s1Received).containsExactly("s1");
         assertThat(pause instanceof UnknownSubscriptionException).as("pausing s1, which the wrapped model runs, answers as for an unknown id, pause=" + pause).isFalse();
         assertThat(failure).as("the subscribe of s1, which the wrapped model runs").isNull();
+    }
+
+    @Test
+    void an_event_this_node_may_not_deliver_does_not_hold_up_a_pause_of_a_model_that_delivers_under_its_lock() {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        List<String> s1Received = new CopyOnWriteArrayList<>();
+        model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId()));
+        // The lease of s1 could have expired, and the lease strategy says so only when asked
+        strategy.holders.remove("s1");
+        Thread writer = Thread.ofPlatform().daemon().start(() -> catchThrowable(() -> delegate.write("e1")));
+        await().atMost(Duration.ofSeconds(5)).until(() -> writer.getState() == Thread.State.TIMED_WAITING);
+
+        CompletableFuture<Void> pause = CompletableFuture.runAsync(() -> model.pauseSubscription("s1"));
+
+        assertThat(pause).as("[the pause of s1 returned while its event waits for the lease]").succeedsWithin(Duration.ofSeconds(5));
+        assertThat(delegate.isPaused("s1")).as("s1 paused in the wrapped model").isTrue();
+        assertThat(s1Received).as("events s1 received without its lease").isEmpty();
+    }
+
+    @Test
+    void an_event_for_a_subscription_without_its_lease_that_a_model_which_cannot_pause_runs_while_this_model_is_stopped_is_refused_instead_of_held() {
+        UserWrittenModel delegate = new UserWrittenModel(true);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        // A stop() overtakes the subscribe, the wrapped model is started again by a resume of another subscription, and
+        // registering s1 again fails
+        delegate.beforeSubscribe = id -> {
+            delegate.beforeSubscribe = __ -> {};
+            join(runOnAnotherThreadUntilDoneOrBlocked(model::stop));
+            delegate.start(false);
+            strategy.registerFailsOnce.add("s1");
+        };
+        List<String> s1Received = new CopyOnWriteArrayList<>();
+        catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId())));
+        await().atMost(Duration.ofSeconds(5)).until(() -> Thread.getAllStackTraces().keySet().stream().noneMatch(thread -> thread.getName().startsWith("occurrent-competing-consumer-reconcile-")));
+
+        CompletableFuture<Throwable> write = CompletableFuture.supplyAsync(() -> catchThrowable(() -> delegate.write("e1")));
+
+        assertThat(write).as("[the write returned while this model is stopped and s1 has no lease]").succeedsWithin(Duration.ofSeconds(5));
+        assertThat(delegate.isRunning("s1")).as("s1 runs in the wrapped model that cannot pause it").isTrue();
+        assertThat(s1Received).as("events s1 received without its lease").isEmpty();
     }
 
     @Test

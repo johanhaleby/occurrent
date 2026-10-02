@@ -79,6 +79,10 @@ public interface CompetingConsumerStrategy {
 
     /**
      * Check whether a particular subscriber has the lock (access) to read events for the given subscription.
+     * <p>
+     * {@code CompetingConsumerSubscriptionModel} calls this before it hands each event of a competing subscription to
+     * the action, and holds the event while this returns {@code false} or throws. Answer from what this strategy keeps
+     * in memory rather than by asking a database, and answer {@code false} once the lock could have expired.
      *
      * @param subscriptionId The id of of the subscription
      * @param subscriberId   The unique of of the subscriber
