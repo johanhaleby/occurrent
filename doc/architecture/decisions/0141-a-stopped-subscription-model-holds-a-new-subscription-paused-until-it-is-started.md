@@ -316,11 +316,13 @@ fails in its own call, unless the call it gave up threw an `Error`. It throws th
 MongoDB lease strategies throw an `Error` from one listener once they have told the others. In 0.33.0 a cancel of such a subscription worked, and throwing instead would refuse
 every pause, resume and cancel of it for as long as applying the call went on failing. A `RuntimeException` from
 applying a `stop()` to a competing subscription is not given up, since the try takes it on. The `stop()` throws it,
-also when another call applied it to that subscription first. The exception is a pause, resume or cancel that met the
-failure before the `stop()` was done stopping the wrapped model. The thread of the `stop()` pauses a subscription in the
-wrapped model only after that, and only one that model still runs then. So the `stop()` throws such a failure only when
-the wrapped model still runs the subscription once the `stop()` is done stopping that model, and logs it as a warning
-otherwise. When the thread of
+also when another call applied it to that subscription first. The exception is a pause, resume or cancel that failed to
+pause the subscription in the wrapped model before the `stop()` was done stopping the wrapped model. The thread of the
+`stop()` pauses a subscription in the wrapped model only after that, and only one that model runs when that thread gets
+to it, unless a resume that began after the `stop()` has let it run. So the `stop()` throws such a failure only when
+the same holds once its thread gets to the subscription, and logs it as a warning otherwise. Any other failure there,
+such as the lease strategy failing to unregister the subscription, the thread of the `stop()` meets too, so the `stop()`
+throws it. When the thread of
 the `stop()` finds the subscription's lock held by a call that has not applied it there, the `stop()` returns without
 waiting for it and doesn't throw what fails there later. Giving up a `start(..)` gives
 up only what it does for that subscription. Starting the wrapped model is a step for the whole model, which no single

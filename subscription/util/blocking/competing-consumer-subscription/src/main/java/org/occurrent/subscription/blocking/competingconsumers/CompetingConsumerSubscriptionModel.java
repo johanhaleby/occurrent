@@ -213,13 +213,16 @@ import static java.util.Objects.requireNonNull;
  * running first would have had {@code stop()} stop it. {@code stop()} waits for a call in the wrapped model only while
  * no {@code start(..)} is waiting behind it. Once one is, also one that was waiting before {@code stop()} got to the call,
  * {@code stop()} returns without stopping the wrapped model or a subscription, and the {@code start(..)} decides for
- * every subscription. Until then a pause, resume or cancel that began after {@code stop()} stops its subscription before
- * making its own call, as it would have had {@code stop()} got there first, and that subscription stays stopped unless
- * its own call or the {@code start(..)} changes that. {@code stop()} pauses a subscription in the wrapped model only
- * once it is done stopping that model, and only one the wrapped model still runs then. So when stopping a competing
- * consumer fails for such a pause, resume or cancel before that, {@code stop()} throws the failure only when the
- * wrapped model still runs the subscription once {@code stop()} is done stopping that model, and logs it as a warning
- * otherwise. A second {@code stop()} waiting behind it waits for it to return instead.
+ * every subscription. Until then a pause, resume or cancel that began after {@code stop()} stops its subscription
+ * before making its own call, as it would have had {@code stop()} got there first, and that subscription stays stopped
+ * unless its own call or the {@code start(..)} changes that. {@code stop()} pauses a subscription in the wrapped model
+ * only once it is done stopping that model, and only one that the wrapped model runs when {@code stop()} gets to it,
+ * unless a resume that began after {@code stop()} has let it run. So when pausing a competing consumer in the wrapped
+ * model fails for such a pause, resume or cancel before that, {@code stop()} throws the failure only when the same
+ * holds once {@code stop()} gets to that subscription, and logs it as a warning otherwise. Any other failure such a
+ * call meets stopping a competing consumer, such as the lease strategy failing to unregister it, {@code stop()} throws,
+ * as it would had it got to that subscription first. A second {@code stop()} waiting behind it waits for it to return
+ * instead.
  */
 @NullMarked
 public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrapper, SubscriptionModel, SubscriptionModelLifeCycle, IntrospectableSubscriptions, CompetingConsumerListener {
@@ -847,7 +850,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 return null;
             }
             if (next.id() == applied.id()) {
-                @Nullable RuntimeException failure = applyLifecycle(subscriptionId, applied, paused, null);
+                @Nullable RuntimeException failure = applyLifecycle(subscriptionId, applied, paused, new ArrayList<>(), null);
                 if (handed != null) {
                     synchronized (this) {
                         handed.applied(applied);
@@ -1015,7 +1018,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // was handed to tries it again.
     private void applyHandedOver(String subscriptionId, HandedOver handed, Lifecycle next) {
         @Nullable CompetingConsumer cc = findFirstCompetingConsumerMatching(c -> c.hasSubscriptionId(subscriptionId)).orElse(null);
-        RuntimeException failure = applyLifecycle(subscriptionId, next, new ArrayList<>(), null);
+        List<RuntimeException> failedToPause = new ArrayList<>();
+        RuntimeException failure = applyLifecycle(subscriptionId, next, new ArrayList<>(), failedToPause, null);
         if (failure != null && cc == null && nonCompetingConsumersSubscriptions.contains(subscriptionId)) {
             throw failure;
         }
@@ -1023,10 +1027,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             // Mostly handed to the try already, which this only asks to decide once more
             reconcileLater(cc.subscriptionIdAndSubscriberId, false);
         }
-        // Read once the call to the wrapped model has failed, so the stop() had not stopped the wrapped model before
-        // that call returned
+        // Read once pausing the consumer in the wrapped model has failed, so the stop() had not stopped the wrapped model
+        // before that call returned. The thread of the stop() unregisters the consumer whatever the wrapped model runs,
+        // so a failure to unregister it is thrown as it is.
         @Nullable SubscriptionIdAndSubscriberId beforeTheWrappedModelWasStopped =
-                failure != null && cc != null && stillStoppingTheWrappedModel(next) ? cc.subscriptionIdAndSubscriberId : null;
+                failure != null && cc != null && !failedToPause.isEmpty() && stillStoppingTheWrappedModel(next) ? cc.subscriptionIdAndSubscriberId : null;
         synchronized (this) {
             handed.applied(next);
             if (failure != null) {
@@ -1057,26 +1062,28 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * The failure another call met applying a {@code start(..)} or {@code stop()}, for the thread of that call to throw,
      * unless that thread would not have met it. A pause, resume or cancel that began after a {@code stop()} can apply
      * it before that {@code stop()} is done stopping the wrapped model. The thread of the {@code stop()} stops each
-     * consumer only after that, and pauses one in the wrapped model only when that model still runs it then. So a
-     * failure met before then is not thrown when the wrapped model no longer runs the subscription once the
-     * {@code stop()} is done stopping that model. It is logged instead, and the try of the consumer has it already, as
-     * with any other failed call. Called outside the monitor.
+     * consumer only after that, and when it gets to one, it pauses it in the wrapped model only when that model runs it
+     * and no resume that began after the {@code stop()} has let it run while this model is stopped. So a failure to
+     * pause a consumer in the wrapped model, met before then, is thrown only when the same holds once the thread of the
+     * {@code stop()} gets here. Otherwise it is logged, and the try of the consumer has it already, as with any other
+     * failed call. Any other failure is thrown as it is, since that thread meets it too. Called outside the monitor.
      */
     private @Nullable RuntimeException asMetByItsOwnThread(@Nullable FailedWhenAppliedFirst failedFirst) {
         if (failedFirst == null) {
             return null;
         }
         @Nullable SubscriptionIdAndSubscriberId stoppedEarly = failedFirst.beforeTheWrappedModelWasStopped();
-        if (stoppedEarly == null || runsInTheWrappedModel(stoppedEarly, failedFirst.failure())) {
+        // Asked in this order, since a resume lets a consumer run while stopped before it runs it in the wrapped model
+        if (stoppedEarly == null || runsInTheWrappedModel(stoppedEarly, failedFirst.failure()) && !mayRunWhileStopped.contains(stoppedEarly)) {
             return failedFirst.failure();
         }
-        log.warn("A pause, resume or cancel failed to stop subscription {} for a stop() that had not stopped the wrapped model yet, and the wrapped model no longer runs it, so stop() does not throw the failure",
+        log.warn("A pause, resume or cancel failed to pause subscription {} in the wrapped model for a stop() that had not stopped the wrapped model yet. The wrapped model no longer runs it, or a resume that began after the stop() has let it run, so stop() does not throw the failure",
                 stoppedEarly.subscriptionId(), failedFirst.failure());
         return null;
     }
 
     // What failed for a competing consumer when another call than its own thread applied a start(..) or stop(). The
-    // consumer is set when a stop() was applied before it had stopped the wrapped model.
+    // consumer is set when a stop() failed to pause it in the wrapped model before it had stopped the wrapped model.
     private record FailedWhenAppliedFirst(RuntimeException failure, @Nullable SubscriptionIdAndSubscriberId beforeTheWrappedModelWasStopped) {
     }
 
@@ -1097,8 +1104,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
     }
 
-    // Applies a start(..) or stop() to one subscription, under that subscription's lock
-    private @Nullable RuntimeException applyLifecycle(String subscriptionId, Lifecycle applied, List<String> paused, @Nullable RuntimeException firstFailure) {
+    // Applies a start(..) or stop() to one subscription, under that subscription's lock. A stop() that fails to pause the
+    // consumer in the wrapped model adds that failure to failedToPause too.
+    private @Nullable RuntimeException applyLifecycle(String subscriptionId, Lifecycle applied, List<String> paused, List<RuntimeException> failedToPause, @Nullable RuntimeException firstFailure) {
         @Nullable CompetingConsumer cc = findFirstCompetingConsumerMatching(c -> c.hasSubscriptionId(subscriptionId)).orElse(null);
         if (applied.started()) {
             lifecycleAppliedOnThisThread.set(applied);
@@ -1142,7 +1150,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
         if (cc != null && !mayRunWhileStopped.contains(cc.subscriptionIdAndSubscriberId)) {
             try {
-                stopConsumer(cc, paused, applied);
+                stopConsumer(cc, paused, failedToPause, applied);
             } catch (RuntimeException e) {
                 recordAsPausedUnlessItRuns(cc.subscriptionIdAndSubscriberId, true, e);
                 reconcileLater(cc.subscriptionIdAndSubscriberId);
@@ -1176,13 +1184,18 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // A consumer that a call coming before this stop() meant to run, and did not, because this stop() refused it or the
     // call failed, is paused as by the user too, as it would have been had that call run it and this stop() paused it
     // after
-    private void stopConsumer(CompetingConsumer cc, List<String> paused, Lifecycle stop) {
+    private void stopConsumer(CompetingConsumer cc, List<String> paused, List<RuntimeException> failedToPause, Lifecycle stop) {
         String subscriptionId = cc.getSubscriptionId();
-        if (cc.isRunning() && delegate.isRunning(subscriptionId)) {
-            delegate.pauseSubscription(subscriptionId);
-            if (delegate.isRunning(subscriptionId)) {
-                throw new IllegalStateException("Subscription " + subscriptionId + " still runs in the wrapped subscription model after it was paused there, so this node keeps its lease");
+        try {
+            if (cc.isRunning() && delegate.isRunning(subscriptionId)) {
+                delegate.pauseSubscription(subscriptionId);
+                if (delegate.isRunning(subscriptionId)) {
+                    throw new IllegalStateException("Subscription " + subscriptionId + " still runs in the wrapped subscription model after it was paused there, so this node keeps its lease");
+                }
             }
+        } catch (RuntimeException e) {
+            failedToPause.add(e);
+            throw e;
         }
         unregisterCompetingConsumer(cc, c -> {
             logDebug("Stopped CompetingConsumer subscription (subscriberId={}, subscriptionId={})", c.getSubscriberId(), c.getSubscriptionId());

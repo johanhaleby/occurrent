@@ -878,29 +878,114 @@ class CompetingConsumerHandedOverLifecycleTest {
 
         Fixture fixture = new Fixture(Initially.RUNNING);
         try {
-            fixture.subscribeN1();
-            fixture.model.pauseSubscription("n1");
-            Gate resumeOfN1InTheWrappedModel = new Gate();
-            fixture.wrapped.nextResumeOfN1OnTheTestThread.set(resumeOfN1InTheWrappedModel);
-            CompletableFuture<Void> resume = runOnTheTestThread(() -> fixture.model.resumeSubscription("n1"));
-            assertThat(resumeOfN1InTheWrappedModel.awaitEntered()).as("the resume of n1 waits in the wrapped model").isTrue();
-            CompletableFuture<Void> stopped = new CompletableFuture<>();
-            Thread stopping = startOnALifecycleCallThread(fixture.model::stop, stopped);
-            await().atMost(EVENTUALLY).pollInterval(1, MILLISECONDS).until(() -> stopped.isDone() || waitsOnAMonitor(stopping));
-            assertThat(stopped).as("stop() waits for the resume of n1").isNotDone();
+            StopWaitingForAResumeOfN1 stop = stopWaitingForAResumeOfN1(fixture);
 
             fixture.wrapped.failuresFromPausingS1.set(1);
             CompletableFuture<Void> later = runOnTheTestThread(() -> laterCall.accept(fixture.model));
             await().atMost(EVENTUALLY).until(later::isDone);
             assertThat(fixture.wrapped.failuresFromPausingS1).as("failures left for the pause of s1 in the wrapped model").hasValue(0);
-            assertThat(stopped).as("stop() while the resume of n1 waits").isNotDone();
-            resumeOfN1InTheWrappedModel.open();
-            assertThat(resume).as("the resume of n1").succeedsWithin(EVENTUALLY);
+            assertThat(stop.stopped()).as("stop() while the resume of n1 waits").isNotDone();
+            stop.resumeOfN1InTheWrappedModel().open();
+            assertThat(stop.resume()).as("the resume of n1").succeedsWithin(EVENTUALLY);
 
-            assertThat(stopped).as("[stop() applied to s1 by the later call before the wrapped model was stopped]").succeedsWithin(EVENTUALLY);
+            assertThat(stop.stopped()).as("[stop() applied to s1 by the later call before the wrapped model was stopped]").succeedsWithin(EVENTUALLY);
         } finally {
             fixture.model.shutdown();
         }
+    }
+
+    // As above, with a pause of s1 applying the stop(), and then a resume of s1 that began after the stop() too. The
+    // resume waits for the wrapped model to be stopped and then runs s1 there, and the thread of stop() gets to s1 only
+    // after that. stop() does not pause a subscription that a resume begun after it let run, so it does not throw what
+    // failed for the pause either.
+    @Test
+    void a_stop_that_a_later_pause_applied_before_the_wrapped_model_was_stopped_does_not_throw_for_a_subscription_a_later_resume_runs() {
+        Fixture fixture = new Fixture(Initially.RUNNING);
+        try {
+            StopWaitingForAResumeOfN1 stop = stopWaitingForAResumeOfN1(fixture);
+            fixture.wrapped.failuresFromPausingS1.set(1);
+            CompletableFuture<Void> pause = runOnTheTestThread(() -> fixture.model.pauseSubscription("s1"));
+            assertThat(pause).as("the pause of s1").succeedsWithin(EVENTUALLY);
+            assertThat(fixture.wrapped.failuresFromPausingS1).as("failures left for the pause of s1 in the wrapped model").hasValue(0);
+            CompletableFuture<Void> resumed = new CompletableFuture<>();
+            Thread resuming = startOnTheTestThread(() -> fixture.model.resumeSubscription("s1"), resumed);
+            await().atMost(EVENTUALLY).pollInterval(1, MILLISECONDS).until(() -> resumed.isDone() || waitsOnAMonitor(resuming));
+            assertThat(resumed).as("the resume of s1 waits for the wrapped model to be stopped").isNotDone();
+
+            Gate stopGetsToS1 = new Gate();
+            fixture.wrapped.nextIsRunningOfS1OnAHandedOverThread.set(stopGetsToS1);
+            stop.resumeOfN1InTheWrappedModel().open();
+            assertThat(stop.resume()).as("the resume of n1").succeedsWithin(EVENTUALLY);
+            assertThat(resumed).as("the resume of s1").succeedsWithin(EVENTUALLY);
+            assertThat(fixture.wrapped.isRunning("s1")).as("s1 runs in the wrapped model").isTrue();
+            assertThat(stopGetsToS1.awaitEntered()).as("stop() gets to s1").isTrue();
+            stopGetsToS1.open();
+
+            assertThat(stop.stopped()).as("[stop() applied to s1 by the pause, with s1 run by the later resume]").succeedsWithin(EVENTUALLY);
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // As above, with the pause of s1 in the wrapped model succeeding, and the lease strategy failing to unregister s1
+    // once or each time. With the lock free, the thread of stop() meets that failure itself, since it unregisters s1
+    // whatever the wrapped model runs, so stop() throws it here too.
+    @TestFactory
+    Stream<DynamicTest> a_stop_that_a_later_pause_applied_before_the_wrapped_model_was_stopped_throws_what_failed_to_unregister_the_subscription() {
+        return Stream.of(
+                DynamicTest.dynamicTest("once", () -> aStopAppliedByALaterPauseWhileUnregisteringS1Fails(1)),
+                DynamicTest.dynamicTest("each time", () -> aStopAppliedByALaterPauseWhileUnregisteringS1Fails(Integer.MAX_VALUE)));
+    }
+
+    private static void aStopAppliedByALaterPauseWhileUnregisteringS1Fails(int failures) {
+        Throwable expected;
+        Fixture free = new Fixture(Initially.RUNNING);
+        try {
+            free.strategy.failuresFromUnregisteringS1.set(failures);
+            expected = catchThrowable(free.model::stop);
+        } finally {
+            free.strategy.failuresFromUnregisteringS1.set(0);
+            free.model.shutdown();
+        }
+        assertThat(expected).as("what stop() throws with the lock free").isInstanceOf(IllegalStateException.class);
+
+        Fixture fixture = new Fixture(Initially.RUNNING);
+        try {
+            StopWaitingForAResumeOfN1 stop = stopWaitingForAResumeOfN1(fixture);
+            fixture.strategy.failuresFromUnregisteringS1.set(failures);
+            CompletableFuture<Void> pause = runOnTheTestThread(() -> fixture.model.pauseSubscription("s1"));
+            await().atMost(EVENTUALLY).until(pause::isDone);
+            assertThat(fixture.strategy.failuresFromUnregisteringS1).as("failures left for unregistering s1").hasValueLessThan(failures);
+            assertThat(stop.stopped()).as("stop() while the resume of n1 waits").isNotDone();
+            stop.resumeOfN1InTheWrappedModel().open();
+            assertThat(stop.resume()).as("the resume of n1").succeedsWithin(EVENTUALLY);
+
+            assertThat(stop.stopped()).as("[stop() applied to s1 by the pause, which failed to unregister s1]").failsWithin(EVENTUALLY)
+                    .withThrowableOfType(ExecutionException.class)
+                    .havingCause().isInstanceOf(expected.getClass()).withMessage(expected.getMessage());
+        } finally {
+            fixture.strategy.failuresFromUnregisteringS1.set(0);
+            fixture.model.shutdown();
+        }
+    }
+
+    // A stop() that waits for a resume of n1 under way in the wrapped model, so it has not stopped the wrapped model,
+    // until the test opens the gate
+    private record StopWaitingForAResumeOfN1(Gate resumeOfN1InTheWrappedModel, CompletableFuture<Void> resume, CompletableFuture<Void> stopped) {
+    }
+
+    private static StopWaitingForAResumeOfN1 stopWaitingForAResumeOfN1(Fixture fixture) {
+        fixture.subscribeN1();
+        fixture.model.pauseSubscription("n1");
+        Gate resumeOfN1InTheWrappedModel = new Gate();
+        fixture.wrapped.nextResumeOfN1OnTheTestThread.set(resumeOfN1InTheWrappedModel);
+        CompletableFuture<Void> resume = runOnTheTestThread(() -> fixture.model.resumeSubscription("n1"));
+        assertThat(resumeOfN1InTheWrappedModel.awaitEntered()).as("the resume of n1 waits in the wrapped model").isTrue();
+        CompletableFuture<Void> stopped = new CompletableFuture<>();
+        Thread stopping = startOnALifecycleCallThread(fixture.model::stop, stopped);
+        await().atMost(EVENTUALLY).pollInterval(1, MILLISECONDS).until(() -> stopped.isDone() || waitsOnAMonitor(stopping));
+        assertThat(stopped).as("stop() waits for the resume of n1").isNotDone();
+        return new StopWaitingForAResumeOfN1(resumeOfN1InTheWrappedModel, resume, stopped);
     }
 
     private static Thread startOnALifecycleCallThread(Runnable call, CompletableFuture<Void> called) {
@@ -1394,6 +1479,7 @@ class CompetingConsumerHandedOverLifecycleTest {
         private final AtomicBoolean leaseHeldAfterTheGate = new AtomicBoolean();
         private final AtomicInteger errorsFromRegisteringS1OnALifecycleThread = new AtomicInteger();
         private final AtomicInteger errorsFromUnregisteringS1 = new AtomicInteger();
+        private final AtomicInteger failuresFromUnregisteringS1 = new AtomicInteger();
         private final AtomicBoolean anotherNodeHoldsS1 = new AtomicBoolean();
         private final AtomicReference<@Nullable Gate> nextRegisterOfS1OnTheTestThread = new AtomicReference<>();
         private final Set<String> candidates = ConcurrentHashMap.newKeySet();
@@ -1422,6 +1508,9 @@ class CompetingConsumerHandedOverLifecycleTest {
         public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
             if (subscriptionId.equals("s1") && errorsFromUnregisteringS1.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
                 throw new AssertionError("Unregistering s1 failed on " + Thread.currentThread().getName());
+            }
+            if (subscriptionId.equals("s1") && failuresFromUnregisteringS1.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
+                throw new IllegalStateException("Unregistering s1 failed");
             }
             candidates.remove(subscriptionId);
             holders.remove(subscriptionId);

@@ -1301,10 +1301,11 @@ you called again.
    an `Error`, and the thread from item 1 makes the call again. Keep that code for a subscription that does not compete.
    `resumeSubscription(..)` still throws its failure for it, and so does `start(..)` when no other call for that
    subscription is under way, and this model doesn't make the call that failed again. `stop()` throws what failed for a
-   competing subscription when it gets to that subscription itself, and when another call applied it there first,
-   unless a pause, resume or cancel met the failure before `stop()` was done stopping the wrapped model and the wrapped
-   model no longer runs the subscription after that. That failure is logged as a warning instead. The thread from item 1
-   tries the subscription again either way. When `stop()` finds a subscription held by a call
+   competing subscription when it gets to that subscription itself, and when another call applied it there first. The
+   exception is a failure to pause the subscription in the wrapped model that a pause, resume or cancel met before
+   `stop()` was done stopping the wrapped model. `stop()` throws that one only when the wrapped model runs the
+   subscription once `stop()` gets to it, and no resume that began after `stop()` has let it run. Otherwise it is logged
+   as a warning. The thread from item 1 tries the subscription again either way. When `stop()` finds a subscription held by a call
    that has not applied it there, it is applied once that call returns, by a thread of its own or by the next call made
    for that subscription, and `stop()` doesn't throw what fails there. A `stop()` that a `start(..)` waiting behind it
    took back doesn't throw what failed for a subscription.
