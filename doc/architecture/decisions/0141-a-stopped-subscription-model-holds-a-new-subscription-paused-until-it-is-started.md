@@ -264,7 +264,8 @@ paused, whether the wrapped model runs it, whether this node holds its lease, an
 all. Each `start(..)` and `stop()` is recorded as not yet applied to each subscription it takes, in the step that
 begins it. Any call that takes the lock of one of them after that step, a pause, resume, cancel, grant or try as much
 as a later `start(..)` or `stop()`, applies it first, and then its own call. That holds also when the thread of that
-`start(..)` or `stop()` has not got to the subscription yet. Two kinds of call are left out, both described below. A pause,
+`start(..)` or `stop()` has not got to the subscription yet. Two kinds of call are left out, both described below, and
+so is a `stop()` that a `start(..)` waiting behind it may still take back, described further down. A pause,
 resume or cancel that began before the `start(..)` or `stop()` and waits for the lock comes first. A call that takes
 the lock while it waits does not apply the `start(..)` or `stop()`, which is applied after the pause, resume or
 cancel. A pause, resume or cancel made on a
@@ -272,14 +273,19 @@ thread that already holds the lock applies nothing first. A resume that such a `
 subscription run while the model is stopped. Only a resume the user asks for does that.
 
 `start(..)`, `stop()`, pause, resume and cancel calls are ordered by when they began. A grant or a try is ordered by
-when it took the subscription's lock. So a grant or a try that holds the lock when a `stop()` begins comes before that
+when it took the subscription's lock. Two cases differ. A lease callback left to a try is ordered against a pause,
+resume or cancel by when the callback came, as the end of this paragraph says, and a `stop()` that may still be taken
+back is described further down. So a grant or a try that holds the lock when a `stop()` begins comes before that
 `stop()`, and so does a `start(..)`, pause, resume or cancel that began before it. Once the `stop()` has begun, such a call runs
 nothing in the wrapped model, also when a `start(..)` after the `stop()` has begun too, and the `stop()` then pauses
 the subscription as paused by the user. That is where the subscription would be had the call run first and the
 `stop()` paused it after. Letting the call run instead would start the wrapped model after a `stop()` and a
 `start(false)` that leave it stopped with their lock free. A lease callback that finds a pause, resume or cancel
 waiting for the lock that began before the callback came lets that call go first. The callback is then left to a try,
-which comes after that call and decides from the lease as it stands when the try runs.
+which comes after that call and decides from the lease as it stands when the try runs. A pause, resume or cancel that
+began after the callback came waits for that try instead, also when it takes the lock before the try does. The
+exception is a callback that comes while a `subscribe(..)` is still making the subscription. Its try starts only once
+the `subscribe(..)` has returned, so a pause, resume or cancel that takes the lock before then comes first.
 
 A pause, resume or cancel that waits for the subscription's lock decides from where the `start(..)` and `stop()` calls
 stood when it began waiting. While it waits, any other thread that holds the lock, a handed over thread, a try or a
@@ -308,7 +314,11 @@ throw it, also when the pause, resume or cancel applied it before the thread of 
 subscription. The pause, resume or cancel then applies the calls after it and makes its own call, so it throws what
 fails in its own call, unless the call it gave up threw an `Error`. It throws that `Error` once its own call is made, as the
 MongoDB lease strategies throw an `Error` from one listener once they have told the others. In 0.33.0 a cancel of such a subscription worked, and throwing instead would refuse
-every pause, resume and cancel of it for as long as applying the call went on failing. Giving up a `start(..)` gives
+every pause, resume and cancel of it for as long as applying the call went on failing. A `RuntimeException` from
+applying a `stop()` to a competing subscription is not given up, since the try takes it on. The `stop()` throws it as it
+would had its own thread applied it, also when another call applied it to that subscription first. When the thread of
+the `stop()` finds the subscription's lock held by a call that has not applied it there, the `stop()` returns without
+waiting for it and doesn't throw what fails there later. Giving up a `start(..)` gives
 up only what it does for that subscription. Starting the wrapped model is a step for the whole model, which no single
 subscription can give up, so a thread of its own goes on trying it, with the same backoff, until it succeeds or a
 `stop()` that began after that `start(..)`, or `shutdown()`, comes. A handed over thread or a try that is still
@@ -340,9 +350,20 @@ once. Only a call allowed while stopped, such as a resume that began after `stop
 model is stopped, and then runs. A resume that began before `stop()` did ends paused by the user, also when it takes
 the subscription's lock after `stop()` began. In 0.33.0 a resume that held the monitor when `stop()` began ended the
 same way, since `stop()` waited for the monitor and then paused the subscription. `stop()` waits for those calls only while no `start(..)` is waiting behind
-it. Once one is, also one that was waiting before `stop()` got to those calls, `stop()` returns without stopping
-anything, since the `start(..)` then decides for every subscription. A second `stop()` waits for the first to return
-instead.
+it. Once one is, also one that was waiting before `stop()` got to those calls, `stop()` returns without stopping the
+wrapped model or a subscription, since the `start(..)` then decides for every subscription. A second `stop()` waits for
+the first to return instead.
+
+Until a `stop()` knows whether a `start(..)` waiting behind it takes it back, a grant, a try and the handed over thread
+leave it to the thread of that `stop()`, which applies it to the subscriptions only once it is not taken back. A pause,
+resume or cancel that began after the `stop()` applies it first all the same, since that call then decides where the
+subscription ends, as it would have with the lock free. A grant, a lease loss or a try that takes the lock meanwhile
+does what it does while the model is stopped, without applying the `stop()`. A grant for a subscription the wrapped model
+runs leaves it running, and a lease loss pauses it for the lost lease, not as by the user, so a `start(false)` that
+takes the `stop()` back doesn't keep it paused. Two such calls can still record a subscription as paused by the user,
+which a `start(false)` then keeps paused. One is a try that pauses a subscription the wrapped model runs. The other is
+a grant for a subscription recorded as running that the wrapped model doesn't run. Both need that call to come while
+`stop()` waits behind calls in the wrapped model, and are left as they are.
 
 `shutdown()` takes neither the monitor nor any subscription's lock. It shuts the lease strategy down, which ends a
 registration waiting between two attempts and makes each later unregister a single attempt, removes the model as a

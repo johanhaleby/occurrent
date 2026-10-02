@@ -1287,17 +1287,25 @@ you called again.
    subscription is under way, `start(..)` returns instead, and a thread of its own tries the subscription again once
    that call has returned, until it succeeds. A pause, resume or cancel of the subscription made while it still fails
    ends those tries and is made all the same. It doesn't end the tries to start the wrapped model, which go on until
-   one succeeds, or until `stop()` or `shutdown()`. `stop()` still throws what failed in its own call, and so do
-   `pauseSubscription(..)` and `cancelSubscription(..)`. A pause, resume or cancel first applies each `start(..)` and
-   `stop()` that began before it and is still waiting to be applied, also one that has not got to that subscription
-   yet, and gives up one that fails. That `start(..)` or `stop()` doesn't throw the failure, which is logged as a
-   warning. When the failure is an `Error`, the pause, resume or cancel throws it once its own call is made. A pause,
+   one succeeds, or until `stop()` or `shutdown()`. `pauseSubscription(..)` and `cancelSubscription(..)` still throw
+   what failed in their own call, and item 3 says what `stop()` throws. A pause, resume or cancel first applies each
+   `start(..)` and `stop()` that began before it and is still waiting to be applied, also one that has not got to that
+   subscription yet. What fails there for a competing subscription is left to the thread from item 1, as it is when
+   the `start(..)` or `stop()` gets there itself. One that fails for a subscription that does not compete, or throws an
+   `Error`, is given up. That `start(..)` or `stop()` doesn't throw the failure, which is logged as a warning. When the
+   failure is an `Error`, the pause, resume or cancel throws it once its own call is made. A pause,
    resume or cancel made from inside a call this model makes to the lease strategy or the wrapped model for that
    subscription applies none of them first. `stop()` gives up no other call.
-3. For a competing subscription, remove code that caught the exception from `start(..)` or `resumeSubscription(..)`
-   to call again. The thread does that now. Keep it for a subscription that does not compete. `resumeSubscription(..)`
-   still throws its failure, and so does `start(..)` when no other call for that subscription is under way, and this
-   model doesn't make the call that failed again.
+3. For a competing subscription, remove code that caught the exception from `start(..)` or `resumeSubscription(..)` to
+   call again. Neither throws what the lease strategy or the wrapped model threw for that subscription now, unless it is
+   an `Error`, and the thread from item 1 makes the call again. Keep that code for a subscription that does not compete.
+   `resumeSubscription(..)` still throws its failure for it, and so does `start(..)` when no other call for that
+   subscription is under way, and this model doesn't make the call that failed again. `stop()` throws what failed for a
+   competing subscription when it gets to that subscription itself, and when another call applied it there first, and
+   the thread from item 1 tries the subscription again either way. When `stop()` finds a subscription held by a call
+   that has not applied it there, it is applied once that call returns, by a thread of its own or by the next call made
+   for that subscription, and `stop()` doesn't throw what fails there. A `stop()` that a `start(..)` waiting behind it
+   took back doesn't throw what failed for a subscription.
 4. To find out whether a subscription runs, call `isRunning(id)`. It asks the wrapped model, which runs the
    subscription only on the node that holds its lease. `isPaused(id)` returns `true` for a subscription that
    `pauseSubscription(..)`, `stop()` or the loss of its lease paused. A subscription for which both return `false` is

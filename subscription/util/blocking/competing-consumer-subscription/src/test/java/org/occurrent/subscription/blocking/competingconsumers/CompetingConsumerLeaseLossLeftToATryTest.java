@@ -37,8 +37,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -46,12 +49,15 @@ import static org.awaitility.Awaitility.await;
 /**
  * A lease loss that finds its subscription's lock taken is left to a try, which acts on it as soon as the call holding
  * the lock has returned. Once a try has ended on an interrupt, the next failure for its subscription starts a new try.
+ * A grant handed to a try that is waiting for its backoff goes ahead of a pause that began after the grant came.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CompetingConsumerLeaseLossLeftToATryTest {
 
     private static final String NODE = "node";
     private static final Duration EVENTUALLY = Duration.ofSeconds(5);
+    private static final String TRY_OF_S1 = "occurrent-competing-consumer-reconcile-s1";
+    private static final String PAUSING_THREAD = "test-pausing-thread";
 
     @Test
     void a_lease_loss_that_finds_its_subscription_busy_is_acted_on_as_soon_as_the_call_holding_it_returns() {
@@ -110,6 +116,71 @@ class CompetingConsumerLeaseLossLeftToATryTest {
         } finally {
             model.shutdown();
         }
+    }
+
+    // The lease loss of s1 fails to pause it, which leaves a try waiting for its backoff. The grant that gives the lease
+    // back finds the lock of s1 held by a resume and is handed to that try, and a pause of s1 that begins after the grant
+    // waits for the lock. The try stands still until the resume has returned and the pause has taken the lock or
+    // returned, so the pause has every chance to go first.
+    @Test
+    void a_grant_handed_to_a_try_waiting_after_a_failure_comes_before_a_pause_that_began_after_it() {
+        WrappedModel wrapped = new WrappedModel();
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
+        Gate tryAboutToBackOff = new Gate();
+        model.runBeforeATryWaitsForItsBackoff(tryAboutToBackOff::pass);
+        Gate isRunningOfS1 = new Gate();
+        try {
+            subscribe(model, "s1");
+            wrapped.pauseFails = true;
+            strategy.holders.remove("s1");
+            model.onConsumeProhibited("s1", NODE);
+            assertThat(tryAboutToBackOff.awaitEnteredOnAnotherThread()).as("the failed pause of s1 left a try waiting for its backoff").isTrue();
+            wrapped.pauseFails = false;
+
+            wrapped.isRunningGates.put("s1", isRunningOfS1);
+            CompletableFuture<Void> resuming = CompletableFuture.runAsync(() -> model.resumeSubscription("s1"));
+            assertThat(isRunningOfS1.awaitEnteredOnAnotherThread()).as("the resume holds s1").isTrue();
+            strategy.holders.add("s1");
+            model.onConsumeGranted("s1", NODE);
+            CompletableFuture<Void> pausing = new CompletableFuture<>();
+            Thread pause = new Thread(() -> {
+                try {
+                    model.pauseSubscription("s1");
+                    pausing.complete(null);
+                } catch (Throwable e) {
+                    pausing.completeExceptionally(e);
+                }
+            }, PAUSING_THREAD);
+            pause.setDaemon(true);
+            pause.start();
+            await().atMost(EVENTUALLY).pollInterval(1, MILLISECONDS).until(() -> pausing.isDone() || waitsForALock(pause));
+            assertThat(pausing).as("the pause of s1 waits for its lock").isNotDone();
+
+            wrapped.callsOfS1.clear();
+            isRunningOfS1.open();
+            await().atMost(EVENTUALLY).until(resuming::isDone);
+            await().atMost(EVENTUALLY).pollInterval(1, MILLISECONDS).until(() -> pausing.isDone() || waitsOnACondition(pause));
+            tryAboutToBackOff.open();
+            await().atMost(EVENTUALLY).until(() -> pausing.isDone() && tryOf("s1").isEmpty());
+
+            List<String> tryAndPause = wrapped.callsOfS1.stream().filter(thread -> thread.equals(TRY_OF_S1) || thread.equals(PAUSING_THREAD)).distinct().toList();
+            assertThat(tryAndPause).as("[the try and the pause of s1, in the order they called the wrapped model for s1]").containsExactly(TRY_OF_S1, PAUSING_THREAD);
+        } finally {
+            tryAboutToBackOff.open();
+            isRunningOfS1.open();
+            model.shutdown();
+        }
+    }
+
+    private static boolean waitsOnACondition(Thread thread) {
+        return thread.getState() == Thread.State.TIMED_WAITING && Stream.of(thread.getStackTrace())
+                .anyMatch(frame -> frame.getClassName().endsWith("$ConditionObject") && frame.getMethodName().startsWith("await"));
+    }
+
+    private static boolean waitsForALock(Thread thread) {
+        return thread.getState() == Thread.State.WAITING && Stream.of(thread.getStackTrace())
+                .anyMatch(frame -> frame.getClassName().equals(ReentrantLock.class.getName()) && frame.getMethodName().equals("lock"));
     }
 
     private static Optional<Thread> tryOf(String subscriptionId) {
@@ -198,9 +269,11 @@ class CompetingConsumerLeaseLossLeftToATryTest {
     }
 
     // A model of a user's own. Its next isRunning(id) for an id waits at
-    // that id's gate once, outside the monitor of this model, and its pause throws while the test says so.
+    // that id's gate once, outside the monitor of this model, and its pause throws while the test says so. It records
+    // the thread of each isRunning and pause of s1.
     private static final class WrappedModel implements SubscriptionModel {
         private final Map<String, Gate> isRunningGates = new ConcurrentHashMap<>();
+        private final List<String> callsOfS1 = new CopyOnWriteArrayList<>();
         private volatile boolean pauseFails;
         private final Set<String> runningIds = new HashSet<>();
         private final Set<String> pausedIds = new HashSet<>();
@@ -241,6 +314,7 @@ class CompetingConsumerLeaseLossLeftToATryTest {
 
         @Override
         public boolean isRunning(String subscriptionId) {
+            recordIfS1(subscriptionId);
             Gate gate = isRunningGates.remove(subscriptionId);
             if (gate != null) {
                 gate.pass();
@@ -264,11 +338,18 @@ class CompetingConsumerLeaseLossLeftToATryTest {
 
         @Override
         public synchronized void pauseSubscription(String subscriptionId) {
+            recordIfS1(subscriptionId);
             if (pauseFails) {
                 throw new IllegalStateException("Pausing " + subscriptionId + " failed");
             }
             if (runningIds.remove(subscriptionId)) {
                 pausedIds.add(subscriptionId);
+            }
+        }
+
+        private void recordIfS1(String subscriptionId) {
+            if (subscriptionId.equals("s1")) {
+                callsOfS1.add(Thread.currentThread().getName());
             }
         }
     }
