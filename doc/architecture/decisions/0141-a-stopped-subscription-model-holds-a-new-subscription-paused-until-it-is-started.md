@@ -322,11 +322,14 @@ subscription registered. The thread of the `stop()` pauses a subscription in the
 only one that this model records as running and the wrapped model runs when that thread gets to it, unless a resume
 that began after the `stop()` has let it run. The `stop()` throws such a failure only when, once its thread gets to the
 subscription, the wrapped model runs it or can't say whether it does, and no such resume has let it run. Otherwise it
-logs the failure as a warning, and its thread then stops the subscription as it stops any other and throws what fails
-there, such as the lease strategy failing to unregister it, or, when another call holds the subscription's lock by
-then, leaves the subscription to its try. Any other failure there, such as the lease strategy failing to unregister the
-subscription, the `stop()` throws as it is. When the thread of the `stop()` finds the subscription's lock held by a
-call that has not applied it there, the `stop()` returns without waiting for it and doesn't throw what fails there later. Giving up a `start(..)` gives
+logs the failure as a warning. Unless such a resume has let the subscription run, its thread then stops the
+subscription as it stops any other and throws what fails there, such as the lease strategy failing to unregister it for
+the `stop()`. When another call holds the subscription's lock by then, this node gives the lease up when that call
+returns or, at the latest, once the try of the subscription gets the lock, again unless such a resume has let it run.
+Any other failure the pause, resume or cancel meets applying the `stop()`, such as the lease strategy failing to
+unregister the subscription for that call, the `stop()` throws as it is. When the thread of the `stop()` finds the
+subscription's lock held by a call that has not applied it there, the `stop()` returns without waiting for it and
+doesn't throw what fails there later. Giving up a `start(..)` gives
 up only what it does for that subscription. Starting the wrapped model is a step for the whole model, which no single
 subscription can give up, so a thread of its own goes on trying it, with the same backoff, until it succeeds or a
 `stop()` that began after that `start(..)`, or `shutdown()`, comes. A handed over thread or a try that is still

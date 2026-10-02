@@ -1305,10 +1305,12 @@ you called again.
    exception is a failure to pause the subscription in the wrapped model that a pause, resume or cancel met before
    `stop()` was done stopping the wrapped model. `stop()` throws that one only when, once `stop()` gets to the
    subscription, the wrapped model runs it or can't say whether it does, and no resume that began after `stop()` has let
-   it run. Otherwise it is logged as a warning, and `stop()` then stops the subscription as it stops any other and throws
-   what fails there, or, when another call holds the subscription by then, leaves it to the thread from item 1. The
-   thread from item 1 tries the subscription again either way. When `stop()` finds a subscription held by a call
-   that has not applied it there, it is applied once that call returns, by a thread of its own or by the next call made
+   it run. Otherwise it is logged as a warning, and unless such a resume has let the subscription run, `stop()` then
+   stops it as it stops any other and throws what fails there. When another call holds the subscription by then, the
+   lease is given up, with the same exception, when that call returns or, at the latest, once the thread from item 1
+   gets to the subscription. The thread from item 1 tries the subscription again either way. When `stop()` finds a
+   subscription held by a call that has not applied it there, it is applied once that call returns, by a thread of its
+   own or by the next call made
    for that subscription, and `stop()` doesn't throw what fails there. A `stop()` that a `start(..)` waiting behind it
    took back doesn't throw what failed for a subscription.
 4. To find out whether a subscription runs, call `isRunning(id)`. It asks the wrapped model, which runs the
