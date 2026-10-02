@@ -1289,8 +1289,11 @@ you called again.
    ends those tries and is made all the same. It doesn't end the tries to start the wrapped model, which go on until
    one succeeds, or until `stop()` or `shutdown()`. `stop()` still throws what failed in its own call, and so do
    `pauseSubscription(..)` and `cancelSubscription(..)`. A pause, resume or cancel first applies each `start(..)` and
-   `stop()` that began before it and is still waiting to be applied, and gives up one that fails. When that failure is
-   an `Error`, the pause, resume or cancel throws it once its own call is made. `stop()` gives up no other call.
+   `stop()` that began before it and is still waiting to be applied, also one that has not got to that subscription
+   yet, and gives up one that fails. That `start(..)` or `stop()` doesn't throw the failure, which is logged as a
+   warning. When the failure is an `Error`, the pause, resume or cancel throws it once its own call is made. A pause,
+   resume or cancel made from inside a call this model makes to the lease strategy or the wrapped model for that
+   subscription applies none of them first. `stop()` gives up no other call.
 3. For a competing subscription, remove code that caught the exception from `start(..)` or `resumeSubscription(..)`
    to call again. The thread does that now. Keep it for a subscription that does not compete. `resumeSubscription(..)`
    still throws its failure, and so does `start(..)` when no other call for that subscription is under way, and this

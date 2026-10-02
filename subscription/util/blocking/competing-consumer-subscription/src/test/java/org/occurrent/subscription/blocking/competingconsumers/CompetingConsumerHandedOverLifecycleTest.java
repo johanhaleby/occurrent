@@ -116,6 +116,27 @@ class CompetingConsumerHandedOverLifecycleTest {
         return tests.stream();
     }
 
+    // A pause, resume or cancel of s1 that begins after a start(..) or stop() has begun comes after it, also when it
+    // takes the lock of s1 before that start(..) or stop() has got to s1
+    @TestFactory
+    Stream<DynamicTest> a_call_that_begins_after_a_start_or_stop_comes_after_it_also_when_it_takes_the_lock_first() {
+        List<DynamicTest> tests = new ArrayList<>();
+        for (From from : From.values()) {
+            for (Call earlier : Call.values()) {
+                for (UserCall userCall : UserCall.values()) {
+                    String name = "from " + from.description + ", " + earlier.description + ", then " + userCall.description + " that takes the lock of s1 first";
+                    tests.add(DynamicTest.dynamicTest(name, () -> {
+                        State expected = withTheLockFree(from, earlier, userCall);
+                        State actual = beforeTheStartOrStopGetsToS1(from, earlier, userCall);
+                        assertThat(actual).as("[s1 from %s once %s and then %s are applied]",
+                                from.description, earlier.description, userCall.description).isEqualTo(expected);
+                    }));
+                }
+            }
+        }
+        return tests.stream();
+    }
+
     // A pause of s1 that takes its lock before a resume of s1 that began first lets the resume go first, so a stop() that
     // began between the two is applied after the resume and before the pause
     @Test
@@ -811,6 +832,51 @@ class CompetingConsumerHandedOverLifecycleTest {
         }
     }
 
+    // What the user call throws is left out, since only where s1 ends is compared
+    private static State withTheLockFree(From from, Call earlier, UserCall userCall) {
+        Fixture fixture = new Fixture(from.initially);
+        try {
+            from.prepare(fixture.model);
+            earlier.apply(fixture.model);
+            catchThrowable(() -> userCall.apply(fixture.model));
+            awaitNothingLeftForS1();
+            return fixture.state();
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // The start(..) or stop() waits once it has begun, before it gets to s1, while the user call takes the lock of s1.
+    // It goes on once the user call has returned, or once the user call waits for that stop() to stop the wrapped model.
+    private static State beforeTheStartOrStopGetsToS1(From from, Call earlier, UserCall userCall) {
+        Fixture fixture = new Fixture(from.initially);
+        try {
+            from.prepare(fixture.model);
+            Gate begun = new Gate();
+            AtomicBoolean first = new AtomicBoolean(true);
+            fixture.model.runOnceAStartOrStopHasBegun(() -> {
+                if (first.getAndSet(false)) {
+                    begun.pass();
+                }
+            });
+            CompletableFuture<Void> applied = CompletableFuture.runAsync(() -> earlier.apply(fixture.model), command -> {
+                Thread thread = new Thread(command, "test-lifecycle-thread");
+                thread.setDaemon(true);
+                thread.start();
+            });
+            assertThat(begun.awaitEntered()).as("%s has begun", earlier.description).isTrue();
+            CompletableFuture<Void> called = new CompletableFuture<>();
+            Thread calling = startOnTheTestThread(() -> userCall.apply(fixture.model), called);
+            await().atMost(EVENTUALLY).pollInterval(1, MILLISECONDS).until(() -> called.isDone() || waitsOnAMonitor(calling));
+            begun.open();
+            await().atMost(EVENTUALLY).until(() -> applied.isDone() && called.isDone());
+            awaitNothingLeftForS1();
+            return fixture.state();
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
     // The grant holds the lock of s1 while the user call waits for it, and the later call begins then and is handed over
     private static State whileTheCallWaitsForTheLock(From from, UserCall userCall, Call later) {
         Fixture fixture = new Fixture(from.initially);
@@ -932,23 +998,24 @@ class CompetingConsumerHandedOverLifecycleTest {
     }
 
     private enum From {
-        RUNNING("a running model", Initially.RUNNING, false),
-        RUNNING_WITH_S1_PAUSED("a running model with s1 paused by the user", Initially.RUNNING, true),
-        STOPPED("a stopped model", Initially.STOPPED, false);
+        RUNNING("a running model", Initially.RUNNING, null),
+        RUNNING_WITH_S1_PAUSED("a running model with s1 paused by the user", Initially.RUNNING, UserCall.PAUSE),
+        STOPPED("a stopped model", Initially.STOPPED, null),
+        STOPPED_WITH_S1_RESUMED("a stopped model with s1 resumed by the user", Initially.STOPPED, UserCall.RESUME);
 
         private final String description;
         private final Initially initially;
-        private final boolean s1PausedByTheUser;
+        private final @Nullable UserCall preparedBy;
 
-        From(String description, Initially initially, boolean s1PausedByTheUser) {
+        From(String description, Initially initially, @Nullable UserCall preparedBy) {
             this.description = description;
             this.initially = initially;
-            this.s1PausedByTheUser = s1PausedByTheUser;
+            this.preparedBy = preparedBy;
         }
 
         private void prepare(CompetingConsumerSubscriptionModel model) {
-            if (s1PausedByTheUser) {
-                model.pauseSubscription("s1");
+            if (preparedBy != null) {
+                preparedBy.apply(model);
             }
         }
     }

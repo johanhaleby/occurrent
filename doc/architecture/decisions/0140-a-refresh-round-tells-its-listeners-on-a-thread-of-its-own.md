@@ -25,14 +25,17 @@ to another node, although nothing was wrong with any of them.
 **The refresh thread refreshes and never calls a listener. It hands each change a round made to a notifier for the
 subscription the change is about, which calls the listeners for that subscription one change at a time, in the order
 the round decided the changes.** The notifiers for different subscriptions call the listeners at the same time, each on
-a thread of its own while it has a change waiting. On Java 24 and later those are virtual threads, which the JVM runs
-on as many platform threads as the node has processors by default, so the number of platform threads doesn't grow
-with the number of subscriptions that have a listener that blocks. On Java 21 to 23 they are
-platform threads, from a pool that grows to one for each subscription with a change waiting. Until Java 24 a virtual
-thread that blocks inside `synchronized` keeps the platform thread it runs on, and a listener, whether yours or the
-subscription model's, can block there. As many of them as the node has processors would then hold up every
-notification on the node, and one subscription holding up another is what this decision rules out, so it comes before
-the number of threads.
+a thread of its own while it has a change waiting. On Java 24 and later those are virtual threads. By default the JVM
+runs them on as many platform threads as the node has processors, and adds more, up to 256, only while a virtual
+thread blocks in a way that keeps the platform thread it runs on. On Java 25, 40 listeners blocked on 2 processors
+added none, whether they blocked on a lock, inside or entering `synchronized`, in `Object.wait` or reading a pipe. I
+did not check other blocking, such as reading a file. On Java 21 to 23 they are platform threads, from a pool that
+grows to one for each subscription with a change waiting. Until Java 24 a virtual thread that blocks inside
+`synchronized` keeps the platform thread it runs on, and a listener, whether yours or the subscription model's, can
+block there. On Java 21 the JVM added a platform thread for each of 40 such listeners, but only up to its limit, and
+with the limit set to 2 the same check never finished. Enough of them would then hold up every notification on the
+node, and one subscription holding up another is what this decision rules out, so it comes before the number of
+threads.
 
 A change can be out of date by the time the notifier gets to it, since registering, releasing and the next round keep
 changing the lease meanwhile. The notifier therefore calls `onConsumeGranted` only if the consumer still holds the
