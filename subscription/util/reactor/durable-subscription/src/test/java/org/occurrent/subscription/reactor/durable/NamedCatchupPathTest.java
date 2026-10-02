@@ -298,11 +298,11 @@ class NamedCatchupPathTest {
 
     /**
      * The storage deletes the position of the cancelled subscription only some time after it is asked to. The rebuild
-     * is subscribed without waiting for the cancel, with a start position that reads the stored position itself and
-     * replays the history when none is stored.
+     * waits for the Mono the cancel returned, as a caller that wants a clean start does, and is then subscribed with a
+     * start position that reads the stored position itself and replays the history when none is stored.
      */
     @Test
-    void a_rebuild_subscribed_right_after_a_cancel_replays_the_history_when_its_start_position_reads_the_stored_position_itself() {
+    void a_rebuild_subscribed_once_the_cancel_has_completed_replays_the_history_when_its_start_position_reads_the_stored_position_itself() {
         // Given
         CheckpointStorage storage = new SlowDeleteCheckpointStorage(new ReactorCheckpointStorage(reactiveMongoTemplate, checkpointCollectionName));
         // Replaces the composition this class builds, which has subscribed nothing yet, so the shutdown after the test shuts
@@ -316,7 +316,7 @@ class NamedCatchupPathTest {
         await().atMost(TIMEOUT).until(() -> storage.read(streamId).blockOptional().isPresent());
 
         // When
-        durableModel.cancelSubscription(streamId);
+        durableModel.cancelSubscription(streamId).block(TIMEOUT);
         List<String> handledByTheRebuild = new CopyOnWriteArrayList<>();
         durableModel.subscribe(streamId, null, ResumeStartPositions.replayThenResume(streamId, storage, StartAt.checkpoint(GlobalCheckpoint.of(0))),
                         event -> Mono.fromRunnable(() -> handledByTheRebuild.add(event.getId())))
@@ -324,7 +324,7 @@ class NamedCatchupPathTest {
 
         // Then
         // The cancel deleted the only stored position, and with none stored this start position replays the whole history
-        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(handledByTheRebuild).as("events the rebuild subscribed right after the cancel handled").containsExactly("e1", "e2", "e3"));
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(handledByTheRebuild).as("events the rebuild subscribed once the cancel had completed handled").containsExactly("e1", "e2", "e3"));
     }
 
     private void publish(String... eventIds) {

@@ -43,8 +43,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * A subscription the starter registers with a {@code BEGINNING} start and the default resume behaviour reads the
- * stored position itself to decide between replaying and resuming. Subscribed again right after a cancel of the same
- * id, without waiting for the cancel, it has to find the position the cancel deletes gone rather than resume from it.
+ * stored position itself to decide between replaying and resuming. Subscribed again once the cancel of the same id has
+ * completed, it has to find the position the cancel deleted gone rather than resume from it.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -54,15 +54,15 @@ class StartPositionSupportAfterACancelTest {
     private static final StringBasedCheckpoint REACHED_BEFORE_THE_CANCEL = new StringBasedCheckpoint("reached-before-the-cancel");
 
     @Test
-    void a_subscription_starting_at_the_beginning_subscribed_right_after_a_cancel_of_its_id_replays_from_the_beginning() {
+    void a_subscription_starting_at_the_beginning_subscribed_once_the_cancel_of_its_id_has_completed_replays_from_the_beginning() {
         whereTheResubscriptionStarts(startPositionSupport -> startPositionSupport.generateAgnosticStartAt(SUBSCRIPTION_ID, StartPosition.BEGINNING, -1, ResumeBehavior.DEFAULT),
-                startAt -> assertThat(startAt).as("start position of the subscription made right after the cancel").hasToString(StartAt.checkpoint(GlobalCheckpoint.of(0)).toString()));
+                startAt -> assertThat(startAt).as("start position of the subscription made once the cancel had completed").hasToString(StartAt.checkpoint(GlobalCheckpoint.of(0)).toString()));
     }
 
     @Test
-    void a_dcb_subscription_starting_at_the_beginning_subscribed_right_after_a_cancel_of_its_id_replays_from_the_beginning() {
+    void a_dcb_subscription_starting_at_the_beginning_subscribed_once_the_cancel_of_its_id_has_completed_replays_from_the_beginning() {
         whereTheResubscriptionStarts(startPositionSupport -> startPositionSupport.generateDcbStartAt(SUBSCRIPTION_ID, StartPosition.BEGINNING, -1, ResumeBehavior.DEFAULT).toStartAt(),
-                startAt -> assertThat(startAt).as("start position of the DCB subscription made right after the cancel").hasToString(StartAt.checkpoint(GlobalCheckpoint.of(0)).toString()));
+                startAt -> assertThat(startAt).as("start position of the DCB subscription made once the cancel had completed").hasToString(StartAt.checkpoint(GlobalCheckpoint.of(0)).toString()));
     }
 
     // The cancel deletes the only stored position, and with none stored a BEGINNING start replays from position 0,
@@ -80,7 +80,7 @@ class StartPositionSupportAfterACancelTest {
                         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
                         // When
-                        model.cancelSubscription(SUBSCRIPTION_ID);
+                        model.cancelSubscription(SUBSCRIPTION_ID).block(Duration.ofSeconds(5));
                         model.subscribe(SUBSCRIPTION_ID, null, startAt.apply(new StartPositionSupport(context)), __ -> Mono.empty())
                                 .waitUntilStarted().block(Duration.ofSeconds(5));
 
