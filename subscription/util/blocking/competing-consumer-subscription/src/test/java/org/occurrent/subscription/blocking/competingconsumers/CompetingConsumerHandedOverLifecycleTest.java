@@ -40,6 +40,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -92,6 +93,69 @@ class CompetingConsumerHandedOverLifecycleTest {
             }
         }
         return orders;
+    }
+
+    // A pause, resume or cancel of s1 that waits for its lock comes before a start(..) or stop() that begins while it
+    // waits, which is handed over and applied once the pause, resume or cancel has returned
+    @TestFactory
+    Stream<DynamicTest> a_call_waiting_for_the_lock_comes_before_a_start_or_stop_that_begins_meanwhile() {
+        List<DynamicTest> tests = new ArrayList<>();
+        for (From from : From.values()) {
+            for (UserCall userCall : UserCall.values()) {
+                for (Call later : Call.values()) {
+                    String name = "from " + from.description + ", " + userCall.description + " waiting for the lock of s1, then " + later.description;
+                    tests.add(DynamicTest.dynamicTest(name, () -> {
+                        State expected = withTheLockFree(from, userCall, later);
+                        State actual = whileTheCallWaitsForTheLock(from, userCall, later);
+                        assertThat(actual).as("[s1 from %s once %s and then %s are applied]",
+                                from.description, userCall.description, later.description).isEqualTo(expected);
+                    }));
+                }
+            }
+        }
+        return tests.stream();
+    }
+
+    // A pause of s1 that takes its lock before a resume of s1 that began first lets the resume go first, so a stop() that
+    // began between the two is applied after the resume and before the pause
+    @Test
+    void a_call_that_takes_the_lock_first_lets_a_call_waiting_since_before_a_stop_go_first() {
+        State expected = withTheLockFree(Initially.RUNNING, model -> {
+            From.RUNNING_WITH_S1_PAUSED.prepare(model);
+            catchThrowable(() -> model.resumeSubscription("s1"));
+            model.stop();
+            catchThrowable(() -> model.pauseSubscription("s1"));
+        });
+        Fixture fixture = new Fixture(Initially.RUNNING);
+        try {
+            From.RUNNING_WITH_S1_PAUSED.prepare(fixture.model);
+            Gate grantHoldingTheLock = fixture.grantHoldingTheLockOfS1();
+            Gate resumeAboutToWait = new Gate();
+            AtomicBoolean first = new AtomicBoolean(true);
+            fixture.model.runBeforeACallWaitsForTheLock(() -> {
+                if (first.getAndSet(false)) {
+                    resumeAboutToWait.pass();
+                }
+            });
+            CompletableFuture<Void> resume = runOnTheTestThread(() -> fixture.model.resumeSubscription("s1"));
+            assertThat(resumeAboutToWait.awaitEntered()).as("the resume of s1 counts as waiting for its lock").isTrue();
+            fixture.model.stop();
+            CompletableFuture<Void> pause = new CompletableFuture<>();
+            Thread pausing = startOnTheTestThread(() -> fixture.model.pauseSubscription("s1"), pause);
+            await().atMost(EVENTUALLY).pollInterval(1, MILLISECONDS).until(() -> pause.isDone() || waitsForALock(pausing));
+
+            grantHoldingTheLock.open();
+            assertThat(fixture.grant).as("the grant of s1").succeedsWithin(EVENTUALLY);
+            // The pause has taken the lock of s1 by then, and waits for the resume, or has returned
+            await().atMost(EVENTUALLY).pollInterval(1, MILLISECONDS).until(() -> pause.isDone() || waitsForItsTurn(pausing));
+            resumeAboutToWait.open();
+            await().atMost(EVENTUALLY).until(() -> resume.isDone() && pause.isDone());
+            awaitNothingLeftForS1();
+
+            assertThat(fixture.state()).as("[s1 once a resume, a stop() and a pause are applied in the order they began]").isEqualTo(expected);
+        } finally {
+            fixture.model.shutdown();
+        }
     }
 
     // A stop() that begins after the thread s1 was handed to has failed to apply start(true) to it, and finds the lock
@@ -462,6 +526,28 @@ class CompetingConsumerHandedOverLifecycleTest {
         }
     }
 
+    // A pause that gives up a start(true) handed over for a subscription that does not compete throws the Error that
+    // start(true) threw, also when its own call throws that same instance, as a model that keeps one Error for every
+    // failure does
+    @Test
+    void a_pause_whose_own_call_throws_the_error_it_gave_up_throws_that_error() {
+        Fixture fixture = new Fixture(Initially.STOPPED, true);
+        Error shared = new AssertionError("One Error for every failure");
+        try {
+            Gate backingOff = fixture.handOverAStartOfN1(() -> fixture.wrapped.errorFromStarting.set(shared));
+            fixture.wrapped.errorFromIsPausedOfN1.set(shared);
+
+            Throwable thrownByPause = catchThrowable(() -> fixture.model.pauseSubscription("n1"));
+            fixture.wrapped.errorFromIsPausedOfN1.set(null);
+            fixture.wrapped.errorFromStarting.set(null);
+            backingOff.open();
+
+            assertThat(thrownByPause).as("what the pause of n1 threw").isSameAs(shared);
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
     // The wrapped model, which a start(true) given up for a subscription that does not compete still has started, stays
     // stopped once stop() is called, and nothing is left trying to start it
     @Test
@@ -672,8 +758,31 @@ class CompetingConsumerHandedOverLifecycleTest {
                 .anyMatch(frame -> frame.getClassName().equals(Object.class.getName()) && frame.getMethodName().startsWith("wait"));
     }
 
+    private static boolean waitsForALock(Thread thread) {
+        return thread.getState() == Thread.State.WAITING && Stream.of(thread.getStackTrace())
+                .anyMatch(frame -> frame.getClassName().equals(ReentrantLock.class.getName()) && frame.getMethodName().equals("lock"));
+    }
+
+    private static boolean waitsForItsTurn(Thread thread) {
+        return thread.getState() == Thread.State.WAITING && Stream.of(thread.getStackTrace())
+                .anyMatch(frame -> frame.getMethodName().equals("awaitUninterruptibly"));
+    }
+
     private static CompletableFuture<Void> runOnTheTestThread(Runnable call) {
         CompletableFuture<Void> called = new CompletableFuture<>();
+        startOnTheTestThread(call, called);
+        return called;
+    }
+
+    // Returns once the call waits for a lock, or has returned or thrown
+    private static CompletableFuture<Void> runOnTheTestThreadUntilItWaitsForALock(Runnable call) {
+        CompletableFuture<Void> called = new CompletableFuture<>();
+        Thread thread = startOnTheTestThread(call, called);
+        await().atMost(EVENTUALLY).pollInterval(1, MILLISECONDS).until(() -> called.isDone() || waitsForALock(thread));
+        return called;
+    }
+
+    private static Thread startOnTheTestThread(Runnable call, CompletableFuture<Void> called) {
         Thread thread = new Thread(() -> {
             try {
                 call.run();
@@ -684,7 +793,41 @@ class CompetingConsumerHandedOverLifecycleTest {
         }, WrappedModel.TEST_THREAD);
         thread.setDaemon(true);
         thread.start();
-        return called;
+        return thread;
+    }
+
+    // What the user call throws is left out, since a resume of s1 running asks the wrapped model, which a stop() that
+    // began while the resume waited has stopped already
+    private static State withTheLockFree(From from, UserCall userCall, Call later) {
+        Fixture fixture = new Fixture(from.initially);
+        try {
+            from.prepare(fixture.model);
+            catchThrowable(() -> userCall.apply(fixture.model));
+            later.apply(fixture.model);
+            awaitNothingLeftForS1();
+            return fixture.state();
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // The grant holds the lock of s1 while the user call waits for it, and the later call begins then and is handed over
+    private static State whileTheCallWaitsForTheLock(From from, UserCall userCall, Call later) {
+        Fixture fixture = new Fixture(from.initially);
+        try {
+            from.prepare(fixture.model);
+            Gate grantHoldingTheLock = fixture.grantHoldingTheLockOfS1();
+            CompletableFuture<Void> called = runOnTheTestThreadUntilItWaitsForALock(() -> userCall.apply(fixture.model));
+            assertThat(called).as("%s waits for the lock of s1", userCall.description).isNotDone();
+            later.apply(fixture.model);
+            grantHoldingTheLock.open();
+            assertThat(fixture.grant).as("the grant of s1").succeedsWithin(EVENTUALLY);
+            await().atMost(EVENTUALLY).until(called::isDone);
+            awaitNothingLeftForS1();
+            return fixture.state();
+        } finally {
+            fixture.model.shutdown();
+        }
     }
 
     private static State withTheLockFree(Initially initially, List<Call> calls) {
@@ -784,6 +927,48 @@ class CompetingConsumerHandedOverLifecycleTest {
                 case START_RESUMING -> model.start(true);
                 case START_NOT_RESUMING -> model.start(false);
                 case STOP -> model.stop();
+            }
+        }
+    }
+
+    private enum From {
+        RUNNING("a running model", Initially.RUNNING, false),
+        RUNNING_WITH_S1_PAUSED("a running model with s1 paused by the user", Initially.RUNNING, true),
+        STOPPED("a stopped model", Initially.STOPPED, false);
+
+        private final String description;
+        private final Initially initially;
+        private final boolean s1PausedByTheUser;
+
+        From(String description, Initially initially, boolean s1PausedByTheUser) {
+            this.description = description;
+            this.initially = initially;
+            this.s1PausedByTheUser = s1PausedByTheUser;
+        }
+
+        private void prepare(CompetingConsumerSubscriptionModel model) {
+            if (s1PausedByTheUser) {
+                model.pauseSubscription("s1");
+            }
+        }
+    }
+
+    private enum UserCall {
+        PAUSE("a pause"),
+        RESUME("a resume"),
+        CANCEL("a cancel");
+
+        private final String description;
+
+        UserCall(String description) {
+            this.description = description;
+        }
+
+        private void apply(CompetingConsumerSubscriptionModel model) {
+            switch (this) {
+                case PAUSE -> model.pauseSubscription("s1");
+                case RESUME -> model.resumeSubscription("s1");
+                case CANCEL -> model.cancelSubscription("s1");
             }
         }
     }
@@ -1080,6 +1265,8 @@ class CompetingConsumerHandedOverLifecycleTest {
         private final AtomicInteger errorsFromIsRunningOfS1OnALifecycleThread = new AtomicInteger();
         private final AtomicInteger failuresFromResumingN1 = new AtomicInteger();
         private final AtomicInteger failuresFromStarting = new AtomicInteger();
+        private final AtomicReference<@Nullable Error> errorFromStarting = new AtomicReference<>();
+        private final AtomicReference<@Nullable Error> errorFromIsPausedOfN1 = new AtomicReference<>();
         private final Counter resumeFailuresOfN1 = new Counter();
         private final List<String> callsAfterShutdown = new CopyOnWriteArrayList<>();
         private final Set<String> runningIds = new HashSet<>();
@@ -1142,6 +1329,10 @@ class CompetingConsumerHandedOverLifecycleTest {
             if (failuresFromStarting.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
                 throw new IllegalStateException("Starting the wrapped model failed");
             }
+            Error error = errorFromStarting.get();
+            if (error != null) {
+                throw error;
+            }
             running = true;
             if (resumeSubscriptionsAutomatically) {
                 runningIds.addAll(pausedIds);
@@ -1176,6 +1367,10 @@ class CompetingConsumerHandedOverLifecycleTest {
         public boolean isPaused(String subscriptionId) {
             if (subscriptionId.equals("n1") && Thread.currentThread().getName().equals(TEST_THREAD)) {
                 passIfSet(nextIsPausedOfN1OnTheTestThread);
+            }
+            Error error = subscriptionId.equals("n1") ? errorFromIsPausedOfN1.get() : null;
+            if (error != null) {
+                throw error;
             }
             synchronized (this) {
                 return pausedIds.contains(subscriptionId);

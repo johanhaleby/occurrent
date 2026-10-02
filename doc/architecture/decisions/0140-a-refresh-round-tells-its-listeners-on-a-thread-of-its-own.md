@@ -25,8 +25,9 @@ to another node, although nothing was wrong with any of them.
 **The refresh thread refreshes and never calls a listener. It hands each change a round made to a notifier for the
 subscription the change is about, which calls the listeners for that subscription one change at a time, in the order
 the round decided the changes.** The notifiers for different subscriptions call the listeners at the same time, each on
-a thread of its own while it has a change waiting. On Java 24 and later those are virtual threads, so the number of
-platform threads stays the same however many subscriptions have a listener that blocks. On Java 21 to 23 they are
+a thread of its own while it has a change waiting. On Java 24 and later those are virtual threads, which the JVM runs
+on as many platform threads as the node has processors by default, so the number of platform threads doesn't grow
+with the number of subscriptions that have a listener that blocks. On Java 21 to 23 they are
 platform threads, from a pool that grows to one for each subscription with a change waiting. Until Java 24 a virtual
 thread that blocks inside `synchronized` keeps the platform thread it runs on, and a listener, whether yours or the
 subscription model's, can block there. As many of them as the node has processors would then hold up every
