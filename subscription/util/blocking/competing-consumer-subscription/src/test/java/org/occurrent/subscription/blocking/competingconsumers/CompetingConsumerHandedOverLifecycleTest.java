@@ -856,6 +856,53 @@ class CompetingConsumerHandedOverLifecycleTest {
         }
     }
 
+    // A stop() that waits for a resume of n1 under way in the wrapped model has not stopped the wrapped model, which still
+    // runs s1. A pause or cancel of s1 that began after that stop() applies it to s1 first, and the pause of s1 in the
+    // wrapped model fails there. With the lock free, stop() stops the wrapped model first and then has nothing to pause
+    // there, so stop() does not throw that failure here either.
+    @TestFactory
+    Stream<DynamicTest> a_stop_that_a_later_call_applied_before_the_wrapped_model_was_stopped_does_not_throw_what_its_own_thread_would_not_have_met() {
+        return Stream.of(
+                DynamicTest.dynamicTest("applied by a pause", () -> aStopAppliedBeforeTheWrappedModelWasStoppedBy(model -> model.pauseSubscription("s1"))),
+                DynamicTest.dynamicTest("applied by a cancel", () -> aStopAppliedBeforeTheWrappedModelWasStoppedBy(model -> model.cancelSubscription("s1"))));
+    }
+
+    private static void aStopAppliedBeforeTheWrappedModelWasStoppedBy(Consumer<CompetingConsumerSubscriptionModel> laterCall) {
+        Fixture free = new Fixture(Initially.RUNNING);
+        try {
+            free.wrapped.failuresFromPausingS1.set(1);
+            assertThat(catchThrowable(free.model::stop)).as("what stop() throws with the lock free").isNull();
+        } finally {
+            free.model.shutdown();
+        }
+
+        Fixture fixture = new Fixture(Initially.RUNNING);
+        try {
+            fixture.subscribeN1();
+            fixture.model.pauseSubscription("n1");
+            Gate resumeOfN1InTheWrappedModel = new Gate();
+            fixture.wrapped.nextResumeOfN1OnTheTestThread.set(resumeOfN1InTheWrappedModel);
+            CompletableFuture<Void> resume = runOnTheTestThread(() -> fixture.model.resumeSubscription("n1"));
+            assertThat(resumeOfN1InTheWrappedModel.awaitEntered()).as("the resume of n1 waits in the wrapped model").isTrue();
+            CompletableFuture<Void> stopped = new CompletableFuture<>();
+            Thread stopping = startOnALifecycleCallThread(fixture.model::stop, stopped);
+            await().atMost(EVENTUALLY).pollInterval(1, MILLISECONDS).until(() -> stopped.isDone() || waitsOnAMonitor(stopping));
+            assertThat(stopped).as("stop() waits for the resume of n1").isNotDone();
+
+            fixture.wrapped.failuresFromPausingS1.set(1);
+            CompletableFuture<Void> later = runOnTheTestThread(() -> laterCall.accept(fixture.model));
+            await().atMost(EVENTUALLY).until(later::isDone);
+            assertThat(fixture.wrapped.failuresFromPausingS1).as("failures left for the pause of s1 in the wrapped model").hasValue(0);
+            assertThat(stopped).as("stop() while the resume of n1 waits").isNotDone();
+            resumeOfN1InTheWrappedModel.open();
+            assertThat(resume).as("the resume of n1").succeedsWithin(EVENTUALLY);
+
+            assertThat(stopped).as("[stop() applied to s1 by the later call before the wrapped model was stopped]").succeedsWithin(EVENTUALLY);
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
     private static Thread startOnALifecycleCallThread(Runnable call, CompletableFuture<Void> called) {
         Thread thread = new Thread(() -> {
             try {
@@ -1427,6 +1474,7 @@ class CompetingConsumerHandedOverLifecycleTest {
         private final AtomicReference<@Nullable Gate> nextPauseOfS1OnATry = new AtomicReference<>();
         // s1 runs on through a pause or a stop of this model, as with a model whose pause fails without throwing
         private final AtomicBoolean s1RunsOnWhateverPausesIt = new AtomicBoolean();
+        private final AtomicInteger failuresFromPausingS1 = new AtomicInteger();
         private final AtomicInteger errorsFromIsRunningOfS1OnALifecycleThread = new AtomicInteger();
         private final AtomicInteger failuresFromResumingN1 = new AtomicInteger();
         private final AtomicInteger failuresFromStarting = new AtomicInteger();
@@ -1571,6 +1619,9 @@ class CompetingConsumerHandedOverLifecycleTest {
         public void pauseSubscription(String subscriptionId) {
             if (subscriptionId.equals("s1") && Thread.currentThread().getName().equals(TRY_OF_S1)) {
                 passIfSet(nextPauseOfS1OnATry);
+            }
+            if (subscriptionId.equals("s1") && failuresFromPausingS1.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
+                throw new IllegalStateException("Pausing s1 failed");
             }
             synchronized (this) {
                 if (subscriptionId.equals("s1") && s1RunsOnWhateverPausesIt.get()) {
