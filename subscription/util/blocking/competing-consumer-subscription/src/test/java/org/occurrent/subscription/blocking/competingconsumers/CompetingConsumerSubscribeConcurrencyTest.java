@@ -648,6 +648,58 @@ class CompetingConsumerSubscribeConcurrencyTest {
     }
 
     @Test
+    void an_interrupt_that_lets_an_event_waiting_for_the_lease_through_is_clear_in_the_action_and_set_again_after_it() {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        try {
+            List<String> s1Received = new CopyOnWriteArrayList<>();
+            List<Boolean> interruptedInTheAction = new CopyOnWriteArrayList<>();
+            model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> {
+                s1Received.add(e.getId());
+                interruptedInTheAction.add(Thread.currentThread().isInterrupted());
+            });
+            strategy.holders.remove("s1");
+            CompletableFuture<Boolean> interruptedAfterTheWrite = new CompletableFuture<>();
+            Thread writer = Thread.ofPlatform().daemon().start(() -> {
+                delegate.write("e1");
+                interruptedAfterTheWrite.complete(Thread.currentThread().isInterrupted());
+            });
+            await().atMost(Duration.ofSeconds(5)).until(() -> writer.getState() == Thread.State.TIMED_WAITING);
+
+            writer.interrupt();
+
+            assertThat(interruptedAfterTheWrite).as("the write once its thread was interrupted").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(s1Received).as("[events s1 received once the thread delivering them was interrupted]").containsExactly("e1");
+            assertThat(interruptedInTheAction).as("[the interrupt flag in the action, as when the event does not wait]").containsExactly(false);
+            assertThat(interruptedAfterTheWrite.join()).as("[the interrupt flag once the action has returned]").isTrue();
+        } finally {
+            strategy.holders.add("s1");
+            model.shutdown();
+        }
+    }
+
+    @Test
+    void an_event_a_wrapped_model_read_before_a_cancel_and_hands_over_after_it_is_delivered() {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        try {
+            List<String> s1Received = new CopyOnWriteArrayList<>();
+            model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId()));
+            model.cancelSubscription("s1");
+            assertThat(strategy.hasLock("s1", "node")).as("the lease of s1 once it is cancelled").isFalse();
+
+            CompletableFuture<Void> handedOver = CompletableFuture.runAsync(() -> delegate.deliverReadBeforeTheCancel("s1", "e1"));
+
+            assertThat(handedOver).as("[the hand over of an event read before the cancel of s1]").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(s1Received).as("[events s1 received after its cancel, as without the lease strategy]").containsExactly("e1");
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    @Test
     void an_event_for_a_subscription_without_its_lease_that_a_model_which_cannot_pause_runs_while_this_model_is_stopped_waits_for_start() {
         UserWrittenModel delegate = new UserWrittenModel(true);
         Strategy strategy = new Strategy();
@@ -1211,6 +1263,16 @@ class CompetingConsumerSubscribeConcurrencyTest {
             }
             afterSubscribe.accept(subscriptionId);
             return new UserWrittenSubscription(subscriptionId);
+        }
+
+        // Hands an event to the action of a cancelled subscription, as a thread of the model that read it before the
+        // cancel does
+        private void deliverReadBeforeTheCancel(String subscriptionId, String eventId) {
+            Consumer<CloudEvent> action;
+            synchronized (this) {
+                action = actions.get(subscriptionId);
+            }
+            action.accept(CloudEventBuilder.v1().withId(eventId).withSource(URI.create("urn:user-written")).withType("written").build());
         }
 
         private synchronized void write(String eventId) {
