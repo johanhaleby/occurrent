@@ -1484,23 +1484,29 @@ starting or registered by then. When that subscribe fails before the delete has 
 once the delete that goes ahead has ended. To start the id clean, wait for the `Mono` before you subscribe it again, as
 step 2 describes.
 
-The subscription reads the store only once the checkpoint writes the delete runs after have ended and the checkpoint is
-back, and writes a checkpoint only once those writes have ended. A write back that fails fails a subscription that reads
-the store to start, the way a failed read of the stored checkpoint does. A subscription from the subscription-model
-default has therefore handled no event when the process ends before the write back reached the store, and the next run
-of it starts from where the feed is.
+The subscription reads the store and writes a checkpoint only once the checkpoint writes the delete runs after have
+ended.
 
 The reactor `CheckpointStorage` gains two methods with defaults, `delete(subscriptionId, condition)` and
 `evaluatesDeleteConditions()`. The in-memory and MongoDB reactor storages implement both. On them each try of the
 delete is conditional on the version it read just before, and the checkpoint goes back at once at a higher version. The
 subscription writes its own checkpoints at once too, at a version above that, so neither the try nor the write back
-removes or replaces them, and neither the subscribe, the delivery of an event nor a checkpoint write waits for the try.
+removes or replaces them, and neither the subscribe, the delivery of an event, a read of the store nor a checkpoint
+write waits for the try or the write back.
+
+On those storages a subscription from the subscription-model default writes the checkpoint it read, or the one written
+back when it read nothing, at that version before it starts. One registered while the model was stopped writes it
+before `resolveFirstCheckpointRace(..)` compares it with where the feed was at registration. A refused write makes the
+subscription read the store again, and a write that fails fails the subscription to start. A write back that fails is
+logged as a warning and fails no subscription.
+
 A `CheckpointStorage` of your own keeps compiling and keeps working, and on it a subscribe that takes the delete over
-waits for the try under way to end before it writes the checkpoint back, and the checkpoint writes of the subscription
-wait for that write back. A process that ends after a try deleted the checkpoint and before the write back reached such
-a store keeps no checkpoint, also for a subscription with a `StartAt` of its own that handled events by then, so its
-next run from the subscription-model default starts from where the feed is. To remove that case and the wait for the
-try, implement both:
+waits for the try under way to end before it writes the checkpoint back. The subscription reads the store and writes
+checkpoints only once that write back has ended, and a write back that fails fails a subscription that reads the store
+to start, the way a failed read of the stored checkpoint does. A process that ends after a try deleted the checkpoint
+and before the write back reached such a store keeps no checkpoint, also for a subscription with a `StartAt` of its own
+that handled events by then, so its next run from the subscription-model default starts from where the feed is. To
+remove that case and the wait for the try, implement both:
 
 1. `delete(subscriptionId, condition)` evaluates the condition against the stored version exactly as
    `save(subscriptionId, checkpoint, condition)` does, in the same atomic step as the delete. `notOlderThan(v)` deletes

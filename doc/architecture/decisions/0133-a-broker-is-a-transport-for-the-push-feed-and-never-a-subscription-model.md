@@ -1523,11 +1523,7 @@ evaluates no condition on a delete, the write back waits for the try under way, 
 took the delete over has failed by the time that try ends, since what the try removed is then what the cancel asked
 for.
 
-The subscription reads storage only once the position writes the delete runs after have ended and the position is
-back, and writes a position only once those writes have ended. Before that, a try under way could still remove a
-position the subscription reads. A write back that fails fails a subscription that reads storage to start, the way a
-failed read of the stored position does, since starting from what the store holds without it could skip the events
-after the position of the cancelled subscription.
+The subscription reads storage and writes a position only once the position writes the delete runs after have ended.
 
 How the position goes back depends on the storage. The reactor `CheckpointStorage` gains `delete(id, condition)`, which
 takes the `CheckpointWriteCondition` that `save(..)` takes and evaluates it against the same stored version, and
@@ -1537,15 +1533,26 @@ position, and deletes on `notOlderThan` that version. A `subscribe(..)` that tak
 back at once, on `notOlderThan` one version higher. Whichever reaches the store first, the try is refused or the
 position it deleted is back. The subscription writes its own positions at once too, on `notOlderThan` the version above
 the write back, so neither the try nor the write back removes or replaces them. Neither the `subscribe(..)`, the
-delivery of an event nor a position write waits for the try, and no position write waits for the write back. Each
-position the subscription writes is then a save on that condition, where it is an unconditional save with no delete
-running.
+delivery of an event, a read of the store nor a position write waits for the try or for the write back. Each position
+the subscription writes is then a save on that condition, where it is an unconditional save with no delete running.
+
+A read of the store can then answer the position the try is about to delete, or nothing once the try deleted it and
+before the write back reached the store. So a subscription from the subscription-model default writes the position it
+read, or the one written back when it read nothing, on the condition of its own position writes, before it starts.
+When that write is refused, the store holds a position at a higher version, which neither the try nor the write back
+removes, and the subscription reads the store again and starts from it. When the write fails, the `subscribe(..)`
+fails to start, as it does when its first position fails. A write back that fails is logged as a warning and fails no
+subscription. The delete of a later cancel of the id runs only once that write back has ended, so the write back cannot
+put the position back after that delete.
 
 A storage of your own keeps compiling, since both methods have defaults. The default `evaluatesDeleteConditions()`
 answers false, also when `evaluatesWriteConditions()` answers true, and on such a storage nothing stops a try under way
 from deleting what is stored. So a `subscribe(..)` that takes the delete over waits for that try to end, and then writes
-the position back on `ifAbsent()`, or unconditionally when the storage evaluates no write condition. The position writes
-of the subscription wait for that write back. Waiting for the delete without writing anything back would lose events.
+the position back on `ifAbsent()`, or unconditionally when the storage evaluates no write condition. The subscription
+reads the store and writes positions only once that write back has ended. A write back that fails fails a subscription
+that reads storage to start, the way a failed read of the stored position does, since starting from what the store
+holds without it could skip the events after the position of the cancelled subscription. Waiting for the delete
+without writing anything back would lose events.
 `ResumeStartPositions.replayThenResume(..)` reads the stored position at the call and resumes from the position of the
 cancelled subscription. The delete then removes it, and a process that ends before the subscription writes a position of
 its own restarts from the subscription-model default and skips the events in between.
@@ -1595,9 +1602,11 @@ the delete would not help either, for the same reason. So the model waits until 
 
 That has a cost next to 0.33.0, where neither the cancel nor a later `subscribe(..)` waited for the store. A
 subscription that takes a delete over waits for the position writes of the cancelled subscription that the delete runs
-after before it reads or writes a position, and for the write of the position back before it reads. On a storage that
-evaluates no condition on a delete, its reads and position writes also wait for the try under way and for the write
-back, so on such a store whose deletes hang, a subscription of the id made right after the cancel reads and writes no
+after before it reads or writes a position. On a storage that evaluates a condition on a delete, a subscription that
+reads the store to start makes one write more than 0.33.0 before it starts, when the store answers a position, since
+0.33.0 writes a position before it starts only when the store holds none. On a storage that evaluates no condition on a
+delete, its reads and position writes also wait for the try under way and for the write back, so on such a store whose
+deletes hang, a subscription of the id made right after the cancel reads and writes no
 position until the store answers. No call for another id waits for any of them. The cancel itself returns once
 it has stopped the subscription and started the delete.
 
@@ -1606,22 +1615,23 @@ for by an earlier cancel, is still under way, with the same `subscribe(..)` in 0
 
 1. It delivers every event that 0.33.0 delivers, also when the process ends and the id is subscribed again after the
    restart. On a storage that evaluates no condition on a delete, a process that ends between a try deleting the
-   position and the write back reaching the store is the exception, described below, and so is such a process for a
-   subscription from the subscription-model default on any storage.
+   position and the write back reaching the store is the exception, described below.
 2. It waits only where 0.33.0 waits, where a `subscribe(..)` from the subscription-model default on a stopped model that
    the durable model drives waits for its read of where the feed is, and for the storage calls the takeover makes. On a
    storage that evaluates a condition on a delete, no `subscribe(..)`, resume or delivery waits for a delete.
-3. It refuses only where 0.33.0 refuses, apart from a write of the position back that fails.
-4. The delete never removes a position that the subscription reads or writes.
+3. It refuses only where 0.33.0 refuses, apart from a write of the position back that fails on a storage that evaluates
+   no condition on a delete, and a write of the position read to start from that fails on one that does.
+4. Once the subscription has started, the delete never removes the position it started from or a position it wrote.
 
-The takeover keeps the fourth part. By the time the subscription reads, no try is under way and none follows, or the
-try under way was refused, or what it deleted is back, or, on a storage that evaluates no condition on a delete, it has
-ended before the write back. On a storage that evaluates a condition on a delete, the subscription writes its positions
-at a version the try cannot delete, and otherwise only once the try has ended. The write back keeps the first part. A
-start position resolved at the call can rest on the position of the cancelled subscription, and the store holds it
-again before the subscription reads anything. The write back never replaces a position the subscription wrote, so a
-restart resumes from the position of the cancelled subscription until the subscription writes one of its own, and from
-the last one the subscription wrote after that.
+The takeover keeps the fourth part. On a storage that evaluates no condition on a delete, the subscription reads the
+store and writes positions only once the try under way has ended and the position is back. On a storage that evaluates
+one, it writes its positions at a version that neither the try nor the write back removes or replaces, and that
+includes the position it read to start from, which it writes before it starts. The write back keeps the first part. A
+start position resolved at the call can rest on the position of the cancelled subscription. On a storage that evaluates
+no condition on a delete, the store holds it again before the subscription reads anything, and on one that does, a
+subscription from the subscription-model default writes it itself before it starts. The write back never replaces a
+position the subscription wrote, so a restart resumes from the position of the cancelled subscription until the
+subscription writes one of its own, and from the last one the subscription wrote after that.
 
 The second part also gives way on a running model that the durable model drives. There a `subscribe(..)` from the
 subscription-model default waits on a thread that may block for its read of where the feed is when the store holds
@@ -1638,6 +1648,11 @@ evaluates a condition on a delete, a subscription that reads nothing to start, s
 every position the store applied by then, since neither the try nor the write back removes or replaces one. Its next run
 resumes from the last of them. 0.33.0 keeps no more, since its delete removes any position the store applied before it.
 
+On that storage a subscription from the subscription-model default has written the position it started from before it
+delivers an event, so its next run resumes from that position or a later one. When the process ends before that write, the
+subscription has delivered nothing, nothing is stored for it, and its next run starts from where the feed is. 0.33.0
+keeps nothing there either, since its delete has removed the position by then.
+
 On a storage that evaluates no condition on a delete, nothing is stored then, and the next run of a subscription from
 the subscription-model default starts from where the feed is. The subscription that took the delete over has written no
 position by then, since its position writes wait for the write back, which waits for the try. One that reads nothing to
@@ -1645,18 +1660,20 @@ start can have delivered events, though. In 0.33.0 the next run starts from the 
 store after the last position the new subscription wrote, which a slow delete does. When the delete reaches the store
 before such a write, 0.33.0 keeps that position and its next run resumes from it, where this change keeps nothing.
 
-A subscription from the subscription-model default reads the store only once the write back has ended, on any storage.
-When the process ends before the write back reached the store, that subscription has delivered no event, nothing is
-stored for it, and its next run starts from where the feed is. In 0.33.0 the `subscribe(..)` reads the store without
-waiting, so when it read after its delete it started from where the feed was then, and it can have delivered events
-before the process ended, which this change then never delivers. On a storage that evaluates a condition on a delete,
-the write back goes to the store as the `subscribe(..)` takes the delete over. That case then needs the write back to
-take longer to reach the store than 0.33.0 takes to read the store, start and deliver an event, as when the storage
-retries the write back.
+On a storage that evaluates no condition on a delete, a subscription from the subscription-model default reads the
+store only once the write back has ended. When the process ends before the write back reached the store, that
+subscription has delivered no event, nothing is stored for it, and its next run starts from where the feed is. In
+0.33.0 the `subscribe(..)` reads the store without waiting, so when it read after its delete it started from where the
+feed was then, and it can have delivered events before the process ended, which this change then never delivers.
 
 A subscription registered on a stopped model reconciles the stored position with where the feed was at
-its registration, through `resolveFirstCheckpointRace(..)` when the storage can. That reconciling runs once the takeover
-has ended, as it would with no delete running.
+its registration, through `resolveFirstCheckpointRace(..)` when the storage can. On a storage that evaluates no
+condition on a delete, that reconciling runs once the takeover has ended, as it would with no delete running. On a
+storage that evaluates one, the subscription first writes the position it read, or the one written back when it read
+nothing, on the condition of its own position writes, the same write a subscription from the subscription-model
+default makes before it starts. Without it, a write back that reached the store after `resolveFirstCheckpointRace(..)`
+could replace the earlier position that call kept with the position of the cancelled subscription, and a restart would
+skip the events between the two.
 
 When the durable model drives the subscription itself, `subscribe(..)` and `resumeSubscription(..)` ask where the feed
 is for a subscription from the subscription-model default or a dynamic `StartAt`, on a running and on a stopped model.

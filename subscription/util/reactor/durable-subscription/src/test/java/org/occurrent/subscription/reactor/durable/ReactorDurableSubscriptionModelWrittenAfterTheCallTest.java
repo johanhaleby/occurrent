@@ -49,6 +49,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -1010,6 +1011,205 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     }
 
     /**
+     * The storage evaluates a condition on a delete and holds the delete of an earlier cancel of the same id while it
+     * still holds the checkpoint of the cancelled subscription. A subscribe of the id from the model default writes
+     * that checkpoint back, and the write back never reaches the store, as one still on its way there when the process
+     * ends. The storage applies the delete before or after the subscription reads storage. The process then ends, an
+     * event is written while it is down, and a new model on the same storage subscribes the id from the model default.
+     * It resumes from the checkpoint of the cancelled subscription, as it would had no delete been running, so the
+     * event written while the process was down is delivered.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void a_rebuild_after_the_process_ended_before_a_write_back_reached_the_store_resumes_a_subscription_from_the_model_default(boolean deleteAppliedBeforeTheRead) throws Exception {
+        // Given
+        InMemoryCheckpointStorage store = new InMemoryCheckpointStorage();
+        HeldDeleteStorage storage = new HeldDeleteStorage(store, true);
+        storage.firstVersionedSaveNeverArrives = true;
+        Feed feed = new Feed();
+        store.save(SUBSCRIPTION_ID, checkpoint(feed.write())).block(TIMEOUT);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        model.cancelSubscription(SUBSCRIPTION_ID);
+        await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 1);
+        ReactorDurableSubscriptionModel rebuilt = new ReactorDurableSubscriptionModel(feed, new HeldDeleteStorage(store, true));
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        if (deleteAppliedBeforeTheRead) {
+            storage.releaseNextRead = releaseRead;
+        }
+        List<String> delivered = new CopyOnWriteArrayList<>();
+
+        try {
+            // On another thread, so a subscribe that waits for the write back does not hang the test
+            CompletableFuture.runAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)));
+            if (deleteAppliedBeforeTheRead) {
+                // Not asserted, since a subscribe that waits for the write back before it reads never gets there
+                storage.nextReadEntered.await(1, TimeUnit.SECONDS);
+            } else {
+                // Long enough for the subscription to read storage, where nothing holds it back
+                await().pollDelay(Duration.ofMillis(300)).atMost(TIMEOUT).until(() -> true);
+            }
+            storage.releaseDelete.countDown();
+            assertThat(storage.deleteApplied.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the storage applied the delete").isTrue();
+            releaseRead.countDown();
+            // Long enough for the subscription to start, where nothing holds it back
+            await().pollDelay(Duration.ofMillis(300)).atMost(TIMEOUT).until(() -> true);
+
+            // When
+            storage.processEnded = true;
+            model.shutdown();
+            long writtenWhileDown = feed.write();
+            rebuilt.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)).waitUntilStarted().block(TIMEOUT);
+            long writtenAfterTheRebuild = feed.write();
+
+            // Then
+            await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(writtenAfterTheRebuild)));
+            assertThat(delivered).as("events delivered before and after the rebuild")
+                    .containsExactly(String.valueOf(writtenWhileDown), String.valueOf(writtenAfterTheRebuild));
+        } finally {
+            releaseRead.countDown();
+            storage.releaseDelete.countDown();
+            model.shutdown();
+            rebuilt.shutdown();
+        }
+    }
+
+    /**
+     * The storage evaluates a condition on a delete, and keeps the earlier of a position it is offered and the one it
+     * holds, as the MongoDB storages do. A cancel of the id starts a delete, and a subscription of the id from the
+     * model default is registered while the model is stopped, where the feed is then. Another node of the id stores a
+     * later checkpoint, the delete holds it, and starting the model writes it back. The registration starts from where
+     * the feed was when it was registered, and handles no event before the process ends. The write back reaches the
+     * store once the subscription started, or never, as one still on its way there when the process ends. A new model
+     * on the same storage then resumes the id from where the feed was at the registration, so every event written
+     * after it is delivered.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"once the subscription started", "never"})
+    void a_rebuild_resumes_a_registration_made_while_the_model_was_stopped_from_where_the_feed_was_then_whenever_the_write_back_arrives(String writeBackArrives) throws Exception {
+        // Given
+        InMemoryCheckpointStorage store = new InMemoryCheckpointStorage();
+        HeldDeleteStorage storage = new HeldDeleteStorage(store, true);
+        storage.resolvesByOrder = true;
+        CountDownLatch releaseWriteBack = new CountDownLatch(1);
+        if (writeBackArrives.equals("never")) {
+            storage.firstVersionedSaveNeverArrives = true;
+        } else {
+            storage.releaseFirstVersionedSave = releaseWriteBack;
+        }
+        storage.deleteFails = true;
+        Feed feed = new Feed();
+        store.save(SUBSCRIPTION_ID, checkpoint(feed.write())).block(TIMEOUT);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        HeldDeleteStorage rebuiltStorage = new HeldDeleteStorage(store, true);
+        rebuiltStorage.resolvesByOrder = true;
+        ReactorDurableSubscriptionModel rebuilt = new ReactorDurableSubscriptionModel(feed, rebuiltStorage);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+
+        try {
+            model.stop();
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 1);
+            // Handles nothing before the process ends
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.never());
+            List<Long> afterTheRegistration = List.of(feed.write(), feed.write());
+            store.save(SUBSCRIPTION_ID, checkpoint(afterTheRegistration.get(1))).block(TIMEOUT);
+            storage.deleteFails = false;
+            assertThat(storage.deleteHeld.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the storage holds a delete").isTrue();
+            model.start(true);
+            // Long enough for the subscription to start, where nothing holds it back
+            await().pollDelay(Duration.ofMillis(300)).atMost(TIMEOUT).until(() -> true);
+            storage.releaseDelete.countDown();
+            assertThat(storage.deleteApplied.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the storage applied the delete").isTrue();
+            releaseWriteBack.countDown();
+            // Long enough for the write back to reach the store and for the subscription to start, where nothing
+            // holds either back
+            await().pollDelay(Duration.ofMillis(300)).atMost(TIMEOUT).until(() -> true);
+
+            // When
+            storage.processEnded = true;
+            model.shutdown();
+            long writtenWhileDown = feed.write();
+            rebuilt.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)).waitUntilStarted().block(TIMEOUT);
+            long writtenAfterTheRebuild = feed.write();
+
+            // Then
+            await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(writtenAfterTheRebuild)));
+            assertThat(delivered).as("events delivered after the rebuild")
+                    .containsExactly(String.valueOf(afterTheRegistration.get(0)), String.valueOf(afterTheRegistration.get(1)),
+                            String.valueOf(writtenWhileDown), String.valueOf(writtenAfterTheRebuild));
+        } finally {
+            releaseWriteBack.countDown();
+            storage.releaseDelete.countDown();
+            model.shutdown();
+            rebuilt.shutdown();
+        }
+    }
+
+    /**
+     * The storage evaluates a condition on a delete and holds the delete of an earlier cancel of the same id while it
+     * still holds the checkpoint of the cancelled subscription. A subscribe of the id from an earlier position of its
+     * own writes that checkpoint back, and the storage holds the write back. The storage applies the delete, and the
+     * subscription is paused and resumed before the write back reaches the store. The resumed subscription handles an
+     * event and stores its position, and then the write back reaches the store. The process ends before the
+     * subscription handles the next event, and a new model on the same storage subscribes the id from the model
+     * default. It resumes from the event the resumed subscription handled, so no event after it is skipped.
+     */
+    @Test
+    void a_subscription_resumed_before_a_write_back_reached_the_store_keeps_the_position_it_stored() throws Exception {
+        // Given
+        InMemoryCheckpointStorage store = new InMemoryCheckpointStorage();
+        HeldDeleteStorage storage = new HeldDeleteStorage(store, true);
+        CountDownLatch releaseWriteBack = new CountDownLatch(1);
+        storage.releaseFirstVersionedSave = releaseWriteBack;
+        Feed feed = new Feed();
+        long ownPosition = feed.write();
+        long handledOnceResumed = feed.write();
+        long neverHandled = feed.write();
+        store.save(SUBSCRIPTION_ID, checkpoint(neverHandled)).block(TIMEOUT);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ReactorDurableSubscriptionModel rebuilt = new ReactorDurableSubscriptionModel(feed, new HeldDeleteStorage(store, true));
+        AtomicBoolean firstDelivery = new AtomicBoolean(true);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        // The first delivery never ends, and neither does any of an event after the one handled once resumed
+        Function<CloudEvent, Mono<Void>> action = event -> firstDelivery.getAndSet(false) || !event.getId().equals(String.valueOf(handledOnceResumed))
+                ? Mono.never()
+                : Mono.fromRunnable(() -> delivered.add(event.getId()));
+
+        try {
+            CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+            await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 1);
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(checkpoint(ownPosition)), action).waitUntilStarted().block(TIMEOUT);
+            storage.releaseDelete.countDown();
+            assertThat(storage.deleteApplied.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the storage applied the delete").isTrue();
+            // Long enough for the delete to end its try, where nothing holds it back
+            await().pollDelay(Duration.ofMillis(300)).atMost(TIMEOUT).until(() -> true);
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            model.resumeSubscription(SUBSCRIPTION_ID).waitUntilStarted().block(TIMEOUT);
+            await().atMost(TIMEOUT).until(() -> String.valueOf(handledOnceResumed).equals(store.read(SUBSCRIPTION_ID).map(Checkpoint::asString).block(TIMEOUT)));
+            releaseWriteBack.countDown();
+            cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+            // When
+            storage.processEnded = true;
+            model.shutdown();
+            long writtenWhileDown = feed.write();
+            rebuilt.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)).waitUntilStarted().block(TIMEOUT);
+            long writtenAfterTheRebuild = feed.write();
+
+            // Then
+            await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(writtenAfterTheRebuild)));
+            assertThat(delivered).as("events delivered before and after the rebuild")
+                    .containsExactly(String.valueOf(handledOnceResumed), String.valueOf(neverHandled), String.valueOf(writtenWhileDown),
+                            String.valueOf(writtenAfterTheRebuild));
+        } finally {
+            releaseWriteBack.countDown();
+            storage.releaseDelete.countDown();
+            model.shutdown();
+            rebuilt.shutdown();
+        }
+    }
+
+    /**
      * A subscribe of the id comes on a thread where Reactor does not allow blocking while the delete of an earlier
      * cancel of the same id runs, and the storage still holds the checkpoint of the cancelled subscription. Reactor
      * refuses the subscribe, by refusing the read of the model default where the subscription is handed to a wrapped
@@ -1163,8 +1363,18 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
         // Set, the first save on the condition that the stored version is not above a given one never reaches the
         // store, as a write still on its way there when the process ends
         volatile boolean firstVersionedSaveNeverArrives;
+        // Set, that first save waits for it instead, and is then applied unless the process ended meanwhile
+        volatile @Nullable CountDownLatch releaseFirstVersionedSave;
         private final AtomicBoolean versionedSaveHeld = new AtomicBoolean();
+        // Set, the next read waits for it, and then answers what the store holds by then
+        volatile @Nullable CountDownLatch releaseNextRead;
+        final CountDownLatch nextReadEntered = new CountDownLatch(1);
+        // Set, resolveFirstCheckpointRace keeps the earlier of the stored and the offered position, writing the
+        // offered one when it is earlier, as the MongoDB storages do by operation time
+        volatile boolean resolvesByOrder;
         final CountDownLatch deleteApplied = new CountDownLatch(1);
+        // Counted down once a delete is held rather than failed
+        final CountDownLatch deleteHeld = new CountDownLatch(1);
         // Whether a delete evaluates its condition, or refuses every condition but any(), as a storage written before
         // deletes took one does
         private final boolean conditionalDeletes;
@@ -1180,7 +1390,31 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
         @Override
         public Mono<Checkpoint> read(String subscriptionId) {
+            CountDownLatch release = releaseNextRead;
+            if (release != null) {
+                releaseNextRead = null;
+                return Mono.fromCallable(() -> {
+                            nextReadEntered.countDown();
+                            return release.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                        })
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .then(Mono.defer(() -> processEnded ? Mono.never() : stored.read(subscriptionId)));
+            }
             return Mono.defer(() -> processEnded ? Mono.never() : stored.read(subscriptionId));
+        }
+
+        @Override
+        public Mono<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+            if (!resolvesByOrder) {
+                return Mono.empty();
+            }
+            return Mono.defer(() -> processEnded ? Mono.never() : stored.read(subscriptionId)
+                    .map(Optional::of)
+                    .defaultIfEmpty(Optional.empty())
+                    .flatMap(storedNow -> storedNow.isPresent() && Long.parseLong(storedNow.get().asString()) <= Long.parseLong(candidate.asString())
+                            ? Mono.just(storedNow.get())
+                            // any() keeps the stored version, as the MongoDB storages do
+                            : stored.save(subscriptionId, candidate, CheckpointWriteCondition.any())));
         }
 
         @Override
@@ -1190,8 +1424,12 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
                     return Mono.never();
                 }
                 saves.incrementAndGet();
-                if (firstVersionedSaveNeverArrives && writeCondition instanceof CheckpointWriteCondition.NotOlderThan && versionedSaveHeld.compareAndSet(false, true)) {
-                    return Mono.never();
+                CountDownLatch release = releaseFirstVersionedSave;
+                if ((firstVersionedSaveNeverArrives || release != null) && writeCondition instanceof CheckpointWriteCondition.NotOlderThan
+                    && versionedSaveHeld.compareAndSet(false, true)) {
+                    return release == null ? Mono.never() : Mono.fromCallable(() -> release.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS))
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .then(Mono.defer(() -> processEnded ? Mono.never() : stored.save(subscriptionId, checkpoint, writeCondition)));
                 }
                 if (savesToFail.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
                     return Mono.error(new IllegalStateException(SAVE_FAILED));
@@ -1235,7 +1473,10 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             if (deleteFails) {
                 return Mono.error(new IllegalStateException(DELETE_FAILED));
             }
-            return Mono.fromCallable(() -> releaseDelete.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS))
+            return Mono.fromCallable(() -> {
+                        deleteHeld.countDown();
+                        return releaseDelete.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                    })
                     .subscribeOn(Schedulers.boundedElastic())
                     // Before the model hears that the delete ended, so nothing it starts then reaches the store
                     .then(Mono.defer(() -> processEnded ? Mono.<Void>never() : applied.get().doOnTerminate(() -> {

@@ -529,12 +529,13 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     /**
      * The storage evaluates a condition on a delete and holds the delete of a cancel, and the subscribe of the same id
      * made without waiting for the cancel writes the checkpoint of the cancelled subscription back. The storage holds
-     * that write too, and applies the delete first, which removes the checkpoint. The write puts it back, and the
-     * subscription starts only once the write has ended, so it resumes from that checkpoint, as it would without the
-     * cancel.
+     * that write too, and applies the delete before the subscription reads storage, which removes the checkpoint. The
+     * subscription does not wait for the write. It writes that checkpoint itself before it starts, at a version neither
+     * the delete nor the write back removes or replaces, and starts from it, as it would without the cancel. The next
+     * subscription of the id resumes from it once the write back has reached the store.
      */
     @Test
-    void a_checkpoint_written_back_after_the_storage_applied_the_delete_is_where_the_next_subscription_of_the_id_resumes() throws Exception {
+    void a_subscription_whose_write_back_is_held_starts_from_the_checkpoint_of_the_cancelled_subscription_and_the_next_one_resumes_from_it() throws Exception {
         // Given
         PositionStorage storage = new PositionStorage(true);
         RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
@@ -543,68 +544,95 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         CountDownLatch releaseDelete = new CountDownLatch(1);
         CountDownLatch writeBackEntered = new CountDownLatch(1);
         CountDownLatch releaseWriteBack = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
         storage.releaseHeldDelete = releaseDelete;
         storage.heldSave = REACHED_BEFORE_THE_CANCEL;
         storage.heldSaveEntered = writeBackEntered;
         storage.releaseHeldSave = releaseWriteBack;
+        RecordingSubscriptionModel nextFeed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel next = new ReactorDurableSubscriptionModel(nextFeed, storage);
 
         try {
             // When
             CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+            await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 1);
+            storage.releaseNextRead = releaseRead;
             CompletableFuture<Void> subscribed = CompletableFuture.runAsync(() -> subscribe(model));
             assertThat(writeBackEntered.await(5, TimeUnit.SECONDS)).as("the checkpoint of the cancelled subscription is being written back").isTrue();
+            assertThat(storage.nextReadEntered.await(5, TimeUnit.SECONDS)).as("the subscription reads storage").isTrue();
             releaseDelete.countDown();
             storage.heldDeleteApplied.get(5, TimeUnit.SECONDS);
             boolean storedOnceTheDeleteApplied = hasPosition(storage);
-            int startedBeforeTheWriteEnded = feed.startedAt.size() - 1;
-            releaseWriteBack.countDown();
+            releaseRead.countDown();
             subscribed.get(5, TimeUnit.SECONDS);
+            await().atMost(TIMEOUT).until(() -> feed.startedAt.size() == 2);
+            @Nullable String storedWhileTheWriteBackWasHeld = storedPosition(storage);
+            releaseWriteBack.countDown();
+            cancelled.get(5, TimeUnit.SECONDS);
+            model.shutdown();
+            next.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
 
             // Then
             assertThat(storedOnceTheDeleteApplied).as("whether a checkpoint was stored once the storage applied the delete").isFalse();
-            assertThat(startedBeforeTheWriteEnded).as("subscriptions started before the write ended").isZero();
-            await().atMost(TIMEOUT).until(() -> feed.startedAt.size() == 2);
             assertThat(feed.startedAt.get(1)).as("start position of the subscription made without waiting for the cancel").hasToString(REACHED_BEFORE_THE_CANCEL.asString());
-            assertThat(storedPosition(storage)).as("position stored once the write ended").isEqualTo(REACHED_BEFORE_THE_CANCEL.asString());
-            cancelled.get(5, TimeUnit.SECONDS);
+            assertThat(storedWhileTheWriteBackWasHeld).as("position stored while the storage held the write back").isEqualTo(REACHED_BEFORE_THE_CANCEL.asString());
+            assertThat(nextFeed.startedAt).as("start positions of the next subscription of the id").singleElement().hasToString(REACHED_BEFORE_THE_CANCEL.asString());
         } finally {
             releaseDelete.countDown();
             releaseWriteBack.countDown();
+            releaseRead.countDown();
             model.shutdown();
+            next.shutdown();
         }
     }
 
     /**
-     * As above, except that the storage fails the write of the checkpoint back. The storage may remove the checkpoint
-     * once it applies the delete, and starting from what it holds then could skip every event after that checkpoint,
-     * so the subscription does not start, and waiting for its start ends with the error of the write.
+     * As above, except that the storage fails the write of the checkpoint back. The subscription writes that
+     * checkpoint itself before it starts, so it starts from it rather than from where the feed is, and the next
+     * subscription of the id resumes from it.
      */
     @Test
-    void a_subscription_whose_checkpoint_could_not_be_written_back_does_not_start_and_its_start_ends_with_the_error_of_the_write() throws Exception {
+    void a_subscription_whose_write_back_failed_starts_from_the_checkpoint_of_the_cancelled_subscription_and_the_next_one_resumes_from_it() throws Exception {
         // Given
         PositionStorage storage = new PositionStorage(true);
         RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
         runningFromAStoredPosition(model, storage);
         CountDownLatch releaseDelete = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
         storage.releaseHeldDelete = releaseDelete;
         storage.failedSave = REACHED_BEFORE_THE_CANCEL;
+        RecordingSubscriptionModel nextFeed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel next = new ReactorDurableSubscriptionModel(nextFeed, storage);
 
         try {
             // When
             CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
-            Subscription subscription = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
-                    .get(5, TimeUnit.SECONDS);
-            Throwable startEnded = catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
+            await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 1);
+            storage.releaseNextRead = releaseRead;
+            CompletableFuture<Subscription> subscribed = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()));
+            assertThat(storage.nextReadEntered.await(5, TimeUnit.SECONDS)).as("the subscription reads storage").isTrue();
             releaseDelete.countDown();
+            storage.heldDeleteApplied.get(5, TimeUnit.SECONDS);
+            boolean storedOnceTheDeleteApplied = hasPosition(storage);
+            releaseRead.countDown();
+            Subscription subscription = subscribed.get(5, TimeUnit.SECONDS);
+            Throwable startEnded = catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
+            cancelled.get(5, TimeUnit.SECONDS);
+            model.shutdown();
+            next.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
 
             // Then
-            assertThat(startEnded).as("how waiting for the start of the subscription ended").hasMessage(SAVE_FAILED);
-            assertThat(feed.startedAt).as("subscriptions started").hasSize(1);
-            cancelled.get(5, TimeUnit.SECONDS);
+            assertThat(storedOnceTheDeleteApplied).as("whether a checkpoint was stored once the storage applied the delete").isFalse();
+            assertThat(startEnded).as("how waiting for the start of the subscription ended").isNull();
+            assertThat(feed.startedAt).as("start positions").hasSize(2);
+            assertThat(feed.startedAt.get(1)).as("start position of the subscription made without waiting for the cancel").hasToString(REACHED_BEFORE_THE_CANCEL.asString());
+            assertThat(nextFeed.startedAt).as("start positions of the next subscription of the id").singleElement().hasToString(REACHED_BEFORE_THE_CANCEL.asString());
         } finally {
             releaseDelete.countDown();
+            releaseRead.countDown();
             model.shutdown();
+            next.shutdown();
         }
     }
 
@@ -1802,9 +1830,10 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     private static class PositionStorage implements CheckpointStorage {
         private final CheckpointStorage backing;
         private volatile Mono<Void> beforeDelete = Mono.empty();
-        // A save of this position waits for releaseHeldSave and is then written whether or not anyone still waits for it
+        // The first save of this position waits for releaseHeldSave and is then written whether or not anyone still
+        // waits for it
         private volatile @Nullable Checkpoint heldSave;
-        // A save of this position fails
+        // The first save of this position fails
         private volatile @Nullable Checkpoint failedSave;
         private volatile CountDownLatch heldSaveEntered = new CountDownLatch(0);
         private volatile CountDownLatch releaseHeldSave = new CountDownLatch(0);
@@ -1822,6 +1851,9 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         // Set, a read of the id a waits for it on the thread that reads, before the read is even handed back
         private volatile @Nullable CountDownLatch releaseReadOfA;
         private final CountDownLatch readOfAEntered = new CountDownLatch(1);
+        // Set, the next read waits for it, and then answers what the storage holds by then
+        private volatile @Nullable CountDownLatch releaseNextRead;
+        private final CountDownLatch nextReadEntered = new CountDownLatch(1);
         // Whether a delete evaluates its condition, which the backing storage then does, or refuses every condition
         // but any(), as a storage written before deletes took one does
         private final boolean conditionalDeletes;
@@ -1850,6 +1882,16 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
                 readOfAEntered.countDown();
                 awaitLatch(releaseRead);
             }
+            CountDownLatch releaseNext = releaseNextRead;
+            if (releaseNext != null) {
+                releaseNextRead = null;
+                return Mono.fromRunnable(() -> {
+                            nextReadEntered.countDown();
+                            awaitLatch(releaseNext);
+                        })
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .then(Mono.defer(() -> backing.read(subscriptionId)));
+            }
             if (!holdNextRead) {
                 return backing.read(subscriptionId);
             }
@@ -1869,10 +1911,12 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition writeCondition) {
             Checkpoint failed = failedSave;
             if (failed != null && failed.asString().equals(checkpoint.asString())) {
+                failedSave = null;
                 return Mono.error(new IllegalStateException(SAVE_FAILED));
             }
             Checkpoint held = heldSave;
             if (held != null && held.asString().equals(checkpoint.asString())) {
+                heldSave = null;
                 CompletableFuture<Checkpoint> saved = CompletableFuture.supplyAsync(() -> {
                     heldSaveEntered.countDown();
                     awaitLatch(releaseHeldSave);
