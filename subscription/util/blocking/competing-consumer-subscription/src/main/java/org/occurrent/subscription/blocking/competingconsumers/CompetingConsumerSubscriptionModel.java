@@ -3322,17 +3322,17 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         };
     }
 
-    // When the unregister throws while this node still holds the lease, this tries to give the lease back at least.
-    // When both throw the lease stays held, and the try that called this goes on trying
+    // When the unregister throws, an Error included, while this node still holds the lease, this tries at least to give
+    // the lease back. When both throw the lease stays held, and the try that called this goes on trying
     private void unregisterOrAtLeastGiveUpTheLease(SubscriptionIdAndSubscriberId key) {
         try {
             unregisterCompetingConsumer(key.subscriptionId(), key.subscriberId());
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
             try {
                 if (hasLock(key.subscriptionId(), key.subscriberId())) {
                     competingConsumerStrategy.releaseCompetingConsumer(key.subscriptionId(), key.subscriberId());
                 }
-            } catch (RuntimeException releaseFailure) {
+            } catch (Throwable releaseFailure) {
                 e.addSuppressed(releaseFailure);
             }
             throw e;

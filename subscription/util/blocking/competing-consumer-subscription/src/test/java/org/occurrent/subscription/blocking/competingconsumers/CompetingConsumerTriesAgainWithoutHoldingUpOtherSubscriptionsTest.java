@@ -215,6 +215,25 @@ class CompetingConsumerTriesAgainWithoutHoldingUpOtherSubscriptionsTest {
     }
 
     @Test
+    void the_try_gives_up_the_lease_after_stop_when_the_unregister_throws_an_error_before_letting_the_lease_go() {
+        WrappedModel wrapped = new WrappedModel();
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
+        try {
+            subscribeRunningWithLease(model, wrapped, strategy, "s1");
+            strategy.unregisterErrorsFor.add("s1");
+
+            Throwable failure = catchThrowable(model::stop);
+
+            assertThat(failure).as("failure of stop() when the unregister of s1 throws an Error").isInstanceOf(Error.class);
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(strategy.holders).as("leases held while the unregister of s1 throws an Error and its release succeeds, unregister called for " + strategy.unregisterCalls).doesNotContain("s1"));
+        } finally {
+            strategy.unregisterErrorsFor.clear();
+            model.shutdown();
+        }
+    }
+
+    @Test
     void a_user_pause_that_takes_effect_and_then_throws_stays_paused_when_the_wrapped_model_cannot_say_whether_it_runs() {
         WrappedModel wrapped = new WrappedModel();
         Strategy strategy = new Strategy();
@@ -463,6 +482,8 @@ class CompetingConsumerTriesAgainWithoutHoldingUpOtherSubscriptionsTest {
         private final Set<String> registerFailsOnce = ConcurrentHashMap.newKeySet();
         private final Set<String> unregisterFailsFor = ConcurrentHashMap.newKeySet();
         private final Set<String> releaseFailsFor = ConcurrentHashMap.newKeySet();
+        // An unregister throws an Error before it lets the lease go
+        private final Set<String> unregisterErrorsFor = ConcurrentHashMap.newKeySet();
         // Added once a release has decided to throw
         private final Set<String> releaseFailures = ConcurrentHashMap.newKeySet();
         // A registration waits at its gate once
@@ -498,6 +519,9 @@ class CompetingConsumerTriesAgainWithoutHoldingUpOtherSubscriptionsTest {
             }
             if (unregisterFailsFor.contains(subscriptionId)) {
                 throw new IllegalStateException("unregister failure for " + subscriptionId);
+            }
+            if (unregisterErrorsFor.contains(subscriptionId)) {
+                throw new Error("unregister error for " + subscriptionId);
             }
             registered.remove(subscriptionId);
             holders.remove(subscriptionId);
