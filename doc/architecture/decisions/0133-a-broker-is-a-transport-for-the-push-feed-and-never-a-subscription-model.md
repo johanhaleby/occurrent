@@ -1502,8 +1502,7 @@ subscription sent just before the cancel can reach the store after a delete sent
 back. So the delete runs after every position write the cancelled subscription had already started, and a write it had
 not started by then never runs, even when the wrapped model runs an event through the action after the cancel. A
 `subscribe(..)` for that id in the same process reads and writes the position only after that delete has ended, whether
-or not anything waited for the `Mono`, so it does not start from the position of the subscription that was cancelled
-unless the delete failed.
+or not anything waited for the `Mono`, so it does not start from the position of the subscription that was cancelled.
 It resolves a dynamic `StartAt` only after the delete too, since `ResumeStartPositions.replayThenResume(..)` and the
 Spring Boot starter's `BEGINNING` start read the stored position themselves to choose between replaying and resuming.
 The cancel ends every subscription of the id that it finds, and stops their position writes and no others. When the
@@ -1519,6 +1518,16 @@ cancel's `Mono` fails with that error, and a `shutdown()`, which returns nothing
 The durable model doesn't run the action of that subscription for anything the wrapped model delivers after the cancel
 or the `shutdown()` returned.
 
+After a delete that fails, that position is still stored, and a `subscribe(..)` of the id that started before the delete
+succeeded would start from the position of the cancelled subscription. So the model tries the delete again until it
+succeeds or the model is shut down. The wait before a try starts at 100 milliseconds and about doubles after each
+failure, never past 5 seconds, with some randomness so that deletes failing together are not tried again together. Every
+failure is logged as a warning. A store that fails for a few seconds should not keep a stale position stored, and a
+caller that ignores the `Mono` would never learn that the delete has to be made again. Until a try succeeds, a
+`subscribe(..)` of the id waits for it, and the cancel's `Mono` neither completes nor fails. A `shutdown()` stops the
+tries, and the `Mono` then fails with the error of the last one. The position then stays stored, so the caller calls
+`cancelSubscription(id)` again once a model runs.
+
 None of these waits has a time limit. A store can apply a write or a delete after its caller stopped waiting for it,
 so a delete that went ahead of a slow save could still have the save put the position back, and a `subscribe(..)` that
 stopped waiting for a slow delete could still have the delete remove the position it went on to save. Calling off the
@@ -1528,50 +1537,61 @@ That has one cost next to 0.33.0, where neither the cancel nor a later `subscrib
 whose writes hang but whose reads answer, a `subscribe(..)` of the id right after the cancel now waits until the store
 answers those writes, where 0.33.0 started it straight away. Only a caller that waits on the cancel's `Mono`, and a
 `subscribe(..)` of the same id made after the cancel, wait for those writes and the delete, and no call for another id
-waits for them. The cancel itself returns once it has stopped the subscription and started the delete. A store that answers no reads held up a `subscribe(..)` in 0.33.0 too, since a `subscribe(..)`
-reads the stored position before the subscription starts.
+waits for them. The cancel itself returns once it has stopped the subscription and started the delete. A store that
+answers no reads held up a `subscribe(..)` in 0.33.0 too when the durable model hands the subscription to a wrapped
+model that manages named subscriptions, since that `subscribe(..)` reads the stored position on the caller's thread
+before it returns. When the durable model drives the subscription itself, the 0.33.0 `subscribe(..)` returned and only
+the subscription waited for that read.
 
-On a thread that may block, a `subscribe(..)` of the same id with a dynamic `StartAt` does not wait for the delete on
-that thread. It returns and starts the subscription once the delete has ended. The function can read the stored position
-itself, so it runs only then, and before it returns the `subscribe(..)` asks the wrapped model where the feed is. Asking
-only when the function runs would skip what was written between the return and then. When the function answers the
-subscription-model default and no position is stored, the subscription starts from that answer, on both paths, and so
-does a function that answers `StartAt.now()` when the model was running at the `subscribe(..)`. A subscription
-registered while the model was stopped starts `StartAt.now()` from where the feed was when the `start(..)` or
-`resumeSubscription(..)` that started it asked, since `StartAt.now()` for a subscription registered on a stopped model
-means where the feed is once it starts.
+On a thread that may block, a `subscribe(..)` or `resumeSubscription(..)` of the same id with a dynamic `StartAt` asks
+where the feed is, and waits for that answer or for the end of the delete, whichever comes first. The function can read
+the stored position itself, so when the answer comes first the call returns and the function runs only once the delete
+has ended. Asking where the feed is only when the function runs would skip what was written between the return and then.
+When the function answers the subscription-model default and no position is stored, the subscription starts from that
+answer, on both paths, and so does a function that answers `StartAt.now()`. When the delete ends first, the function
+runs at the call, as it does without a delete. A read that never answers then holds the call only until the delete has
+ended, where waiting for the read alone would hold it for good while 0.33.0 returned.
 
-A wrapped model that manages named subscriptions and is still stopped when the delete ends gets a dynamic `StartAt`,
-which it resolves when it starts the subscription. The function answers `StartAt.now()`, which the wrapped model applies
-as it starts, unless a `start(..)` of the durable model came while the wrapped model took the subscribe. That start
-could have started the wrapped model before the wrapped model had the subscription, and returned before it applied
-`StartAt.now()`, so the function answers what the `subscribe(..)` read instead. A wrapped model that resolves the
-dynamic `StartAt` while it takes the subscribe gets that position too. One that was started before the delete ended,
-from a thread where Reactor refuses to block or other than by the durable model's `start(..)`, starts the subscription
-from what the `subscribe(..)` read, the latest position known not to be after that start. I don't hold a lock across
-that hand-over, or across any read or call to the wrapped model. A `start(..)` on a thread where Reactor refuses to
-block would otherwise wait for a read or a wrapped model on another thread.
+A subscription registered while the model is stopped runs its function when `start(..)` starts it, as in 0.33.0, also
+while the delete runs, and only its checkpoint writes wait for the delete. When the durable model hands subscriptions to
+a wrapped model that manages named subscriptions and that model is stopped, the function runs at the `subscribe(..)`,
+and the wrapped model applies what it answers when it starts. `StartAt.now()` then means where the feed is once the
+model is started, and the feed opens there. Running the function only once the delete had ended would mean starting
+`StartAt.now()` from a position read at the start, and waiting for that read let a read that never answered hang
+`start(..)` and keep the subscription from the events 0.33.0 delivered to it. The cost is the one a thread where Reactor
+refuses to block has, described below. A function that reads the stored position itself can read it before the delete
+has ended. I don't hold a lock across a hand-over, or across any read or call to the wrapped model, so a `start(..)`
+never waits for a read or a wrapped model on another thread.
 
-The property this keeps is that an event written after the `subscribe(..)` or the `start(..)` returned reaches a
-subscription whose dynamic `StartAt` waited for a delete and answered the subscription-model default or `StartAt.now()`,
-on both paths, on a thread that may block. Duplicates are allowed and skips are not. A wrapped model that answers
-asynchronously, as `ReactorMongoSubscriptionModel` does, can answer after the call returned, with a position after
-events written in between. So the answer is awaited before the `subscribe(..)` or the `resumeSubscription(..)` returns.
-A `start(..)` awaits the answers it asked for itself only once it has started every subscription, so one read slow to
-answer holds up no other subscription. It does not await the answer a registration on a stopped model asked for when it
-was registered, as in 0.33.0, since one read that never answered would then hold up the whole start. When the read fails
-or answers nothing, the function runs at the call instead, as it does without a delete, and `StartAt.now()` starts from
-where the feed is then. That is not the fallback the subscription-model default refuses. `StartAt.now()` is what the
-caller asked for and needs no recorded position, so refusing it would refuse a subscription 0.33.0 started. A function
-that reads the checkpoint itself can then read it before the delete has ended, as in 0.33.0, since nothing tells the
-model what the function answers until it has run. The start of a stopped wrapped model that manages named subscriptions
-is the exception, where a subscription whose read at the start fails starts from what the `subscribe(..)` read. When the
-durable model drives the subscription itself, the same wait applies to the subscription-model default in a
-`subscribe(..)`, with or without a delete, where 0.33.0 started from an answer that could come after the return. On a
-running model with no delete of the id under way, that `subscribe(..)` asks storage first and asks the wrapped model
-only when storage holds nothing, so a stored checkpoint never waits for the wrapped model. With
-`startWhenNoStartPositionCanBeRecorded` set, a default whose read answers nothing behind a delete opens the feed at the
-call, since nothing is stored once the delete has succeeded, and only the checkpoint writes wait.
+The property this keeps is that an event written after the `subscribe(..)` or the `resumeSubscription(..)` returned
+reaches a subscription whose dynamic `StartAt` waited for a delete and answered the subscription-model default or
+`StartAt.now()`, on both paths, on a thread that may block. Duplicates are allowed and skips are not. A wrapped model
+that answers asynchronously, as `ReactorMongoSubscriptionModel` does, can answer after the call returned, with a
+position after events written in between. So the answer is awaited before the `subscribe(..)` or the
+`resumeSubscription(..)` returns. When the read fails or answers nothing, the function runs at the call instead, as it
+does without a delete, and `StartAt.now()` starts from where the feed is then. That is not the fallback the
+subscription-model default refuses. `StartAt.now()` is what the caller asked for and needs no recorded position, so
+refusing it would refuse a subscription 0.33.0 started. A function that reads the checkpoint itself can then read it
+before the delete has ended, as in 0.33.0, since nothing tells the model what the function answers until it has run. A
+`start(..)` takes no read of where the feed is and awaits none, as in 0.33.0. Each subscription it starts begins from a
+stored checkpoint, from the read its `subscribe(..)` took, or from `StartAt.now()` with the feed opened at the start. A
+read taken at the start would answer a position after the registration and skip what was written in between, and
+awaiting a read would let one that never answers hold up the whole start, where 0.33.0 returned. So a wrapped model that
+answers the read a `subscribe(..)` took on a stopped model only after the start returned can answer a position after
+events written in between, as in 0.33.0. A `resumeSubscription(..)` on a thread that may block awaits that read. When
+the durable model drives the subscription itself, a `subscribe(..)` from the subscription-model default awaits its read
+too, with or without a delete, where 0.33.0 started from an answer that could come after the return. On a running model
+with no delete of the id under way, that `subscribe(..)` asks storage first and asks the wrapped model only when storage
+holds nothing, so a stored checkpoint never waits for the wrapped model. With `startWhenNoStartPositionCanBeRecorded`
+set, a default whose read answers nothing behind a delete opens the feed at the call, since nothing is stored once the
+delete has succeeded, and only the checkpoint writes wait.
+
+On a thread that may block, a `subscribe(..)` or `resumeSubscription(..)` from the subscription-model default, or from a
+dynamic `StartAt` that answers it, waits for its read of where the feed is however long that read takes, with or without
+a delete. Returning after a time limit would let the subscription start from a position read after the call returned and
+skip what was written in between, so the wait stays. A cancel of that id or a `shutdown()` ends it, and so do a pause of
+that id and a `stop()` when the durable model drives the subscription itself. No call for another id waits for it.
+0.33.0 never started such a subscription either.
 
 On a thread where Reactor refuses to block, the answer cannot be awaited, so the function runs at the call, as it does
 without a delete and as in 0.33.0. Checkpoint reads and writes still wait for the delete, and `StartAt.now()` starts
@@ -1594,15 +1614,15 @@ once the subscribe has stopped. A `shutdown()` ends it too, and `waitUntilStarte
 `SubscriptionModelShutdownException`, the same as for any subscription that `shutdown()` ends before it starts. In
 0.33.0 the wait of a subscription that `shutdown()` ended before it started never ended when the durable model drove the
 subscription itself. With no delete running, or on a thread where Reactor refuses to block, the function still runs, and
-throws, on the caller's thread. One with the
-subscription-model default start position, on a durable model that wraps a model that manages named subscriptions, reads
-the stored position on the caller's thread and waits there for the delete, where 0.33.0 blocked that thread on the same
-read. A `shutdown()` ends that wait too, and the `subscribe(..)` throws `SubscriptionModelShutdownException`. On a
-thread where Reactor refuses to block, Reactor refuses that read and the `subscribe(..)` throws, with or without a
-delete, as in 0.33.0. That refusal stays. A read that ends after `subscribe(..)` returns would start the subscription
-from a position later than the return, so it would skip the events the caller writes in between. The Spring Boot reactor
-autoconfigure depends on the refusal to fail a bean built late on such a thread with a `DEFAULT` start, with a message
-saying to build it on a thread that may block or to start it at the beginning or at an explicit position.
+throws, on the caller's thread. One with the subscription-model default start position, on a durable model that wraps a
+model that manages named subscriptions, reads the stored position on the caller's thread and waits there for the delete
+to succeed, where 0.33.0 blocked that thread on the same read. A `shutdown()` ends that wait too, and the
+`subscribe(..)` throws `SubscriptionModelShutdownException`. On a thread where Reactor refuses to block, Reactor refuses
+that read and the `subscribe(..)` throws, with or without a delete, as in 0.33.0. That refusal stays. A read that ends
+after `subscribe(..)` returns would start the subscription from a position later than the return, so it would skip the
+events the caller writes in between. The Spring Boot reactor autoconfigure depends on the refusal to fail a bean built
+late on such a thread with a `DEFAULT` start, with a message saying to build it on a thread that may block or to start
+it at the beginning or at an explicit position.
 
 When the durable model drives the subscription itself, no lifecycle call holds its monitor while it calls the storage,
 the wrapped model or a function the caller supplies, or while it cancels the feed of a subscription. Each call decides
