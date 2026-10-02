@@ -511,7 +511,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     // The first Error, or the first failure when none was one, with the rest attached as suppressed. Nothing when the
-    // list is empty.
+    // list is empty. A checked exception a listener threw without declaring it is thrown as it is.
     private static void throwTheFirstErrorOrFailure(List<Throwable> failures) {
         if (failures.isEmpty()) {
             return;
@@ -522,10 +522,12 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 thrown.addSuppressed(failure);
             }
         }
-        if (thrown instanceof Error error) {
-            throw error;
-        }
-        throw (RuntimeException) thrown;
+        MongoLeaseCompetingConsumerStrategySupport.<RuntimeException>throwAsItIs(thrown);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void throwAsItIs(Throwable thrown) throws T {
+        throw (T) thrown;
     }
 
     private record CompetingConsumer(String subscriptionId, String subscriberId) {

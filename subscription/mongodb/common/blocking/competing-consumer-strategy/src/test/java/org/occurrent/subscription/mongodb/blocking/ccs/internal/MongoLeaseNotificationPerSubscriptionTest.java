@@ -30,6 +30,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -210,6 +211,21 @@ class MongoLeaseNotificationPerSubscriptionTest {
             assertThat(told).containsExactlyInAnyOrder("first granted " + A, "second granted " + A);
             assertThat(thrown).as("what the register threw").isInstanceOf(Error.class);
             assertThat(thrown.getSuppressed()).as("what the register threw, suppressed").hasSize(1);
+        } finally {
+            node.shutdown();
+        }
+    }
+
+    @Test
+    void a_checked_exception_a_listener_throws_on_a_grant_without_declaring_it_is_thrown_as_it_is() {
+        MongoLeaseCompetingConsumerStrategySupport node = rivalThatNeverRefreshes();
+        List<String> told = new CopyOnWriteArrayList<>();
+        node.addListener(new CheckedExceptionListener(told));
+        try {
+            Throwable thrown = catchThrowable(() -> node.registerCompetingConsumer(locks, A, NODE));
+
+            assertThat(told).containsExactly("granted " + A);
+            assertThat(thrown).as("what the register threw").isInstanceOf(IOException.class);
         } finally {
             node.shutdown();
         }
@@ -407,6 +423,30 @@ class MongoLeaseNotificationPerSubscriptionTest {
                 throw new AssertionError(message);
             }
             throw new IllegalStateException(message);
+        }
+    }
+
+    /**
+     * Records each call it is told of and then throws an {@link IOException}, which neither callback declares, the
+     * way code compiled from another JVM language can.
+     */
+    private record CheckedExceptionListener(List<String> told) implements CompetingConsumerListener {
+
+        @Override
+        public void onConsumeGranted(String subscriptionId, String subscriberId) {
+            told.add("granted " + subscriptionId);
+            CheckedExceptionListener.<RuntimeException>throwUndeclared(new IOException("failed on the grant of " + subscriptionId));
+        }
+
+        @Override
+        public void onConsumeProhibited(String subscriptionId, String subscriberId) {
+            told.add("prohibited " + subscriptionId);
+            CheckedExceptionListener.<RuntimeException>throwUndeclared(new IOException("failed on the loss of " + subscriptionId));
+        }
+
+        @SuppressWarnings("unchecked")
+        private static <T extends Throwable> void throwUndeclared(Throwable thrown) throws T {
+            throw (T) thrown;
         }
     }
 }

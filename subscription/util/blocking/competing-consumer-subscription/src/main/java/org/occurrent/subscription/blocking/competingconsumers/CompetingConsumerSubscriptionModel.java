@@ -126,10 +126,13 @@ import static java.util.Objects.requireNonNull;
  * together with each call after it, until that succeeds or this model is shut down. A pause, resume or cancel that
  * finds one of them still failing gives it up when it began before the pause, resume or cancel, so the thread it was
  * handed to does not try it again, applies the ones after it in turn, and is then made all the same. So a pause, resume
- * or cancel throws only what fails in its own call. A {@code start(..)} or {@code stop()} takes every subscription this
- * model knows in the same step that makes it visible to the other calls, so a subscription that a {@code subscribe(..)}
- * records meanwhile is either taken or reads it at its next step. A {@code start(..)} or {@code stop()} that begins
- * while another one runs waits for it to return, in the order they began, with one exception described below.
+ * or cancel throws what fails in its own call, unless the one it gave up threw an {@link Error}, which it throws once
+ * its own call is made. Giving up a {@code start(..)} does not give up starting the wrapped model. A thread of its own
+ * tries that until it succeeds, or until a later {@code stop()} or {@code shutdown()}. A {@code start(..)} or
+ * {@code stop()} takes every subscription this model knows in the same step that makes it visible to the other calls,
+ * so a subscription that a {@code subscribe(..)} records meanwhile is either taken or reads it at its next step. A
+ * {@code start(..)} or {@code stop()} that begins while another one runs waits for it to return, in the order they
+ * began, with one exception described below.
  * <br>
  * <br>
  * Once {@link #shutdown()} has begun, no call starts the wrapped model or runs a subscription there, and a lease
@@ -234,6 +237,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // How often a thread waiting for a subscription's lock checks whether this model is shut down
     private static final Duration SHUTDOWN_CHECK_INTERVAL = Duration.ofMillis(100);
     private static final Duration RECONCILE_MAX_BACKOFF = Duration.ofSeconds(2);
+    private static final String WRAPPED_MODEL_START_THREAD = "occurrent-competing-consumer-wrapped-model-start";
     // A consumer that keeps failing warns on every fifth try, which is every ten seconds once the backoff has reached two
     private static final int RECONCILE_TRIES_BETWEEN_WARNINGS = 5;
     // A try makes at most two calls when nothing changes while it runs, and four when a stop() comes in between. More
@@ -302,6 +306,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     };
     // The start(..) or stop() being applied to every subscription, or 0, read and written under the monitor only
     private long lifecycleBeingApplied;
+    // The latest start(..) whose start of the wrapped model a pause, resume or cancel gave up along with the rest of
+    // what it handed over for one subscription, or null, read and written under the monitor only. While it is set a
+    // thread of its own starts the wrapped model for it.
+    private @Nullable Lifecycle wrappedModelStartGivenUp;
 
     public CompetingConsumerSubscriptionModel(SubscriptionModel subscriptionModel, CompetingConsumerStrategy strategy) {
         requireNonNull(subscriptionModel, "Subscription model cannot be null");
@@ -1233,7 +1241,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * Once it has the lock, each {@code start(..)} and {@code stop()} handed over for the subscription is applied first,
      * see {@link #applyWhatWasHandedOverFirst(String, SubscriptionLock)}. One of those that fails, and began before this
      * call took the lock, is given up instead of tried again, and the ones after it are still applied in turn. This call
-     * is then made all the same, so it throws only what fails in this call.
+     * is then made all the same, so what it throws is what fails in this call, or the first {@link Error} that one given
+     * up threw, which is thrown once this call has been made. Giving up a {@code start(..)} gives up only what it does
+     * for this subscription. Its start of the wrapped model is left to a thread of its own, see
+     * {@link #keepStartingTheWrappedModel(Lifecycle)}.
      */
     private <T> T actOn(String subscriptionId, Supplier<T> call) {
         SubscriptionLock lock = useSubscriptionLock(subscriptionId);
@@ -1243,6 +1254,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         synchronized (this) {
             begunBefore = lifecycleCalls;
         }
+        @Nullable Error givenUpError = null;
         try {
             while (true) {
                 try {
@@ -1252,9 +1264,25 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     if (!giveUpTheFirstHandedOver(subscriptionId, begunBefore, e)) {
                         break;
                     }
+                    if (e instanceof Error error && givenUpError == null) {
+                        givenUpError = error;
+                    }
                 }
             }
-            return call.get();
+            T made;
+            try {
+                made = call.get();
+            } catch (Throwable e) {
+                if (givenUpError != null) {
+                    givenUpError.addSuppressed(e);
+                    throw givenUpError;
+                }
+                throw e;
+            }
+            if (givenUpError != null) {
+                throw givenUpError;
+            }
+            return made;
         } finally {
             lock.unlock();
         }
@@ -1262,9 +1290,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     // Called under the subscription's lock once the oldest start(..) or stop() handed over for it has failed. Gives it
     // up when it began before begunBefore, so the ones after it are still applied in turn. One that began later is left
-    // to the thread it was handed to. Answers whether it was given up.
+    // to the thread it was handed to. Answers whether it was given up. A start(..) given up for a subscription that does
+    // not compete still has the wrapped model started, since that start is one for the whole model.
     private boolean giveUpTheFirstHandedOver(String subscriptionId, long begunBefore, Throwable failure) {
         @Nullable Lifecycle givenUp;
+        boolean startsTheWrappedModel;
         synchronized (this) {
             @Nullable HandedOver handed = handedOver.get(subscriptionId);
             if (handed == null) {
@@ -1275,10 +1305,77 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 return false;
             }
             handed.applied(givenUp);
+            startsTheWrappedModel = givenUp.started() && nonCompetingConsumersSubscriptions.contains(subscriptionId);
         }
-        log.warn("A start(..) or stop() handed over for subscription {} failed, and a pause, resume or cancel of that subscription came after it, so it is not tried again ({})",
+        log.warn("A start(..) or stop() handed over for subscription {} failed, and a pause, resume or cancel of that subscription came after it, so it is not tried again for that subscription ({})",
                 subscriptionId, givenUp, failure);
+        if (startsTheWrappedModel) {
+            keepStartingTheWrappedModel(givenUp);
+        }
         return true;
+    }
+
+    /**
+     * Starts the wrapped model for a {@code start(..)} that a pause, resume or cancel gave up for one subscription, on a
+     * thread of its own, with the backoff a try uses, until the wrapped model runs, or a {@code stop()} that began after
+     * that {@code start(..)} or {@code shutdown()} refuses it. One thread does it for every such {@code start(..)}, the
+     * latest one given up.
+     */
+    private void keepStartingTheWrappedModel(Lifecycle start) {
+        synchronized (this) {
+            @Nullable Lifecycle alreadyStarting = wrappedModelStartGivenUp;
+            if (shutDown || (alreadyStarting != null && alreadyStarting.id() >= start.id())) {
+                return;
+            }
+            wrappedModelStartGivenUp = start;
+            if (alreadyStarting != null) {
+                return;
+            }
+        }
+        Thread.ofPlatform().daemon().name(WRAPPED_MODEL_START_THREAD).start(() -> {
+            Duration backoff = RECONCILE_FIRST_BACKOFF;
+            int failures = 0;
+            while (true) {
+                Lifecycle starting;
+                synchronized (this) {
+                    starting = requireNonNull(wrappedModelStartGivenUp);
+                }
+                boolean done = true;
+                lifecycleAppliedOnThisThread.set(starting);
+                try {
+                    runInTheWrappedModel(null, true, () -> null);
+                } catch (StoppedMeanwhile | ShutDownMeanwhile e) {
+                    logDebug("Not starting the wrapped model for a start(..) given up for a subscription, since this model was stopped or shut down meanwhile");
+                } catch (Throwable e) {
+                    done = false;
+                    if (failures++ % RECONCILE_TRIES_BETWEEN_WARNINGS == 0) {
+                        log.warn("Could not start the wrapped subscription model for a start(..) given up for a subscription, so it is tried again", e);
+                    }
+                } finally {
+                    lifecycleAppliedOnThisThread.remove();
+                }
+                synchronized (this) {
+                    if (shutDown || (done && wrappedModelStartGivenUp == starting)) {
+                        wrappedModelStartGivenUp = null;
+                        return;
+                    }
+                }
+                if (done) {
+                    // A later start(..) was given up meanwhile, and is applied at once
+                    continue;
+                }
+                try {
+                    Thread.sleep(backoff);
+                } catch (InterruptedException e) {
+                    synchronized (this) {
+                        wrappedModelStartGivenUp = null;
+                    }
+                    return;
+                }
+                Duration doubled = backoff.multipliedBy(2);
+                backoff = doubled.compareTo(RECONCILE_MAX_BACKOFF) > 0 ? RECONCILE_MAX_BACKOFF : doubled;
+            }
+        });
     }
 
     private SubscriptionLock lockSubscription(String subscriptionId) {
@@ -3030,14 +3127,22 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         return acquired;
     }
 
-    // One attempt, as shutdown() makes for every other lease. One not given up expires after the lease time.
+    // One attempt, as shutdown() makes for every other lease. One not given up expires after the lease time. An Error
+    // is thrown once the registration is forgotten.
     private void giveUpALeaseTakenAfterShutdownBegan(SubscriptionIdAndSubscriberId key) {
+        @Nullable Error error = null;
         try {
             competingConsumerStrategy.unregisterCompetingConsumer(key.subscriptionId(), key.subscriberId());
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
             log.warn("Could not give up the lease of CompetingConsumer registered while this model was shut down, so it expires after the lease time (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId(), e);
+            if (e instanceof Error thrown) {
+                error = thrown;
+            }
         } finally {
             registrations.remove(key);
+        }
+        if (error != null) {
+            throw error;
         }
     }
 

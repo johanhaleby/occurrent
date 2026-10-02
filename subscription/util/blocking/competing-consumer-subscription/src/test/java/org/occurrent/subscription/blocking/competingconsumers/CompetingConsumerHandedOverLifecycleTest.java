@@ -404,6 +404,113 @@ class CompetingConsumerHandedOverLifecycleTest {
         }
     }
 
+    // A cancel that gives up a start(true) handed over for a subscription that does not compete, while starting the
+    // wrapped model fails, gives up only what that start(true) does for the subscription, and the wrapped model is
+    // still started
+    @Test
+    void a_cancel_that_gives_up_a_start_handed_over_while_the_wrapped_model_fails_to_start_has_it_started_all_the_same() {
+        Fixture fixture = new Fixture(Initially.STOPPED, true);
+        try {
+            // Fails once on the thread n1 is handed to and once when the cancel tries the start(true) first
+            Gate backingOff = fixture.handOverAStartOfN1WhileTheWrappedModelFailsToStart(2);
+
+            Throwable thrownByCancel = catchThrowable(() -> fixture.model.cancelSubscription("n1"));
+            backingOff.open();
+
+            assertThat(thrownByCancel).as("what the cancel of n1 threw").isNull();
+            await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(fixture.wrapped.isRunning()).as("whether the wrapped model runs").isTrue());
+            assertThat(fixture.wrapped.holdsPaused("n1") || fixture.wrapped.isRunning("n1")).as("whether the wrapped model still holds n1").isFalse();
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // A pause that gives up a start(true) handed over for a subscription that does not compete, while starting the
+    // wrapped model fails, pauses the subscription, and the wrapped model is still started
+    @Test
+    void a_pause_that_gives_up_a_start_handed_over_while_the_wrapped_model_fails_to_start_has_it_started_all_the_same() {
+        Fixture fixture = new Fixture(Initially.STOPPED, true);
+        try {
+            Gate backingOff = fixture.handOverAStartOfN1WhileTheWrappedModelFailsToStart(2);
+
+            Throwable thrownByPause = catchThrowable(() -> fixture.model.pauseSubscription("n1"));
+            backingOff.open();
+
+            assertThat(thrownByPause).as("what the pause of n1 threw").isNull();
+            await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(fixture.wrapped.isRunning()).as("whether the wrapped model runs").isTrue());
+            assertThat(fixture.wrapped.holdsPaused("n1")).as("n1 is paused in the wrapped model").isTrue();
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // A resume that gives up a start(true) handed over for a subscription that does not compete, while starting the
+    // wrapped model fails, has the subscription run once the wrapped model is started
+    @Test
+    void a_resume_that_gives_up_a_start_handed_over_while_the_wrapped_model_fails_to_start_has_the_subscription_run() {
+        Fixture fixture = new Fixture(Initially.STOPPED, true);
+        try {
+            Gate backingOff = fixture.handOverAStartOfN1WhileTheWrappedModelFailsToStart(2);
+
+            Throwable thrownByResume = catchThrowable(() -> fixture.model.resumeSubscription("n1"));
+            backingOff.open();
+
+            assertThat(thrownByResume).as("what the resume of n1 threw").isNull();
+            await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(fixture.wrapped.isRunning("n1")).as("n1 runs in the wrapped model").isTrue());
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // The wrapped model, which a start(true) given up for a subscription that does not compete still has started, stays
+    // stopped once stop() is called, and nothing is left trying to start it
+    @Test
+    void a_stop_ends_the_start_of_the_wrapped_model_for_a_start_given_up() {
+        Fixture fixture = new Fixture(Initially.STOPPED, true);
+        try {
+            Gate backingOff = fixture.handOverAStartOfN1WhileTheWrappedModelFailsToStart(Integer.MAX_VALUE);
+            fixture.model.cancelSubscription("n1");
+            backingOff.open();
+
+            fixture.model.stop();
+            fixture.wrapped.failuresFromStarting.set(0);
+
+            await().atMost(EVENTUALLY).pollInterval(5, MILLISECONDS).until(() -> noThreadNamed("occurrent-competing-consumer-wrapped-model-start"));
+            assertThat(fixture.wrapped.isRunning()).as("whether the wrapped model runs after stop()").isFalse();
+        } finally {
+            fixture.model.shutdown();
+        }
+    }
+
+    // An Error from a stop() handed over for s1, which a cancel of s1 gives up, is thrown once the cancel is made
+    @Test
+    void an_error_from_a_stop_handed_over_that_a_cancel_gives_up_is_thrown_once_the_cancel_is_made() {
+        Fixture fixture = new Fixture(Initially.RUNNING);
+        Gate tryBeforeItsBackoff = new Gate();
+        Gate backingOff = fixture.handedOverThreadAboutToBackOff();
+        try {
+            // Holds the try that the failure on the thread s1 is handed to starts, so the stop() is left for the cancel
+            fixture.model.runBeforeATryWaitsForItsBackoff(tryBeforeItsBackoff::pass);
+            Gate grantHoldingTheLock = fixture.grantHoldingTheLockOfS1();
+            fixture.wrapped.errorsFromIsRunningOfS1OnALifecycleThread.set(1);
+            fixture.model.stop();
+            grantHoldingTheLock.open();
+            assertThat(backingOff.awaitEntered()).as("the thread s1 was handed to failed and let go of the lock").isTrue();
+            assertThat(tryBeforeItsBackoff.awaitEntered()).as("the try of s1 waits before its backoff").isTrue();
+            fixture.strategy.errorsFromUnregisteringS1.set(1);
+
+            Throwable thrownByCancel = catchThrowable(() -> fixture.model.cancelSubscription("s1"));
+
+            assertThat(thrownByCancel).as("what the cancel of s1 threw").isInstanceOf(AssertionError.class).hasMessageStartingWith("Unregistering s1 failed");
+            assertThat(fixture.wrapped.holdsPaused("s1") || fixture.wrapped.isRunning("s1")).as("whether the wrapped model still holds s1").isFalse();
+            assertThat(fixture.strategy.candidates).as("the subscriptions this node competes for").doesNotContain("s1");
+        } finally {
+            tryBeforeItsBackoff.open();
+            backingOff.open();
+            fixture.model.shutdown();
+        }
+    }
+
     // A resume that took the lock of s1 before stop() began runs first, and stop() pauses s1 after it
     @Test
     void a_resume_under_way_when_stop_begins_ends_paused_by_the_user() {
@@ -640,10 +747,14 @@ class CompetingConsumerHandedOverLifecycleTest {
     }
 
     private static boolean noThreadLeftFor(String subscriptionId) {
+        return noThreadNamed("occurrent-competing-consumer-lifecycle-" + subscriptionId) && noThreadNamed("occurrent-competing-consumer-reconcile-" + subscriptionId);
+    }
+
+    private static boolean noThreadNamed(String name) {
         return Thread.getAllStackTraces().keySet().stream()
                 .filter(Thread::isAlive)
                 .map(Thread::getName)
-                .noneMatch(name -> name.equals("occurrent-competing-consumer-lifecycle-" + subscriptionId) || name.equals("occurrent-competing-consumer-reconcile-" + subscriptionId));
+                .noneMatch(name::equals);
     }
 
     private enum Initially {
@@ -762,13 +873,23 @@ class CompetingConsumerHandedOverLifecycleTest {
         // pause of n1 holds its lock. The pause then fails, since n1 is paused already. Resuming n1 fails as often as
         // given, and the thread n1 is handed to waits at the returned gate after its first failure, with the lock free.
         private Gate handOverAStartOfN1ThatFails(int failures) {
+            return handOverAStartOfN1(() -> wrapped.failuresFromResumingN1.set(failures));
+        }
+
+        // As handOverAStartOfN1ThatFails, but starting the wrapped model fails as often as given instead. Only n1 starts
+        // it, when another node holds the lease of s1.
+        private Gate handOverAStartOfN1WhileTheWrappedModelFailsToStart(int failures) {
+            return handOverAStartOfN1(() -> wrapped.failuresFromStarting.set(failures));
+        }
+
+        private Gate handOverAStartOfN1(Runnable failing) {
             subscribeN1();
             Gate backingOff = handedOverThreadAboutToBackOff();
             Gate pauseHoldingTheLock = new Gate();
             wrapped.nextIsPausedOfN1OnTheTestThread.set(pauseHoldingTheLock);
             CompletableFuture<Void> pause = runOnTheTestThread(() -> model.pauseSubscription("n1"));
             assertThat(pauseHoldingTheLock.awaitEntered()).as("the pause of n1 holds its lock").isTrue();
-            wrapped.failuresFromResumingN1.set(failures);
+            failing.run();
             model.start(true);
             pauseHoldingTheLock.open();
             assertThat(pause).as("the pause of n1").failsWithin(EVENTUALLY);
@@ -877,6 +998,7 @@ class CompetingConsumerHandedOverLifecycleTest {
         private final AtomicReference<@Nullable Gate> nextHasLockForS1 = new AtomicReference<>();
         private final AtomicBoolean leaseHeldAfterTheGate = new AtomicBoolean();
         private final AtomicInteger errorsFromRegisteringS1OnALifecycleThread = new AtomicInteger();
+        private final AtomicInteger errorsFromUnregisteringS1 = new AtomicInteger();
         private final AtomicBoolean anotherNodeHoldsS1 = new AtomicBoolean();
         private final AtomicReference<@Nullable Gate> nextRegisterOfS1OnTheTestThread = new AtomicReference<>();
         private final Set<String> candidates = ConcurrentHashMap.newKeySet();
@@ -903,6 +1025,9 @@ class CompetingConsumerHandedOverLifecycleTest {
 
         @Override
         public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
+            if (subscriptionId.equals("s1") && errorsFromUnregisteringS1.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
+                throw new AssertionError("Unregistering s1 failed on " + Thread.currentThread().getName());
+            }
             candidates.remove(subscriptionId);
             holders.remove(subscriptionId);
         }
@@ -954,6 +1079,7 @@ class CompetingConsumerHandedOverLifecycleTest {
         private final AtomicReference<@Nullable Gate> nextPauseOfS1OnATry = new AtomicReference<>();
         private final AtomicInteger errorsFromIsRunningOfS1OnALifecycleThread = new AtomicInteger();
         private final AtomicInteger failuresFromResumingN1 = new AtomicInteger();
+        private final AtomicInteger failuresFromStarting = new AtomicInteger();
         private final Counter resumeFailuresOfN1 = new Counter();
         private final List<String> callsAfterShutdown = new CopyOnWriteArrayList<>();
         private final Set<String> runningIds = new HashSet<>();
@@ -1013,6 +1139,9 @@ class CompetingConsumerHandedOverLifecycleTest {
         @Override
         public synchronized void start(boolean resumeSubscriptionsAutomatically) {
             calledAfterShutdown("start");
+            if (failuresFromStarting.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
+                throw new IllegalStateException("Starting the wrapped model failed");
+            }
             running = true;
             if (resumeSubscriptionsAutomatically) {
                 runningIds.addAll(pausedIds);

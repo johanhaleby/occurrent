@@ -275,10 +275,14 @@ call, and any other subscription by the handed over thread, with the same backof
 shut down. A later `start(..)` or `stop()` that fails to apply such a call lets that thread try it again, together with
 its own call, and never counts it as applied. A pause, resume or cancel of the subscription that fails to apply such a
 call gives it up instead, when the call began before the pause, resume or cancel took the lock, so the handed over
-thread does not try it again. It then applies the calls after it and makes its own call, so it throws only what fails
-in its own call. In 0.33.0 a cancel of such a subscription worked, and throwing instead would refuse every pause,
-resume and cancel of it until `shutdown()`. A handed over thread or a try that is still waiting for the lock when
-`shutdown()` runs ends within 100 milliseconds.
+thread does not try it again. It then applies the calls after it and makes its own call, so it throws what fails in
+its own call, unless the call it gave up threw an `Error`. It throws that `Error` once its own call is made, as the
+MongoDB lease strategies throw an `Error` from one listener once they have told the others. In 0.33.0 a cancel of such a subscription worked, and throwing instead would refuse
+every pause, resume and cancel of it for as long as applying the call went on failing. Giving up a `start(..)` gives
+up only what it does for that subscription. Starting the wrapped model is a step for the whole model, which no single
+subscription can give up, so a thread of its own goes on trying it, with the same backoff, until it succeeds or a
+`stop()` that began after that `start(..)`, or `shutdown()`, comes. A handed over thread or a try that is still
+waiting for the lock when `shutdown()` runs ends within 100 milliseconds.
 
 A `start(..)` or `stop()` that begins while another one runs waits for it to return, and they run in the order they
 began. The one exception is a `start(..)` waiting behind a `stop()` that has calls already in the wrapped model to
