@@ -1508,11 +1508,16 @@ start position resolves at the call, your `StartAt.dynamic(..)` function include
 subscription's checkpoint, from the subscription-model default, through `ResumeStartPositions.replayThenResume(..)`, or
 through the Spring Boot starter's `BEGINNING` start with the default `ResumeBehavior`. A first checkpoint that fails or
 is refused, for instance because another node stored one for the id meanwhile, ends the subscription as it does with
-no delete running. When a subscribe fails once it has taken the delete over, as one that Reactor refuses on a thread
-that may not block does, the delete still removes the checkpoint, as in 0.33.0, unless another subscription of the id is
-starting or registered by then. When that subscribe fails before the delete has ended, the cancel's `Mono` ends only
-once the delete that goes ahead has ended. To start the id clean, wait for the `Mono` before you subscribe it again, as
-step 2 describes.
+no delete running. On a model that wraps one that manages named subscriptions, that failure can reach
+`waitUntilStarted()` instead of the subscribe, as described below.
+
+When a subscribe fails once it has taken the delete over, as one that Reactor refuses on a thread that may not block
+does, the delete still removes the checkpoint, as in 0.33.0, unless another subscription of the id is starting or
+registered by then. The same goes for a subscription that took the delete over and ends before it started without
+writing a checkpoint, for instance because its start position cannot be read. A subscription that a pause ended before
+it started keeps the delete taken over until you resume it. When that subscribe fails, or that subscription ends,
+before the delete has ended, the cancel's `Mono` ends only once the delete that goes ahead has ended. To start the id
+clean, wait for the `Mono` before you subscribe it again, as step 2 describes.
 
 The subscribe reads the store at the call and waits neither for the delete nor for the checkpoint writes the delete runs
 after. When the store holds nothing, the subscription starts from the checkpoint that the newest of those writes is
@@ -1523,10 +1528,13 @@ writes have ended.
 
 When they have not ended at the call, or on a storage of your own the write back described below has not, a subscription
 handed to a wrapped model that manages named subscriptions is handed its checkpoint at the call, and an event that model
-delivers before the checkpoint is recorded waits for it. When the checkpoint cannot be recorded,
+delivers before the checkpoint is recorded waits for it. When the store records an earlier checkpoint for the id than
+the one read, as `resolveFirstCheckpointRace(..)` can answer, `ReactorDurableSubscriptionModel` cancels the
+subscription in the wrapped model and subscribes it there again from that earlier checkpoint, so your action sees the
+events between the two. When the checkpoint cannot be recorded, or that second subscribe fails,
 `ReactorDurableSubscriptionModel` cancels the subscription in the wrapped model and its `waitUntilStarted()` fails with
-that error, since the subscribe has returned by then. Wait for `waitUntilStarted()` if your code needs to know that such
-a subscription started.
+that error, since the subscribe has returned by then. With no delete running that failure is thrown from the subscribe,
+as in 0.33.0. Wait for `waitUntilStarted()` if your code needs to know that such a subscription started.
 
 The reactor `CheckpointStorage` gains two methods with defaults, `delete(subscriptionId, condition)` and
 `evaluatesDeleteConditions()`. The in-memory and MongoDB reactor storages implement both. On them each try of the
@@ -1539,7 +1547,10 @@ On those storages a subscription from the subscription-model default writes the 
 back when it read nothing, at that version before it starts. One registered while the model was stopped writes it
 before `resolveFirstCheckpointRace(..)` compares it with where the feed was at registration. A refused write makes the
 subscription read the store again, and a write that fails fails the subscription to start. A write back that fails is
-logged as a warning and fails no subscription.
+logged as a warning and fails no subscription. A subscription handed to a wrapped model that manages named
+subscriptions writes that checkpoint after the subscribe has returned, and an event the wrapped model delivers before
+then waits for it. When that write is refused, the subscription keeps the checkpoint it was handed, so your action can
+see events again that the stored checkpoint already covers.
 
 A `CheckpointStorage` of your own keeps compiling and keeps working, and on it the write back of a subscribe that takes
 the delete over waits for the try under way to end. The subscribe doesn't wait for it, and when the try has already

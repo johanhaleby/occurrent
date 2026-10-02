@@ -75,6 +75,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
     private static final String SUBSCRIPTION_ID = "sub";
     private static final String SAVE_FAILED = "The storage cannot save right now";
+    private static final String READ_FAILED = "The storage cannot read right now";
 
     /**
      * The subscription from the model default starts where it would with no delete running, and the subscribe returns
@@ -296,6 +297,321 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         }
     }
 
+    /**
+     * A subscribe from the model default takes over a delete whose try is held, and its start position then cannot be
+     * read, so it never starts. No subscription needs the checkpoint any more, so the delete goes ahead and removes it,
+     * and the cancel completes once it has. A later subscribe from the model default starts from where the feed is.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_subscribe_that_takes_over_a_delete_and_cannot_read_its_start_position_lets_the_delete_remove_the_checkpoint(boolean conditionalDeletes) throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(conditionalDeletes);
+        Feed feed = new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            Mono<Void> cancelled = cancelWithCheckpointStored(model, storage, feed, release);
+            storage.readsFail = true;
+            Subscription failed = subscribeOn(caller, model, new CopyOnWriteArrayList<>());
+            Throwable notStarted = catchThrowable(() -> failed.waitUntilStarted(TIMEOUT).block());
+            storage.readsFail = false;
+
+            // When
+            release.countDown();
+            cancelled.block(TIMEOUT);
+            String storedOnceTheCancelEnded = storage.stored();
+            Later later = subscribeAgain(model, feed, caller);
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(notStarted).as("why the subscribe that took the delete over did not start").hasStackTraceContaining(READ_FAILED);
+                softly.assertThat(storedOnceTheCancelEnded).as("checkpoint stored once the cancel completed").isEqualTo("-");
+                softly.assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
+                        .containsExactly(later.writtenAfter());
+            });
+        } finally {
+            release.countDown();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe takes over a delete whose try is held, and a pause comes before it started. Its resume then cannot
+     * read the start position, so the subscription never starts and is dropped. The delete goes ahead and removes the
+     * checkpoint, and a later subscribe from the model default starts from where the feed is.
+     */
+    @Test
+    void a_resume_that_cannot_read_its_start_position_after_a_pause_before_the_subscription_started_lets_the_delete_remove_the_checkpoint() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        Feed feed = new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            Mono<Void> cancelled = cancelWithCheckpointStored(model, storage, feed, release);
+            // Waits for the write back after the held try before it opens the feed
+            Subscription takingOver = subscribeOn(caller, model, new CopyOnWriteArrayList<>());
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            Throwable pausedBeforeItStarted = catchThrowable(() -> takingOver.waitUntilStarted(TIMEOUT).block());
+            storage.readsFail = true;
+            Subscription resumed = CompletableFuture.supplyAsync(() -> model.resumeSubscription(SUBSCRIPTION_ID), caller).get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            Throwable notStarted = catchThrowable(() -> resumed.waitUntilStarted(TIMEOUT).block());
+            storage.readsFail = false;
+
+            // When
+            release.countDown();
+            cancelled.block(TIMEOUT);
+            String storedOnceTheCancelEnded = storage.stored();
+            Later later = subscribeAgain(model, feed, caller);
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(pausedBeforeItStarted).as("how the subscribe that took the delete over ended").isInstanceOf(java.util.concurrent.CancellationException.class);
+                softly.assertThat(notStarted).as("why the resume did not start").hasStackTraceContaining(READ_FAILED);
+                softly.assertThat(storedOnceTheCancelEnded).as("checkpoint stored once the cancel completed").isEqualTo("-");
+                softly.assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
+                        .containsExactly(later.writtenAfter());
+            });
+        } finally {
+            release.countDown();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe takes over a delete whose try is held and a second cancel ends it before it started. A subscribe
+     * after that takes over both deletes and cannot read its start position, so no subscription needs the checkpoint.
+     * Both deletes go ahead and remove it. That holds on the path that drives the feed, and on the one that hands the
+     * subscription to a wrapped model, where the second cancel ends the first subscribe while it reads the store, or
+     * once it is registered and waits for the delete to record its start position.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"drives-the-feed", "reads-the-store", "handed-over"})
+    void a_subscribe_that_cannot_read_its_start_position_after_a_cancel_ended_one_that_took_the_delete_over_lets_the_delete_remove_the_checkpoint(String endedWhile) throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        boolean readsTheStore = endedWhile.equals("reads-the-store");
+        boolean handedOver = endedWhile.equals("handed-over");
+        Feed feed = readsTheStore || handedOver ? new NamedFeed() : new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        try {
+            cancelWithCheckpointStored(model, storage, feed, release);
+            if (readsTheStore) {
+                storage.readGate = releaseRead;
+            }
+            CompletableFuture<Subscription> takingOver = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())), caller);
+            if (readsTheStore) {
+                assertThat(storage.readEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("read of the store held").isTrue();
+            } else {
+                takingOver.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            }
+            Mono<Void> cancelledAgain = model.cancelSubscription(SUBSCRIPTION_ID);
+            // One handed over waits for the delete it took over before it tells how it ended
+            Throwable cancelledBeforeItStarted = handedOver
+                    ? new java.util.concurrent.CancellationException()
+                    : catchThrowable(() -> takingOver.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted(TIMEOUT).block());
+            releaseRead.countDown();
+            storage.readsFail = true;
+            Throwable notStarted = catchThrowable(() -> subscribeOn(caller, model, new CopyOnWriteArrayList<>()).waitUntilStarted(TIMEOUT).block());
+            storage.readsFail = false;
+
+            // When
+            release.countDown();
+            cancelledAgain.block(TIMEOUT);
+            String storedOnceTheCancelEnded = storage.stored();
+            Later later = subscribeAgain(model, feed, caller);
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(cancelledBeforeItStarted).as("how the subscribe that took the delete over ended").isInstanceOf(java.util.concurrent.CancellationException.class);
+                softly.assertThat(notStarted).as("why the subscribe after the second cancel did not start").hasStackTraceContaining(READ_FAILED);
+                softly.assertThat(storedOnceTheCancelEnded).as("checkpoint stored once the second cancel completed").isEqualTo("-");
+                softly.assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
+                        .containsExactly(later.writtenAfter());
+            });
+        } finally {
+            release.countDown();
+            releaseRead.countDown();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe handed to a wrapped model takes over a delete whose try is held, and is handed where the wrapped model
+     * is. Another node stores an earlier position right before the subscribe records its own, and the storage settles the
+     * race by position in favour of that one. The subscription is then subscribed again in the wrapped model from the
+     * earlier position, so it delivers the event between the two, and every event after it once.
+     */
+    @Test
+    void a_subscribe_handed_to_a_wrapped_model_whose_first_position_loses_to_an_earlier_one_starts_again_from_that_one() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        NamedFeed feed = new NamedFeed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            Held heldCall = cancelWhileHeld(model, storage, feed, "nothing-stored", release);
+            assertThat(heldCall.entered().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("storage call held").isTrue();
+            long storedElsewhere = feed.write();
+            long handedOver = feed.write();
+            storage.storedElsewhereBeforeIfAbsent = new StringBasedCheckpoint(String.valueOf(storedElsewhere));
+            storage.resolvesRaceByPosition = true;
+
+            // When
+            Subscription subscription = subscribeOn(caller, model, delivered);
+            List<Long> writtenWhileHeld = List.of(feed.write(), feed.write());
+            release.countDown();
+            long writtenAfter = feed.write();
+
+            // Then
+            Throwable thrown = catchThrowable(() -> subscription.waitUntilStarted(TIMEOUT).block());
+            untilDelivered(delivered, writtenAfter);
+            String stored = untilStored(storage, writtenAfter);
+            assertThat(writtenWhileHeld).containsExactly(handedOver + 1, handedOver + 2);
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(thrown).as("how waiting for the start of the subscription ended").isNull();
+                softly.assertThat(delivered).as("events delivered to the subscription").containsExactlyElementsOf(positionsAfter(storedElsewhere, writtenAfter));
+                softly.assertThat(stored).as("checkpoint stored").isEqualTo(String.valueOf(writtenAfter));
+            });
+        } finally {
+            release.countDown();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe handed to a wrapped model takes over a delete whose try is held. Another node stores a position right
+     * before the subscribe records its own, and the storage cannot order the two, so recording it is refused and the
+     * subscription never starts. The refused write wrote nothing, so the delete goes ahead and removes the position the
+     * other node stored, and a later subscribe from the model default starts from where the feed is.
+     */
+    @Test
+    void a_subscribe_handed_to_a_wrapped_model_whose_first_position_is_refused_lets_the_delete_remove_the_checkpoint() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        NamedFeed feed = new NamedFeed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            Held heldCall = cancelWhileHeld(model, storage, feed, "nothing-stored", release);
+            assertThat(heldCall.entered().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("storage call held").isTrue();
+            // Past every event this test writes
+            storage.storedElsewhereBeforeIfAbsent = new StringBasedCheckpoint("1000");
+
+            // When
+            Subscription refused = subscribeOn(caller, model, new CopyOnWriteArrayList<>());
+            release.countDown();
+            Throwable notStarted = catchThrowable(() -> refused.waitUntilStarted(TIMEOUT).block());
+            String stored = untilNothingStored(storage);
+            Later later = subscribeAgain(model, feed, caller);
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(notStarted).as("why the subscribe that took the delete over did not start").hasStackTraceContaining("StartPositionAlreadyPinnedException");
+                softly.assertThat(stored).as("checkpoint stored once the subscribe was refused").isEqualTo("-");
+                softly.assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
+                        .containsExactly(later.writtenAfter());
+            });
+        } finally {
+            release.countDown();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe handed to a wrapped model takes over a delete that writes the checkpoint back at once, and returns
+     * while the write of its start position is held. It is handed the checkpoint it read and delivers what is written
+     * after it.
+     */
+    @Test
+    void a_subscribe_handed_to_a_wrapped_model_that_takes_over_a_delete_written_back_at_once_returns_while_its_start_position_is_written() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(true);
+        NamedFeed feed = new NamedFeed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch releaseWrites = new CountDownLatch(1);
+        try {
+            Held heldCall = cancelWhileHeld(model, storage, feed, "stored", release);
+            assertThat(heldCall.entered().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("storage call held").isTrue();
+            storage.notOlderThanGate = releaseWrites;
+
+            // When
+            CompletableFuture<Subscription> subscribed = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(delivered)), caller);
+            Throwable returnedWhileHeld = catchThrowable(() -> subscribed.get(2, TimeUnit.SECONDS));
+            long writtenWhileHeld = feed.write();
+            storage.notOlderThanGate = null;
+            releaseWrites.countDown();
+            release.countDown();
+            long writtenAfter = feed.write();
+
+            // Then
+            Throwable thrown = catchThrowable(() -> subscribed.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted(TIMEOUT).block());
+            untilDelivered(delivered, writtenAfter);
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(returnedWhileHeld).as("the subscribe returning while the write of its start position is held").isNull();
+                softly.assertThat(thrown).as("how waiting for the start of the subscription ended").isNull();
+                softly.assertThat(delivered).as("events delivered to the subscription").containsExactlyElementsOf(positionsAfter(heldCall.startsAfter(), writtenAfter));
+            });
+            assertThat(writtenWhileHeld).isEqualTo(heldCall.startsAfter() + 1);
+        } finally {
+            release.countDown();
+            releaseWrites.countDown();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    // What a subscribe of the id from the model default delivered, of an event written before it and one written after
+    private record Later(List<Long> delivered, long writtenBefore, long writtenAfter) {
+    }
+
+    private static Later subscribeAgain(ReactorDurableSubscriptionModel model, Feed feed, ExecutorService caller) throws Exception {
+        long writtenBefore = feed.write();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        subscribeOn(caller, model, delivered).waitUntilStarted(TIMEOUT).block();
+        long writtenAfter = feed.write();
+        untilDelivered(delivered, writtenAfter);
+        return new Later(delivered, writtenBefore, writtenAfter);
+    }
+
+    private static Subscription subscribeOn(ExecutorService caller, ReactorDurableSubscriptionModel model, List<Long> delivered) throws Exception {
+        return CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(delivered)), caller)
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    // Subscribes the id from the model default, waits until the checkpoint of three events is stored, then cancels it
+    // while the try of the delete is held until release opens. Answers the cancel.
+    private static Mono<Void> cancelWithCheckpointStored(ReactorDurableSubscriptionModel model, GatedStorage storage, Feed feed, CountDownLatch release) throws InterruptedException {
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())).waitUntilStarted(TIMEOUT).block();
+        long written = 0;
+        for (int i = 0; i < 3; i++) {
+            written = feed.write();
+        }
+        String lastWritten = String.valueOf(written);
+        await().atMost(TIMEOUT).until(() -> lastWritten.equals(storage.stored()));
+        storage.deleteGate = release;
+        Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
+        assertThat(storage.deleteEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete held").isTrue();
+        return cancelled;
+    }
+
     // The storage call a cancel left held, and the position a subscribe from the model default starts after then, or -1
     // for where the feed is at that subscribe
     private record Held(CountDownLatch entered, long startsAfter) {
@@ -354,6 +670,27 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         }
     }
 
+    // Waits a while for the checkpoint to be stored and answers what is stored either way, since the assertion that
+    // follows says what it is
+    private static String untilStored(GatedStorage storage, long position) {
+        try {
+            await().atMost(Duration.ofSeconds(3)).until(() -> String.valueOf(position).equals(storage.stored()));
+        } catch (ConditionTimeoutException notStored) {
+            // What is stored instead is asserted next
+        }
+        return storage.stored();
+    }
+
+    // Waits a while for nothing to be stored and answers what is stored either way
+    private static String untilNothingStored(GatedStorage storage) {
+        try {
+            await().atMost(Duration.ofSeconds(3)).until(() -> "-".equals(storage.stored()));
+        } catch (ConditionTimeoutException stillStored) {
+            // What is stored instead is asserted next
+        }
+        return storage.stored();
+    }
+
     private static Subscription onParallel(java.util.concurrent.Callable<Subscription> call) {
         return Mono.fromCallable(call).subscribeOn(Schedulers.parallel()).block(TIMEOUT);
     }
@@ -362,18 +699,27 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         return cloudEvent -> Mono.fromRunnable(() -> delivered.add(Long.parseLong(cloudEvent.getId())));
     }
 
-    // Holds a delete, the next write back, or the next position write, while the latch it was given is closed
+    // Holds a delete, the next write back, the next position write, the next read or every conditional write at a
+    // version, while the latch it was given is closed. It can also fail every read, store a checkpoint of another node
+    // right before the next write on the condition that nothing is stored, and settle a first-position race by
+    // position.
     private static final class GatedStorage implements CheckpointStorage {
         private final InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         private final boolean conditionalDeletes;
         private final CountDownLatch deleteEntered = new CountDownLatch(1);
         private final CountDownLatch ifAbsentEntered = new CountDownLatch(1);
         private final CountDownLatch saveEntered = new CountDownLatch(1);
+        private final CountDownLatch readEntered = new CountDownLatch(1);
         private volatile @Nullable CountDownLatch deleteGate;
         private volatile @Nullable CountDownLatch ifAbsentGate;
         private volatile boolean ifAbsentFails;
         private volatile @Nullable CountDownLatch heldSave;
         private volatile boolean heldSaveFails = true;
+        private volatile @Nullable CountDownLatch readGate;
+        private volatile boolean readsFail;
+        private volatile @Nullable CountDownLatch notOlderThanGate;
+        private volatile @Nullable Checkpoint storedElsewhereBeforeIfAbsent;
+        private volatile boolean resolvesRaceByPosition;
 
         private GatedStorage(boolean conditionalDeletes) {
             this.conditionalDeletes = conditionalDeletes;
@@ -386,12 +732,43 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
 
         @Override
         public Mono<Checkpoint> read(String subscriptionId) {
-            return storage.read(subscriptionId);
+            return Mono.defer(() -> {
+                if (readsFail) {
+                    return Mono.error(new IllegalStateException(READ_FAILED));
+                }
+                @Nullable CountDownLatch gate = readGate;
+                if (gate != null) {
+                    readGate = null;
+                    readEntered.countDown();
+                    return held(gate).then(Mono.defer(() -> storage.read(subscriptionId)));
+                }
+                return storage.read(subscriptionId);
+            });
+        }
+
+        @Override
+        public Mono<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+            if (!resolvesRaceByPosition) {
+                return Mono.empty();
+            }
+            return storage.read(subscriptionId)
+                    .filter(stored -> Long.parseLong(stored.asString()) <= Long.parseLong(candidate.asString()))
+                    .switchIfEmpty(Mono.defer(() -> storage.save(subscriptionId, candidate, CheckpointWriteCondition.any())));
         }
 
         @Override
         public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
             return Mono.defer(() -> {
+                @Nullable Checkpoint elsewhere = storedElsewhereBeforeIfAbsent;
+                if (elsewhere != null && condition instanceof CheckpointWriteCondition.IfAbsent) {
+                    storedElsewhereBeforeIfAbsent = null;
+                    return storage.save(subscriptionId, elsewhere, CheckpointWriteCondition.any())
+                            .then(Mono.defer(() -> storage.save(subscriptionId, checkpoint, condition)));
+                }
+                @Nullable CountDownLatch versionGate = notOlderThanGate;
+                if (versionGate != null && condition instanceof CheckpointWriteCondition.NotOlderThan) {
+                    return held(versionGate).then(Mono.defer(() -> storage.save(subscriptionId, checkpoint, condition)));
+                }
                 @Nullable CountDownLatch saveGate = heldSave;
                 if (saveGate != null) {
                     heldSave = null;

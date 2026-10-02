@@ -1509,7 +1509,8 @@ that try. The subscription then resolves its start position at the call, a dynam
 from the subscription-model default resumes from the position of the cancelled subscription when the store still held
 it, and so do `ResumeStartPositions.replayThenResume(..)` and the Spring Boot starter's `BEGINNING` start with the
 default resume behaviour, which read the stored position themselves to choose between replaying and resuming. A first
-position that fails or is refused ends the subscription as it does with no delete running. The position goes back
+position that fails or is refused ends the subscription as it does with no delete running, except that a subscription
+handed to a wrapped model can get the failure on `waitUntilStarted()`, as described below. The position goes back
 also for a `subscribe(..)` with a `StartAt` of its own, so the store holds what it would hold had the cancel not deleted
 anything.
 
@@ -1523,6 +1524,16 @@ evaluates no condition on a delete, the write back waits for the try under way, 
 took the delete over has failed by the time that try ends, since what the try removed is then what the cancel asked
 for.
 
+A subscription that took the delete over and ends before it started, as one whose start position cannot be read does,
+counts as such a call too, unless it wrote a position by then. A subscription has started once it subscribed to the
+feed, which completes its `waitUntilStarted()`. Whatever ends it after that, it keeps the delete taken over, since it
+may have delivered events whose position the store holds. When the durable model drives the feed and runs, a subscribe
+from the subscription-model default or a dynamic `StartAt` takes the delete over twice, once at the call before it reads
+the store and once when its subscription reads where to start, and both go back together. One that a pause ended before
+it started keeps both for the resume, and the resumed subscription gives them back with its own when it ends the same
+way. A cancel of the id gives back what the subscriptions it ends took over, since its own delete removes the position
+whatever they held.
+
 The `subscribe(..)` reads the store at the call and waits neither for the delete nor for the position writes the delete
 runs after, so it starts as it would with no delete running. When the store holds nothing, the subscription starts from
 the position that the newest of those writes is writing, and with none of them from where the feed is at the call. A
@@ -1534,9 +1545,14 @@ the cancelled subscription. The subscription writes a position only once those w
 When they have not ended at the call, or on a storage of your own the write back described below has not, a subscription
 handed to a wrapped model that manages named subscriptions is still handed its position at the call. Recording that
 position waits for them, and an event the wrapped model delivers before the position is recorded waits until it is. When
-the position cannot be recorded, the durable model cancels the subscription in the wrapped model and its
-`waitUntilStarted()` fails with that error, since the `subscribe(..)` has returned by then. With no delete running, and
-with one whose writes have ended, the `subscribe(..)` fails with it.
+the store records an earlier position than the one handed over, as `resolveFirstCheckpointRace(..)` answers when
+another node recorded one first, the durable model cancels the subscription in the wrapped model and subscribes it there
+again from the earlier position, so it delivers the events between the two. It is the position the subscription would
+have started from had the race been settled before the hand-over. A later position recorded in its place only makes the
+subscription deliver events again, so it keeps the position it was handed. When the position cannot be recorded, or the
+second subscribe fails, the durable model cancels the subscription in the wrapped model and its `waitUntilStarted()`
+fails with that error, since the `subscribe(..)` has returned by then. With no delete running, and with one whose writes
+have ended, the `subscribe(..)` fails with it.
 
 How the position goes back depends on the storage. The reactor `CheckpointStorage` gains `delete(id, condition)`, which
 takes the `CheckpointWriteCondition` that `save(..)` takes and evaluates it against the same stored version, and
@@ -1551,9 +1567,11 @@ the subscription writes is then a save on that condition, where it is an uncondi
 
 A read of the store can then answer the position the try is about to delete, or nothing once the try deleted it and
 before the write back reached the store. So a subscription from the subscription-model default writes the position it
-read, or the one written back when it read nothing, on the condition of its own position writes, before it starts.
-When that write is refused, the store holds a position at a higher version, which neither the try nor the write back
-removes, and the subscription reads the store again and starts from it. When the write fails, the `subscribe(..)`
+read, or the one written back when it read nothing, on the condition of its own position writes, before it starts. When
+that write is refused, the store holds a position at a higher version, which neither the try nor the write back removes,
+and the subscription reads the store again and starts from it. A subscription handed to a wrapped model makes that write
+after the `subscribe(..)` has returned, as when the writes the delete runs after have not ended, so the call doesn't
+wait for the store. A refused write keeps it at the position it was handed. When the write fails, the `subscribe(..)`
 fails to start, as it does when its first position fails. A write back that fails is logged as a warning and fails no
 subscription. The delete of a later cancel of the id runs only once that write back has ended, so the write back cannot
 put the position back after that delete.
