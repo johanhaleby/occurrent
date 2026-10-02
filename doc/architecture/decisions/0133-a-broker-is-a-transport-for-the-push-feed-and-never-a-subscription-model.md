@@ -1510,12 +1510,18 @@ of the cancelled subscription. A subscription from the subscription-model defaul
 so do `ResumeStartPositions.replayThenResume(..)` and the Spring Boot starter's `BEGINNING` start with the default
 resume behaviour, which read the stored position themselves to choose between replaying and resuming.
 
-Every position the new subscription writes waits until the delete has ended, so the delete never removes one of them.
-An action completes only once the position written after it is stored. So until the delete ends, a subscription the
-durable model drives itself handles its first event and then waits, and a wrapped model that manages named
-subscriptions sees the action of that first event go on. A wrapped model that blocks on that action inside its own
-`subscribe(..)`, as one that replays history there could, holds that `subscribe(..)` until the delete ends, where
-0.33.0 returned.
+Every position the new subscription writes while the delete runs is queued and written once the delete has ended, so
+the delete does not remove it. Neither the `subscribe(..)` nor the delivery of an event waits for the delete, and an
+action completes without waiting for the position queued after it. Of the queued positions that each follow an event,
+only the latest is written, since each says only where the subscription has got to. A queued position that fails once
+written is logged and tried again with the same waits as a failed delete, until it is written, a later queued position
+of the subscription replaces it or the model is shut down. A pause, a stop, a cancel or a `shutdown()` of the new
+subscription drops what it has queued, since that subscription no longer runs. The queue keeps the order of the
+writes, so a position never reaches the store ahead of one queued before it.
+
+The first position of a subscription that found nothing stored is queued the same way, and the subscription starts
+from it without waiting. When that position fails or is refused once written, the model ends the subscription and logs
+the error. With no delete running, the same failure refuses the `subscribe(..)`, which here has already returned.
 
 The cancel ends every subscription of the id that it finds, and stops their position writes and no others. When the
 durable model drives the subscription itself, it finds a `subscribe(..)` as soon as that call has taken the id. When it
@@ -1543,9 +1549,9 @@ and so does one that checked for a shutdown just before the `shutdown()` came, w
 try, and `ReactorCheckpointStorage` for MongoDB does by default, up to 5 times with a backoff from 100 milliseconds, so
 such a try can still reach the store after the `shutdown()`. This change does not touch that retry. When the position
 stays stored, the caller calls `cancelSubscription(id)` again once a model runs. A subscription of the id that started
-meanwhile wrote no position of its own, since its writes wait for the delete, so after a restart it resumes from the
-stored one until that second cancel. I accept that in exchange for a subscribe that does not wait for a delete that may
-never succeed.
+meanwhile wrote no position of its own, since its writes are queued behind the delete, apart from the reconciling write
+described below, so after a restart it resumes from the stored one until that second cancel. I accept that in exchange
+for a subscribe that does not wait for a delete that may never succeed.
 
 None of these waits has a time limit. A store can apply a write or a delete after its caller stopped waiting for it,
 so a delete that went ahead of a slow save could still have the save put the position back, and a `subscribe(..)` that
@@ -1554,9 +1560,9 @@ write or the delete would not help either, for the same reason. So the model wai
 
 That has one cost next to 0.33.0, where neither the cancel nor a later `subscribe(..)` waited for the store. On a store
 whose deletes hang or keep failing but whose reads answer, a subscription of the id made right after the cancel starts
-as in 0.33.0, and then handles one event and waits until the store answers the delete, since its position writes wait
-for it. No call for another id waits for them. The cancel itself returns once it has stopped the subscription and
-started the delete.
+as in 0.33.0 and has its events delivered, but stores no position until the store answers the delete, since its position
+writes are queued behind it. No call for another id waits for them. The cancel itself returns once it has stopped the
+subscription and started the delete.
 
 The property I hold the durable model to has four parts. Each compares a `subscribe(..)` of an id whose delete, asked
 for by an earlier cancel, is still under way, with the same `subscribe(..)` in 0.33.0.
@@ -1567,11 +1573,15 @@ for by an earlier cancel, is still under way, with the same `subscribe(..)` in 0
 3. It refuses only where 0.33.0 refuses.
 4. The delete never removes a position that it writes.
 
-The first and the second part give way in one place, the cost above. Until the delete ends, the subscription handles
-its first event and no other, and a wrapped model that waits for an action waits for the delete too. Every event is
-still delivered, but after the first one only once the delete has ended. I hold to the fourth part over the second.
-A position write that does not wait for the delete can be removed by it, and the subscription would then resume from
-the position of the cancelled subscription after a restart.
+Queuing the position writes keeps the fourth part without giving up the second. No `subscribe(..)`, resume or
+delivery waits for a delete, and the only wait added next to 0.33.0 is the one the second part names. A position write
+that went ahead of the delete instead could be removed by it, and the subscription would then resume from the position
+of the cancelled subscription after a restart.
+
+The third part gives way in when a refusal comes. Where 0.33.0 refuses the `subscribe(..)` because its first position is
+refused, the subscription here has already started, since the `subscribe(..)` returned before that position could be
+written. It ends once the queued position is refused, after delivering the events written before that, and the error is
+logged.
 
 The second part also gives way on a running model that the durable model drives. There a `subscribe(..)` from the
 subscription-model default waits on a thread that may block for its read of where the feed is when the store holds
@@ -1584,13 +1594,15 @@ needed a read of where the feed is at the call for every dynamic `StartAt`, held
 the `Mono` gives the clean start without any of that.
 
 A subscription from the subscription-model default reads the stored position at the call. When the store holds none,
-it starts from where the feed is, and the position it records waits for the delete. When a process ends after the
-delete succeeded and before that write, nothing is stored, and the next run starts from the subscription-model default
-again. Closing that gap would need the delete and the write to be one storage call. A subscription registered on a
-stopped model reconciles the stored position with where the feed was at its registration, through
-`resolveFirstCheckpointRace(..)` when the storage can. That reconciling writes, and would wait for the delete, so while
-a delete runs the model takes what the store answers instead. That differs from 0.33.0 only when the store holds a
-position later than where the feed was at the registration.
+it starts from where the feed is, and the position it records is queued behind the delete. When a process ends after
+the delete succeeded and before a queued position is written, nothing is stored, and the next run starts from the
+subscription-model default again. Closing that gap would need the delete and the write to be one storage call. A pause
+or a stop of the subscription before its queued position is written drops that position, so a process that ends while
+the subscription is paused has nothing stored either. A subscription registered on a stopped model reconciles the
+stored position with where the feed was at its registration, through `resolveFirstCheckpointRace(..)` when the storage
+can. That reconciling is asked at the start without waiting for the delete, as it is with no delete running, so the
+subscription starts from the same position as it would then. The delete can remove what it wrote, so a position it
+wrote is saved again, queued behind the delete.
 
 When the durable model drives the subscription itself, `subscribe(..)` and `resumeSubscription(..)` ask where the feed
 is for a subscription from the subscription-model default or a dynamic `StartAt`, on a running and on a stopped model.

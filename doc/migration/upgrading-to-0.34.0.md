@@ -1470,8 +1470,8 @@ type the recipe cannot see.
 
 `ReactorDurableSubscriptionModel` now deletes the checkpoint only after every checkpoint write the cancelled
 subscription had already started has ended, and a write it had not started by then never runs. Every checkpoint that a
-later subscription of the same id in the same process writes waits until the delete has ended, so the delete never
-removes one of them.
+later subscription of the same id in the same process writes while the delete runs is queued and written once the
+delete has ended, so the delete does not remove it.
 
 A subscribe of the id that does not wait for the cancel's `Mono` behaves as in 0.33.0 until the delete has ended, apart
 from those writes. Its start position resolves at the call, your `StartAt.dynamic(..)` function included, and reading
@@ -1480,10 +1480,14 @@ subscription's checkpoint, from the subscription-model default, through `ResumeS
 through the Spring Boot starter's `BEGINNING` start with the default `ResumeBehavior`. To start the id clean, wait for
 the `Mono` before you subscribe it again, as step 2 describes.
 
-An action completes only once the checkpoint written after it is stored. So until the delete has ended, such a
-subscription handles its first event and then waits when `ReactorDurableSubscriptionModel` drives the feed itself. When
-it wraps a model that manages named subscriptions, the action of that first event goes on until then, and a wrapped
-model of your own that blocks on that action inside its `subscribe(..)` holds that call until then too.
+Neither the subscribe nor the delivery of its events waits for the delete, since an action completes without waiting
+for a queued checkpoint. Of the queued checkpoints that each follow an event, only the latest is written. A queued
+checkpoint that fails once written is logged as a warning and tried again with the same waits as a failed delete, until
+it is written, a later queued checkpoint of the subscription replaces it, or the model is shut down. A pause, a
+`stop()`, a cancel or a `shutdown()` of the subscription drops what it has queued. When the subscription found no
+checkpoint stored, its first checkpoint is queued the same way and it starts without waiting. If that checkpoint fails
+or is refused once written, for instance because another node stored one for the id meanwhile, the subscription ends
+and the error is logged. With no delete running, the same failure refuses the subscribe.
 
 The cancel also ends a subscribe of the id that has not started yet. The subscribe writes no checkpoint, and its
 `waitUntilStarted()` fails with `CancellationException`. A `StartAt.dynamic(..)` function that was about to run as the
@@ -1516,8 +1520,8 @@ its own `StartAt` begins before it. If that call must have ended before you go o
 None of these waits has a time limit, because a store can still apply a write after the model stopped waiting for it. A
 save could then bring the cancelled checkpoint back after the delete, and a delete could remove the checkpoint the next
 subscription wrote. On a store whose deletes hang or keep failing but whose reads answer, a subscription of the id made
-right after the cancel therefore handles one event and then waits until the store answers. No call for another id waits
-for them.
+right after the cancel therefore stores no checkpoint until the store answers, and its events are delivered meanwhile.
+No call for another id waits for them.
 
 A delete that fails is tried again until it succeeds or the model is shut down, and each failure is logged as a warning.
 The wait before a try starts at 100 milliseconds and about doubles after each failure, never past 5 seconds, with some
@@ -1527,7 +1531,10 @@ tries, also one waiting to be tried again. A try already under way runs to its e
 the error of the last try. A store can retry within one try, as `ReactorCheckpointStorage` for MongoDB does by default,
 so such a try can still reach the store after the `shutdown()`. When the checkpoint stays stored, call
 `cancelSubscription(id)` again once a model runs, as step 2 describes. A subscription of the id that started meanwhile
-has written no checkpoint of its own, so until you do, it resumes from the stored one after a restart.
+has written no checkpoint of its own, apart from one that a subscription registered while the model was stopped can
+write as it starts, so until you do, it resumes from the stored one after a restart. When the process ends after the
+delete succeeded and before a queued checkpoint is written, no checkpoint is stored for the id, and the next subscribe
+from the subscription-model default starts from where the feed is then.
 
 When `ReactorDurableSubscriptionModel` drives the subscription itself, `subscribe(..)` and `resumeSubscription(..)` ask
 where the feed is for a subscription from the subscription-model default or a `StartAt.dynamic(..)`, on a running and on

@@ -44,8 +44,10 @@ import reactor.core.scheduler.Schedulers;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -177,8 +179,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private static final Logger log = LoggerFactory.getLogger(ReactorDurableSubscriptionModel.class);
     // How long a failed delete of a cancelled subscription's checkpoint waits before it is tried again, about
     // doubling up to the longest, with jitter
-    private static final Duration FIRST_DELETE_RETRY_AFTER = Duration.ofMillis(100);
-    private static final Duration LONGEST_DELETE_RETRY_AFTER = Duration.ofSeconds(5);
+    private static final Duration FIRST_RETRY_AFTER = Duration.ofMillis(100);
+    private static final Duration LONGEST_RETRY_AFTER = Duration.ofSeconds(5);
 
     private final CheckpointAwareSubscriptionModel subscription;
     private final CheckpointStorage storage;
@@ -195,11 +197,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // function the caller supplies, or while disposing a subscription to the wrapped model's feed
     private final ConcurrentMap<String, InternalSubscription> runningSubscriptions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions = new ConcurrentHashMap<>();
-    // Held while reading or changing the five maps below, and never while calling the storage, the wrapped
+    // Held while reading or changing the six maps and the set below, and never while calling the storage, the wrapped
     // model or a function the caller supplies. A cancel retires the writer of the subscription it removes, collects
     // the writes in flight for the id and installs its delete in one step under it. A write checks its writer and
-    // looks for that delete in one step under it too, so each write is one the delete waits for, one that waits for
-    // the delete, or one that never starts.
+    // looks for that delete in one step under it too, so each write is one the delete waits for, one queued or waiting
+    // behind the delete, or one that never starts.
     private final Object positionLock = new Object();
     // The writer of the subscription registered under each id
     private final Map<String, PositionWriter> positionWriters = new HashMap<>();
@@ -208,13 +210,19 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private final Map<String, Set<PositionWriter>> positionWritersStarting = new HashMap<>();
     // The position writes that have started and not ended yet, by subscription id
     private final Map<String, Set<Mono<Void>>> positionWritesInFlight = new HashMap<>();
-    // For each delete of a stored position that cancelSubscription started, what position writes of that subscription
-    // id wait for, until the delete succeeds or a shutdown stops its tries. Nothing else waits for it. It completes
+    // For each delete of a stored position that cancelSubscription started, what the position writes of that
+    // subscription id wait for or are queued behind, until the delete succeeds or a shutdown stops its tries. Nothing else waits for it. It completes
     // only after it has been taken out of the map.
     private final Map<String, Mono<Void>> positionDeletes = new HashMap<>();
     // The last error of each delete in positionDeletes, which a delete queued behind it ends with when a shutdown comes
     // before its own first try
     private final Map<String, AtomicReference<Throwable>> positionDeleteFailures = new HashMap<>();
+    // The position writes made while a delete of their subscription id runs, by subscription id, in the order they
+    // were made. Each is written once the delete has ended, see writeQueuedPositions.
+    private final Map<String, Deque<QueuedPositionWrite>> queuedPositionWrites = new HashMap<>();
+    // The subscription ids whose queued position writes are being written or wait for a delete to end. A write of one
+    // of these ids is queued too, so it is not written before the ones queued ahead of it.
+    private final Set<String> positionWritesDraining = new HashSet<>();
     // Completes when shutdown() runs, which ends a subscribe reading its start position on the caller's thread
     private final Sinks.Empty<Void> shutDown = Sinks.empty();
 
@@ -417,6 +425,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         Registration registration = registerDelegated(subscriptionId, writer);
         if (registration == Registration.REGISTERED) {
             handedOver(writer, Mono.empty());
+            writer.firstPositionFailed.asMono().subscribe(unused -> {
+            }, throwable -> endAfterItsFirstPositionFailed(delegate, subscriptionId, writer, throwable));
             return delegated;
         }
         // A cancel or a shutdown came while the wrapped model took the subscribe, and may have reached that model
@@ -428,6 +438,30 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             throw new SubscriptionModelShutdownException();
         }
         return null;
+    }
+
+    // A first position queued behind a delete of the id failed or was refused once it was written, after the subscribe
+    // returned, so the subscription is cancelled in the wrapped model, as a refused first position refuses the
+    // subscribe otherwise. Nothing is done once the writer is no longer the registered one, since a cancel, a shutdown or
+    // another subscribe of the id has ended the subscription then.
+    private void endAfterItsFirstPositionFailed(SubscriptionModel delegate, String subscriptionId, PositionWriter writer, Throwable throwable) {
+        synchronized (positionLock) {
+            if (!positionWriters.remove(subscriptionId, writer)) {
+                return;
+            }
+            writer.retired = true;
+            delegatedSubscriptionIds.remove(subscriptionId);
+        }
+        log.error("Subscription {} terminated with an unrecoverable error, since the first position recorded for it once the delete of its stored checkpoint had ended failed or was refused. It is cancelled in the wrapped model {}.",
+                subscriptionId, delegate.getClass().getName(), throwable);
+        // cancelInWrappedModel logs a failure during a shutdown itself
+        cancelInWrappedModel(delegate, subscriptionId).subscribe(unused -> {
+        }, cancelFailed -> {
+            if (!shutdown) {
+                log.error("Could not cancel subscription {} in the wrapped model {} after its first position failed. That model may still hold the subscription, though its action no longer runs.",
+                        subscriptionId, delegate.getClass().getName(), cancelFailed);
+            }
+        });
     }
 
     // Called once, and as soon as it is called. Cached, so a cancel of the id that waits for it does not cancel again.
@@ -511,12 +545,15 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // The caller's action with the checkpoint save behind it, which is the whole of what this model adds to a delivery.
+    // While a delete of the id runs, the save is queued and the delivery completes without it, see writePosition.
+    // Whether the event's checkpoint is saved at all is decided here, when its action has completed.
     private Function<CloudEvent, Mono<Void>> persistingAction(String subscriptionId, PositionWriter writer, Function<CloudEvent, Mono<Void>> action) {
         // One per subscription, so an EveryN configured for the whole model counts this subscription's events only
         Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
         return cloudEvent -> action.apply(cloudEvent)
                 .then(Mono.defer(() -> persistCheckpoint.test(cloudEvent)
-                        ? writePosition(subscriptionId, writer, () -> storage.save(subscriptionId, getCheckpointOrThrowIAE(cloudEvent)), Mono.empty()).then()
+                        ? writePosition(subscriptionId, writer, () -> storage.save(subscriptionId, getCheckpointOrThrowIAE(cloudEvent)), Mono.empty(),
+                        WhileADeleteRuns.QUEUE, Mono.empty()).then()
                         : Mono.empty()));
     }
 
@@ -778,8 +815,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // Reads events from the wrapped model's cold primitive, applies the action, then persists the position after each
     // event (per the config predicate) when persist is true. currentStartAt is advanced once the action completes, so
     // that pause/resume continues from the last delivered event rather than replaying or skipping. That is before the
-    // position write, which can wait for a delete of the id, so a pause while it waits does not resume from before an
-    // event whose action already ran.
+    // position write, so a pause while that write runs does not resume from before an event whose action already ran.
+    // A first position that was queued behind a delete of the id and then failed ends the subscription here, through
+    // the error handler of startReserved, as a refused first position refuses the start otherwise.
     private Flux<Void> source(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action, AtomicReference<StartAt> currentStartAt, boolean persist,
                               PositionWriter writer, Sinks.Empty<Void> startedSink) {
         Function<CloudEvent, Mono<Void>> advancing = cloudEvent -> action.apply(cloudEvent)
@@ -791,7 +829,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 ? Flux.<Void>never()
                 : subscription.subscribe(filter, startAt)
                 .doOnSubscribe(__ -> startedSink.tryEmitEmpty())
-                .concatMap(delivery));
+                .concatMap(delivery)
+                .doOnComplete(writer.firstPositionFailed::tryEmitEmpty)
+                .mergeWith(writer.firstPositionFailed.asMono()));
     }
 
     // Resolve the effective StartAt, mirroring the blocking DurableSubscriptionModel#generateStartAtPositionFrom:
@@ -840,10 +880,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // the model waits for no read.
             //
             // While a delete that a cancel of the id started runs, storage can still hold the checkpoint of the
-            // cancelled subscription, and the subscription starts from it as it would without the delete. Reconciling
-            // it with positionAtRegistration can write, and every write of the id waits for the delete, so it is taken
-            // as storage answered it instead. A first position recorded meanwhile waits for the delete too, see
-            // pinUnlessADeleteRuns.
+            // cancelled subscription, and the subscription starts from it as it would without the delete, reconciled
+            // with positionAtRegistration in the same way, see reconcileWithStored. A first position recorded
+            // meanwhile is queued behind the delete, see pinUnlessADeleteRuns.
             @Nullable Mono<Checkpoint> readAtTheCall = positionAtRegistration != null ? positionAtRegistration : positionNow;
             if (readAtTheCall != null && waitEnds != null) {
                 awaitAnswer(readAtTheCall, waitEnds);
@@ -851,9 +890,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             final Mono<StartAt> resolved;
             if (positionAtRegistration != null) {
                 resolved = readStoredPosition(subscriptionId)
-                        .flatMap(stored -> pendingPositionDelete(subscriptionId) != null ? Mono.just(stored) : positionAtRegistration
+                        .flatMap(stored -> positionAtRegistration
                                 .onErrorResume(__ -> Mono.empty())
-                                .flatMap(checkpoint -> writePosition(subscriptionId, writer, () -> storage.resolveFirstCheckpointRace(subscriptionId, checkpoint), Mono.just(checkpoint)))
+                                .flatMap(checkpoint -> reconcileWithStored(subscriptionId, writer, checkpoint, stored))
                                 .defaultIfEmpty(stored))
                         .switchIfEmpty(Mono.defer(() -> positionAtRegistration.flatMap(checkpoint -> pinUnlessADeleteRuns(subscriptionId, checkpoint, writer))))
                         .map(StartAt::checkpoint);
@@ -944,16 +983,27 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
     }
 
-    // Answers whenRetired without writing once a cancel has retired or overtaken the writer, and waits for a delete
-    // that a cancel of the id started before checking again. Otherwise the write starts here and is tracked until it
-    // ends. A storage can apply a write after its caller stopped waiting, so the write is subscribed here rather than
-    // by the caller, and disposing the cancelled subscription does not end the tracking early. It is subscribed after
-    // the lock is released, since a storage that blocks while subscribing would otherwise hold up every subscription.
+    // Answers whenRetired without writing once a cancel has retired or overtaken the writer. Otherwise the write starts
+    // here and is tracked until it ends. A storage can apply a write after its caller stopped waiting, so the write is
+    // subscribed here rather than by the caller, and disposing the cancelled subscription does not end the tracking
+    // early. It is subscribed after the lock is released, since a storage that blocks while subscribing would otherwise
+    // hold up every subscription. While a delete that a cancel of the id started runs, it waits for the delete before
+    // checking again.
     private <T> Mono<T> writePosition(String subscriptionId, PositionWriter writer, Supplier<Mono<T>> write, Mono<T> whenRetired) {
+        return writePosition(subscriptionId, writer, write, whenRetired, WhileADeleteRuns.WAIT, whenRetired);
+    }
+
+    // writePosition, with whileADeleteRuns deciding what the write does while a delete of the id runs. A queued write
+    // answers whenQueued at once. It is queued as well while the writes queued before it are written, so it never
+    // reaches storage ahead of them, and it is written as writeQueuedPositions describes.
+    private <T> Mono<T> writePosition(String subscriptionId, PositionWriter writer, Supplier<Mono<T>> write, Mono<T> whenRetired,
+                                      WhileADeleteRuns whileADeleteRuns, Mono<T> whenQueued) {
         return Mono.defer(() -> {
             Sinks.Empty<Void> ended = Sinks.empty();
             Mono<Void> writeEnded = ended.asMono();
-            final Mono<Void> deleteEnded;
+            @Nullable Mono<Void> deleteEnded;
+            boolean queued = false;
+            boolean drainStarts = false;
             synchronized (positionLock) {
                 // An overtaken writer belongs to a subscribe that a cancel ended before it was registered, so what it
                 // would write is a position of a subscription that no longer exists
@@ -961,9 +1011,20 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                     return whenRetired;
                 }
                 deleteEnded = positionDeletes.get(subscriptionId);
-                if (deleteEnded == null) {
+                if (whileADeleteRuns == WhileADeleteRuns.QUEUE && (deleteEnded != null || positionWritesDraining.contains(subscriptionId))) {
+                    drainStarts = queuePositionWrite(subscriptionId, new QueuedPositionWrite(writer, true, 0,
+                            () -> writePosition(subscriptionId, writer, write, whenRetired).then()));
+                    queued = true;
+                } else if (deleteEnded == null || whileADeleteRuns == WhileADeleteRuns.WRITE) {
+                    deleteEnded = null;
                     positionWritesInFlight.computeIfAbsent(subscriptionId, __ -> new HashSet<>()).add(writeEnded);
                 }
+            }
+            if (queued) {
+                if (drainStarts) {
+                    startWritingQueuedPositions(subscriptionId);
+                }
+                return whenQueued;
             }
             if (deleteEnded != null) {
                 return deleteEnded.then(writePosition(subscriptionId, writer, write, whenRetired));
@@ -980,6 +1041,85 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             });
             return started;
         });
+    }
+
+    // Called under positionLock. Puts the write after those already queued for the id. Of two writes in a row that
+    // each only save where the subscription has got to, the later one replaces the earlier, so a delete that keeps
+    // failing holds one such write per id and not one per event. A write that records the first position is never
+    // replaced, since it is the one that is refused when another position got there first. Answers true when no
+    // writeQueuedPositions runs for the id yet, and the caller starts one once the lock is released.
+    private boolean queuePositionWrite(String subscriptionId, QueuedPositionWrite write) {
+        Deque<QueuedPositionWrite> queued = queuedPositionWrites.computeIfAbsent(subscriptionId, __ -> new ArrayDeque<>());
+        @Nullable QueuedPositionWrite last = queued.peekLast();
+        if (write.latestWins() && last != null && last.latestWins()) {
+            queued.pollLast();
+        }
+        queued.addLast(write);
+        return positionWritesDraining.add(subscriptionId);
+    }
+
+    private void startWritingQueuedPositions(String subscriptionId) {
+        writeQueuedPositions(subscriptionId).subscribe(unused -> {
+        }, throwable -> log.warn("Stopped writing the queued checkpoints of subscription {}.", subscriptionId, throwable));
+    }
+
+    // Writes the queued writes of the id one at a time, in the order they were queued, each once no delete of the id
+    // runs, and ends once none is left. A write whose writer is retired by then is dropped, and so is every queued
+    // write once the model is shut down. Should a cancel start another delete meanwhile, it waits for the write under
+    // way, as it waits for every write in flight, and retires the writers of the writes still queued.
+    // A write that fails is logged and tried again after the same wait as a failed delete, at the front of the queue,
+    // unless a later write of the id that saves where the subscription has got to is queued by then. The writes behind
+    // it wait meanwhile, so none reaches storage ahead of it. A shutdown ends the wait. A first position is never tried
+    // again, since its failure ends the subscription as a refused first position does, see pinUnlessADeleteRuns.
+    private Mono<Void> writeQueuedPositions(String subscriptionId) {
+        return Mono.defer(() -> {
+            final @Nullable Mono<Void> deleteEnded;
+            @Nullable QueuedPositionWrite next = null;
+            synchronized (positionLock) {
+                deleteEnded = shutdown ? null : positionDeletes.get(subscriptionId);
+                if (deleteEnded == null) {
+                    Deque<QueuedPositionWrite> queued = queuedPositionWrites.getOrDefault(subscriptionId, new ArrayDeque<>());
+                    while (!shutdown && next == null && !queued.isEmpty()) {
+                        QueuedPositionWrite first = queued.pollFirst();
+                        if (!first.writer().retired && !first.writer().overtakenByCancel) {
+                            next = first;
+                        }
+                    }
+                    if (next == null || queued.isEmpty()) {
+                        queuedPositionWrites.remove(subscriptionId);
+                    }
+                    if (next == null) {
+                        positionWritesDraining.remove(subscriptionId);
+                        return Mono.<Void>empty();
+                    }
+                }
+            }
+            if (deleteEnded != null) {
+                return deleteEnded.then(writeQueuedPositions(subscriptionId));
+            }
+            QueuedPositionWrite written = next;
+            return written.write().get()
+                    .onErrorResume(throwable -> {
+                        QueuedPositionWrite failed = written.failedOnceMore();
+                        log.warn("Failed to write the checkpoint of subscription {} that was queued while the delete of its stored checkpoint ran, on attempt {}. Trying again.",
+                                subscriptionId, failed.failedAttempts(), throwable);
+                        return Mono.firstWithSignal(Mono.delay(retryAfter(failed.failedAttempts())).then(), shutDown.asMono())
+                                .then(Mono.fromRunnable(() -> queueAgain(subscriptionId, failed)));
+                    })
+                    .then(writeQueuedPositions(subscriptionId));
+        });
+    }
+
+    // Puts a write that failed back at the front of the queue of the id, unless a later write that saves where the
+    // subscription has got to is queued behind it, which replaces it as in queuePositionWrite. writeQueuedPositions
+    // drops it when its writer has been retired meanwhile.
+    private void queueAgain(String subscriptionId, QueuedPositionWrite failed) {
+        synchronized (positionLock) {
+            Deque<QueuedPositionWrite> queued = queuedPositionWrites.computeIfAbsent(subscriptionId, __ -> new ArrayDeque<>());
+            if (queued.stream().noneMatch(QueuedPositionWrite::latestWins)) {
+                queued.addFirst(failed);
+            }
+        }
     }
 
     private void positionWriteEnded(String subscriptionId, Mono<Void> writeEnded) {
@@ -1004,19 +1144,53 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 .switchIfEmpty(Mono.error(() -> storageAnsweredNothingAboutItsOwnWrite(subscriptionId, positionRead)));
     }
 
-    // pinStartPosition, except while a delete of the id runs. The write then waits for the delete, as every write of
-    // the id does, and the subscription starts from positionRead without waiting for it, so a delete that keeps
-    // failing holds up the writes and not the start. A write that fails then is logged, since the subscription has
-    // started by the time it fails.
+    // pinStartPosition, except while a delete of the id runs or the writes queued behind one are written. It is then
+    // queued as a whole, and the subscription starts from positionRead without waiting for it, so a delete that keeps
+    // failing holds up the write and not the start. A first position that fails or is refused once it is written ends
+    // the subscription, through firstPositionFailed of its writer, as a refused first position refuses the start
+    // otherwise. A cancel
+    // that comes between the check below and the write retires the writer, so the write never waits for a delete.
     private Mono<Checkpoint> pinUnlessADeleteRuns(String subscriptionId, Checkpoint positionRead, PositionWriter writer) {
         return Mono.defer(() -> {
-            if (pendingPositionDelete(subscriptionId) == null) {
+            final boolean queued;
+            boolean drainStarts = false;
+            synchronized (positionLock) {
+                queued = positionDeletes.get(subscriptionId) != null || positionWritesDraining.contains(subscriptionId);
+                if (queued) {
+                    drainStarts = queuePositionWrite(subscriptionId, new QueuedPositionWrite(writer, false, 0,
+                            () -> pinStartPosition(subscriptionId, positionRead, writer)
+                                    .then()
+                                    .onErrorResume(throwable -> {
+                                        writer.firstPositionFailed.tryEmitError(throwable);
+                                        return Mono.empty();
+                                    })));
+                }
+            }
+            if (!queued) {
                 return pinStartPosition(subscriptionId, positionRead, writer);
             }
-            pinStartPosition(subscriptionId, positionRead, writer).subscribe(unused -> {
-            }, throwable -> log.warn("Could not record {} as the first position of subscription {} once the delete of its stored checkpoint had ended. The subscription started from that position all the same.",
-                    positionRead.asString(), subscriptionId, throwable));
+            if (drainStarts) {
+                startWritingQueuedPositions(subscriptionId);
+            }
             return Mono.just(positionRead);
+        });
+    }
+
+    // storage.resolveFirstCheckpointRace, which can write the position read at registration. While a delete of the id
+    // runs it is asked without waiting for the delete, as it is with none running, so the subscription starts from the
+    // same answer. The delete can then remove what it wrote, so a position it wrote is saved again, queued behind the
+    // delete. An answer equal to what storage held means it wrote nothing.
+    private Mono<Checkpoint> reconcileWithStored(String subscriptionId, PositionWriter writer, Checkpoint atRegistration, Checkpoint stored) {
+        return Mono.defer(() -> {
+            if (pendingPositionDelete(subscriptionId) == null) {
+                return writePosition(subscriptionId, writer, () -> storage.resolveFirstCheckpointRace(subscriptionId, atRegistration), Mono.just(atRegistration));
+            }
+            return writePosition(subscriptionId, writer, () -> storage.resolveFirstCheckpointRace(subscriptionId, atRegistration), Mono.just(atRegistration),
+                    WhileADeleteRuns.WRITE, Mono.just(atRegistration))
+                    .flatMap(governing -> governing.asString().equals(stored.asString())
+                            ? Mono.just(governing)
+                            : writePosition(subscriptionId, writer, () -> storage.save(subscriptionId, governing), Mono.just(governing),
+                            WhileADeleteRuns.QUEUE, Mono.just(governing)));
         });
     }
 
@@ -1207,11 +1381,26 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * resumes from that checkpoint, and so does a function that reads the checkpoint itself, as
      * {@code ResumeStartPositions.replayThenResume(..)} does.
      * <p>
-     * Every checkpoint the new subscription writes waits until the delete has ended, so the delete never removes one of
-     * them. The action of an event completes only once the checkpoint written after it is stored. So until the delete
-     * ends, a subscription this model drives itself handles its first event and then waits, and a wrapped model that
-     * manages named subscriptions sees the action of that first event go on. When such a wrapped model waits for that
-     * action within its own subscribe, as one that replays history there can, that subscribe waits for the delete too.
+     * Every checkpoint the new subscription writes while the delete runs is queued and written once the delete has
+     * ended, so the delete does not remove it. Neither the subscribe nor the delivery of an event waits for the delete,
+     * and the action of an event completes without waiting for its checkpoint. Of the queued checkpoints that each
+     * follow an event, only the latest is written. A queued checkpoint that fails once written is logged as a warning
+     * and tried again after the same wait as a failed delete, until it is written, a later queued checkpoint of the
+     * subscription replaces it or the model is shut down. A pause, a stop, a cancel or a shutdown of the new
+     * subscription drops what it has queued.
+     * The first position of a subscription that found no checkpoint stored is queued the same way, and the subscription
+     * starts from it without waiting. When that position fails or is refused once written, the subscription is ended
+     * and the error logged, as a refused first position refuses the subscribe when no delete runs.
+     * <p>
+     * One write is not queued. A subscription registered while this model was stopped reconciles the position it read
+     * at registration with the stored checkpoint, see {@link CheckpointStorage#resolveFirstCheckpointRace(String,
+     * org.occurrent.subscription.Checkpoint)}, which can write that position. It is asked at the start, as it is with no
+     * delete running, so the subscription starts from the same position, and a position it wrote is queued again behind
+     * the delete, since the delete can remove it.
+     * <p>
+     * Should the process end after the delete succeeded and before the queued checkpoint is written, storage holds no
+     * checkpoint for the id, and a later subscribe from the subscription-model default starts from where the feed is
+     * then.
      * <p>
      * This cancel ends every subscription of the id that it finds, including one that has not started yet since it is
      * still resolving its start position. Such a subscription writes no checkpoint once this is called. A step toward
@@ -1231,15 +1420,16 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * <p>
      * Neither the delete nor its tries has a time limit. The delete waits for the checkpoint writes it runs after,
      * however long the storage takes to answer them, and its tries go on until one succeeds. A storage that does not
-     * answer, or keeps failing the delete, holds up the checkpoint writes of a subscription of the same id, and with
-     * them every event after its first, until then, until the id is cancelled again or until the model is shut down.
+     * answer, or keeps failing the delete, holds up the checkpoint writes of a subscription of the same id until then,
+     * until the id is cancelled again or until the model is shut down. Its events are delivered meanwhile.
      * <p>
      * The returned {@code Mono} is cached. Each failed try of the delete is also logged as a warning, whether or not
      * anything subscribes to the {@code Mono}.
      * <p>
      * When a shutdown stopped the tries, the subscription stays cancelled and the checkpoint stays stored, so call this
      * again once a model runs. A subscription of the same id that started meanwhile has written no checkpoint of its
-     * own, so after a restart it resumes from the stored one unless this is called first. Do the same after a restart
+     * own, other than the position a reconcile at its start can write, so after a restart it resumes from the stored
+     * one unless this is called first. Do the same after a restart
      * when the process ended before the {@code Mono} completed. It deletes the checkpoint for an id this model has never
      * subscribed to.
      *
@@ -1304,8 +1494,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     // Started by startDelete rather than by whoever subscribes to the result, so the delete runs even when nobody waits
     // for it. Runs after the position writes already in flight and after an earlier delete of the id, since either
-    // ending after this delete would leave a position stored. Position writes of the id wait for deleteEnded instead
-    // of the delete. It is put in the map in the same step that retires the writer and completes only once it is taken
+    // ending after this delete would leave a position stored. Position writes of the id wait for deleteEnded, or are
+    // queued until it completes, instead of waiting for the delete. It is put in the map in the same step that retires the writer and completes only once it is taken
     // out, so each write waits for this delete at most once.
     // Adds what completes once each hand-over of the id to the wrapped model under way has ended to handOversEnded.
     private Mono<Void> deleteStoredCheckpoint(String subscriptionId, List<Mono<Void>> handOversEnded) {
@@ -1380,7 +1570,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             if (shutdown) {
                 return Mono.error(failure);
             }
-            log.warn("Failed to delete the stored checkpoint of cancelled subscription {} on attempt {}. Trying again. Until a delete succeeds, a subscribe of the id can still resume from that checkpoint, and its checkpoint writes wait for the delete.",
+            log.warn("Failed to delete the stored checkpoint of cancelled subscription {} on attempt {}. Trying again. Until a delete succeeds, a subscribe of the id can still resume from that checkpoint, and its checkpoint writes are queued until a delete succeeds.",
                     subscriptionId, failedAttempts, failure);
             return Mono.firstWithSignal(Mono.delay(retryAfter(failedAttempts)), shutDown.asMono().then(Mono.<Long>error(failure)));
         })));
@@ -1394,12 +1584,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         return failure != null ? failure : new SubscriptionModelShutdownException();
     }
 
-    // About doubles with each failed attempt, between half and one and a half of that, from FIRST_DELETE_RETRY_AFTER
-    // and never past LONGEST_DELETE_RETRY_AFTER, so deletes failing together are not tried again together
+    // About doubles with each failed attempt, between half and one and a half of that, from FIRST_RETRY_AFTER
+    // and never past LONGEST_RETRY_AFTER, so deletes or queued writes failing together are not tried again together
     private static Duration retryAfter(long failedAttempts) {
-        long doubled = FIRST_DELETE_RETRY_AFTER.toMillis() << Math.min(failedAttempts - 1, 16);
-        long withJitter = (long) (Math.min(doubled, LONGEST_DELETE_RETRY_AFTER.toMillis()) * ThreadLocalRandom.current().nextDouble(0.5, 1.5));
-        return Duration.ofMillis(Math.max(FIRST_DELETE_RETRY_AFTER.toMillis(), Math.min(withJitter, LONGEST_DELETE_RETRY_AFTER.toMillis())));
+        long doubled = FIRST_RETRY_AFTER.toMillis() << Math.min(failedAttempts - 1, 16);
+        long withJitter = (long) (Math.min(doubled, LONGEST_RETRY_AFTER.toMillis()) * ThreadLocalRandom.current().nextDouble(0.5, 1.5));
+        return Duration.ofMillis(Math.max(FIRST_RETRY_AFTER.toMillis(), Math.min(withJitter, LONGEST_RETRY_AFTER.toMillis())));
     }
 
     private void startDelete(String subscriptionId, Mono<Void> delete) {
@@ -1623,11 +1813,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // What one generation of a subscription writes its positions through, and what tells whether that generation is
-    // still the live one for its id. Both fields are read and changed under positionLock only.
+    // still the live one for its id. The two flags are read and changed under positionLock only.
     private static final class PositionWriter {
         // Set once the generation is retired, by a cancel, a pause, a stop or a shutdown, or by a writer registered
-        // in its place, after which none of its writes and none of its steps toward starting begin, and the wrapped
-        // model no longer runs the action of one handed to it
+        // in its place, after which none of its writes and none of its steps toward starting begin, its queued writes
+        // are dropped, and the wrapped model no longer runs the action of one handed to it
         private boolean retired;
         // Set by a cancel of the id while the subscribe was still reading where to start or handing the subscription
         // over, after which none of its writes start, its action does not run and the subscribe ends
@@ -1638,6 +1828,29 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // Fails with OvertakenByCancel once overtakenByCancel is set, which ends a wait of the subscribe on the
         // caller's thread and the read it waits for
         private final Sinks.Empty<Void> overtaken = Sinks.empty();
+        // Fails once a first position that was queued behind a delete of the id fails or is refused as it is written,
+        // which ends the subscription, see pinUnlessADeleteRuns. Completed once the feed of a subscription this model
+        // drives has ended.
+        private final Sinks.Empty<Void> firstPositionFailed = Sinks.empty();
+    }
+
+    // A position write queued while a delete of its subscription id runs. latestWins is true for a write that only
+    // saves where the subscription has got to, which the next such write of the id replaces while both are queued.
+    // failedAttempts counts the tries of it that failed.
+    private record QueuedPositionWrite(PositionWriter writer, boolean latestWins, long failedAttempts, Supplier<Mono<Void>> write) {
+        QueuedPositionWrite failedOnceMore() {
+            return new QueuedPositionWrite(writer, latestWins, failedAttempts + 1, write);
+        }
+    }
+
+    // What a position write does while a delete that a cancel of its subscription id started runs
+    private enum WhileADeleteRuns {
+        // Waits for the delete to end and is then written
+        WAIT,
+        // Queued, and written once the delete has ended, see writeQueuedPositions
+        QUEUE,
+        // Written without waiting, and the delete may remove it
+        WRITE
     }
 
     // What capturePositionUnlessStored answers when storage holds a checkpoint. Reaches a caller only when that
