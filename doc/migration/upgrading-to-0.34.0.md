@@ -1286,10 +1286,40 @@ you called again.
 1. Both now log the failure as a warning and return. A thread of its own tries the subscription again, with the backoff
    the MongoDB lease strategies use by default, until it is registered for its lease and runs only while this node
    holds it. Every fifth try that fails is logged as a warning.
-2. `start(..)` still throws the first failure of a subscription that does not compete, since nothing tries that one
-   again. `stop()`, `pauseSubscription(..)` and `cancelSubscription(..)` still throw what failed.
-3. Remove code that caught the exception from `start(..)` or `resumeSubscription(..)` to call again. The thread does
-   that now.
+2. `start(..)` still throws the first failure of a subscription that does not compete. When another call for that
+   subscription is under way, `start(..)` returns instead, and a thread of its own tries the subscription again once
+   that call has returned, until it succeeds. A pause, resume or cancel of the subscription made while it still fails
+   ends those tries and is made all the same. It doesn't end the tries to start the wrapped model, which go on until
+   one succeeds, or until `stop()` or `shutdown()`. `pauseSubscription(..)` and `cancelSubscription(..)` still throw
+   what failed in their own call, and item 3 says what `stop()` throws. A pause, resume or cancel first applies each
+   `start(..)` and `stop()` that began before it and is still waiting to be applied, also one that has not got to that
+   subscription yet. What fails there for a competing subscription is left to the thread from item 1, as it is when
+   the `start(..)` or `stop()` gets there itself. One that fails for a subscription that does not compete, or throws an
+   `Error`, is given up. That `start(..)` or `stop()` doesn't throw the failure, which is logged as a warning. When the
+   failure is an `Error`, the pause, resume or cancel throws it once its own call is made. A pause,
+   resume or cancel made from inside a call this model makes to the lease strategy or the wrapped model for that
+   subscription applies none of them first. `stop()` gives up no other call.
+3. For a competing subscription, remove code that caught the exception from `start(..)` or `resumeSubscription(..)` to
+   call again. Neither throws what the lease strategy or the wrapped model threw for that subscription now, unless it is
+   an `Error`, and the thread from item 1 makes the call again. Keep that code for a subscription that does not compete.
+   `resumeSubscription(..)` still throws its failure for it, and so does `start(..)` when no other call for that
+   subscription is under way, and this model doesn't make the call that failed again. `stop()` throws what failed for a
+   competing subscription when it gets to that subscription itself, and when another call applied it there first. The
+   exception is a failure to pause the subscription in the wrapped model that a pause, resume or cancel met before
+   `stop()` was done stopping the wrapped model. `stop()` throws that one only when, once `stop()` gets to the
+   subscription, the wrapped model runs it or can't say whether it does, and no resume that began after `stop()` has let
+   it run. Otherwise it is logged as a warning, and unless such a resume has let the subscription run, `stop()` then
+   stops it as it stops any other and throws what fails there. When another call holds the subscription by then, that
+   call, or at the latest the thread from item 1 once it gets to the subscription, tries to unregister it, with the same
+   exception. When the thread from item 1 fails to unregister it, the thread gives up the lease instead, if the lease
+   strategy still reports it held. The MongoDB lease strategies forget the subscription before they remove its lease,
+   so after a removal that fails they neither report the lease held nor refresh it. It expires within the lease time,
+   after which another node can take the subscription over. The thread from
+   item 1 tries the subscription again either way. When `stop()` finds a
+   subscription held by a call that has not applied it there, it is applied once that call returns, by a thread of its
+   own or by the next call made
+   for that subscription, and `stop()` doesn't throw what fails there. A `stop()` that a `start(..)` waiting behind it
+   took back doesn't throw what failed for a subscription.
 4. To find out whether a subscription runs, call `isRunning(id)`. It asks the wrapped model, which runs the
    subscription only on the node that holds its lease. `isPaused(id)` returns `true` for a subscription that
    `pauseSubscription(..)`, `stop()` or the loss of its lease paused. A subscription for which both return `false` is
