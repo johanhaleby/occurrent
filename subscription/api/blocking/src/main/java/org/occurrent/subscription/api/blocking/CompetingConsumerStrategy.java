@@ -81,8 +81,16 @@ public interface CompetingConsumerStrategy {
      * Check whether a particular subscriber has the lock (access) to read events for the given subscription.
      * <p>
      * {@code CompetingConsumerSubscriptionModel} calls this before it hands each event of a competing subscription to
-     * the action, and holds the event while this returns {@code false} or throws. Answer from what this strategy keeps
-     * in memory rather than by asking a database, and answer {@code false} once the lock could have expired.
+     * the action, and holds the event while this returns {@code false} or throws, until it returns {@code true} or the
+     * model calls the wrapped subscription model for the subscription, for instance to pause it, which lets the event
+     * through. Answer from what this strategy keeps in memory rather than by asking a database, and answer
+     * {@code false} once the lock could have expired.
+     * <p>
+     * The MongoDB lease strategies answer {@code false} three quarters of the lease time after the request that last
+     * set the lease was sent, timed by this node's monotonic clock, while MongoDB expires the lease by its own clock.
+     * Their answer is right only while MongoDB's clock gains less than a quarter of the lease time on this node's over
+     * one lease. After a failover to a primary whose clock is further ahead than that, or a server clock set forward by
+     * more than that, they can answer {@code true} after another node has taken the lease.
      *
      * @param subscriptionId The id of of the subscription
      * @param subscriberId   The unique of of the subscriber

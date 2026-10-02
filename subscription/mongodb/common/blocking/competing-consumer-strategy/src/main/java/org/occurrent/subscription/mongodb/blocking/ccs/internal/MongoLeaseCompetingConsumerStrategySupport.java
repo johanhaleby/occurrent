@@ -356,6 +356,11 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * refreshed it was sent, and no longer, also while every refresh since has failed, since a refresh that never got
      * through tells this node nothing about whether another node has taken the lease since. Reads memory only, so it
      * neither blocks nor reaches MongoDB.
+     * <p>
+     * This node times the lease by its monotonic clock and MongoDB expires it by its own, so the answer is right only
+     * while MongoDB's clock gains less than a quarter of the lease time on this node's over one lease. After a failover
+     * to a primary whose clock is further ahead than that, or a server clock set forward by more than that, this can
+     * answer {@code true} after another node has taken the lease.
      */
     public boolean hasLock(String subscriptionId, String subscriberId) {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");

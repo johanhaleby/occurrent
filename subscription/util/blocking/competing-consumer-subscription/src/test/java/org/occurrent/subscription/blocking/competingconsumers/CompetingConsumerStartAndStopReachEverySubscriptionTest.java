@@ -17,6 +17,7 @@
 package org.occurrent.subscription.blocking.competingconsumers;
 
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -27,6 +28,7 @@ import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
@@ -85,17 +87,18 @@ class CompetingConsumerStartAndStopReachEverySubscriptionTest {
         }
     }
 
-    // Neither stop() waits for the grant's resume of s1, since the resume of a competing subscription can no longer
-    // deliver once a stop() has begun
+    // Neither stop() waits for the grant's resume of s1. Once the resume returns, s1 is paused again in the wrapped model
+    // and delivers nothing more.
     @Test
-    void a_stop_that_another_stop_begins_behind_returns_without_waiting_for_a_resume_that_can_no_longer_deliver() {
+    void a_stop_that_another_stop_begins_behind_returns_without_waiting_for_the_resume_of_a_competing_subscription() {
         WrappedModel wrapped = WrappedModel.pausingWhatItRunsOnStop();
         Strategy strategy = new Strategy();
         CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
         ExecutorService otherThreads = Executors.newCachedThreadPool();
         Gate resumeOfS1 = new Gate();
         try {
-            subscribe(model, "s1");
+            List<String> s1Received = new CopyOnWriteArrayList<>();
+            model.subscribe(NODE, "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId()));
             subscribe(model, "s2");
             strategy.holders.remove("s1");
             model.onConsumeProhibited("s1", NODE);
@@ -113,10 +116,14 @@ class CompetingConsumerStartAndStopReachEverySubscriptionTest {
             assertThat(s2RanWhenTheFirstStopReturned.join()).as("[s2 runs in the wrapped model after the first stop() returned]").isFalse();
             CompletableFuture<Void> secondStop = CompletableFuture.runAsync(model::stop, otherThreads);
             assertThat(secondStop).as("[the second stop() returned while the resume of s1 waits]").succeedsWithin(EVENTUALLY);
+            wrapped.publish("s1", "e1");
 
             resumeOfS1.open();
             await().atMost(EVENTUALLY).untilAsserted(() ->
                     assertThat(wrapped.isPaused("s1")).as("[s1 paused again in the wrapped model once the resume the stop() calls did not wait for returned]").isTrue());
+            wrapped.publish("s1", "e2");
+            await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(1)).untilAsserted(() ->
+                    assertThat(s1Received).as("[events s1 received once both stop() calls had returned]").isEmpty());
         } finally {
             resumeOfS1.open();
             otherThreads.shutdownNow();
@@ -303,6 +310,7 @@ class CompetingConsumerStartAndStopReachEverySubscriptionTest {
         private volatile @Nullable Gate stopGate;
         private final Set<String> runningIds = new HashSet<>();
         private final Set<String> pausedIds = new HashSet<>();
+        private final Map<String, Consumer<CloudEvent>> actions = new ConcurrentHashMap<>();
         private boolean running = true;
 
         private WrappedModel(boolean refusesSubscribePaused, boolean pausesWhatItRunsOnStop) {
@@ -318,8 +326,22 @@ class CompetingConsumerStartAndStopReachEverySubscriptionTest {
             return new WrappedModel(true, false);
         }
 
+        // Runs the action of a subscription it runs for the event, on a thread of its own
+        private void publish(String subscriptionId, String eventId) {
+            Consumer<CloudEvent> action;
+            synchronized (this) {
+                if (!running || !runningIds.contains(subscriptionId)) {
+                    return;
+                }
+                action = actions.get(subscriptionId);
+            }
+            CloudEvent event = CloudEventBuilder.v1().withId(eventId).withSource(URI.create("urn:test")).withType("Tested").build();
+            Thread.ofPlatform().daemon().start(() -> action.accept(event));
+        }
+
         @Override
         public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            actions.put(subscriptionId, action);
             (running ? runningIds : pausedIds).add(subscriptionId);
             return new WrappedSubscription(subscriptionId);
         }
@@ -329,6 +351,7 @@ class CompetingConsumerStartAndStopReachEverySubscriptionTest {
             if (refusesSubscribePaused) {
                 throw new UnsupportedOperationException("subscribePaused");
             }
+            actions.put(subscriptionId, action);
             pausedIds.add(subscriptionId);
             return new WrappedSubscription(subscriptionId);
         }

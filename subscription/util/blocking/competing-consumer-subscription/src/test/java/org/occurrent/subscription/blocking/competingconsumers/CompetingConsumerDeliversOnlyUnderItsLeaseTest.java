@@ -85,10 +85,10 @@ class CompetingConsumerDeliversOnlyUnderItsLeaseTest {
     }
 
     @Test
-    void a_subscription_whose_lease_another_node_took_delivers_nothing_while_a_resume_of_another_subscription_waits() {
+    void a_subscription_whose_lease_another_node_took_before_this_node_is_told_delivers_nothing_while_a_resume_of_another_subscription_waits() {
         theGrantOfS1WaitsInsideTheWrappedModel();
 
-        strategy.anotherNodeTakes("s2");
+        strategy.anotherNodeTakesBeforeThisNodeIsTold("s2");
         wrapped.publish("s2", "e1");
 
         assertThat(deliveredWithin(NOT_DELIVERED_WITHIN, "s2"))
@@ -119,7 +119,7 @@ class CompetingConsumerDeliversOnlyUnderItsLeaseTest {
     }
 
     @Test
-    void a_stop_while_a_resume_waits_returns_without_it_and_the_late_resume_delivers_nothing() {
+    void a_stop_while_a_resume_waits_returns_without_it_and_the_late_resume_is_paused_again() {
         theGrantOfS1WaitsInsideTheWrappedModel();
 
         CompletableFuture<Void> stop = CompletableFuture.runAsync(model::stop, otherThreads);
@@ -128,11 +128,11 @@ class CompetingConsumerDeliversOnlyUnderItsLeaseTest {
 
         resumeOfS1.open();
         await().atMost(EVENTUALLY).until(() -> wrapped.resumesReturned.contains("s1"));
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(wrapped.isRunning("s1")).as("[s1 paused again in the wrapped model]").isFalse());
         wrapped.publish("s1", "e1");
         assertThat(deliveredWithin(NOT_DELIVERED_WITHIN, "s1"))
-                .as("[s1 delivered an event after stop() returned]")
+                .as("[s1 delivered an event after stop() returned and the late resume was paused again]")
                 .isEmpty();
-        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(wrapped.isRunning("s1")).as("s1 paused again in the wrapped model").isFalse());
     }
 
     // s1 and s2 run on this node. Another node takes s1 and gives it back, and the grant of s1 that follows resumes s1
@@ -250,6 +250,11 @@ class CompetingConsumerDeliversOnlyUnderItsLeaseTest {
             if (NODE.equals(holders.put(subscriptionId, OTHER_NODE))) {
                 notifyLater(subscriptionId, listener -> listener.onConsumeProhibited(subscriptionId, NODE));
             }
+        }
+
+        // As when the lease expired, and the refresh that tells this node has not run yet
+        private void anotherNodeTakesBeforeThisNodeIsTold(String subscriptionId) {
+            holders.put(subscriptionId, OTHER_NODE);
         }
 
         private void anotherNodeGivesUp(String subscriptionId) {
