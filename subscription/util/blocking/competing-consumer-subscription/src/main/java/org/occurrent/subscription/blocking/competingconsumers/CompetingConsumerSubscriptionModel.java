@@ -1278,7 +1278,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
         // A subscription that fails to start must not keep the subscriptions after it from starting. A failure of one
         // that does not compete is thrown once every subscription has had its turn. A competing consumer that fails is
-        // tried again on a thread of its own instead, and has given its lease back by then.
+        // tried again on a thread of its own instead. It has tried to give its lease back by then, unless the wrapped
+        // model runs it anyway or shutdown() has begun, and a lease it could not give back is tried again on that same
+        // thread.
         @Nullable RuntimeException firstFailure;
         try {
             onceAStartOrStopHasBegun.run();
@@ -3320,7 +3322,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         };
     }
 
-    // An unregister that throws while this node still holds the lease gives the lease back at least
+    // When the unregister throws while this node still holds the lease, this tries to give the lease back at least.
+    // When both throw the lease stays held, and the try that called this goes on trying
     private void unregisterOrAtLeastGiveUpTheLease(SubscriptionIdAndSubscriberId key) {
         try {
             unregisterCompetingConsumer(key.subscriptionId(), key.subscriberId());
@@ -3366,7 +3369,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * it is applied to it, as it would have paused it had the call run first.
      */
     private Subscription giveTheLeaseBackIfItThrows(SubscriptionIdAndSubscriberId key, CompetingConsumerState previous, Supplier<Subscription> start) {
-        // Asked inside the try, so an Error asking puts the consumer back and gives the lease back too
+        // Asked inside the try, so an Error asking puts the consumer back and tries to give the lease back too
         boolean ranBefore = false;
         try {
             ranBefore = runsInTheWrappedModelBefore(key);
