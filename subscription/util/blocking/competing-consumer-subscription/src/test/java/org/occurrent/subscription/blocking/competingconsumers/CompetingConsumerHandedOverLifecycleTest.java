@@ -44,6 +44,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -969,6 +970,94 @@ class CompetingConsumerHandedOverLifecycleTest {
         }
     }
 
+    // As above, with the pause of s1 in the wrapped model taking effect and then failing, or followed by an isRunning of
+    // s1 that fails. That leaves s1 registered, and the wrapped model no longer runs it once the thread of stop() gets
+    // to s1, as with the lock free. stop() returns only once this node has given up the lease of s1, as it does with the
+    // lock free, while the try of s1 waits before its backoff.
+    @TestFactory
+    Stream<DynamicTest> a_stop_that_a_later_pause_applied_before_the_wrapped_model_was_stopped_gives_up_the_lease_of_a_subscription_the_wrapped_model_no_longer_runs() {
+        return Stream.of(
+                DynamicTest.dynamicTest("with the pause failing after it took effect", () -> aStopAppliedByALaterPauseThatLeftS1Paused(wrapped -> wrapped.failuresAfterPausingS1)),
+                DynamicTest.dynamicTest("with isRunning failing after the pause", () -> aStopAppliedByALaterPauseThatLeftS1Paused(wrapped -> wrapped.failuresFromIsRunningOfS1AfterItsPause)));
+    }
+
+    private static void aStopAppliedByALaterPauseThatLeftS1Paused(Function<WrappedModel, AtomicInteger> failures) {
+        Fixture free = new Fixture(Initially.RUNNING);
+        try {
+            failures.apply(free.wrapped).set(1);
+            assertThat(catchThrowable(free.model::stop)).as("what stop() throws with the lock free").isNull();
+            assertThat(free.strategy.holders).as("the leases this node holds once stop() returned with the lock free").doesNotContain("s1");
+        } finally {
+            failures.apply(free.wrapped).set(0);
+            free.model.shutdown();
+        }
+
+        Fixture fixture = new Fixture(Initially.RUNNING);
+        Gate tryBeforeItsBackoff = new Gate();
+        try {
+            fixture.model.runBeforeATryWaitsForItsBackoff(tryBeforeItsBackoff::pass);
+            StopWaitingForAResumeOfN1 stop = stopWaitingForAResumeOfN1(fixture);
+            failures.apply(fixture.wrapped).set(1);
+            CompletableFuture<Void> pause = runOnTheTestThread(() -> fixture.model.pauseSubscription("s1"));
+            await().atMost(EVENTUALLY).until(pause::isDone);
+            assertThat(failures.apply(fixture.wrapped)).as("failures left in the wrapped model").hasValue(0);
+            assertThat(tryBeforeItsBackoff.awaitEntered()).as("the try of s1 waits before its backoff").isTrue();
+            assertThat(fixture.strategy.holders).as("the leases this node holds once the pause of s1 returned").contains("s1");
+            assertThat(stop.stopped()).as("stop() while the resume of n1 waits").isNotDone();
+            stop.resumeOfN1InTheWrappedModel().open();
+            assertThat(stop.resume()).as("the resume of n1").succeedsWithin(EVENTUALLY);
+            assertThat(stop.stopped()).as("stop() applied to s1 by the pause").succeedsWithin(EVENTUALLY);
+
+            assertThat(fixture.strategy.holders).as("[the leases this node holds once stop() returned, with the try of s1 waiting]").doesNotContain("s1");
+        } finally {
+            failures.apply(fixture.wrapped).set(0);
+            tryBeforeItsBackoff.open();
+            fixture.model.shutdown();
+        }
+    }
+
+    // As above, with the pause of s1 in the wrapped model failing after it took effect, and the lease strategy failing to
+    // unregister s1 once the pause returned. With the lock free, the thread of stop() meets that failure itself, so stop()
+    // throws it here too.
+    @Test
+    void a_stop_that_a_later_pause_applied_before_the_wrapped_model_was_stopped_throws_what_failed_to_unregister_a_subscription_the_wrapped_model_no_longer_runs() {
+        Throwable expected;
+        Fixture free = new Fixture(Initially.RUNNING);
+        try {
+            free.wrapped.failuresAfterPausingS1.set(1);
+            free.strategy.failuresFromUnregisteringS1.set(1);
+            expected = catchThrowable(free.model::stop);
+        } finally {
+            free.wrapped.failuresAfterPausingS1.set(0);
+            free.strategy.failuresFromUnregisteringS1.set(0);
+            free.model.shutdown();
+        }
+        assertThat(expected).as("what stop() throws with the lock free").isInstanceOf(IllegalStateException.class).hasMessage("Unregistering s1 failed");
+
+        Fixture fixture = new Fixture(Initially.RUNNING);
+        Gate tryBeforeItsBackoff = new Gate();
+        try {
+            fixture.model.runBeforeATryWaitsForItsBackoff(tryBeforeItsBackoff::pass);
+            StopWaitingForAResumeOfN1 stop = stopWaitingForAResumeOfN1(fixture);
+            fixture.wrapped.failuresAfterPausingS1.set(1);
+            CompletableFuture<Void> pause = runOnTheTestThread(() -> fixture.model.pauseSubscription("s1"));
+            await().atMost(EVENTUALLY).until(pause::isDone);
+            assertThat(fixture.wrapped.failuresAfterPausingS1).as("failures left for the pause of s1 in the wrapped model").hasValue(0);
+            fixture.strategy.failuresFromUnregisteringS1.set(1);
+            stop.resumeOfN1InTheWrappedModel().open();
+            assertThat(stop.resume()).as("the resume of n1").succeedsWithin(EVENTUALLY);
+
+            assertThat(stop.stopped()).as("[stop() applied to s1 by the pause, with unregistering s1 failing after]").failsWithin(EVENTUALLY)
+                    .withThrowableOfType(ExecutionException.class)
+                    .havingCause().isInstanceOf(expected.getClass()).withMessage(expected.getMessage());
+        } finally {
+            fixture.wrapped.failuresAfterPausingS1.set(0);
+            fixture.strategy.failuresFromUnregisteringS1.set(0);
+            tryBeforeItsBackoff.open();
+            fixture.model.shutdown();
+        }
+    }
+
     // A stop() that waits for a resume of n1 under way in the wrapped model, so it has not stopped the wrapped model,
     // until the test opens the gate
     private record StopWaitingForAResumeOfN1(Gate resumeOfN1InTheWrappedModel, CompletableFuture<Void> resume, CompletableFuture<Void> stopped) {
@@ -1564,6 +1653,9 @@ class CompetingConsumerHandedOverLifecycleTest {
         // s1 runs on through a pause or a stop of this model, as with a model whose pause fails without throwing
         private final AtomicBoolean s1RunsOnWhateverPausesIt = new AtomicBoolean();
         private final AtomicInteger failuresFromPausingS1 = new AtomicInteger();
+        private final AtomicInteger failuresAfterPausingS1 = new AtomicInteger();
+        // Each pause of s1 that uses one up makes the next isRunning of s1 fail
+        private final AtomicInteger failuresFromIsRunningOfS1AfterItsPause = new AtomicInteger();
         private final AtomicInteger errorsFromIsRunningOfS1OnALifecycleThread = new AtomicInteger();
         private final AtomicInteger failuresFromResumingN1 = new AtomicInteger();
         private final AtomicInteger failuresFromStarting = new AtomicInteger();
@@ -1575,6 +1667,7 @@ class CompetingConsumerHandedOverLifecycleTest {
         private final Set<String> pausedIds = new HashSet<>();
         private boolean running = true;
         private boolean shutDown;
+        private boolean isRunningOfS1Fails;
 
         @Override
         public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -1666,6 +1759,10 @@ class CompetingConsumerHandedOverLifecycleTest {
                 }
             }
             synchronized (this) {
+                if (subscriptionId.equals("s1") && isRunningOfS1Fails) {
+                    isRunningOfS1Fails = false;
+                    throw new IllegalStateException("isRunning of s1 failed");
+                }
                 boolean runsOn = subscriptionId.equals("s1") && s1RunsOnWhateverPausesIt.get();
                 return (running || runsOn) && runningIds.contains(subscriptionId);
             }
@@ -1713,12 +1810,18 @@ class CompetingConsumerHandedOverLifecycleTest {
                 throw new IllegalStateException("Pausing s1 failed");
             }
             synchronized (this) {
+                if (subscriptionId.equals("s1")) {
+                    isRunningOfS1Fails = failuresFromIsRunningOfS1AfterItsPause.getAndUpdate(left -> Math.max(0, left - 1)) > 0;
+                }
                 if (subscriptionId.equals("s1") && s1RunsOnWhateverPausesIt.get()) {
                     return;
                 }
                 if (runningIds.remove(subscriptionId)) {
                     pausedIds.add(subscriptionId);
                 }
+            }
+            if (subscriptionId.equals("s1") && failuresAfterPausingS1.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
+                throw new IllegalStateException("Pausing s1 failed after it was paused");
             }
         }
 

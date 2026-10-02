@@ -81,9 +81,10 @@ import static java.util.Objects.requireNonNull;
  * straight away or on a later grant. The third is described below. A {@code subscribe(..)} on another thread whose
  * registration is under way when {@code stop()} runs, or whose subscription the wrapped model is making or already
  * runs, can still hold a lease after {@code stop()} has returned. It gives the lease up at its next step, as {@code stop()} would. So
- * can a subscription whose lock another call holds when {@code stop()} runs, such as a try waiting for the lease
- * strategy. It gives the lease up once that call has returned, and delivers nothing meanwhile, since
- * {@code stop()} stops the wrapped model.
+ * can a subscription whose lock another call holds when {@code stop()} gets to it, such as a try waiting for the lease
+ * strategy. It gives the lease up once that call has returned, or, when a call that began after {@code stop()} failed
+ * to pause it in the wrapped model, once its try gets the lock. It delivers nothing meanwhile, since {@code stop()}
+ * stops the wrapped model.
  * <br>
  * <br>
  * While this model is started, a competing subscription that is neither cancelled nor paused by the user is registered
@@ -216,13 +217,16 @@ import static java.util.Objects.requireNonNull;
  * every subscription. Until then a pause, resume or cancel that began after {@code stop()} stops its subscription
  * before making its own call, as it would have had {@code stop()} got there first, and that subscription stays stopped
  * unless its own call or the {@code start(..)} changes that. {@code stop()} pauses a subscription in the wrapped model
- * only once it is done stopping that model, and only one that the wrapped model runs when {@code stop()} gets to it,
- * unless a resume that began after {@code stop()} has let it run. So when pausing a competing consumer in the wrapped
- * model fails for such a pause, resume or cancel before that, {@code stop()} throws the failure only when the same
- * holds once {@code stop()} gets to that subscription, and logs it as a warning otherwise. Any other failure such a
- * call meets stopping a competing consumer, such as the lease strategy failing to unregister it, {@code stop()} throws,
- * as it would had it got to that subscription first. A second {@code stop()} waiting behind it waits for it to return
- * instead.
+ * only once it is done stopping that model, and only one that this model records as running and the wrapped model runs
+ * when {@code stop()} gets to it, unless a resume that began after {@code stop()} has let it run. A failure to pause a
+ * competing consumer in the wrapped model that such a pause, resume or cancel meets before that leaves the consumer
+ * registered. {@code stop()} throws it when, once {@code stop()} gets to that subscription, the wrapped model runs it or
+ * cannot say whether it does, and no such resume has let it run. Otherwise {@code stop()} logs it as a warning, and
+ * then stops the subscription as it stops any other, throwing what fails there, such as the lease strategy failing to
+ * unregister it. When another call holds the lock of the subscription by then, {@code stop()} leaves stopping it to
+ * the try of the subscription instead. Any other failure such a call meets stopping a competing consumer,
+ * such as the lease strategy failing to unregister it, {@code stop()} throws, as it throws what it meets itself when
+ * it gets to that subscription first. A second {@code stop()} waiting behind it waits for it to return instead.
  */
 @NullMarked
 public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrapper, SubscriptionModel, SubscriptionModelLifeCycle, IntrospectableSubscriptions, CompetingConsumerListener {
@@ -866,7 +870,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             }
         }
         // Outside the monitor, since it can ask the wrapped model
-        return asMetByItsOwnThread(failedFirst);
+        @Nullable RuntimeException failure = asMetByItsOwnThread(failedFirst);
+        if (failure == null && failedFirst != null && failedFirst.beforeTheWrappedModelWasStopped() != null) {
+            // The call that applied this stop() first failed to pause the consumer in the wrapped model, and so left it
+            // registered. This thread holds the lock, so it stops the consumer as it stops any other.
+            return applyLifecycle(subscriptionId, applied, paused, new ArrayList<>(), null);
+        }
+        return failure;
     }
 
     /**
@@ -1062,11 +1072,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * The failure another call met applying a {@code start(..)} or {@code stop()}, for the thread of that call to throw,
      * unless that thread would not have met it. A pause, resume or cancel that began after a {@code stop()} can apply
      * it before that {@code stop()} is done stopping the wrapped model. The thread of the {@code stop()} stops each
-     * consumer only after that, and when it gets to one, it pauses it in the wrapped model only when that model runs it
-     * and no resume that began after the {@code stop()} has let it run while this model is stopped. So a failure to
-     * pause a consumer in the wrapped model, met before then, is thrown only when the same holds once the thread of the
-     * {@code stop()} gets here. Otherwise it is logged, and the try of the consumer has it already, as with any other
-     * failed call. Any other failure is thrown as it is, since that thread meets it too. Called outside the monitor.
+     * consumer only after that, and when it gets to one, it pauses it in the wrapped model only when this model records
+     * it as running, the wrapped model runs it, and no resume that began after the {@code stop()} has let it run while
+     * this model is stopped. A failure to pause a consumer in the wrapped model, met before then, leaves the consumer
+     * registered. It is thrown when, once the thread of the {@code stop()} gets here, the wrapped model runs the consumer
+     * or cannot say whether it does, and no such resume has let it run. Otherwise it is logged, and the try of the
+     * consumer has it already, as with any other failed call. A thread of the {@code stop()} that holds the consumer's
+     * lock then stops the consumer as it stops any other, see applyInTurn, and one that finds the lock held by another
+     * call leaves the lease to the try. Any other failure is thrown as it is. Called outside the monitor.
      */
     private @Nullable RuntimeException asMetByItsOwnThread(@Nullable FailedWhenAppliedFirst failedFirst) {
         if (failedFirst == null) {
