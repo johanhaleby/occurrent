@@ -191,6 +191,30 @@ class CompetingConsumerTriesAgainWithoutHoldingUpOtherSubscriptionsTest {
     }
 
     @Test
+    void the_try_goes_on_giving_up_the_lease_after_stop_while_the_unregister_and_the_release_both_throw() {
+        WrappedModel wrapped = new WrappedModel();
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
+        try {
+            subscribeRunningWithLease(model, wrapped, strategy, "s1");
+            strategy.unregisterFailsFor.add("s1");
+            strategy.releaseFailsFor.add("s1");
+
+            Throwable failure = catchThrowable(model::stop);
+            // The try of s1 has met both failures once
+            await().atMost(5, SECONDS).until(() -> strategy.releaseFailures.contains("s1"));
+
+            assertThat(failure).as("failure of stop() when the unregister of s1 throws").isNotNull();
+            assertThat(strategy.holders).as("leases held while the unregister and the release of s1 both throw").contains("s1");
+            strategy.unregisterFailsFor.remove("s1");
+            strategy.releaseFailsFor.remove("s1");
+            await().atMost(10, SECONDS).untilAsserted(() -> assertThat(strategy.holders).as("leases held once the unregister of s1 succeeds, unregister called for " + strategy.unregisterCalls).doesNotContain("s1"));
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    @Test
     void a_user_pause_that_takes_effect_and_then_throws_stays_paused_when_the_wrapped_model_cannot_say_whether_it_runs() {
         WrappedModel wrapped = new WrappedModel();
         Strategy strategy = new Strategy();
@@ -438,6 +462,9 @@ class CompetingConsumerTriesAgainWithoutHoldingUpOtherSubscriptionsTest {
         private final Set<String> registered = ConcurrentHashMap.newKeySet();
         private final Set<String> registerFailsOnce = ConcurrentHashMap.newKeySet();
         private final Set<String> unregisterFailsFor = ConcurrentHashMap.newKeySet();
+        private final Set<String> releaseFailsFor = ConcurrentHashMap.newKeySet();
+        // Added once a release has decided to throw
+        private final Set<String> releaseFailures = ConcurrentHashMap.newKeySet();
         // A registration waits at its gate once
         private final Map<String, Gate> registerGates = new ConcurrentHashMap<>();
         // An unregister waits at its gate every time, until the gate is opened
@@ -478,6 +505,10 @@ class CompetingConsumerTriesAgainWithoutHoldingUpOtherSubscriptionsTest {
 
         @Override
         public void releaseCompetingConsumer(String subscriptionId, String subscriberId) {
+            if (releaseFailsFor.contains(subscriptionId)) {
+                releaseFailures.add(subscriptionId);
+                throw new IllegalStateException("release failure for " + subscriptionId);
+            }
             holders.remove(subscriptionId);
         }
 

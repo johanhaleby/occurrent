@@ -80,11 +80,13 @@ import static java.util.Objects.requireNonNull;
  * {@link #resumeSubscription(String)}. It competes for its lease and runs once this node wins it, whether that happens
  * straight away or on a later grant. The third is described below. A {@code subscribe(..)} on another thread whose
  * registration is under way when {@code stop()} runs, or whose subscription the wrapped model is making or already
- * runs, can still hold a lease after {@code stop()} has returned. It gives the lease up at its next step, as {@code stop()} would. So
- * can a subscription whose lock another call holds when {@code stop()} gets to it, such as a try waiting for the lease
- * strategy. Unless a call that began after {@code stop()} failed to pause it in the wrapped model, it gives the lease
- * up once that call has returned. Otherwise it gives the lease up when that call returns or, at the latest, once its
- * try gets the lock. It delivers nothing meanwhile, since {@code stop()} stops the wrapped model.
+ * runs, can still hold a lease after {@code stop()} has returned. It tries to give the lease up at its next step, as
+ * {@code stop()} would. A subscription whose lock another call holds when {@code stop()} gets to it, such as a try
+ * waiting for the lease strategy, can too. That call, or at the latest the try of the subscription once it gets the
+ * lock, tries to unregister it. The subscription delivers nothing meanwhile, since {@code stop()} stops the wrapped
+ * model. When the try of a subscription fails to unregister it, the try releases the lease instead. When that fails
+ * too, this node keeps the lease, and the try goes on trying, waiting at most 2 seconds between attempts, until one
+ * succeeds or this model is shut down.
  * <br>
  * <br>
  * While this model is started, a competing subscription that is neither cancelled nor paused by the user is registered
@@ -224,8 +226,10 @@ import static java.util.Objects.requireNonNull;
  * cannot say whether it does, and no such resume has let it run. Otherwise {@code stop()} logs it as a warning. Unless
  * such a resume has let the subscription run, {@code stop()} then stops it as it stops any other and throws what fails
  * there, such as the lease strategy failing to unregister it for {@code stop()}. If another call holds the lock of the
- * subscription by then, this node gives the lease up when that call returns or, at the latest, once the try of the
- * subscription gets the lock, again unless such a resume has let it run. Any other failure such a pause, resume or
+ * subscription by then, that call, or at the latest the try of the subscription once it gets the lock, tries to
+ * unregister it instead, again unless such a resume has let it run. When the unregister of the try and its release of
+ * the lease both fail, this node keeps the lease, and the try goes on trying until one succeeds or this model is shut
+ * down. Any other failure such a pause, resume or
  * cancel meets stopping a competing consumer, such as the lease strategy failing to unregister it for that call,
  * {@code stop()} throws, as it throws what it meets itself when it gets to that subscription first. A second
  * {@code stop()} waiting behind it waits for it to return instead.
@@ -761,7 +765,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * as paused then, unless the wrapped model says it still runs it. A consumer whose resume by the user began
      * after this {@code stop()} did is left to run, as one resumed after {@code stop()} has returned is. A subscribe on another
      * thread whose registration has returned gives it up too, unless the wrapped model already runs its subscription or
-     * cannot say whether it does. That one, and one whose registration is under way, give it up at their next step.
+     * cannot say whether it does. That one, and one whose registration is under way, try to give it up at their next
+     * step, and an unregister that throws there has the consumer tried again on a thread of its own.
      * <p>
      * The threads are not pooled, since a pool would queue the subscriptions behind one whose call waits for the
      * database, which is what taking them one at a time did. They are joined before this returns. The wrapped MongoDB
@@ -1081,9 +1086,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * or cannot say whether it does, and no such resume has let it run. Otherwise it is logged, and the try of the
      * consumer has it already, as with any other failed call. Unless such a resume has let the consumer run, a thread
      * of the {@code stop()} that holds the consumer's lock then stops the consumer as it stops any other, see
-     * applyInTurn. One that finds the lock held by another call does not, and the lease is then given up, again unless
-     * such a resume has let the consumer run, when that call returns or, at the latest, once the try of the consumer
-     * gets the lock. Any other failure is thrown as it is. Called outside the monitor.
+     * applyInTurn. One that finds the lock held by another call does not. That call, or at the latest the try of the
+     * consumer once it gets the lock, then tries to unregister the consumer, again unless such a resume has let it run.
+     * When the unregister of the try and its release of the lease both fail, this node keeps the lease, and the try
+     * goes on trying until one succeeds or this model is shut down, see unregisterOrAtLeastGiveUpTheLease and
+     * keepTrying.
+     * Any other failure is thrown as it is. Called outside the monitor.
      */
     private @Nullable RuntimeException asMetByItsOwnThread(@Nullable FailedWhenAppliedFirst failedFirst) {
         if (failedFirst == null) {

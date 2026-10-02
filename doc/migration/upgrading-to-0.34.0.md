@@ -1306,9 +1306,11 @@ you called again.
    `stop()` was done stopping the wrapped model. `stop()` throws that one only when, once `stop()` gets to the
    subscription, the wrapped model runs it or can't say whether it does, and no resume that began after `stop()` has let
    it run. Otherwise it is logged as a warning, and unless such a resume has let the subscription run, `stop()` then
-   stops it as it stops any other and throws what fails there. When another call holds the subscription by then, the
-   lease is given up, with the same exception, when that call returns or, at the latest, once the thread from item 1
-   gets to the subscription. The thread from item 1 tries the subscription again either way. When `stop()` finds a
+   stops it as it stops any other and throws what fails there. When another call holds the subscription by then, that
+   call, or at the latest the thread from item 1 once it gets to the subscription, tries to unregister it, with the same
+   exception. When the thread from item 1 fails to unregister it, the thread gives up the lease instead. When that fails
+   too, this node keeps the lease, and the thread goes on trying until one succeeds or `shutdown()`. The thread from
+   item 1 tries the subscription again either way. When `stop()` finds a
    subscription held by a call that has not applied it there, it is applied once that call returns, by a thread of its
    own or by the next call made
    for that subscription, and `stop()` doesn't throw what fails there. A `stop()` that a `start(..)` waiting behind it
