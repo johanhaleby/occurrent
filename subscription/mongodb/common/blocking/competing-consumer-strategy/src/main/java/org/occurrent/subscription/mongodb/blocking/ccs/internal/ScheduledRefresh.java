@@ -44,7 +44,9 @@ import static java.util.concurrent.TimeUnit.SECONDS;
  * long as the database takes to answer. On the refresh thread that would hold up every other lease on the instance
  * until each one expired, so {@link #auto()} and {@link #every(Duration)} hand notifications to a notifier instead.
  * Each subscription id gets its notifications one at a time, in the order the refresh decided them, and a
- * notification that blocks holds up later ones for its own subscription id only.
+ * notification that blocks holds up later ones for its own subscription id only. Each id whose notification blocks
+ * takes a thread of the notifier's, a virtual one from Java 24 and a platform one before that, since a virtual thread
+ * blocked inside {@code synchronized} keeps the platform thread it runs on before Java 24.
  *
  * @see #auto()
  */
@@ -103,8 +105,15 @@ class ScheduledRefresh {
         }, newNotifier());
     }
 
-    // A thread for each subscription id whose notification blocks, so none of them holds up another
+    // A thread for each subscription id whose notification blocks, so none of them holds up another. A listener can
+    // block inside synchronized, and before Java 24 a virtual thread blocked there keeps the platform thread it runs on,
+    // so as many such listeners as there are processors would hold up every other notification. Before 24 each
+    // therefore gets a platform thread, and from 24 a virtual one, so the number of platform threads no longer grows
+    // with the ids that block.
     private static ExecutorService newNotifier() {
+        if (Runtime.version().feature() >= 24) {
+            return Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("occurrent-lease-notifier-", 0).factory());
+        }
         return Executors.newCachedThreadPool(Thread.ofPlatform().daemon().name("occurrent-lease-notifier-", 0).factory());
     }
 

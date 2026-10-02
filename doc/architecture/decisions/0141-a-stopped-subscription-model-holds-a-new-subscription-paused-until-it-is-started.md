@@ -247,7 +247,10 @@ into the lease strategy.
 
 The MongoDB lease strategies tell the listeners about each subscription on a notifier of its own, in the order a
 refresh round decided the changes (ADR 140). So a grant whose callback resumes subscription A in the wrapped model,
-which opens a change stream, holds up the later callbacks for A and none for subscription B.
+which opens a change stream, holds up the later callbacks for A and none for subscription B. Each subscription whose
+callback waits takes a thread of the notifier's, a virtual one on Java 24 and later and a platform one on Java 21 to 23,
+where a virtual thread that waits inside `synchronized`, as the pause of the MongoDB subscription models does, would
+keep the platform thread it runs on.
 
 `start(..)` and `stop()` never wait for a subscription's lock either. Each applies itself to every subscription at
 once, on a thread of its own for each subscription, and returns once it has taken care of each subscription whose lock

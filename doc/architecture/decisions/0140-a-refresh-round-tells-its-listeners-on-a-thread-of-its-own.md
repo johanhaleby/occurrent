@@ -24,8 +24,14 @@ to another node, although nothing was wrong with any of them.
 
 **The refresh thread refreshes and never calls a listener. It hands each change a round made to a notifier for the
 subscription the change is about, which calls the listeners for that subscription one change at a time, in the order
-the round decided the changes.** The notifiers for different subscriptions call the listeners at the same time, on
-threads from a pool that grows to one thread for each subscription with a change waiting.
+the round decided the changes.** The notifiers for different subscriptions call the listeners at the same time, each on
+a thread of its own while it has a change waiting. On Java 24 and later those are virtual threads, so the number of
+platform threads stays the same however many subscriptions have a listener that blocks. On Java 21 to 23 they are
+platform threads, from a pool that grows to one for each subscription with a change waiting. Until Java 24 a virtual
+thread that blocks inside `synchronized` keeps the platform thread it runs on, and a listener, whether yours or the
+subscription model's, can block there. As many of them as the node has processors would then hold up every
+notification on the node, and one subscription holding up another is what this decision rules out, so it comes before
+the number of threads.
 
 A change can be out of date by the time the notifier gets to it, since registering, releasing and the next round keep
 changing the lease meanwhile. The notifier therefore calls `onConsumeGranted` only if the consumer still holds the
@@ -52,7 +58,8 @@ once every other listener has been called, with any later failure attached as su
 ## Consequences
 
 A listener that blocks holds up the later calls for the same subscription. It holds up no call for another
-subscription and no refresh of any lease. A subscription whose pause is still waiting keeps delivering events until the pause completes, as it did before. Its checkpoint
+subscription and no refresh of any lease. On Java 21 to 23 an outage that blocks the listeners of many subscriptions
+takes a platform thread for each of them until their calls return. A subscription whose pause is still waiting keeps delivering events until the pause completes, as it did before. Its checkpoint
 writes use the fencing token of the lease it lost, so they are refused once the next holder has written (ADR 139).
 
 A `CompetingConsumerListener` of your own is called from a notifier thread for a change a refresh round made, and can
