@@ -326,12 +326,13 @@ logs the failure as a warning. Unless such a resume has let the subscription run
 subscription as it stops any other and throws what fails there, such as the lease strategy failing to unregister it for
 the `stop()`. When another call holds the subscription's lock by then, that call, or at the latest the try of the
 subscription once it gets the lock, tries to unregister the subscription, again unless such a resume has let it
-run. When the try fails to unregister it, the try releases the lease instead. When that fails too, this node keeps
-the lease, and the try goes on trying, with the same backoff, until one succeeds or the model is shut down. Any other
-failure the pause, resume or cancel meets applying the `stop()`, such as the lease strategy failing to unregister the
-subscription for that call, the `stop()` throws as it is. When the thread of the `stop()` finds the
-subscription's lock held by a call that has not applied it there, the `stop()` returns without waiting for it and
-doesn't throw what fails there later. Giving up a `start(..)` gives
+run. When the try fails to unregister it, the try releases the lease instead, if the lease strategy still reports it
+held. The MongoDB lease strategies forget the subscription before they remove its lease, so after a removal that fails
+they neither report the lease held nor refresh it. It expires within the lease time, after which another node can
+take the subscription over. Any other failure the pause, resume or cancel meets applying the `stop()`, such as the lease
+strategy failing to unregister the subscription for that call, the `stop()` throws as it is. When the thread of the
+`stop()` finds the subscription's lock held by a call that has not applied it there, the `stop()` returns without
+waiting for it and doesn't throw what fails there later. Giving up a `start(..)` gives
 up only what it does for that subscription. Starting the wrapped model is a step for the whole model, which no single
 subscription can give up, so a thread of its own goes on trying it, with the same backoff, until it succeeds or a
 `stop()` that began after that `start(..)`, or `shutdown()`, comes. A handed over thread or a try that is still
