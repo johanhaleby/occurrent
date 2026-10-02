@@ -58,6 +58,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -295,10 +296,10 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     /**
      * The storage fails every delete of an earlier cancel of the same id, as during an outage, and still holds the
-     * checkpoint of the cancelled subscription. A subscribe from the model default reads that checkpoint and resumes
-     * from it, as it does without the delete, and returns without waiting for the delete. Its position writes are
-     * queued behind the delete, so the delete cannot remove them, and its events are delivered meanwhile. Once the
-     * storage deletes again, the stored position is that of the last event.
+     * checkpoint of the cancelled subscription. A subscribe from the model default takes the delete over, reads that
+     * checkpoint and resumes from it, as it does without the delete, and returns without waiting for the delete. The
+     * model makes no further try of the delete, so once the storage deletes again, the stored position is that of the
+     * last event.
      */
     @Test
     void a_subscribe_from_the_model_default_resumes_from_the_checkpoint_the_storage_still_holds_while_a_delete_keeps_failing() {
@@ -553,12 +554,13 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     }
 
     /**
-     * A pause that comes while the position write after an event is queued behind the delete of an earlier cancel resumes
-     * after that event, since its action already ran. Resuming from where the subscription started would skip what was
+     * The storage evaluates no condition on a delete, so the position write after an event waits for the try of the
+     * delete of an earlier cancel under way when the subscribe came. A pause that comes while that write waits resumes
+     * after the event, since its action already ran. Resuming from where the subscription started would skip what was
      * written while it was paused, because StartAt.now() means the present at the resume again.
      */
     @Test
-    void a_resume_after_a_pause_while_a_position_write_is_queued_behind_a_delete_starts_after_the_last_event_whose_action_ran() {
+    void a_resume_after_a_pause_while_a_position_write_waits_for_a_delete_starts_after_the_last_event_whose_action_ran() {
         // Given
         HeldDeleteStorage storage = new HeldDeleteStorage();
         Feed feed = new Feed();
@@ -795,24 +797,26 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     }
 
     /**
-     * A wrapped model that manages named subscriptions runs the action of what it replays within its own subscribe and
-     * waits for it, and the storage fails the delete of an earlier cancel of the same id a few times before one
-     * succeeds, as during a short outage. The subscription resumes from the checkpoint the storage still holds. Its
-     * position writes are queued behind the delete, so the subscribe returns and every event is delivered while the
-     * delete still fails, and once the delete succeeded the position stored is that of the last event.
+     * The storage fails every delete of an earlier cancel of the same id, as during an outage, and still holds the
+     * checkpoint of the cancelled subscription. A subscribe of the id takes the delete over, so the model makes no
+     * further try and the cancel completes. The subscription resumes from that checkpoint and stores the position of
+     * each event it handles as it would with no delete running, so the stored position is that of the last event while
+     * the storage still fails every delete. A wrapped model that manages named subscriptions runs the action of what it
+     * replays within its own subscribe and waits for it, and that subscribe returns too.
      */
-    @Test
-    void a_wrapped_model_that_replays_within_its_subscribe_returns_and_delivers_while_a_delete_of_the_id_fails_and_the_last_position_is_stored_once_it_succeeds() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_subscribe_that_takes_over_a_delete_that_keeps_failing_stores_the_position_of_each_event_and_the_cancel_completes(boolean handsOver) throws Exception {
         // Given
         HeldDeleteStorage storage = new HeldDeleteStorage();
-        storage.releaseDelete.countDown();
         storage.deleteFails = true;
-        NamedFeed feed = new NamedFeed(true);
+        Feed feed = handsOver ? new NamedFeed(true) : new Feed();
         long stored = feed.write();
         List<Long> replayed = List.of(feed.write(), feed.write());
-        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint(String.valueOf(stored))).block(TIMEOUT);
+        storage.save(SUBSCRIPTION_ID, checkpoint(stored)).block(TIMEOUT);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
         CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+        await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 1);
         List<String> delivered = new CopyOnWriteArrayList<>();
 
         try {
@@ -823,145 +827,191 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             Throwable subscribeEnded = catchThrowable(() -> subscribed.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
             // Asserted here, since the wrapped model is still taking a subscribe that did not return, and writing to it
             // would wait for that
-            assertThat(subscribeEnded).as("how the subscribe ended while the delete failed").isNull();
+            assertThat(subscribeEnded).as("how the subscribe ended while the delete kept failing").isNull();
             List<Long> writtenAfterTheReturn = List.of(feed.write(), feed.write());
-            await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 2);
-            boolean cancelEndedBeforeTheDeleteSucceeded = cancelled.isDone();
-            List<String> deliveredWhileTheDeleteFailed = List.copyOf(delivered);
-            storage.deleteFails = false;
-            cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            Throwable cancelEnded = catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            int deletesAskedForOnceTheCancelEnded = storage.deleteAttempts.get();
+            // Longer than the wait before the next try after a few failures
+            await().pollDelay(Duration.ofMillis(500)).atMost(TIMEOUT).until(() -> true);
 
             // Then
-            assertThat(cancelEndedBeforeTheDeleteSucceeded).as("whether the cancel ended before a delete succeeded").isFalse();
-            assertThat(deliveredWhileTheDeleteFailed).as("events delivered while the delete failed")
-                    .containsExactly(String.valueOf(replayed.get(0)), String.valueOf(replayed.get(1)),
-                            String.valueOf(writtenAfterTheReturn.get(0)), String.valueOf(writtenAfterTheReturn.get(1)));
-            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT)).as("position stored once the delete succeeded")
-                    .isEqualTo(new StringBasedCheckpoint(String.valueOf(writtenAfterTheReturn.getLast()))));
+            List<Long> everyEvent = new ArrayList<>(replayed);
+            everyEvent.addAll(writtenAfterTheReturn);
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).as("events delivered while the delete kept failing")
+                    .containsExactlyElementsOf(ids(everyEvent)));
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT)).as("position stored while the delete kept failing")
+                    .isEqualTo(checkpoint(writtenAfterTheReturn.getLast())));
+            assertThat(cancelEnded).as("how the cancel ended once the subscribe took its delete over").isNull();
+            assertThat(storage.deleteAttempts).as("deletes the storage was asked for, once the cancel had ended").hasValue(deletesAskedForOnceTheCancelEnded);
         } finally {
-            storage.deleteFails = false;
             model.shutdown();
         }
     }
 
     /**
-     * As above, except that the storage fails every delete, as during an outage that outlasts the process. The
-     * subscribe returns and the events are delivered all the same. A shutdown then stops the tries and drops the
-     * queued position writes, so the storage still holds the checkpoint of the cancelled subscription and is asked
-     * for no write after the cancel.
+     * The storage fails the delete of an earlier cancel of the same id, and still holds the checkpoint of the cancelled
+     * subscription, when a subscribe of the id takes the delete over. The subscription handles two events, and is then
+     * paused or the model stopped, and resumed or not, before the storage deletes again. The model then ends, an event
+     * is written while it is down, and a new model on the same storage subscribes the id from the model default. It
+     * resumes from the last event the first model handled, so the event written while it was down is delivered.
+     */
+    @ParameterizedTest
+    @CsvSource({"default, pause, false", "now, stop, false", "default, stop, true", "now, pause, true"})
+    void a_subscription_that_took_over_a_delete_and_was_paused_or_stopped_skips_no_event_once_the_model_is_rebuilt(String startAt, String endedBy, boolean resumedFirst) throws Exception {
+        // Given
+        HeldDeleteStorage storage = new HeldDeleteStorage();
+        storage.releaseDelete.countDown();
+        storage.deleteFails = true;
+        Feed feed = new Feed();
+        storage.save(SUBSCRIPTION_ID, checkpoint(feed.write())).block(TIMEOUT);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+        await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 1);
+        ReactorDurableSubscriptionModel rebuilt = new ReactorDurableSubscriptionModel(feed, storage);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+
+        try {
+            CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, answer(startAt), deliveredTo(delivered)))
+                    .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted().block(TIMEOUT);
+            List<Long> handled = List.of(feed.write(), feed.write());
+            await().atMost(TIMEOUT).until(() -> delivered.containsAll(ids(handled)));
+
+            // When
+            if (endedBy.equals("pause")) {
+                model.pauseSubscription(SUBSCRIPTION_ID);
+            } else {
+                model.stop();
+            }
+            if (resumedFirst && endedBy.equals("pause")) {
+                model.resumeSubscription(SUBSCRIPTION_ID);
+            } else if (resumedFirst) {
+                model.start(true);
+            }
+            storage.deleteFails = false;
+            cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            model.shutdown();
+            long writtenWhileDown = feed.write();
+            rebuilt.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)).waitUntilStarted().block(TIMEOUT);
+            long writtenAfterTheRebuild = feed.write();
+
+            // Then
+            await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(writtenAfterTheRebuild)));
+            assertThat(delivered).as("events delivered before and after the rebuild").contains(String.valueOf(writtenWhileDown));
+        } finally {
+            model.shutdown();
+            rebuilt.shutdown();
+        }
+    }
+
+    /**
+     * The storage evaluates a condition on a delete, holds the delete of an earlier cancel of the same id, and still
+     * holds the checkpoint of the cancelled subscription. A subscribe of the id from the model default resumes from
+     * that checkpoint and handles two events while the storage holds the delete. The storage then applies the delete,
+     * and the process ends right after it, so nothing the model asks of the storage afterwards reaches it. An event is
+     * written while the process is down, and a new model on the same storage subscribes the id from the model default.
+     * It resumes from the last event the first model handled, so nothing written after that event is skipped.
      */
     @Test
-    void a_wrapped_model_that_replays_within_its_subscribe_returns_and_delivers_while_a_delete_of_the_id_never_succeeds_and_a_shutdown_drops_its_queued_positions() throws Exception {
+    void a_rebuild_after_the_process_ended_right_after_the_storage_applied_a_delete_that_a_subscribe_took_over_skips_no_event() throws Exception {
         // Given
+        InMemoryCheckpointStorage store = new InMemoryCheckpointStorage();
+        HeldDeleteStorage storage = new HeldDeleteStorage(store, true);
+        storage.processEndsOnceDeleted = true;
+        Feed feed = new Feed();
+        long stored = feed.write();
+        long writtenAfterTheCheckpoint = feed.write();
+        store.save(SUBSCRIPTION_ID, checkpoint(stored)).block(TIMEOUT);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        model.cancelSubscription(SUBSCRIPTION_ID);
+        ReactorDurableSubscriptionModel rebuilt = new ReactorDurableSubscriptionModel(feed, new HeldDeleteStorage(store, true));
+        List<String> delivered = new CopyOnWriteArrayList<>();
+
+        try {
+            CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)))
+                    .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted().block(TIMEOUT);
+            List<Long> handled = List.of(feed.write(), feed.write());
+            await().atMost(TIMEOUT).until(() -> delivered.containsAll(ids(handled)));
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(store.read(SUBSCRIPTION_ID).block(TIMEOUT)).as("position stored while the storage held the delete")
+                    .isEqualTo(checkpoint(handled.getLast())));
+
+            // When
+            storage.releaseDelete.countDown();
+            assertThat(storage.deleteApplied.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the storage applied the delete").isTrue();
+            model.shutdown();
+            long writtenWhileDown = feed.write();
+            rebuilt.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)).waitUntilStarted().block(TIMEOUT);
+            long writtenAfterTheRebuild = feed.write();
+
+            // Then
+            await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(writtenAfterTheRebuild)));
+            assertThat(delivered).as("events delivered before and after the rebuild")
+                    .containsExactly(String.valueOf(writtenAfterTheCheckpoint), String.valueOf(handled.get(0)), String.valueOf(handled.get(1)),
+                            String.valueOf(writtenWhileDown), String.valueOf(writtenAfterTheRebuild));
+        } finally {
+            storage.releaseDelete.countDown();
+            model.shutdown();
+            rebuilt.shutdown();
+        }
+    }
+
+    /**
+     * A subscription from the model default finds nothing stored, so it records where the feed is as its first
+     * position. That write fails once, as during a short outage, or is refused because another node stored a position
+     * for the id right before it. A subscribe that took over the delete of an earlier cancel of the id, which the
+     * storage fails, ends the same way as one with no delete running, and so does the delivery of an event written
+     * afterwards and what is stored then.
+     */
+    @ParameterizedTest
+    @CsvSource({"false, fails", "false, refused", "true, fails", "true, refused"})
+    void a_first_position_that_fails_or_is_refused_ends_a_subscribe_that_took_over_a_delete_as_it_ends_one_with_no_delete_running(boolean handsOver, String firstPosition) {
+        assertThat(firstPositionOutcome(handsOver, firstPosition, true)).as("how a subscribe that took over a delete ended")
+                .isEqualTo(firstPositionOutcome(handsOver, firstPosition, false));
+    }
+
+    private static String firstPositionOutcome(boolean handsOver, String firstPosition, boolean deleteRunning) {
         HeldDeleteStorage storage = new HeldDeleteStorage();
         storage.deleteFails = true;
-        NamedFeed feed = new NamedFeed(true);
-        long stored = feed.write();
-        List<Long> replayed = List.of(feed.write(), feed.write());
-        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint(String.valueOf(stored))).block(TIMEOUT);
+        Feed feed = handsOver ? new NamedFeed(true) : new Feed();
+        feed.write();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
-        CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
-        int savesBeforeTheSubscribe = storage.saves.get();
         List<String> delivered = new CopyOnWriteArrayList<>();
-
         try {
-            // When
-            CompletableFuture<Subscription> subscribed = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)));
-            Throwable subscribeEnded = catchThrowable(() -> subscribed.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
-            assertThat(subscribeEnded).as("how the subscribe ended while the delete failed").isNull();
-            long writtenAfterTheReturn = feed.write();
-            await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 2);
-            model.shutdown();
-            Throwable cancelEnded = catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
-
-            // Then
-            assertThat(delivered).as("events delivered while the delete failed")
-                    .containsExactly(String.valueOf(replayed.get(0)), String.valueOf(replayed.get(1)), String.valueOf(writtenAfterTheReturn));
-            assertThat(cancelEnded).as("how the cancel ended once the model shut down").hasRootCauseMessage(DELETE_FAILED);
-            assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT)).as("position stored once the model shut down")
-                    .isEqualTo(new StringBasedCheckpoint(String.valueOf(stored)));
-            assertThat(storage.saves).as("writes the storage was asked for after the cancel").hasValue(savesBeforeTheSubscribe);
+            if (deleteRunning) {
+                model.cancelSubscription(SUBSCRIPTION_ID);
+                await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 1);
+            }
+            if (firstPosition.equals("fails")) {
+                storage.savesToFail.set(1);
+            } else {
+                storage.storedByAnotherNodeBeforeAFirstPosition = checkpoint(1000);
+            }
+            @Nullable Subscription subscription = null;
+            @Nullable Throwable subscribeThrew = null;
+            try {
+                subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered));
+            } catch (Throwable throwable) {
+                subscribeThrew = throwable;
+            }
+            Subscription returned = subscription;
+            @Nullable Throwable startEnded = returned == null ? null : catchThrowable(() -> returned.waitUntilStarted().block(TIMEOUT));
+            long writtenAfterTheSubscribe = feed.write();
+            // Long enough for the event to be delivered and its position stored, where the subscription still runs
+            await().pollDelay(Duration.ofMillis(300)).atMost(TIMEOUT).until(() -> true);
+            return "subscribe threw " + describe(subscribeThrew) + ", waiting for the start ended with " + describe(startEnded)
+                   + ", running " + model.isRunning(SUBSCRIPTION_ID) + ", event written afterwards delivered " + delivered.contains(String.valueOf(writtenAfterTheSubscribe))
+                   + ", stored " + storage.stored.read(SUBSCRIPTION_ID).map(Checkpoint::asString).blockOptional(TIMEOUT).orElse("nothing");
         } finally {
+            storage.deleteFails = false;
             model.shutdown();
         }
     }
 
-    /**
-     * A subscription from the model default finds nothing stored while the delete of an earlier cancel of the same id
-     * runs, so it starts from where the feed was and records that as its first position once the delete has ended.
-     * Another node stores a position for the id right after the delete, so recording the first position is refused,
-     * as it would be at the subscribe with no delete running. The subscription has started by then, so it is ended
-     * instead, and an event written afterwards is not delivered.
-     */
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void a_first_position_queued_behind_a_delete_and_refused_once_written_ends_the_subscription(boolean handsOver) throws Exception {
-        // Given
-        HeldDeleteStorage storage = new HeldDeleteStorage();
-        storage.storedByAnotherNodeOnceDeleted = new StringBasedCheckpoint("1000");
-        Feed feed = handsOver ? new NamedFeed(true) : new Feed();
-        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
-        CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
-        List<String> delivered = new CopyOnWriteArrayList<>();
-
-        try {
-            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)).waitUntilStarted().block(TIMEOUT);
-            long writtenBeforeTheDeleteEnded = feed.write();
-            await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(writtenBeforeTheDeleteEnded)));
-
-            // When
-            storage.releaseDelete.countDown();
-            cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-
-            // Then
-            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(handsOver ? ((NamedFeed) feed).subscriptions.containsKey(SUBSCRIPTION_ID) : model.isRunning(SUBSCRIPTION_ID))
-                    .as("whether the subscription still runs once its first position was refused").isFalse());
-            long writtenAfterTheRefusal = feed.write();
-            assertThat(delivered).as("events delivered to the subscription").doesNotContain(String.valueOf(writtenAfterTheRefusal));
-            assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT)).as("position stored once the subscription ended")
-                    .isEqualTo(new StringBasedCheckpoint("1000"));
-        } finally {
-            storage.releaseDelete.countDown();
-            model.shutdown();
-        }
+    private static String describe(@Nullable Throwable throwable) {
+        return throwable == null ? "nothing" : throwable.getClass().getSimpleName() + "(" + throwable.getMessage() + ")";
     }
 
-    /**
-     * The checkpoint queued behind the delete of an earlier cancel of the same id fails twice once written, as during a
-     * short outage of the storage. It is tried again, as a failed delete is, so the position stored is that of the last
-     * event. A write dropped after its first failure would leave nothing stored, since the delete removed the checkpoint
-     * of the cancelled subscription.
-     */
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void a_queued_position_that_fails_once_written_is_tried_again_until_it_is_stored(boolean handsOver) throws Exception {
-        // Given
-        HeldDeleteStorage storage = new HeldDeleteStorage();
-        Feed feed = handsOver ? new NamedFeed(true) : new Feed();
-        long stored = feed.write();
-        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint(String.valueOf(stored))).block(TIMEOUT);
-        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
-        CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
-        List<String> delivered = new CopyOnWriteArrayList<>();
-
-        try {
-            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)).waitUntilStarted().block(TIMEOUT);
-            List<Long> written = List.of(feed.write(), feed.write());
-            await().atMost(TIMEOUT).until(() -> delivered.containsAll(ids(written)));
-            storage.savesToFail.set(2);
-
-            // When
-            storage.releaseDelete.countDown();
-            cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-
-            // Then
-            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT)).as("position stored once the delete ended")
-                    .isEqualTo(new StringBasedCheckpoint(String.valueOf(written.getLast()))));
-            assertThat(storage.savesToFail).as("saves still to fail").hasValue(0);
-        } finally {
-            storage.releaseDelete.countDown();
-            model.shutdown();
-        }
+    private static Checkpoint checkpoint(long position) {
+        return new StringBasedCheckpoint(String.valueOf(position));
     }
 
     private static StartAt answer(String answer) {
@@ -997,7 +1047,7 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
      * Holds every delete until the test releases it.
      */
     private static final class HeldDeleteStorage implements CheckpointStorage {
-        final InMemoryCheckpointStorage stored = new InMemoryCheckpointStorage();
+        final InMemoryCheckpointStorage stored;
         final CountDownLatch releaseDelete = new CountDownLatch(1);
         volatile boolean deleteFails;
         final AtomicInteger deleteAttempts = new AtomicInteger();
@@ -1006,18 +1056,46 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
         final AtomicInteger savesToFail = new AtomicInteger();
         // Stored for the id right after a delete applied, as another node recording a first position would
         volatile @Nullable Checkpoint storedByAnotherNodeOnceDeleted;
+        // Stored for the id right before the next save on the condition that nothing is stored, as another node
+        // recording a first position would
+        volatile @Nullable Checkpoint storedByAnotherNodeBeforeAFirstPosition;
+        // Set, the process ends right after a delete reached the store, so nothing asked of this storage afterwards
+        // reaches it
+        volatile boolean processEndsOnceDeleted;
+        private volatile boolean processEnded;
+        final CountDownLatch deleteApplied = new CountDownLatch(1);
+        // Whether a delete evaluates its condition, or refuses every condition but any(), as a storage written before
+        // deletes took one does
+        private final boolean conditionalDeletes;
+
+        HeldDeleteStorage() {
+            this(new InMemoryCheckpointStorage(), false);
+        }
+
+        HeldDeleteStorage(InMemoryCheckpointStorage stored, boolean conditionalDeletes) {
+            this.stored = stored;
+            this.conditionalDeletes = conditionalDeletes;
+        }
 
         @Override
         public Mono<Checkpoint> read(String subscriptionId) {
-            return stored.read(subscriptionId);
+            return Mono.defer(() -> processEnded ? Mono.never() : stored.read(subscriptionId));
         }
 
         @Override
         public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition writeCondition) {
             return Mono.defer(() -> {
+                if (processEnded) {
+                    return Mono.never();
+                }
                 saves.incrementAndGet();
                 if (savesToFail.getAndUpdate(left -> Math.max(0, left - 1)) > 0) {
                     return Mono.error(new IllegalStateException(SAVE_FAILED));
+                }
+                Checkpoint storedByAnotherNode = storedByAnotherNodeBeforeAFirstPosition;
+                if (storedByAnotherNode != null && writeCondition instanceof CheckpointWriteCondition.IfAbsent) {
+                    storedByAnotherNodeBeforeAFirstPosition = null;
+                    return stored.save(subscriptionId, storedByAnotherNode).then(stored.save(subscriptionId, checkpoint, writeCondition));
                 }
                 return stored.save(subscriptionId, checkpoint, writeCondition);
             });
@@ -1030,18 +1108,38 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
         @Override
         public Mono<Long> writeVersion(String subscriptionId) {
-            return stored.writeVersion(subscriptionId);
+            return Mono.defer(() -> processEnded ? Mono.never() : stored.writeVersion(subscriptionId));
         }
 
         @Override
         public Mono<Void> delete(String subscriptionId) {
+            return deleting(subscriptionId, () -> stored.delete(subscriptionId));
+        }
+
+        @Override
+        public Mono<Void> delete(String subscriptionId, CheckpointWriteCondition condition) {
+            return conditionalDeletes ? deleting(subscriptionId, () -> stored.delete(subscriptionId, condition)) : CheckpointStorage.super.delete(subscriptionId, condition);
+        }
+
+        @Override
+        public boolean evaluatesDeleteConditions() {
+            return conditionalDeletes;
+        }
+
+        private Mono<Void> deleting(String subscriptionId, Supplier<Mono<Void>> applied) {
             deleteAttempts.incrementAndGet();
             if (deleteFails) {
                 return Mono.error(new IllegalStateException(DELETE_FAILED));
             }
             return Mono.fromCallable(() -> releaseDelete.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS))
                     .subscribeOn(Schedulers.boundedElastic())
-                    .then(Mono.defer(() -> stored.delete(subscriptionId)))
+                    // Before the model hears that the delete ended, so nothing it starts then reaches the store
+                    .then(Mono.defer(() -> processEnded ? Mono.<Void>never() : applied.get().doOnTerminate(() -> {
+                        if (processEndsOnceDeleted) {
+                            processEnded = true;
+                        }
+                        deleteApplied.countDown();
+                    })))
                     .then(Mono.defer(() -> {
                         Checkpoint storedByAnotherNode = storedByAnotherNodeOnceDeleted;
                         return storedByAnotherNode == null ? Mono.empty() : stored.save(subscriptionId, storedByAnotherNode).then();

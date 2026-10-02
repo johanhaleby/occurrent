@@ -458,4 +458,119 @@ public abstract class CheckpointStorageConformance {
                     .isNull();
         }
     }
+
+    @Nested
+    @DisplayName("delete conditions")
+    class DeleteConditions {
+
+        @Test
+        void not_older_than_deletes_a_checkpoint_stored_without_a_version_or_at_a_version_not_above_it() {
+            String unversioned = subscriptionId();
+            String atTheVersion = subscriptionId();
+            String belowTheVersion = subscriptionId();
+            checkpointStorage().save(unversioned, new StringBasedCheckpoint("unversioned")).block();
+
+            if (!fixture().evaluatesDeleteConditions()) {
+                assertThatThrownBy(() -> checkpointStorage().delete(unversioned, CheckpointWriteCondition.notOlderThan(0)).block())
+                        .as("a storage that declares it does not evaluate delete conditions refuses anything but any()")
+                        .isInstanceOf(UnsupportedOperationException.class);
+                assertThat(requireNonNull(checkpointStorage().read(unversioned).block()).asString())
+                        .as("a delete refused as unsupported must not delete anything")
+                        .isEqualTo("unversioned");
+                return;
+            }
+
+            checkpointStorage().delete(unversioned, CheckpointWriteCondition.notOlderThan(0)).block();
+
+            assertThat(checkpointStorage().read(unversioned).block())
+                    .as("a checkpoint stored without a version fulfils notOlderThan, as it does on a save")
+                    .isNull();
+
+            if (!fixture().evaluatesWriteConditions()) {
+                return;
+            }
+
+            checkpointStorage().save(atTheVersion, new StringBasedCheckpoint("at-5"), CheckpointWriteCondition.notOlderThan(5)).block();
+            checkpointStorage().save(belowTheVersion, new StringBasedCheckpoint("at-3"), CheckpointWriteCondition.notOlderThan(3)).block();
+
+            checkpointStorage().delete(atTheVersion, CheckpointWriteCondition.notOlderThan(5)).block();
+            checkpointStorage().delete(belowTheVersion, CheckpointWriteCondition.notOlderThan(5)).block();
+
+            assertThat(checkpointStorage().read(atTheVersion).block()).as("a stored version equal to the offered one is deleted").isNull();
+            assertThat(checkpointStorage().read(belowTheVersion).block()).as("a stored version below the offered one is deleted").isNull();
+            assertThat(storedVersion(atTheVersion))
+                    .as("the version is deleted with the checkpoint, or it refuses a later notOlderThan(0) save of a "
+                            + "subscription registered again with the same id")
+                    .isNull();
+        }
+
+        @Test
+        void not_older_than_refuses_and_keeps_a_checkpoint_stored_at_a_higher_version() {
+            if (!fixture().evaluatesDeleteConditions() || !fixture().evaluatesWriteConditions()) {
+                return;
+            }
+            String id = subscriptionId();
+            checkpointStorage().save(id, new StringBasedCheckpoint("at-7"), CheckpointWriteCondition.notOlderThan(7)).block();
+
+            // A refusal that completed empty would make block() return null, and assertThatThrownBy then fails
+            // rather than passing.
+            assertThatThrownBy(() -> checkpointStorage().delete(id, CheckpointWriteCondition.notOlderThan(6)).block())
+                    .as("a stored version above the offered one refuses the delete, which is what keeps a cancelled "
+                            + "subscription's delete from removing the checkpoint a newer one wrote")
+                    .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
+            assertThat(requireNonNull(checkpointStorage().read(id).block()).asString())
+                    .as("a refused delete must not delete the checkpoint")
+                    .isEqualTo("at-7");
+            assertThat(storedVersion(id))
+                    .as("a refused delete must not change the stored version")
+                    .isEqualTo(7L);
+        }
+
+        @Test
+        void a_conditional_delete_with_nothing_stored_completes_without_an_error() {
+            if (!fixture().evaluatesDeleteConditions()) {
+                return;
+            }
+            String id = subscriptionId();
+
+            checkpointStorage().delete(id, CheckpointWriteCondition.notOlderThan(0)).block();
+            checkpointStorage().delete(id, CheckpointWriteCondition.ifAbsent()).block();
+
+            assertThat(checkpointStorage().read(id).block()).isNull();
+        }
+
+        @Test
+        void if_absent_refuses_when_a_checkpoint_is_stored_and_deletes_nothing() {
+            String id = subscriptionId();
+            checkpointStorage().save(id, new StringBasedCheckpoint("kept")).block();
+
+            if (!fixture().evaluatesDeleteConditions()) {
+                assertThatThrownBy(() -> checkpointStorage().delete(id, CheckpointWriteCondition.ifAbsent()).block())
+                        .as("a storage that declares it does not evaluate delete conditions refuses anything but any()")
+                        .isInstanceOf(UnsupportedOperationException.class);
+                return;
+            }
+
+            assertThatThrownBy(() -> checkpointStorage().delete(id, CheckpointWriteCondition.ifAbsent()).block())
+                    .as("ifAbsent holds only when nothing is stored, as on a save")
+                    .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
+            assertThat(requireNonNull(checkpointStorage().read(id).block()).asString()).isEqualTo("kept");
+        }
+
+        @Test
+        void any_deletes_whatever_version_is_stored() {
+            String id = subscriptionId();
+            if (fixture().evaluatesWriteConditions()) {
+                checkpointStorage().save(id, new StringBasedCheckpoint("at-9"), CheckpointWriteCondition.notOlderThan(9)).block();
+            } else {
+                checkpointStorage().save(id, new StringBasedCheckpoint("unversioned")).block();
+            }
+
+            // any() is the one condition every storage is required to support, whatever it declares.
+            checkpointStorage().delete(id, CheckpointWriteCondition.any()).block();
+
+            assertThat(checkpointStorage().read(id).block()).as("any() deletes unconditionally, like delete(id)").isNull();
+            assertThat(storedVersion(id)).isNull();
+        }
+    }
 }
