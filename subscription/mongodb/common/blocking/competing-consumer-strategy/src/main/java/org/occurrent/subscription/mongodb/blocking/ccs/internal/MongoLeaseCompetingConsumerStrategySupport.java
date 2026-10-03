@@ -45,6 +45,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
@@ -74,7 +75,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * Unregistering and releasing a consumer give up a lease this node has stopped refreshing, and that lease
      * expires on its own after {@code leaseTime} whether or not the call gets through, after which any node can
      * take the subscription over. Retrying that removal keeps a closing application waiting for a database it
-     * cannot reach, to delete a document that is about to stop mattering anyway.
+     * cannot reach, to delete a document that is about to stop mattering anyway. An unregister whose removal gives
+     * up has the next refresh round try it again, while the instance still runs.
      * <p>
      * Registering is the one call with nothing covering a failure, so it keeps retrying exactly as configured.
      * 5 attempts matches the cap this codebase already uses elsewhere for a MongoDB call that is expected to
@@ -83,7 +85,32 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      */
     private static final int CAPPED_MAX_ATTEMPTS = 5;
 
+    /**
+     * The part of the lease time this node gives up at the end of each lease, so it stops treating a lease as its own a
+     * quarter of the lease time before MongoDB can expire it, 5 seconds with the default lease time.
+     * <p>
+     * MongoDB decides that a lease has expired by its own clock, while this node can only count the time since it sent
+     * the request that set the lease by its own. The two disagree when the clocks tick at different rates, when the
+     * primary that set the lease fails over to a member whose clock is ahead of it, and when a server's clock is set
+     * forward. A difference in rate is small, since a clock that NTP is correcting runs at most 500 parts per million fast,
+     * 10 milliseconds over the default 20 seconds. The other two depend only on how closely the deployment keeps
+     * its clocks in step, and that is what the margin is for.
+     * <p>
+     * A quarter splits the half lease time between a refresh round and the end of the lease evenly. A round starts every
+     * half lease time, so a node whose refreshes go through stays a quarter of the lease time clear of the margin, which
+     * a slow round, a round retrying a failed call, or a round held up behind another consumer's call can use up before
+     * delivery pauses. The other quarter is the margin. A larger margin would pause delivery on a node whose rounds are
+     * merely slow, and a smaller one would rely on the clocks agreeing more closely.
+     */
+    private static final int LEASE_TIME_PARTS_GIVEN_UP = 4;
+
     private final Duration leaseTime;
+    /**
+     * How long after {@link ListenerLock#sentAt()} this node treats a lease as its own, the lease time less
+     * {@link #LEASE_TIME_PARTS_GIVEN_UP its margin}, in the units of {@link #clock}.
+     */
+    private final long heldForNanos;
+    private final LongSupplier clock;
     private final ScheduledRefresh scheduledRefresh;
     private final ConcurrentMap<CompetingConsumer, Status> competingConsumers;
     /**
@@ -92,6 +119,13 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * with. See {@link #fencingToken(String)}.
      */
     private final ConcurrentMap<String, Long> lastHeldFencingTokens = new ConcurrentHashMap<>();
+    /**
+     * The consumers {@link #hasLock} said no to because their lease could have expired, while the status still said
+     * they held it. A listener may have acted on that answer, such as pausing the subscription, so the refresh that
+     * extends the lease again tells the listeners it is granted. Kept apart from the status, which a refresh replaces,
+     * so an answer given from the status a refresh is replacing is not lost with it.
+     */
+    private final Set<CompetingConsumer> answeredExpired = ConcurrentHashMap.newKeySet();
     private final Set<CompetingConsumerListener> competingConsumerListeners;
     private final RetryStrategy retryStrategy;
     /**
@@ -132,7 +166,17 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * refresh schedule, so this widens nothing a user can reach.
      */
     MongoLeaseCompetingConsumerStrategySupport(Duration leaseTime, RetryStrategy retryStrategy, ScheduledRefresh scheduledRefresh) {
+        this(leaseTime, retryStrategy, scheduledRefresh, System::nanoTime);
+    }
+
+    /**
+     * Takes the clock that times each lease from when the request that set it was sent, so a test can let a lease
+     * run out on this node without waiting for it. Package-private for the same reason as the constructor above.
+     */
+    MongoLeaseCompetingConsumerStrategySupport(Duration leaseTime, RetryStrategy retryStrategy, ScheduledRefresh scheduledRefresh, LongSupplier clock) {
         this.leaseTime = leaseTime;
+        this.heldForNanos = leaseTime.toNanos() - leaseTime.toNanos() / LEASE_TIME_PARTS_GIVEN_UP;
+        this.clock = clock;
         this.scheduledRefresh = scheduledRefresh;
         this.running = true;
         this.competingConsumerListeners = Collections.newSetFromMap(new ConcurrentHashMap<>());
@@ -212,7 +256,20 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         logDebug("Unregistering consumer (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
 
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
-        Outcome outcome = inConsumerLock(competingConsumer, () -> giveUpLease(collection, competingConsumer, competingConsumers.remove(competingConsumer)));
+        Outcome outcome = inConsumerLock(competingConsumer, () -> {
+            Status status = competingConsumers.get(competingConsumer);
+            if (status == null) {
+                return giveUpLease(collection, competingConsumer, null);
+            }
+            // Forgotten only once the lease is removed. A removal that fails keeps the consumer as
+            // UNREGISTERING, which hasLock answers no for and which no round extends, and the next round removes the
+            // lease again. Forgetting it first would leave the lease in place until it expired.
+            competingConsumers.put(competingConsumer, Status.UNREGISTERING);
+            answeredExpired.remove(competingConsumer);
+            Outcome givenUp = giveUpLease(collection, competingConsumer, status);
+            competingConsumers.remove(competingConsumer, Status.UNREGISTERING);
+            return givenUp;
+        });
         notifyListeners(outcome, subscriptionId, subscriberId);
     }
 
@@ -255,11 +312,12 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private Outcome acquireLease(MongoCollection<BsonDocument> collection, CompetingConsumer competingConsumer, @Nullable Status oldStatus, RetryStrategy retryStrategyToUse) {
         String subscriptionId = competingConsumer.subscriptionId;
         String subscriberId = competingConsumer.subscriberId;
-        Optional<ListenerLock> lock = MongoListenerLockService.acquireOrRefreshFor(collection, retryStrategyToUse, whileRunning, leaseTime, subscriptionId, subscriberId);
+        Optional<ListenerLock> lock = MongoListenerLockService.acquireOrRefreshFor(collection, retryStrategyToUse, whileRunning, leaseTime, subscriptionId, subscriberId, clock);
         boolean acquired = lock.isPresent();
-        boolean oldStatusWasAcquired = oldStatus != null && oldStatus.isLockAcquired();
+        // A lease hasLock said no to counts as not held, since a listener may have acted on that answer
+        boolean oldStatusWasAcquired = oldStatus != null && oldStatus.isLockAcquired() && !answeredExpired.remove(competingConsumer);
         logDebug("acquireLease: oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
-        competingConsumers.put(competingConsumer, acquired ? Status.lockAcquired(lock.get().version()) : Status.LOCK_NOT_ACQUIRED);
+        competingConsumers.put(competingConsumer, acquired ? Status.lockAcquired(lock.get().version(), lock.get().sentAt()) : Status.LOCK_NOT_ACQUIRED);
         lock.ifPresent(l -> lastHeldFencingTokens.merge(subscriptionId, l.version(), Math::max));
         if (!oldStatusWasAcquired && acquired) {
             return new Outcome(true, Notification.GRANTED);
@@ -292,13 +350,34 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         return Outcome.NOTHING;
     }
 
+    /**
+     * Whether this node holds the lease and the lease cannot have expired yet. That is the case for
+     * {@link #LEASE_TIME_PARTS_GIVEN_UP three quarters of the lease time} after the request that last acquired or
+     * refreshed it was sent, and no longer, also while every refresh since has failed, since a refresh that never got
+     * through tells this node nothing about whether another node has taken the lease since. Reads memory only, so it
+     * neither blocks nor reaches MongoDB.
+     * <p>
+     * This node times the lease by its monotonic clock and MongoDB expires it by its own, so the answer is right only
+     * while MongoDB's clock gains less than a quarter of the lease time on this node's over one lease. After a failover
+     * to a primary whose clock is further ahead than that, or a server clock set forward by more than that, this can
+     * answer {@code true} after another node has taken the lease.
+     */
     public boolean hasLock(String subscriptionId, String subscriberId) {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
-        Status status = competingConsumers.get(new CompetingConsumer(subscriptionId, subscriberId));
-        boolean hasLock = status != null && status.isLockAcquired();
+        CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
+        Status status = competingConsumers.get(competingConsumer);
+        boolean hasLock = status != null && status.isLockAcquired() && cannotHaveExpired(competingConsumer, status);
         logDebug("hasLock={} (subscriberId={}, subscriptionId={})", hasLock, subscriberId, subscriptionId);
         return hasLock;
+    }
+
+    private boolean cannotHaveExpired(CompetingConsumer competingConsumer, Status acquired) {
+        if (clock.getAsLong() - acquired.sentAt() < heldForNanos) {
+            return true;
+        }
+        answeredExpired.add(competingConsumer);
+        return false;
     }
 
     /**
@@ -317,7 +396,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         Status onlyStatus = null;
         int registered = 0;
         for (Map.Entry<CompetingConsumer, Status> entry : competingConsumers.entrySet()) {
-            if (entry.getKey().subscriptionId.equals(subscriptionId)) {
+            if (entry.getKey().subscriptionId.equals(subscriptionId) && entry.getValue().kind() != Status.Kind.UNREGISTERING) {
                 registered++;
                 if (registered > 1) {
                     return OptionalLong.empty();
@@ -394,8 +473,10 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     /**
      * Runs later than the round that decided it, on the notifier, and by then the consumer may have moved on.
      * A grant for a consumer that no longer holds the lock is dropped, since starting the subscription would leave it
-     * running on an instance without its lease. A prohibition is always delivered, also to a consumer that holds the
-     * lock again. The listener then pauses the subscription and gives the lease up, and a later round grants it again.
+     * running on an instance without its lease. So is one whose lease could have expired since, and the refresh that
+     * extends that lease again grants it once more, see {@link #answeredExpired}. A prohibition is always delivered,
+     * also to a consumer that holds the lock again. The listener then pauses the subscription and gives the lease up,
+     * and a later round grants it again.
      * Dropping it could leave this instance refreshing a lease for a subscription that has stopped delivering, which
      * no grant would restart, since the listener finds the consumer running already, and which no other instance
      * could take over. A listener that throws is logged, and the other listeners are told anyway. Once they all have
@@ -448,14 +529,25 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             case LOCK_ACQUIRED -> {
                 // Uses cappedRetryStrategy, so a commit that keeps failing gives up here instead of holding this
                 // round open until MongoDB answers again. The lock document is untouched by a call that never got
-                // through, so the consumer keeps its lease and the next round commits what it missed.
-                boolean stillHasLock = MongoListenerLockService.commit(collection, cappedRetryStrategy, whileRunning, leaseTime, cc.subscriptionId, cc.subscriberId);
-                if (stillHasLock) {
-                    yield Outcome.NOTHING;
+                // through, so the consumer keeps its status and the next round commits what it missed. hasLock says
+                // no once the lease could have expired meanwhile, see cannotHaveExpired.
+                OptionalLong extended = MongoListenerLockService.commit(collection, cappedRetryStrategy, whileRunning, leaseTime, cc.subscriptionId, cc.subscriberId, clock);
+                if (extended.isPresent()) {
+                    competingConsumers.put(cc, Status.lockAcquired(status.fencingToken().getAsLong(), extended.getAsLong()));
+                    // The document still names this consumer, so no other node took the lease while it could have
+                    // expired, and this node may deliver again. A listener told no meanwhile hears that it may.
+                    yield answeredExpired.remove(cc) ? new Outcome(true, Notification.GRANTED) : Outcome.NOTHING;
                 }
                 logDebug("Lost lock! (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
                 competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
+                answeredExpired.remove(cc);
                 yield new Outcome(false, Notification.PROHIBITED);
+            }
+            // An unregister whose removal of the lease failed. Forgotten once the lease is removed.
+            case UNREGISTERING -> {
+                MongoListenerLockService.remove(collection, cappedRetryStrategy, whileRunning, cc.subscriptionId, cc.subscriberId);
+                competingConsumers.remove(cc, Status.UNREGISTERING);
+                yield Outcome.NOTHING;
             }
             // The round this consumer stands down for after releasing. It is an ordinary candidate again from the
             // next round on, and nothing is reported here. It neither holds the lease nor has just stopped holding
@@ -547,19 +639,20 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     /**
-     * A consumer's status, with its fencing token for the acquired case. The token stays exactly as it was
-     * while this status remains {@code LOCK_ACQUIRED}, since a refresh (see {@code refreshOne}) commits
-     * without touching the map entry, and a lost commit replaces the whole status with {@code LOCK_NOT_ACQUIRED}
-     * rather than updating the token in place. The token itself outlives the status in
+     * A consumer's status, with its fencing token and {@link ListenerLock#sentAt()} for the acquired case. The token
+     * stays exactly as it was while this status remains {@code LOCK_ACQUIRED}, since a refresh (see
+     * {@code refreshOne}) that goes through keeps it in the status it records, and a lost commit replaces the
+     * whole status with {@code LOCK_NOT_ACQUIRED}. The token itself outlives the status in
      * {@link #lastHeldFencingTokens}, and that stale token is what a fence built on {@link #fencingToken(String)}
      * refuses once the next holder has written.
      */
-    private record Status(Kind kind, OptionalLong fencingToken) {
-        private static final Status LOCK_NOT_ACQUIRED = new Status(Kind.LOCK_NOT_ACQUIRED, OptionalLong.empty());
-        private static final Status LOCK_RELEASED = new Status(Kind.LOCK_RELEASED, OptionalLong.empty());
+    private record Status(Kind kind, OptionalLong fencingToken, long sentAt) {
+        private static final Status LOCK_NOT_ACQUIRED = new Status(Kind.LOCK_NOT_ACQUIRED, OptionalLong.empty(), 0);
+        private static final Status LOCK_RELEASED = new Status(Kind.LOCK_RELEASED, OptionalLong.empty(), 0);
+        private static final Status UNREGISTERING = new Status(Kind.UNREGISTERING, OptionalLong.empty(), 0);
 
-        private static Status lockAcquired(long fencingToken) {
-            return new Status(Kind.LOCK_ACQUIRED, OptionalLong.of(fencingToken));
+        private static Status lockAcquired(long fencingToken, long sentAt) {
+            return new Status(Kind.LOCK_ACQUIRED, OptionalLong.of(fencingToken), sentAt);
         }
 
         private boolean isLockAcquired() {
@@ -567,7 +660,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         }
 
         private enum Kind {
-            LOCK_ACQUIRED, LOCK_NOT_ACQUIRED, LOCK_RELEASED
+            LOCK_ACQUIRED, LOCK_NOT_ACQUIRED, LOCK_RELEASED, UNREGISTERING
         }
     }
 

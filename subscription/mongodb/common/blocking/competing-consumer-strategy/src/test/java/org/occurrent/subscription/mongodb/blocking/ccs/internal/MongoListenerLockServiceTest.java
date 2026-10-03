@@ -82,7 +82,7 @@ class MongoListenerLockServiceTest {
     }
 
     private ListenerLock acquire(String subscriberId) {
-        return MongoListenerLockService.acquireOrRefreshFor(locks, RetryStrategy.none(), __ -> true, LEASE, SUBSCRIPTION, subscriberId)
+        return MongoListenerLockService.acquireOrRefreshFor(locks, RetryStrategy.none(), __ -> true, LEASE, SUBSCRIPTION, subscriberId, System::nanoTime)
                 .orElseThrow(() -> new IllegalStateException("Expected " + subscriberId + " to acquire the lock"));
     }
 

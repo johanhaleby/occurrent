@@ -55,6 +55,9 @@ import static org.awaitility.Awaitility.await;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CompetingConsumerSubscribeConcurrencyTest {
 
+    // Longer than the 200 ms an event waits at most between two looks at the lease
+    private static final Duration HELD_FOR = Duration.ofMillis(500);
+
     @Test
     void a_resume_that_starts_the_wrapped_model_while_a_stopped_model_subscribes_delivers_nothing_without_the_lease() throws Exception {
         UserWrittenModel delegate = new UserWrittenModel(false);
@@ -509,7 +512,6 @@ class CompetingConsumerSubscribeConcurrencyTest {
         List<String> s1Received = new CopyOnWriteArrayList<>();
 
         Throwable failure = catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId())));
-        delegate.write("e1");
         Set<String> ids = model.subscriptionIds();
         Throwable pause = catchThrowable(() -> model.pauseSubscription("s1"));
 
@@ -517,6 +519,374 @@ class CompetingConsumerSubscribeConcurrencyTest {
         assertThat(ids).as("subscriptionIds() while the wrapped model runs s1, subscribe failure=" + failure + ", received=" + s1Received).containsExactly("s1");
         assertThat(pause instanceof UnknownSubscriptionException).as("pausing s1, which the wrapped model runs, answers as for an unknown id, pause=" + pause).isFalse();
         assertThat(failure).as("the subscribe of s1, which the wrapped model runs").isNull();
+    }
+
+    @Test
+    void an_event_this_node_may_not_deliver_does_not_hold_up_a_pause_on_a_platform_thread_of_a_model_that_delivers_under_its_lock() {
+        aPauseWhileAModelThatDeliversUnderItsLockHoldsAnEvent(Thread.ofPlatform());
+    }
+
+    @Test
+    void an_event_this_node_may_not_deliver_does_not_hold_up_a_pause_on_a_virtual_thread_of_a_model_that_delivers_under_its_lock() {
+        aPauseWhileAModelThatDeliversUnderItsLockHoldsAnEvent(Thread.ofVirtual());
+    }
+
+    // The lease of s1 could have expired, and the lease strategy says so only when asked. The wrapped model takes its
+    // lock to pause s1, so the pause lets the event through.
+    private static void aPauseWhileAModelThatDeliversUnderItsLockHoldsAnEvent(Thread.Builder pausing) {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        try {
+            List<String> s1Received = new CopyOnWriteArrayList<>();
+            model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId()));
+            strategy.holders.remove("s1");
+            CompletableFuture<Throwable> write = writeOnAnotherThreadUntilItWaits(delegate, "e1");
+
+            CompletableFuture<Void> pause = new CompletableFuture<>();
+            pausing.start(() -> {
+                try {
+                    model.pauseSubscription("s1");
+                    pause.complete(null);
+                } catch (Throwable e) {
+                    pause.completeExceptionally(e);
+                }
+            });
+
+            assertThat(pause).as("[the pause of s1 returned while its event waited for the lease]").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(write).as("the write").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(write.join()).as("[what the write threw]").isNull();
+            assertThat(s1Received).as("[events s1 received, delivered as the pause let them through]").containsExactly("e1");
+            assertThat(delegate.isPaused("s1")).as("s1 paused in the wrapped model").isTrue();
+        } finally {
+            strategy.holders.add("s1");
+            model.shutdown();
+        }
+    }
+
+    @Test
+    void a_loss_of_the_lease_told_on_a_virtual_thread_pauses_a_model_that_delivers_under_its_lock_while_an_event_waits() {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        try {
+            List<String> s1Received = new CopyOnWriteArrayList<>();
+            model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId()));
+            strategy.holders.remove("s1");
+            strategy.heldElsewhere.add("s1");
+            CompletableFuture<Throwable> write = writeOnAnotherThreadUntilItWaits(delegate, "e1");
+
+            CompletableFuture<Void> told = new CompletableFuture<>();
+            Thread.ofVirtual().start(() -> {
+                try {
+                    strategy.listeners.forEach(listener -> listener.onConsumeProhibited("s1", "node"));
+                    told.complete(null);
+                } catch (Throwable e) {
+                    told.completeExceptionally(e);
+                }
+            });
+
+            assertThat(told).as("[the loss of the lease of s1, told on a virtual thread, returned]").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(write).as("the write").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(write.join()).as("[what the write threw]").isNull();
+            assertThat(delegate.isPaused("s1")).as("[s1 paused in the wrapped model once this node lost its lease]").isTrue();
+        } finally {
+            strategy.heldElsewhere.remove("s1");
+            strategy.holders.add("s1");
+            model.shutdown();
+        }
+    }
+
+    @Test
+    void a_platform_thread_of_the_application_waiting_for_a_lock_the_delivering_thread_holds_changes_nothing_about_an_event_that_waits_for_the_lease() {
+        anApplicationThreadWaitsForALockTheDeliveringThreadHolds(Thread.ofPlatform());
+    }
+
+    @Test
+    void a_virtual_thread_of_the_application_waiting_for_a_lock_the_delivering_thread_holds_changes_nothing_about_an_event_that_waits_for_the_lease() {
+        anApplicationThreadWaitsForALockTheDeliveringThreadHolds(Thread.ofVirtual());
+    }
+
+    // The writing thread holds a lock of the application's own while the lease of s1 could have expired, and another
+    // thread of the application waits for that lock. The event waits for the lease all the same.
+    private static void anApplicationThreadWaitsForALockTheDeliveringThreadHolds(Thread.Builder waiting) {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        Object applicationLock = new Object();
+        try {
+            List<String> s1Received = new CopyOnWriteArrayList<>();
+            model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId()));
+            strategy.holders.remove("s1");
+            CompletableFuture<Throwable> write = new CompletableFuture<>();
+            Thread writer = Thread.ofPlatform().daemon().start(() -> {
+                synchronized (applicationLock) {
+                    write.complete(catchThrowable(() -> delegate.write("e1")));
+                }
+            });
+            await().atMost(Duration.ofSeconds(5)).until(() -> writer.getState() == Thread.State.TIMED_WAITING);
+            Thread waiter = waiting.start(() -> {
+                synchronized (applicationLock) {
+                    applicationLock.notifyAll();
+                }
+            });
+            // A write that gives the event up lets go of the lock, so the waiter never stays blocked
+            await().atMost(Duration.ofSeconds(5)).until(() -> waiter.getState() == Thread.State.BLOCKED || write.isDone());
+
+            await().during(HELD_FOR).atMost(HELD_FOR.multipliedBy(2)).untilAsserted(() ->
+                    assertThat(write).as("[the write of an event this node may not deliver, while another thread waits for a lock its thread holds]").isNotDone());
+            assertThat(s1Received).as("events s1 received without its lease").isEmpty();
+            strategy.holders.add("s1");
+
+            assertThat(write).as("the write once this node holds the lease again").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(write.join()).as("[what the write threw]").isNull();
+            assertThat(s1Received).as("[events s1 received once this node held the lease again]").containsExactly("e1");
+        } finally {
+            strategy.holders.add("s1");
+            model.shutdown();
+        }
+    }
+
+    @Test
+    void an_interrupt_that_lets_an_event_waiting_for_the_lease_through_is_clear_in_the_action_and_set_again_after_it() {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        try {
+            List<String> s1Received = new CopyOnWriteArrayList<>();
+            List<Boolean> interruptedInTheAction = new CopyOnWriteArrayList<>();
+            model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> {
+                s1Received.add(e.getId());
+                interruptedInTheAction.add(Thread.currentThread().isInterrupted());
+            });
+            strategy.holders.remove("s1");
+            CompletableFuture<Boolean> interruptedAfterTheWrite = new CompletableFuture<>();
+            Thread writer = Thread.ofPlatform().daemon().start(() -> {
+                delegate.write("e1");
+                interruptedAfterTheWrite.complete(Thread.currentThread().isInterrupted());
+            });
+            await().atMost(Duration.ofSeconds(5)).until(() -> writer.getState() == Thread.State.TIMED_WAITING);
+
+            writer.interrupt();
+
+            assertThat(interruptedAfterTheWrite).as("the write once its thread was interrupted").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(s1Received).as("[events s1 received once the thread delivering them was interrupted]").containsExactly("e1");
+            assertThat(interruptedInTheAction).as("[the interrupt flag in the action, as when the event does not wait]").containsExactly(false);
+            assertThat(interruptedAfterTheWrite.join()).as("[the interrupt flag once the action has returned]").isTrue();
+        } finally {
+            strategy.holders.add("s1");
+            model.shutdown();
+        }
+    }
+
+    @Test
+    void an_event_a_wrapped_model_read_before_a_cancel_and_hands_over_after_it_is_delivered() {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        try {
+            List<String> s1Received = new CopyOnWriteArrayList<>();
+            model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId()));
+            model.cancelSubscription("s1");
+            assertThat(strategy.hasLock("s1", "node")).as("the lease of s1 once it is cancelled").isFalse();
+
+            CompletableFuture<Void> handedOver = CompletableFuture.runAsync(() -> delegate.deliverReadBeforeTheCancel("s1", "e1"));
+
+            assertThat(handedOver).as("[the hand over of an event read before the cancel of s1]").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(s1Received).as("[events s1 received after its cancel, as without the lease strategy]").containsExactly("e1");
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    @Test
+    void a_subscription_made_with_the_id_of_one_whose_cancel_has_not_returned_delivers_nothing_without_the_lease() throws InterruptedException {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        try {
+            List<String> newS1Received = new CopyOnWriteArrayList<>();
+            subscribeAgainBeforeTheCancelReturns(model, delegate, __ -> {}, e -> newS1Received.add(e.getId()));
+            strategy.holders.remove("s1");
+
+            CompletableFuture<Throwable> write = writeOnAnotherThreadUntilItWaits(delegate, "e1");
+
+            await().during(HELD_FOR).atMost(HELD_FOR.multipliedBy(2)).untilAsserted(() ->
+                    assertThat(write).as("[the write to the new s1 while this node does not hold its lease]").isNotDone());
+            assertThat(newS1Received).as("events the new s1 received while this node does not hold its lease").isEmpty();
+            strategy.holders.add("s1");
+
+            assertThat(write).as("the write once this node holds the lease again").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(write.join()).as("[what the write threw]").isNull();
+            assertThat(newS1Received).as("[events the new s1 received once this node held the lease again]").containsExactly("e1");
+        } finally {
+            strategy.holders.add("s1");
+            model.shutdown();
+        }
+    }
+
+    @Test
+    void an_event_handed_to_a_cancelled_subscription_whose_id_was_subscribed_again_before_the_cancel_returned_is_delivered() throws InterruptedException {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        try {
+            List<String> cancelledS1Received = new CopyOnWriteArrayList<>();
+            Consumer<CloudEvent> cancelledInTheWrappedModel = subscribeAgainBeforeTheCancelReturns(model, delegate, e -> cancelledS1Received.add(e.getId()), __ -> {});
+            strategy.holders.remove("s1");
+
+            CompletableFuture<Void> handedOver = CompletableFuture.runAsync(() -> UserWrittenModel.deliverReadBeforeTheCancel(cancelledInTheWrappedModel, "e1"));
+
+            assertThat(handedOver).as("[the hand over of an event read before the cancel of s1]").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(cancelledS1Received).as("[events the cancelled s1 received, as without the lease strategy]").containsExactly("e1");
+        } finally {
+            strategy.holders.add("s1");
+            model.shutdown();
+        }
+    }
+
+    @Test
+    void an_event_handed_to_a_subscription_cancelled_while_the_wrapped_model_makes_it_is_delivered_once_the_cancel_has_returned() throws InterruptedException {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        CountDownLatch inTheWrappedSubscribe = new CountDownLatch(1);
+        CountDownLatch wrappedSubscribeReturns = new CountDownLatch(1);
+        delegate.afterSubscribe = __ -> {
+            delegate.afterSubscribe = ___ -> {};
+            inTheWrappedSubscribe.countDown();
+            try {
+                wrappedSubscribeReturns.await(10, SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        try {
+            List<String> s1Received = new CopyOnWriteArrayList<>();
+            CompletableFuture<Throwable> subscribe = new CompletableFuture<>();
+            Thread.ofPlatform().daemon().start(() ->
+                    subscribe.complete(catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId())))));
+            assertThat(inTheWrappedSubscribe.await(5, SECONDS)).as("the wrapped model got the action of s1").isTrue();
+            model.cancelSubscription("s1");
+            strategy.holders.remove("s1");
+
+            CompletableFuture<Void> handedOver = CompletableFuture.runAsync(() -> delegate.deliverReadBeforeTheCancel("s1", "e1"));
+
+            assertThat(handedOver).as("[the hand over of an event to s1 once its cancel has returned, while the wrapped model still makes it]").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(s1Received).as("[events s1 received once its cancel has returned, as without the lease strategy]").containsExactly("e1");
+            wrappedSubscribeReturns.countDown();
+            assertThat(subscribe).as("the subscribe of s1").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(subscribe.join()).as("[what the subscribe of s1 cancelled meanwhile threw]").isInstanceOf(IllegalStateException.class);
+        } finally {
+            wrappedSubscribeReturns.countDown();
+            strategy.holders.add("s1");
+            model.shutdown();
+        }
+    }
+
+    // Subscribes s1, cancels it on another thread and, once the cancel has freed the id and before it returns,
+    // subscribes s1 again on a third thread. Returns the action the wrapped model held for the cancelled s1.
+    private static Consumer<CloudEvent> subscribeAgainBeforeTheCancelReturns(CompetingConsumerSubscriptionModel model, UserWrittenModel delegate,
+                                                                            Consumer<CloudEvent> cancelledAction, Consumer<CloudEvent> newAction) throws InterruptedException {
+        model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), cancelledAction);
+        Consumer<CloudEvent> cancelledInTheWrappedModel = delegate.actionOf("s1");
+        CountDownLatch idFreed = new CountDownLatch(1);
+        CountDownLatch cancelGoesOn = new CountDownLatch(1);
+        model.runOnceACancelHasFreedTheId(() -> {
+            model.runOnceACancelHasFreedTheId(() -> {});
+            idFreed.countDown();
+            try {
+                cancelGoesOn.await(5, SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        CompletableFuture<Throwable> cancel = new CompletableFuture<>();
+        CompletableFuture<Throwable> subscribe = new CompletableFuture<>();
+        try {
+            Thread.ofPlatform().daemon().start(() -> cancel.complete(catchThrowable(() -> model.cancelSubscription("s1"))));
+            assertThat(idFreed.await(5, SECONDS)).as("the cancel of s1 freed its id").isTrue();
+            Thread subscribing = Thread.ofPlatform().daemon().start(() ->
+                    subscribe.complete(catchThrowable(() -> model.subscribe("s1", null, StartAt.subscriptionModelDefault(), newAction))));
+            await().atMost(Duration.ofSeconds(5)).until(() -> subscribing.getState() == Thread.State.WAITING || subscribe.isDone());
+        } finally {
+            cancelGoesOn.countDown();
+        }
+        assertThat(cancel).as("the cancel of s1").succeedsWithin(Duration.ofSeconds(5));
+        assertThat(cancel.join()).as("[what the cancel of s1 threw]").isNull();
+        assertThat(subscribe).as("the subscribe of s1 made before its cancel returned").succeedsWithin(Duration.ofSeconds(5));
+        assertThat(subscribe.join()).as("[what the subscribe of s1 made before its cancel returned threw]").isNull();
+        assertThat(delegate.actionOf("s1")).as("the action the wrapped model holds for the new s1").isNotSameAs(cancelledInTheWrappedModel);
+        return cancelledInTheWrappedModel;
+    }
+
+    @Test
+    void an_event_for_a_subscription_without_its_lease_that_a_model_which_cannot_pause_runs_while_this_model_is_stopped_waits_for_start() {
+        UserWrittenModel delegate = new UserWrittenModel(true);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        // A stop() overtakes the subscribe, the wrapped model is started again by a resume of another subscription, and
+        // registering s1 again fails
+        delegate.beforeSubscribe = id -> {
+            delegate.beforeSubscribe = __ -> {};
+            join(runOnAnotherThreadUntilDoneOrBlocked(model::stop));
+            delegate.start(false);
+            strategy.registerFailsOnce.add("s1");
+        };
+        try {
+            List<String> s1Received = new CopyOnWriteArrayList<>();
+            catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId())));
+            await().atMost(Duration.ofSeconds(5)).until(() -> Thread.getAllStackTraces().keySet().stream().noneMatch(thread -> thread.getName().startsWith("occurrent-competing-consumer-reconcile-")));
+
+            CompletableFuture<Throwable> write = writeOnAnotherThreadUntilItWaits(delegate, "e1");
+
+            await().during(HELD_FOR).atMost(HELD_FOR.multipliedBy(2)).untilAsserted(() ->
+                    assertThat(write).as("[the write while this model is stopped and s1 has no lease]").isNotDone());
+            assertThat(s1Received).as("events s1 received while this model is stopped and s1 has no lease").isEmpty();
+            model.start(false);
+
+            assertThat(write).as("the write once this model was started").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(write.join()).as("[what the write threw]").isNull();
+            assertThat(s1Received).as("[events s1 received once this model was started]").containsExactly("e1");
+            assertThat(delegate.isRunning("s1")).as("s1 runs in the wrapped model that cannot pause it").isTrue();
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    // The user paused s1, which gave its lease up, and the wrapped model cannot pause it, so it still delivers to s1
+    // while holding the lock its isRunning takes
+    @Test
+    void a_resume_of_a_subscription_that_a_model_which_cannot_pause_runs_returns_while_its_event_waits_for_the_lease() {
+        UserWrittenModel delegate = new UserWrittenModel(true);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        try {
+            List<String> s1Received = new CopyOnWriteArrayList<>();
+            model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId()));
+            catchThrowable(() -> model.pauseSubscription("s1"));
+            strategy.holders.remove("s1");
+            CompletableFuture<Throwable> write = writeOnAnotherThreadUntilItWaits(delegate, "e1");
+            assertThat(write).as("the write of an event for s1 without its lease").isNotDone();
+
+            CompletableFuture<Throwable> resume = new CompletableFuture<>();
+            Thread.ofPlatform().daemon().start(() -> resume.complete(catchThrowable(() -> model.resumeSubscription("s1"))));
+
+            assertThat(resume).as("[the resume of s1 returned while its event waited for the lease]").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(write).as("the write").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(write.join()).as("[what the write threw]").isNull();
+            assertThat(s1Received).as("[events s1 received, delivered as the resume let them through]").containsExactly("e1");
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    // Returns once the write waits, with what the write throws once it returns
+    private static CompletableFuture<Throwable> writeOnAnotherThreadUntilItWaits(UserWrittenModel delegate, String eventId) {
+        CompletableFuture<Throwable> write = new CompletableFuture<>();
+        Thread writer = Thread.ofPlatform().daemon().start(() -> write.complete(catchThrowable(() -> delegate.write(eventId))));
+        await().atMost(Duration.ofSeconds(5)).until(() -> writer.getState() == Thread.State.TIMED_WAITING || write.isDone());
+        return write;
     }
 
     @Test
@@ -1014,6 +1384,20 @@ class CompetingConsumerSubscribeConcurrencyTest {
             }
             afterSubscribe.accept(subscriptionId);
             return new UserWrittenSubscription(subscriptionId);
+        }
+
+        // Hands an event to the action of a cancelled subscription, as a thread of the model that read it before the
+        // cancel does
+        private void deliverReadBeforeTheCancel(String subscriptionId, String eventId) {
+            deliverReadBeforeTheCancel(actionOf(subscriptionId), eventId);
+        }
+
+        private static void deliverReadBeforeTheCancel(Consumer<CloudEvent> action, String eventId) {
+            action.accept(CloudEventBuilder.v1().withId(eventId).withSource(URI.create("urn:user-written")).withType("written").build());
+        }
+
+        private synchronized Consumer<CloudEvent> actionOf(String subscriptionId) {
+            return actions.get(subscriptionId);
         }
 
         private synchronized void write(String eventId) {
