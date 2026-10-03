@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Twenty things are worth reading, five of them compile-time breaks. At compile time, if you use the flow saga's
+This guide covers twenty changes, five of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most

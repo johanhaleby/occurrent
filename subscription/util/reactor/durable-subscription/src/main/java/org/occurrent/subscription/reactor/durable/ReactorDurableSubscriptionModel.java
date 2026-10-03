@@ -1358,8 +1358,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // pinStartPosition writes the seed on the condition that storage still holds nothing, where the storage
             // evaluates one, so a checkpoint stored after the storage read refuses the write there. One stored between
             // reading positionNow and the storage read is where the subscription starts, as one stored just before
-            // the subscribe would be. A registration carrying positionAtRegistration is different: the capture already
-            // happened, at registration, possibly long before this call, so whatever storage now holds may have been
+            // the subscribe would be. A registration with positionAtRegistration is different, since it read the
+            // position at registration, possibly long before this call, so whatever storage now holds may have been
             // written since, including by a checkpoint deleted and rewritten while this subscription waited to be
             // started. resolveFirstCheckpointRace reconciles the two by position instead of trusting storage.read()
             // blindly, when the storage can. Reading storage comes first and on its own, so a stored checkpoint still
@@ -2966,8 +2966,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // that a first run records it when nothing is stored, whichever generation starts. Null for a registration
         // with a start position of its own.
         final @Nullable Mono<Checkpoint> positionNow;
-        // The same read for a subscription registered on a stopped model, which resolveStartAt reconciles with what is
-        // stored instead of only seeding storage with it. Carries the reason instead when that read could not answer,
+        // The same read for a subscription registered on a stopped model, which resolveStartAt compares with what is
+        // stored instead of only writing it when nothing is. Holds the reason instead when that read could not answer,
         // which is what refuses the subscription when it is started. Null for one registered while running.
         final @Nullable Mono<Checkpoint> positionAtRegistration;
         // Failed by a cancel of the id, which cancels the reads of where the feed is that this subscription and every
