@@ -119,9 +119,9 @@ import static java.util.Objects.requireNonNull;
  * never holds the call up, on a platform thread or a virtual one. An event the wrapped model delivers on a thread that
  * is inside a call this model makes into it runs too, and so does one that it hands over once a cancel of the
  * subscription has returned. An event also runs once an interrupt of its thread ends a wait between two looks at the
- * lease, which an interrupt flag already set as such a wait begins does too. When the interrupt that ended the wait came
- * after the event, the action runs with the interrupt flag clear, and the flag is set again once the action returns or
- * throws. In every other case this model does not change the flag, so it can be set while the action runs, for
+ * lease, which an interrupt flag already set as such a wait begins does too. When an interrupt ended the wait and the
+ * interrupt flag was clear as the event came, the action runs with the flag clear, and the flag is set again once the
+ * action returns or throws. In every other case this model does not change the flag, so it can be set while the action runs, for
  * instance when the interrupt comes while this model asks the lease strategy and the strategy then reports the lease
  * held. An event let through by an interrupt can run while another node holds the lease and runs it as well, so it can
  * be delivered twice, but it is not lost.
@@ -555,8 +555,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private void cancel(String subscriptionId) {
         logDebug("Cancelling CompetingConsumer subscription (subscriptionId={})", subscriptionId);
         // A subscribe making this id right now takes back what it made and throws once it finds this
+        @Nullable BeingMade beingMade;
         synchronized (this) {
-            BeingMade beingMade = subscriptionsBeingMade.get(subscriptionId);
+            beingMade = subscriptionsBeingMade.get(subscriptionId);
             if (beingMade != null) {
                 beingMade.cancelled = true;
             }
@@ -573,14 +574,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 });
             } else {
                 try {
-                    forgetCancelled(subscriptionId);
+                    forgetCancelled(subscriptionId, beingMade);
                 } catch (RuntimeException forgetFailure) {
                     e.addSuppressed(forgetFailure);
                 }
             }
             throw e;
         }
-        forgetCancelled(subscriptionId);
+        forgetCancelled(subscriptionId, beingMade);
     }
 
     private boolean heldByTheWrappedModel(String subscriptionId, Throwable failure) {
@@ -592,7 +593,15 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
     }
 
-    private void forgetCancelled(String subscriptionId) {
+    private void forgetCancelled(String subscriptionId, @Nullable BeingMade beingMade) {
+        @Nullable Delivery beingMadeDelivery = beingMade == null ? null : beingMade.delivery;
+        if (beingMadeDelivery != null) {
+            // That subscribe forgets it too, but only once the wrapped model has returned from making the subscription.
+            // Its own rather than whatever is under the id, since a subscribe that does not compete has none and frees
+            // the id without the lock when it fails, so another subscribe of the id can have put one meanwhile.
+            deliveries.remove(subscriptionId, beingMadeDelivery);
+            beingMadeDelivery.forget();
+        }
         // Forgotten here too, not only in the competing consumer map, so the id is free for a new subscription
         // afterwards. Remembering a cancelled one also made start() resume a subscription the delegate no longer has.
         nonCompetingConsumersSubscriptions.remove(subscriptionId);
@@ -2196,8 +2205,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     /**
      * Runs {@code action} for an event once this node may deliver it for the subscription, see
-     * {@link #awaitTheLease}. When an interrupt that came after the event ended the wait, the action runs with the
-     * interrupt flag clear, and the flag is set again once the action returns or throws. Otherwise the flag is not
+     * {@link #awaitTheLease}. When an interrupt ended the wait and the interrupt flag was clear as the event came, the
+     * action runs with the flag clear, and the flag is set again once the action returns or throws. Otherwise the flag is not
      * changed here, so an interrupt that comes after the wait, or while the lease strategy is asked and it then reports
      * the lease held, can be set while the action runs.
      */
@@ -2224,11 +2233,16 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * wrapped model for a step of its own on the subscription, see {@link #inTheWrappedModelFor}, on a
      * {@code start(..)} or {@code stop()}, once {@code shutdown()} has begun, once this model has forgotten a cancelled
      * subscription, when the wrapped model delivers it on a thread that is inside a call this model makes into it, and
-     * on an interrupt. Nothing else ends the wait, so an event a wrapped model delivers while this model is stopped
-     * waits for the lease, for this model's next call for the subscription or for a {@code start(..)}.
+     * when the thread is interrupted during a wait between two looks at the lease or has its interrupt flag set as such
+     * a wait begins. A lease strategy whose {@code hasLock} clears the interrupt flag can take an interrupt that comes
+     * while it is asked, and the event then goes on waiting. Nothing else ends the wait, so an event a wrapped model
+     * delivers while this model is stopped waits for the lease, for this model's next call for the subscription or for
+     * a {@code start(..)}.
      * <p>
-     * Returns {@code true} when an interrupt that came while the event waited ended the wait. The interrupt flag is then
-     * clear. An interrupt flag already set when the event came stays set.
+     * Returns {@code true} when an interrupt ended the wait and the interrupt flag was clear as the event came, and the
+     * flag is then clear. When an interrupt ended the wait and the flag was set as the event came, the flag is set again
+     * and this returns {@code false}. This changes the flag in no other case, though a lease strategy whose
+     * {@code hasLock} clears it can.
      */
     private boolean awaitTheLease(SubscriptionIdAndSubscriberId key, Delivery delivery) {
         boolean interruptedBefore = Thread.currentThread().isInterrupted();
@@ -2554,6 +2568,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         logDebug("Starting CompetingConsumer subscription (subscriberId={}, subscriptionId={})", key.subscriberId(), subscriptionId);
         Delivery delivery = new Delivery();
         Consumer<CloudEvent> delivered = deliveredUnderTheLease(key, delivery, action);
+        beingMade.delivery = delivery;
         deliveries.put(subscriptionId, delivery);
         beingMade.waiting = new CompetingConsumerState.Waiting(() -> {
             logDebug("Starting delegated CompetingConsumer subscription after waiting (subscriberId={}, subscriptionId={})", key.subscriberId(), subscriptionId);
@@ -2636,6 +2651,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         private long stopsBeforeTheWrappedModelMadeIt;
         private @Nullable Subscription subscription;
         private volatile boolean cancelled;
+        // Set for a competing subscription before the wrapped model gets its action, so a cancel can forget it
+        private volatile @Nullable Delivery delivery;
         // A start(true) since the delegate got it and no stop() after, which resumed only what the delegate knew
         private volatile boolean resumedMeanwhile;
         // A call failed for the subscription while it was being made, or a lease callback found its lock taken, and

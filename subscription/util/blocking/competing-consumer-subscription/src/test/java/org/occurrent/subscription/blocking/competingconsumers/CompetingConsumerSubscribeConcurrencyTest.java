@@ -745,6 +745,45 @@ class CompetingConsumerSubscribeConcurrencyTest {
         }
     }
 
+    @Test
+    void an_event_handed_to_a_subscription_cancelled_while_the_wrapped_model_makes_it_is_delivered_once_the_cancel_has_returned() throws InterruptedException {
+        UserWrittenModel delegate = new UserWrittenModel(false);
+        Strategy strategy = new Strategy();
+        CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+        CountDownLatch inTheWrappedSubscribe = new CountDownLatch(1);
+        CountDownLatch wrappedSubscribeReturns = new CountDownLatch(1);
+        delegate.afterSubscribe = __ -> {
+            delegate.afterSubscribe = ___ -> {};
+            inTheWrappedSubscribe.countDown();
+            try {
+                wrappedSubscribeReturns.await(10, SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        try {
+            List<String> s1Received = new CopyOnWriteArrayList<>();
+            CompletableFuture<Throwable> subscribe = new CompletableFuture<>();
+            Thread.ofPlatform().daemon().start(() ->
+                    subscribe.complete(catchThrowable(() -> model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> s1Received.add(e.getId())))));
+            assertThat(inTheWrappedSubscribe.await(5, SECONDS)).as("the wrapped model got the action of s1").isTrue();
+            model.cancelSubscription("s1");
+            strategy.holders.remove("s1");
+
+            CompletableFuture<Void> handedOver = CompletableFuture.runAsync(() -> delegate.deliverReadBeforeTheCancel("s1", "e1"));
+
+            assertThat(handedOver).as("[the hand over of an event to s1 once its cancel has returned, while the wrapped model still makes it]").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(s1Received).as("[events s1 received once its cancel has returned, as without the lease strategy]").containsExactly("e1");
+            wrappedSubscribeReturns.countDown();
+            assertThat(subscribe).as("the subscribe of s1").succeedsWithin(Duration.ofSeconds(5));
+            assertThat(subscribe.join()).as("[what the subscribe of s1 cancelled meanwhile threw]").isInstanceOf(IllegalStateException.class);
+        } finally {
+            wrappedSubscribeReturns.countDown();
+            strategy.holders.add("s1");
+            model.shutdown();
+        }
+    }
+
     // Subscribes s1, cancels it on another thread and, once the cancel has freed the id and before it returns,
     // subscribes s1 again on a third thread. Returns the action the wrapped model held for the cancelled s1.
     private static Consumer<CloudEvent> subscribeAgainBeforeTheCancelReturns(CompetingConsumerSubscriptionModel model, UserWrittenModel delegate,
