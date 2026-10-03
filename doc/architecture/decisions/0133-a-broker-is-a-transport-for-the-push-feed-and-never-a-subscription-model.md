@@ -1554,6 +1554,25 @@ second subscribe fails, the durable model cancels the subscription in the wrappe
 fails with that error, since the `subscribe(..)` has returned by then. With no delete running, and with one whose writes
 have ended, the `subscribe(..)` fails with it.
 
+Between that cancel and the second subscribe the wrapped model has no subscription for the id. A pause, a resume, a
+`stop()` or a `start(..)` passed to it then would fail or reach nothing, and a pause made just before the cancel would
+be lost with the first subscription. So from the moment the durable model decides to start the subscription again, it
+keeps the state those calls ask for and passes none of them on. It puts that state in place in the wrapped model once
+the second subscribe has returned, and an event the wrapped model delivers to a subscription kept paused waits until it
+is resumed. A call made just before that moment passes to the wrapped model, and the durable model reads the state the
+call left only once it has returned. Nothing here waits on the calling thread.
+
+The wrapped model refuses a `subscribe(..)` of the same id only while it has a subscription for it, which it does not
+between the cancel and the second subscribe. So the durable model refuses such a `subscribe(..)` itself with
+`DuplicateSubscriptionIdException` from the moment it decides to start the subscription again. Before the cancel it
+waits for a `subscribe(..)` of the id already being handed over, which the wrapped model refuses as a duplicate.
+
+When the position cannot be recorded, or the second subscribe fails, the durable model cancels the subscription in the
+wrapped model only if no later `subscribe(..)` of the id has registered one there or is handing one over. A wrapped
+model that lets a `subscribe(..)` replace a subscription of the same id can still lose a later one that starts its
+hand-over after that check, since the cancel is by id. Cancelling only the first subscription would need the wrapped
+model to cancel by subscription rather than by id, which its API does not offer.
+
 How the position goes back depends on the storage. The reactor `CheckpointStorage` gains `delete(id, condition)`, which
 takes the `CheckpointWriteCondition` that `save(..)` takes and evaluates it against the same stored version, and
 `evaluatesDeleteConditions()`, which says whether a storage evaluates it. The in-memory and MongoDB reactor storages do,

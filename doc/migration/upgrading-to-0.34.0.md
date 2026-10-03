@@ -1531,10 +1531,22 @@ handed to a wrapped model that manages named subscriptions is handed its checkpo
 delivers before the checkpoint is recorded waits for it. When the store records an earlier checkpoint for the id than
 the one read, as `resolveFirstCheckpointRace(..)` can answer, `ReactorDurableSubscriptionModel` cancels the
 subscription in the wrapped model and subscribes it there again from that earlier checkpoint, so your action sees the
-events between the two. When the checkpoint cannot be recorded, or that second subscribe fails,
-`ReactorDurableSubscriptionModel` cancels the subscription in the wrapped model and its `waitUntilStarted()` fails with
-that error, since the subscribe has returned by then. With no delete running that failure is thrown from the subscribe,
-as in 0.33.0. Wait for `waitUntilStarted()` if your code needs to know that such a subscription started.
+events between the two.
+
+A pause, a resume, a `stop()` or a `start(..)` made while `ReactorDurableSubscriptionModel` starts the subscription
+there again succeeds. The subscription has the state you last asked for before your action sees an event from the earlier
+checkpoint, and `isPaused(id)` and `isRunning(id)` answer that state meanwhile. A subscribe of the same id meanwhile is
+refused with `DuplicateSubscriptionIdException`, as the wrapped model refuses it while it has the subscription.
+
+When the checkpoint cannot be recorded, or that second subscribe fails, `ReactorDurableSubscriptionModel` cancels the
+subscription in the wrapped model and its `waitUntilStarted()` fails with that error, since the subscribe has returned
+by then. With no delete running that failure is thrown from the subscribe, as in 0.33.0. Wait for `waitUntilStarted()`
+if your code needs to know that such a subscription started.
+
+That cancel is not made when a later subscribe of the id has put a subscription in the wrapped model by then. A wrapped
+model of your own that lets a subscribe replace a subscription of the same id, instead of refusing it, can still lose
+the later subscription to that cancel, when the later subscribe reaches the wrapped model after
+`ReactorDurableSubscriptionModel` has decided to cancel and before the cancel does.
 
 The reactor `CheckpointStorage` gains two methods with defaults, `delete(subscriptionId, condition)` and
 `evaluatesDeleteConditions()`. The in-memory and MongoDB reactor storages implement both. On them each try of the

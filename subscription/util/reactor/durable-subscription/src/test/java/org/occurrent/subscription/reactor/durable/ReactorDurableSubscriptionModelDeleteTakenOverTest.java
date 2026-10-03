@@ -57,6 +57,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.LongStream;
@@ -492,6 +493,277 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     }
 
     /**
+     * A subscribe handed to a wrapped model whose first position loses to an earlier one is paused while it is started
+     * again from that one. It stays paused, delivers nothing until it is resumed, and then delivers every event after
+     * the earlier position once.
+     * <ul>
+     *     <li>before-the-start-again: paused right after the subscribe, while the delete it took over is still held</li>
+     *     <li>before-the-cancel: paused while the wrapped model cancels the first subscription, before it is gone there</li>
+     *     <li>between-the-cancel-and-the-subscribe: paused once the wrapped model no longer has the subscription, before
+     *     it has it again</li>
+     *     <li>after-the-subscribe: paused once the wrapped model has the subscription again, before its subscribe
+     *     returned</li>
+     * </ul>
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"before-the-start-again", "before-the-cancel", "between-the-cancel-and-the-subscribe", "after-the-subscribe"})
+    void a_pause_while_a_subscription_handed_to_a_wrapped_model_is_started_again_keeps_it_paused_until_it_is_resumed(String pausedWhen) throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        PausableFeed feed = new PausableFeed(false);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            long storedElsewhere = loseTheFirstPosition(model, storage, feed, release);
+            @Nullable CountDownLatch startingAgain = switch (pausedWhen) {
+                case "before-the-cancel" -> feed.holdCancel(2, true);
+                case "between-the-cancel-and-the-subscribe" -> feed.holdCancel(2, false);
+                case "after-the-subscribe" -> feed.holdSubscribe(3);
+                default -> null;
+            };
+
+            // When
+            subscribeOn(caller, model, delivered);
+            final Throwable pauseFailed;
+            if (startingAgain == null) {
+                pauseFailed = catchThrowable(() -> model.pauseSubscription(SUBSCRIPTION_ID));
+                release.countDown();
+            } else {
+                release.countDown();
+                assertThat(startingAgain.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start again held").isTrue();
+                pauseFailed = catchThrowable(() -> model.pauseSubscription(SUBSCRIPTION_ID));
+                feed.letGo();
+            }
+            await().atMost(TIMEOUT).until(() -> feed.subscribes.get() >= 3);
+            long writtenWhilePaused = feed.write();
+            List<Long> deliveredWhilePaused = deliveredWithin(delivered, writtenWhilePaused);
+            boolean pausedAnswer = model.isPaused(SUBSCRIPTION_ID);
+            boolean runningAnswer = model.isRunning(SUBSCRIPTION_ID);
+            Throwable resumeFailed = catchThrowable(() -> model.resumeSubscription(SUBSCRIPTION_ID));
+            long writtenAfter = feed.write();
+
+            // Then
+            untilDelivered(delivered, writtenAfter);
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(pauseFailed).as("how the pause ended").isNull();
+                softly.assertThat(deliveredWhilePaused).as("events delivered while paused").isEmpty();
+                softly.assertThat(pausedAnswer).as("isPaused while paused").isTrue();
+                softly.assertThat(runningAnswer).as("isRunning while paused").isFalse();
+                softly.assertThat(resumeFailed).as("how the resume ended").isNull();
+                softly.assertThat(delivered).as("events delivered to the subscription").containsExactlyElementsOf(positionsAfter(storedElsewhere, writtenAfter));
+            });
+        } finally {
+            release.countDown();
+            feed.letGo();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A model that hands subscriptions to a wrapped model is stopped once the wrapped model no longer has a subscription
+     * it starts again from an earlier first position, and before it has it again. The subscription answers that it is
+     * paused, delivers nothing while the model is stopped, and delivers every event after the earlier position once the
+     * model starts again.
+     */
+    @Test
+    void a_stop_while_a_subscription_handed_to_a_wrapped_model_is_started_again_keeps_it_paused_until_the_model_starts() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        PausableFeed feed = new PausableFeed(false);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            long storedElsewhere = loseTheFirstPosition(model, storage, feed, release);
+            CountDownLatch startingAgain = feed.holdCancel(2, false);
+
+            // When
+            subscribeOn(caller, model, delivered);
+            release.countDown();
+            assertThat(startingAgain.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start again held").isTrue();
+            model.stop();
+            boolean pausedWhileStartedAgain = model.isPaused(SUBSCRIPTION_ID);
+            boolean runningWhileStartedAgain = model.isRunning(SUBSCRIPTION_ID);
+            feed.letGo();
+            await().atMost(TIMEOUT).until(() -> feed.subscribes.get() >= 3);
+            long writtenWhileStopped = feed.write();
+            List<Long> deliveredWhileStopped = deliveredWithin(delivered, writtenWhileStopped);
+            boolean pausedOnceStartedAgain = model.isPaused(SUBSCRIPTION_ID);
+            model.start(true);
+            long writtenAfter = feed.write();
+
+            // Then
+            untilDelivered(delivered, writtenAfter);
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(pausedWhileStartedAgain).as("isPaused while the wrapped model does not have the subscription").isTrue();
+                softly.assertThat(runningWhileStartedAgain).as("isRunning while the wrapped model does not have the subscription").isFalse();
+                softly.assertThat(deliveredWhileStopped).as("events delivered while stopped").isEmpty();
+                softly.assertThat(pausedOnceStartedAgain).as("isPaused once the wrapped model has the subscription again").isTrue();
+                softly.assertThat(delivered).as("events delivered to the subscription").containsExactlyElementsOf(positionsAfter(storedElsewhere, writtenAfter));
+            });
+        } finally {
+            release.countDown();
+            feed.letGo();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscription handed to a wrapped model is paused once the wrapped model no longer has it, while it is started
+     * again from an earlier first position, and then cancelled before the wrapped model has it again. The cancel
+     * completes, the subscription delivers nothing, and a later subscribe of the id from the model default starts from
+     * where the feed is.
+     */
+    @Test
+    void a_cancel_after_a_pause_while_a_subscription_handed_to_a_wrapped_model_is_started_again_ends_it() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        PausableFeed feed = new PausableFeed(false);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            loseTheFirstPosition(model, storage, feed, release);
+            CountDownLatch startingAgain = feed.holdCancel(2, false);
+
+            // When
+            subscribeOn(caller, model, delivered);
+            release.countDown();
+            assertThat(startingAgain.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start again held").isTrue();
+            Throwable pauseFailed = catchThrowable(() -> model.pauseSubscription(SUBSCRIPTION_ID));
+            Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
+            feed.letGo();
+            Throwable cancelFailed = catchThrowable(() -> cancelled.block(TIMEOUT));
+            long writtenAfterCancel = feed.write();
+            List<Long> deliveredAfterCancel = deliveredWithin(delivered, writtenAfterCancel);
+            boolean pausedAnswer = model.isPaused(SUBSCRIPTION_ID);
+            boolean runningAnswer = model.isRunning(SUBSCRIPTION_ID);
+            Later later = subscribeAgain(model, feed, caller);
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(pauseFailed).as("how the pause ended").isNull();
+                softly.assertThat(cancelFailed).as("how the cancel ended").isNull();
+                softly.assertThat(deliveredAfterCancel).as("events delivered to the cancelled subscription").isEmpty();
+                softly.assertThat(pausedAnswer).as("isPaused once cancelled").isFalse();
+                softly.assertThat(runningAnswer).as("isRunning once cancelled").isFalse();
+                softly.assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
+                        .containsExactly(later.writtenAfter());
+            });
+        } finally {
+            release.countDown();
+            feed.letGo();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe of the id comes once the wrapped model no longer has a subscription handed to it that it starts again
+     * from an earlier first position, and before it has it again. It is refused as a duplicate, as the wrapped model
+     * refuses it while it has the subscription, and the subscription started again delivers every event after the
+     * earlier position.
+     */
+    @Test
+    void a_subscribe_of_the_id_while_a_subscription_handed_to_a_wrapped_model_is_started_again_is_refused_as_a_duplicate() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        PausableFeed feed = new PausableFeed(false);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        ExecutorService otherCaller = Executors.newSingleThreadExecutor();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            long storedElsewhere = loseTheFirstPosition(model, storage, feed, release);
+            CountDownLatch startingAgain = feed.holdCancel(2, false);
+            subscribeOn(caller, model, delivered);
+            release.countDown();
+            assertThat(startingAgain.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start again held").isTrue();
+
+            // When
+            Throwable refused = catchThrowable(() -> subscribeOn(otherCaller, model, new CopyOnWriteArrayList<>()));
+            feed.letGo();
+            await().atMost(TIMEOUT).until(() -> feed.subscribes.get() >= 3);
+            long writtenAfter = feed.write();
+
+            // Then
+            untilDelivered(delivered, writtenAfter);
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(refused).as("how the second subscribe ended").hasCauseInstanceOf(DuplicateSubscriptionIdException.class);
+                softly.assertThat(delivered).as("events delivered to the subscription started again").containsExactlyElementsOf(positionsAfter(storedElsewhere, writtenAfter));
+            });
+        } finally {
+            release.countDown();
+            feed.letGo();
+            caller.shutdownNow();
+            otherCaller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * Against a wrapped model that lets a subscribe replace the subscription of the id it has, a subscribe handed to it
+     * whose first position fails ends while a later subscribe of the id is being handed to it. The subscription the later
+     * one handed over stays in the wrapped model and delivers what is written after it.
+     */
+    @Test
+    void a_subscribe_handed_to_a_wrapped_model_whose_first_position_fails_leaves_a_later_one_of_the_id_in_the_wrapped_model() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        PausableFeed feed = new PausableFeed(true);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        ExecutorService otherCaller = Executors.newSingleThreadExecutor();
+        List<Long> later = new CopyOnWriteArrayList<>();
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch releaseFirstPosition = new CountDownLatch(1);
+        try {
+            Held heldCall = cancelWhileHeld(model, storage, feed, "nothing-stored", release);
+            assertThat(heldCall.entered().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("storage call held").isTrue();
+            storage.ifAbsentGate = releaseFirstPosition;
+            storage.ifAbsentFails = true;
+            Subscription first = subscribeOn(caller, model, new CopyOnWriteArrayList<>());
+            release.countDown();
+            assertThat(storage.ifAbsentEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("first position held").isTrue();
+            CountDownLatch laterInWrappedModel = feed.holdSubscribe(3);
+            CompletableFuture<Subscription> subscribedLater = CompletableFuture.supplyAsync(
+                    () -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(later)), otherCaller);
+            assertThat(laterInWrappedModel.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("later subscribe held in the wrapped model").isTrue();
+
+            // When
+            releaseFirstPosition.countDown();
+            Throwable firstEnded = catchThrowable(() -> first.waitUntilStarted(TIMEOUT).block());
+            // Time for the end of the first subscription to cancel the id in the wrapped model, if it does
+            Thread.sleep(300);
+            feed.letGo();
+            subscribedLater.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted(TIMEOUT).block();
+            long writtenAfter = feed.write();
+
+            // Then
+            untilDelivered(later, writtenAfter);
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(firstEnded).as("how waiting for the start of the first subscription ended").hasStackTraceContaining(SAVE_FAILED);
+                softly.assertThat(later).as("events delivered to the later subscription").contains(writtenAfter);
+                softly.assertThat(feed.isRunning(SUBSCRIPTION_ID)).as("the later subscription running in the wrapped model").isTrue();
+            });
+        } finally {
+            release.countDown();
+            releaseFirstPosition.countDown();
+            feed.letGo();
+            caller.shutdownNow();
+            otherCaller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
      * A subscribe handed to a wrapped model takes over a delete whose try is held. Another node stores a position right
      * before the subscribe records its own, and the storage cannot order the two, so recording it is refused and the
      * subscription never starts. The refused write wrote nothing, so the delete goes ahead and removes the position the
@@ -610,6 +882,29 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
         assertThat(storage.deleteEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete held").isTrue();
         return cancelled;
+    }
+
+    // Cancels a subscription of the id while the try of the delete is held until release opens, writes two events, and
+    // sets the storage so that another node stores the first of them right before a subscribe from the model default
+    // records the second as its first position, and the race goes to the earlier one. Answers the position of the first.
+    private static long loseTheFirstPosition(ReactorDurableSubscriptionModel model, GatedStorage storage, Feed feed, CountDownLatch release) throws InterruptedException {
+        Held heldCall = cancelWhileHeld(model, storage, feed, "nothing-stored", release);
+        assertThat(heldCall.entered().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("storage call held").isTrue();
+        long storedElsewhere = feed.write();
+        feed.write();
+        storage.storedElsewhereBeforeIfAbsent = new StringBasedCheckpoint(String.valueOf(storedElsewhere));
+        storage.resolvesRaceByPosition = true;
+        return storedElsewhere;
+    }
+
+    // Waits a second for the event to arrive, and answers what was delivered by then either way
+    private static List<Long> deliveredWithin(List<Long> delivered, long position) {
+        try {
+            await().atMost(Duration.ofSeconds(1)).until(() -> delivered.contains(position));
+        } catch (ConditionTimeoutException notDelivered) {
+            // What was delivered instead is asserted next
+        }
+        return List.copyOf(delivered);
     }
 
     // The storage call a cancel left held, and the position a subscribe from the model default starts after then, or -1
@@ -938,6 +1233,208 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         @Override
         public void pauseSubscription(String subscriptionId) {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    // A feed for subscriptions it manages by name that it pauses, resumes, stops and starts. A subscription moves past an
+    // event only once its action for it has ended, and a pause ends the action under way, so a resume delivers that
+    // event again. A subscribe while stopped keeps the subscription paused. It refuses a duplicate subscribe, unless
+    // it was made to let a subscribe replace the subscription of the id. holdSubscribe and holdCancel hold the call of
+    // that number, counted from the first, until letGo.
+    private static final class PausableFeed extends Feed implements SubscriptionModel {
+        private final boolean replaces;
+        private final Map<String, Reading> readings = new ConcurrentHashMap<>();
+        private final AtomicInteger subscribes = new AtomicInteger();
+        private final AtomicInteger cancels = new AtomicInteger();
+        private final CountDownLatch held = new CountDownLatch(1);
+        private final CountDownLatch letGo = new CountDownLatch(1);
+        private volatile int heldSubscribe = -1;
+        private volatile int heldCancel = -1;
+        private volatile boolean cancelHeldBeforeItRemoves;
+        private boolean stopped;
+
+        private PausableFeed(boolean replaces) {
+            this.replaces = replaces;
+        }
+
+        // Held once the subscription is in this model, before it reads anything
+        private CountDownLatch holdSubscribe(int number) {
+            heldSubscribe = number;
+            return held;
+        }
+
+        private CountDownLatch holdCancel(int number, boolean beforeItRemoves) {
+            cancelHeldBeforeItRemoves = beforeItRemoves;
+            heldCancel = number;
+            return held;
+        }
+
+        private void letGo() {
+            letGo.countDown();
+        }
+
+        private void holdHere() {
+            held.countDown();
+            try {
+                letGo.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            int number = subscribes.incrementAndGet();
+            Reading reading = new Reading(action, Feed.startOf(startAt, present.get()));
+            synchronized (this) {
+                if (!replaces && readings.containsKey(subscriptionId)) {
+                    throw new DuplicateSubscriptionIdException(subscriptionId);
+                }
+                @Nullable Reading replaced = readings.put(subscriptionId, reading);
+                if (replaced != null) {
+                    replaced.stopReading();
+                }
+                reading.paused = stopped;
+            }
+            if (number == heldSubscribe) {
+                holdHere();
+            }
+            synchronized (this) {
+                if (readings.get(subscriptionId) == reading && !reading.paused) {
+                    reading.read();
+                }
+            }
+            return started(subscriptionId);
+        }
+
+        @Override
+        public synchronized void pauseSubscription(String subscriptionId) {
+            Reading reading = known(subscriptionId);
+            if (reading.paused) {
+                throw new IllegalStateException("Subscription " + subscriptionId + " is already paused");
+            }
+            reading.paused = true;
+            reading.stopReading();
+        }
+
+        @Override
+        public synchronized Subscription resumeSubscription(String subscriptionId) {
+            Reading reading = known(subscriptionId);
+            if (!reading.paused) {
+                throw new IllegalStateException("Subscription " + subscriptionId + " is already running");
+            }
+            reading.paused = false;
+            reading.read();
+            return started(subscriptionId);
+        }
+
+        private Reading known(String subscriptionId) {
+            @Nullable Reading reading = readings.get(subscriptionId);
+            if (reading == null) {
+                throw new IllegalStateException("No subscription " + subscriptionId);
+            }
+            return reading;
+        }
+
+        @Override
+        public Mono<Void> cancelSubscription(String subscriptionId) {
+            int number = cancels.incrementAndGet();
+            if (number == heldCancel && cancelHeldBeforeItRemoves) {
+                holdHere();
+            }
+            synchronized (this) {
+                @Nullable Reading reading = readings.remove(subscriptionId);
+                if (reading != null) {
+                    reading.stopReading();
+                }
+            }
+            if (number == heldCancel && !cancelHeldBeforeItRemoves) {
+                holdHere();
+            }
+            return Mono.empty();
+        }
+
+        @Override
+        public synchronized void start(boolean resumeSubscriptionsAutomatically) {
+            stopped = false;
+            if (resumeSubscriptionsAutomatically) {
+                readings.values().stream().filter(reading -> reading.paused).forEach(reading -> {
+                    reading.paused = false;
+                    reading.read();
+                });
+            }
+        }
+
+        @Override
+        public synchronized void stop() {
+            stopped = true;
+            readings.values().stream().filter(reading -> !reading.paused).forEach(reading -> {
+                reading.paused = true;
+                reading.stopReading();
+            });
+        }
+
+        @Override
+        public synchronized void shutdown() {
+            readings.values().forEach(Reading::stopReading);
+            readings.clear();
+        }
+
+        @Override
+        public synchronized boolean isRunning() {
+            return !stopped;
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            @Nullable Reading reading = readings.get(subscriptionId);
+            return reading != null && !reading.paused;
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            @Nullable Reading reading = readings.get(subscriptionId);
+            return reading != null && reading.paused;
+        }
+
+        private static Subscription started(String subscriptionId) {
+            return new Subscription() {
+                @Override
+                public String id() {
+                    return subscriptionId;
+                }
+
+                @Override
+                public Mono<Void> waitUntilStarted() {
+                    return Mono.empty();
+                }
+            };
+        }
+
+        private final class Reading {
+            private final Function<CloudEvent, Mono<Void>> action;
+            private volatile long handled;
+            private volatile boolean paused;
+            private volatile @Nullable Disposable reading;
+
+            private Reading(Function<CloudEvent, Mono<Void>> action, long startsAfter) {
+                this.action = action;
+                this.handled = startsAfter;
+            }
+
+            private void read() {
+                reading = PausableFeed.this.subscribe(null, StartAt.checkpoint(new StringBasedCheckpoint(String.valueOf(handled))))
+                        .publishOn(Schedulers.boundedElastic())
+                        .concatMap(event -> action.apply(event).then(Mono.fromRunnable(() -> handled = Long.parseLong(event.getId()))))
+                        .subscribe();
+            }
+
+            private void stopReading() {
+                @Nullable Disposable current = reading;
+                if (current != null) {
+                    current.dispose();
+                }
+            }
         }
     }
 }
