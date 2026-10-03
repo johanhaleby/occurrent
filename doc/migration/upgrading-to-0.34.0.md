@@ -70,7 +70,8 @@ Finally, `SpringMongoSubscriptionModel` no longer skips an event whose action ke
 whose history was lost when it is told not to restart it, and no longer builds on Spring Data's
 `MessageListenerContainer`, which removes the `protected` constructor of `SpringMongoSubscription`. A
 `DurableSubscriptionModel` over a MongoDB model also writes a checkpoint once a minute for a subscription that receives
-no events. Read
+no events. `ReactorMongoSubscriptionModel` reads the driver's change stream cursor itself for a subscription with an
+id, which changes what a test that mocks `ReactiveMongoOperations` has to stub. Read
 [section 19](#19-springmongosubscriptionmodel-reads-its-own-cursor-and-a-quiet-durable-subscription-saves-its-position).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
@@ -1435,6 +1436,25 @@ Change the interval with `saveQuietPositionEvery(Duration)` on `DurableSubscript
 below the oplog window. `neverSaveQuietPosition()` turns the save off, and the stored checkpoint of a subscription
 that matches nothing for longer than the oplog window is then a position MongoDB can no longer start from. The Spring
 Boot starter has no property for the interval, so define your own `SubscriptionModel` bean to change it there.
+
+### `ReactorMongoSubscriptionModel` reads the driver's change stream cursor
+
+For a subscription with an id, `ReactorMongoSubscriptionModel` opens the change stream from
+`ReactiveMongoOperations.getCollection(..)` and reads the driver's change stream cursor one batch at a time, so that it
+can move the position of a subscription that matches nothing. The `Flux` that `subscribe(filter, startAt)` returns
+still reads through `ReactiveMongoTemplate.changeStream(..)`.
+
+The model asks MongoDB for the next batch only once your action's `Mono` has completed for every event of the batch
+before. A slow action therefore holds back the next `getMore`, where in 0.33.0 the driver fetched the next batch while
+the action ran.
+
+The resume token MongoDB sends with a batch that has no event isn't in the driver's public API, so the model reads it
+through private fields of the driver. When the driver in use lacks one of those fields, declares one as neither final
+nor volatile, or fails to hand over the token, the model logs a warning with the reason and reads the change stream as
+before, and a quiet subscription keeps the position of its last event.
+
+A test that makes the model fail by stubbing `changeStream(..)` on a mocked `ReactiveMongoOperations` no longer
+reaches a subscription with an id. Stub `getCollection(..)` as well.
 
 There is no recipe for these changes. The removed constructor has no replacement to rewrite to, and the rest is runtime
 behavior that a rewrite of the source cannot see.

@@ -49,10 +49,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
-import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
-import org.springframework.data.mongodb.core.aggregation.PrefixingDelegatingAggregationOperationContext;
 import org.springframework.scheduling.concurrent.ConcurrentTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
@@ -96,9 +94,6 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     }
 
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
-
-    // The change stream fields that a filter on the event already names in full, so they get no fullDocument prefix
-    private static final Set<String> CHANGE_STREAM_FIELDS = Set.of("operationType", "fullDocument", "documentKey", "updateDescription", "ns");
 
     private final String eventCollection;
     private final TimeRepresentation timeRepresentation;
@@ -255,19 +250,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         return subscriptions.subscribe(subscriptionId, () -> pipelineFor(filter), startAt, action, true);
     }
 
-    // The pipeline Spring Data builds for the same filter, where a field of the event gets the fullDocument prefix
-    @SuppressWarnings("unchecked")
     private List<Bson> pipelineFor(@Nullable SubscriptionFilter filter) {
-        ChangeStreamOptions options = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, ChangeStreamOptions.builder());
-        Object changeStreamFilter = options.getFilter().orElse(null);
-        if (changeStreamFilter == null) {
-            return List.of();
-        } else if (changeStreamFilter instanceof Aggregation aggregation) {
-            return List.copyOf(aggregation.toPipeline(new PrefixingDelegatingAggregationOperationContext(Aggregation.DEFAULT_CONTEXT, "fullDocument", CHANGE_STREAM_FIELDS)));
-        } else if (changeStreamFilter instanceof List<?> stages) {
-            return List.copyOf((List<Document>) stages);
-        }
-        throw new IllegalArgumentException("Cannot turn " + changeStreamFilter.getClass().getName() + " into a change stream pipeline");
+        return List.copyOf(ApplyFilterToChangeStreamOptionsBuilder.changeStreamPipeline(timeRepresentation, filter, Aggregation.DEFAULT_CONTEXT));
     }
 
     @Override
