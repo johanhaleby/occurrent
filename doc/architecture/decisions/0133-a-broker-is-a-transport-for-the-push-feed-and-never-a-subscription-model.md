@@ -1567,11 +1567,23 @@ between the cancel and the second subscribe. So the durable model refuses such a
 `DuplicateSubscriptionIdException` from the moment it decides to start the subscription again. Before the cancel it
 waits for a `subscribe(..)` of the id already being handed over, which the wrapped model refuses as a duplicate.
 
+The wrapped model also pauses and resumes by id, so every call of that kind the durable model sends it for one
+subscription reaches whichever subscription of the id it holds when the call runs. Those calls are the cancel of a
+`cancelSubscription(..)`, a pause or a resume the caller makes, the cancel before the second subscribe, the pause or
+resume that puts the kept state in place, and the cancel that ends a handed-over subscription that a cancel, a shutdown
+or a failure ended before it started. The
+durable model counts each such call per id from the moment it decides to send it until it ends, and refuses a
+`subscribe(..)` of the id with `DuplicateSubscriptionIdException` while the count is above zero. A pause or a resume
+ends when the wrapped model returns or throws. A cancel ends when the wrapped model throws or the `Mono` it returned
+signals. The `Mono` of `cancelSubscription(..)` completes only once the count for the id is zero, so a caller that waits
+for it never meets the refusal, and no call sent for an earlier subscription reaches the one it subscribes. In 0.33.0 a
+pause, a resume and a cancel took the durable model's monitor, so a cancel returned only after a pause under way had.
+They no longer take it, since a slow wrapped model would hold the monitor for every other id, and the count gives the
+caller who waits for the cancel's `Mono` the same order. A wrapped cancel that never completes keeps the id refused.
+
 When the position cannot be recorded, or the second subscribe fails, the durable model cancels the subscription in the
-wrapped model only if no later `subscribe(..)` of the id has registered one there or is handing one over. A wrapped
-model that lets a `subscribe(..)` replace a subscription of the same id can still lose a later one that starts its
-hand-over after that check, since the cancel is by id. Cancelling only the first subscription would need the wrapped
-model to cancel by subscription rather than by id, which its API does not offer.
+wrapped model only if no later `subscribe(..)` of the id has registered one there or is handing one over. A later one
+that starts its hand-over after that check is refused until the cancel has ended, as described above.
 
 How the position goes back depends on the storage. The reactor `CheckpointStorage` gains `delete(id, condition)`, which
 takes the `CheckpointWriteCondition` that `save(..)` takes and evaluates it against the same stored version, and

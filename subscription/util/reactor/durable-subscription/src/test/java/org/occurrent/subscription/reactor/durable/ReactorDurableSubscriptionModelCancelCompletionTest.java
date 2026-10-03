@@ -398,9 +398,9 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     }
 
     /**
-     * The cancel has taken the subscription out of this model, and the storage has not deleted the checkpoint yet, when
-     * the subscribe of the same id arrives. The subscribe reads that checkpoint and the subscription resumes from it,
-     * as it would without the cancel.
+     * The cancel has taken the subscription out of this model and out of the wrapped model, and the storage holds the
+     * delete of the checkpoint, when the subscribe of the same id arrives. The subscribe reads that checkpoint and the
+     * subscription resumes from it, as it would without the cancel.
      */
     @Test
     void a_subscribe_arriving_while_the_cancel_is_still_under_way_resumes_from_the_checkpoint_the_storage_still_holds() throws Exception {
@@ -411,7 +411,7 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         runningFromAStoredPosition(model, storage);
 
         // When
-        @Nullable Throwable subscribeFailure = subscribeWhileTheCancelIsHeld(model, publisher -> publisher.getClass().getSimpleName().equals("MonoWhen"));
+        @Nullable Throwable subscribeFailure = subscribeWhileTheDeleteIsHeld(model, storage);
 
         // Then
         assertThat(subscribeFailure).as("failure of the subscribe that arrived during the cancel").isNull();
@@ -419,19 +419,42 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     }
 
     /**
-     * The subscribe finds the delete of the cancel before the cancel has started it, and the storage deletes and saves
-     * on the thread that asks it to. Nothing is stored for the id, so the subscription starts from where the feed is,
-     * and records that start position once the delete has ended.
+     * The cancel has taken the subscription out of this model and has not reached the wrapped model yet when the
+     * subscribe of the same id arrives. The wrapped model cancels by id, so that cancel would end the subscription the
+     * subscribe hands it, and the subscribe is refused as a duplicate.
      */
     @Test
-    void a_subscribe_that_finds_a_delete_the_cancel_has_not_started_yet_records_its_own_start_position_once_it_has_ended() throws Exception {
+    void a_subscribe_arriving_before_the_cancel_has_reached_the_wrapped_model_is_refused_as_a_duplicate() throws Exception {
         // Given
-        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        PositionStorage storage = new PositionStorage();
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage);
+        runningFromAStoredPosition(model, storage);
+
+        // When
+        // Outside the lock the cancel takes, which the subscribe takes too
+        Object positionLock = field(model, "positionLock");
+        @Nullable Throwable subscribeFailure = subscribeWhileTheCancelIsHeld(model, publisher -> publisher.getClass().getSimpleName().equals("MonoWhen") && !Thread.holdsLock(positionLock));
+
+        // Then
+        assertThat(subscribeFailure).as("failure of the subscribe that arrived before the cancel reached the wrapped model").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(wrapped.startedAt).as("start positions the wrapped model was handed").hasSize(1);
+    }
+
+    /**
+     * The subscribe finds the delete of the cancel while the storage holds it. Nothing is stored for the id, so the
+     * subscription starts from where the feed is, and records that start position once the delete has ended.
+     */
+    @Test
+    void a_subscribe_that_finds_a_delete_the_storage_has_not_applied_yet_records_its_own_start_position_once_it_has_ended() throws Exception {
+        // Given
+        // Evaluates no condition on a delete, so a try deletes even when nothing is stored, and the storage holds it
+        PositionStorage storage = new PositionStorage();
         NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage);
 
         // When
-        @Nullable Throwable subscribeFailure = subscribeWhileTheCancelIsHeld(model, __ -> writesOfTheIdWaitForADelete(model));
+        @Nullable Throwable subscribeFailure = subscribeWhileTheDeleteIsHeld(model, storage);
 
         // Then
         assertThat(subscribeFailure).as("failure of the subscribe that found the delete").isNull();
@@ -1689,6 +1712,34 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         });
     }
 
+    // Cancels the id while the storage holds the delete, and subscribes the same id on another thread while it is
+    // held. Answers what that subscribe threw.
+    private static @Nullable Throwable subscribeWhileTheDeleteIsHeld(ReactorDurableSubscriptionModel model, PositionStorage storage) throws Exception {
+        CountDownLatch releaseDelete = new CountDownLatch(1);
+        storage.releaseHeldDelete = releaseDelete;
+        AtomicReference<@Nullable Throwable> subscribeFailure = new AtomicReference<>();
+        Thread subscriber = new Thread(() -> {
+            try {
+                subscribe(model);
+            } catch (Throwable throwable) {
+                subscribeFailure.set(throwable);
+            }
+        });
+        try {
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 1);
+            subscriber.start();
+            // A subscribe that waits waits for the delete, which goes on only once it is released
+            await().atMost(TIMEOUT).until(() -> !subscriber.isAlive() || subscriber.getState() != Thread.State.RUNNABLE);
+            releaseDelete.countDown();
+            subscriber.join(TIMEOUT.toMillis());
+            assertThat(subscriber.isAlive()).as("subscribe still running once the delete was released").isFalse();
+            return subscribeFailure.get();
+        } finally {
+            releaseDelete.countDown();
+        }
+    }
+
     // Holds the thread that cancels at the first operator it assembles once pauseHere answers true, and subscribes the
     // same id on another thread while it is held. Answers what that subscribe threw.
     private static @Nullable Throwable subscribeWhileTheCancelIsHeld(ReactorDurableSubscriptionModel model, Predicate<Object> pauseHere) throws Exception {
@@ -1732,18 +1783,6 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
         } finally {
             release.countDown();
             Hooks.resetOnEachOperator(PAUSE_HOOK);
-        }
-    }
-
-    // Asked on the thread that cancels. True once position writes of the id wait for a delete and that thread no
-    // longer holds the lock they take to find it.
-    private static boolean writesOfTheIdWaitForADelete(ReactorDurableSubscriptionModel model) {
-        Object positionLock = field(model, "positionLock");
-        if (Thread.holdsLock(positionLock)) {
-            return false;
-        }
-        synchronized (positionLock) {
-            return ((Map<?, ?>) field(model, "positionDeletes")).containsKey(SUBSCRIPTION_ID);
         }
     }
 

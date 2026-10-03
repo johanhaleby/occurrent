@@ -37,6 +37,8 @@ import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
@@ -50,6 +52,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -59,9 +62,13 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -69,6 +76,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -77,9 +85,9 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * A subscription handed to {@link ReactorMongoSubscriptionModel} that {@link ReactorDurableSubscriptionModel} starts
- * again there from an earlier first position is cancelled while the Mongo model takes the cancel the start again sends
- * it before its second subscribe. That cancel goes by id, so a subscribe of the id that came before it would lose its
- * subscription to it.
+ * again there from an earlier first position is cancelled, or ends, while the Mongo model takes a cancel or a pause
+ * that the durable model sends it for that subscription. Those calls go by id, so a subscribe of the id that came
+ * before one of them ended would lose its subscription to it, or have it paused.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -88,6 +96,7 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     private static final String DATABASE = "reactordurablemongostartagain";
     private static final String SUBSCRIPTION_ID = "sub";
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
+    private static final String ERROR_HOOK = "reactor-durable-mongo-start-again";
 
     @Container
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
@@ -97,9 +106,10 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     private final String eventCollectionName = "events-" + UUID.randomUUID();
     private final AtomicLong eventsWritten = new AtomicLong();
     private final ExecutorService caller = Executors.newSingleThreadExecutor();
+    private final ExecutorService canceller = Executors.newSingleThreadExecutor();
     private final ReactiveMongoTemplate template;
     private final ReactorMongoEventStore eventStore;
-    private final HeldCancelMongoModel mongoModel;
+    private final HoldingMongoModel mongoModel;
     private final RaceStorage storage;
     private final ReactorDurableSubscriptionModel model;
 
@@ -122,16 +132,17 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
                 .timeRepresentation(timeRepresentation)
                 .build();
         eventStore = new ReactorMongoEventStore(template, eventStoreConfig);
-        mongoModel = new HeldCancelMongoModel(template, eventCollectionName, timeRepresentation);
+        mongoModel = new HoldingMongoModel(template, eventCollectionName, timeRepresentation);
         storage = new RaceStorage();
         model = new ReactorDurableSubscriptionModel(mongoModel, storage);
     }
 
     @AfterEach
     void shutdown() {
-        mongoModel.letGo.countDown();
+        mongoModel.letGoOfEveryHold();
         storage.deleteLetGo.countDown();
         caller.shutdownNow();
+        canceller.shutdownNow();
         model.shutdown();
         template.remove(new Query(), eventCollectionName).block(TIMEOUT);
     }
@@ -139,14 +150,15 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     @Test
     void a_subscribe_of_the_id_before_its_cancel_completes_is_refused_while_the_mongo_model_takes_the_cancel_of_the_start_again() throws Exception {
         // Given
-        heldInTheCancelOfTheStartAgain();
+        Hold startAgainCancel = mongoModel.holdCancel(2);
+        heldInTheCancelOfTheStartAgain(startAgainCancel);
 
         // When
         Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
         CompletableFuture<Void> cancelCompleted = cancelled.toFuture();
         Throwable refused = catchThrowable(() -> subscribe(new CopyOnWriteArrayList<>()));
         boolean completedWhileHeld = cancelCompleted.isDone();
-        mongoModel.letGo.countDown();
+        startAgainCancel.letGo();
         Throwable cancelFailed = catchThrowable(() -> cancelled.block(TIMEOUT));
         Later later = subscribeAgain();
 
@@ -164,11 +176,12 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     @Test
     void a_subscribe_of_the_id_once_its_cancel_completes_delivers_every_event_written_after_it() throws Exception {
         // Given
-        heldInTheCancelOfTheStartAgain();
+        Hold startAgainCancel = mongoModel.holdCancel(2);
+        heldInTheCancelOfTheStartAgain(startAgainCancel);
 
         // When
         Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
-        mongoModel.letGo.countDown();
+        startAgainCancel.letGo();
         Throwable cancelFailed = catchThrowable(() -> cancelled.block(TIMEOUT));
         Later later = subscribeAgain();
 
@@ -181,10 +194,169 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
         });
     }
 
+    @Test
+    void a_subscribe_of_the_id_while_the_mongo_model_takes_the_cancel_of_the_id_is_refused_once_the_start_again_has_ended() throws Exception {
+        // Given
+        Hold startAgainCancel = mongoModel.holdCancel(2);
+        Subscription startedAgain = heldInTheCancelOfTheStartAgain(startAgainCancel);
+        Hold cancelOfTheId = mongoModel.holdCancel(3);
+        CompletableFuture<Mono<Void>> cancelling = CompletableFuture.supplyAsync(() -> model.cancelSubscription(SUBSCRIPTION_ID), canceller);
+        cancelOfTheId.awaitReached();
+        startAgainCancel.letGo();
+        Throwable startAgainEnded = catchThrowable(() -> startedAgain.waitUntilStarted(TIMEOUT).block());
+
+        // When
+        Throwable refused = catchThrowable(() -> subscribe(new CopyOnWriteArrayList<>()));
+        cancelOfTheId.letGo();
+        Mono<Void> cancelled = cancelling.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        Throwable cancelFailed = catchThrowable(() -> cancelled.block(TIMEOUT));
+        Later later = subscribeAgain();
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(startAgainEnded).as("how the start again ended").isInstanceOf(CancellationException.class);
+            softly.assertThat(refused).as("how the subscribe while the Mongo model took the cancel of the id ended").hasCauseInstanceOf(DuplicateSubscriptionIdException.class);
+            softly.assertThat(cancelFailed).as("how the cancel ended").isNull();
+            softly.assertThat(later.failed()).as("how a later subscribe ended").isNull();
+            softly.assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
+                    .containsExactlyElementsOf(later.writtenAfter());
+            softly.assertThat(mongoModel.isRunning(SUBSCRIPTION_ID)).as("the later subscription running in the Mongo model").isTrue();
+        });
+    }
+
+    @Test
+    void a_subscribe_of_the_id_while_the_mongo_model_takes_the_pause_kept_during_the_start_again_is_refused_and_the_cancel_completes_after_that_pause() throws Exception {
+        // Given
+        Hold startAgainCancel = mongoModel.holdCancel(2);
+        heldInTheCancelOfTheStartAgain(startAgainCancel);
+        model.pauseSubscription(SUBSCRIPTION_ID);
+        Hold keptPause = mongoModel.holdNextPause();
+        startAgainCancel.letGo();
+        keptPause.awaitReached();
+
+        // When
+        Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
+        CompletableFuture<Void> cancelCompleted = cancelled.toFuture();
+        Throwable refused = catchThrowable(() -> subscribe(new CopyOnWriteArrayList<>()));
+        boolean completedWhilePauseHeld = cancelCompleted.isDone();
+        keptPause.letGo();
+        Throwable cancelFailed = catchThrowable(() -> cancelled.block(TIMEOUT));
+        Later later = subscribeAgain();
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(refused).as("how the subscribe while the Mongo model took the pause ended").hasCauseInstanceOf(DuplicateSubscriptionIdException.class);
+            softly.assertThat(completedWhilePauseHeld).as("the cancel completed while the Mongo model took the pause").isFalse();
+            softly.assertThat(cancelFailed).as("how the cancel ended").isNull();
+            softly.assertThat(later.failed()).as("how a later subscribe ended").isNull();
+            softly.assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
+                    .containsExactlyElementsOf(later.writtenAfter());
+            softly.assertThat(mongoModel.isPaused(SUBSCRIPTION_ID)).as("the later subscription paused in the Mongo model").isFalse();
+        });
+    }
+
+    @Test
+    void a_subscribe_of_the_id_while_the_mongo_model_takes_a_pause_of_the_id_is_refused_and_the_cancel_completes_after_that_pause() throws Exception {
+        // Given
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())).waitUntilStarted(TIMEOUT).block();
+        Hold pause = mongoModel.holdNextPause();
+        CompletableFuture<Void> pausing = CompletableFuture.runAsync(() -> model.pauseSubscription(SUBSCRIPTION_ID), canceller);
+        pause.awaitReached();
+
+        // When
+        Mono<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID);
+        CompletableFuture<Void> cancelCompleted = cancelled.toFuture();
+        Throwable refused = catchThrowable(() -> subscribe(new CopyOnWriteArrayList<>()));
+        boolean completedWhilePauseHeld = cancelCompleted.isDone();
+        pause.letGo();
+        // The Mongo model has cancelled the id by then, so the pause can fail, as one made after the cancel does
+        catchThrowable(() -> pausing.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+        Throwable cancelFailed = catchThrowable(() -> cancelled.block(TIMEOUT));
+        Later later = subscribeAgain();
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(refused).as("how the subscribe while the Mongo model took the pause ended").hasCauseInstanceOf(DuplicateSubscriptionIdException.class);
+            softly.assertThat(completedWhilePauseHeld).as("the cancel completed while the Mongo model took the pause").isFalse();
+            softly.assertThat(cancelFailed).as("how the cancel ended").isNull();
+            softly.assertThat(later.failed()).as("how a later subscribe ended").isNull();
+            softly.assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
+                    .containsExactlyElementsOf(later.writtenAfter());
+            softly.assertThat(mongoModel.isPaused(SUBSCRIPTION_ID)).as("the later subscription paused in the Mongo model").isFalse();
+        });
+    }
+
+    @Test
+    void a_subscribe_of_the_id_while_the_mongo_model_takes_the_cancel_of_a_start_again_whose_second_subscribe_failed_is_refused() throws Exception {
+        // Given
+        mongoModel.failingSubscribe = 3;
+        Hold cancelOfTheFailedStart = mongoModel.holdCancel(3);
+        Subscription startedAgain = startedAgainInTheMongoModel();
+        cancelOfTheFailedStart.awaitReached();
+
+        // When
+        Throwable refused = catchThrowable(() -> subscribe(new CopyOnWriteArrayList<>()));
+        cancelOfTheFailedStart.letGo();
+        Throwable startAgainEnded = catchThrowable(() -> startedAgain.waitUntilStarted(TIMEOUT).block());
+        Later later = subscribeAgain();
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(refused).as("how the subscribe while the Mongo model took the cancel of the failed start ended").hasCauseInstanceOf(DuplicateSubscriptionIdException.class);
+            softly.assertThat(startAgainEnded).as("how the start again ended").hasMessage(HoldingMongoModel.FAILED_SUBSCRIBE);
+            softly.assertThat(later.failed()).as("how a later subscribe ended").isNull();
+            // The failed start keeps the delete it took over, so the later subscribe resumes from the checkpoint another
+            // node stored and delivers earlier events too
+            softly.assertThat(later.delivered()).as("events a later subscribe delivered").containsAll(later.writtenAfter());
+            softly.assertThat(mongoModel.isRunning(SUBSCRIPTION_ID)).as("the later subscription running in the Mongo model").isTrue();
+        });
+    }
+
+    @Test
+    void a_shutdown_while_the_mongo_model_takes_the_cancel_of_the_start_again_ends_its_wait_until_started_with_the_shutdown() throws Exception {
+        // Given
+        Hold startAgainCancel = mongoModel.holdCancel(2);
+        Subscription startedAgain = heldInTheCancelOfTheStartAgain(startAgainCancel);
+        AtomicReference<@Nullable Thread> endedOn = new AtomicReference<>();
+        Hooks.onOperatorError(ERROR_HOOK, (error, data) -> {
+            if (Arrays.stream(error.getStackTrace()).anyMatch(frame -> frame.getClassName().equals(ReactorDurableSubscriptionModel.class.getName()))) {
+                endedOn.compareAndSet(null, Thread.currentThread());
+            }
+            return error;
+        });
+
+        try {
+            // When
+            model.shutdown();
+            startAgainCancel.letGo();
+            // Asked once the start again has ended, so what it ended with comes first, see untilStartedOrShutDown
+            await().atMost(TIMEOUT).until(() -> {
+                @Nullable Thread thread = endedOn.get();
+                return thread != null && isIdle(thread);
+            });
+            Throwable ended = catchThrowable(() -> startedAgain.waitUntilStarted(TIMEOUT).block());
+
+            // Then
+            assertThat(ended).as("how the wait for the start of the subscription started again ended").isInstanceOf(SubscriptionModelShutdownException.class);
+        } finally {
+            Hooks.resetOnOperatorError(ERROR_HOOK);
+        }
+    }
+
     // Subscribes the id and cancels it while the delete of its checkpoint is held. Subscribes it again from the model
     // default, and another node stores an earlier checkpoint right before that subscribe records its first, so the model
     // starts it again in the Mongo model from that one. Returns once the cancel the start again sends there is held.
-    private void heldInTheCancelOfTheStartAgain() throws Exception {
+    private Subscription heldInTheCancelOfTheStartAgain(Hold startAgainCancel) throws Exception {
+        Subscription startedAgain = startedAgainInTheMongoModel();
+        startAgainCancel.awaitReached();
+        return startedAgain;
+    }
+
+    // Subscribes the id and cancels it while the delete of its checkpoint is held. Subscribes it again from the model
+    // default, and another node stores an earlier checkpoint right before that subscribe records its first, so the model
+    // starts it again in the Mongo model from that one. Returns the subscription that starts again once the delete is
+    // let go.
+    private Subscription startedAgainInTheMongoModel() throws Exception {
         List<Checkpoint> checkpoints = new CopyOnWriteArrayList<>();
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), cloudEvent -> Mono.fromRunnable(() -> checkpoints.add(CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(cloudEvent))))
                 .waitUntilStarted(TIMEOUT).block();
@@ -197,27 +369,29 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
         model.cancelSubscription(SUBSCRIPTION_ID);
         assertThat(storage.deleteEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete held").isTrue();
         storage.storedElsewhereBeforeIfAbsent = checkpoints.getFirst();
-        mongoModel.heldCancel = 2;
-        subscribe(new CopyOnWriteArrayList<>());
+        Subscription startedAgain = subscribe(new CopyOnWriteArrayList<>());
         storage.deleteLetGo.countDown();
-        assertThat(mongoModel.cancelHeld.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("cancel of the start again held").isTrue();
+        return startedAgain;
     }
 
-    // What a subscribe of the id from the model default delivered, of an event written before it and two written after
-    private record Later(List<Long> delivered, long writtenBefore, List<Long> writtenAfter) {
+    // What a subscribe of the id from the model default delivered, of an event written before it and two written after,
+    // and how it failed, if it did
+    private record Later(List<Long> delivered, long writtenBefore, List<Long> writtenAfter, @Nullable Throwable failed) {
     }
 
-    private Later subscribeAgain() throws Exception {
+    private Later subscribeAgain() {
         long writtenBefore = write();
         List<Long> delivered = new CopyOnWriteArrayList<>();
-        subscribe(delivered).waitUntilStarted(TIMEOUT).block();
+        Throwable failed = catchThrowable(() -> subscribe(delivered).waitUntilStarted(TIMEOUT).block());
         List<Long> writtenAfter = List.of(write(), write());
-        try {
-            await().atMost(TIMEOUT).until(() -> delivered.contains(writtenAfter.getLast()));
-        } catch (ConditionTimeoutException notDelivered) {
-            // What was delivered instead is asserted next
+        if (failed == null) {
+            try {
+                await().atMost(TIMEOUT).until(() -> delivered.contains(writtenAfter.getLast()));
+            } catch (ConditionTimeoutException notDelivered) {
+                // What was delivered instead is asserted next
+            }
         }
-        return new Later(delivered, writtenBefore, writtenAfter);
+        return new Later(delivered, writtenBefore, writtenAfter, failed);
     }
 
     // On a thread of its own, since a subscribe that takes over a delete can wait for a read
@@ -244,28 +418,92 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
         return cloudEvent -> Mono.fromRunnable(() -> delivered.add(Long.parseLong(cloudEvent.getId())));
     }
 
-    // Holds the cancel of that number, counted from the first, before it reaches the Mongo model, until letGo opens
-    private static final class HeldCancelMongoModel extends ReactorMongoSubscriptionModel {
-        private final AtomicInteger cancels = new AtomicInteger();
-        private final CountDownLatch cancelHeld = new CountDownLatch(1);
-        private final CountDownLatch letGo = new CountDownLatch(1);
-        private volatile int heldCancel = -1;
+    // A scheduler thread that has gone back to waiting for its next task
+    private static boolean isIdle(Thread thread) {
+        return (thread.getState() == Thread.State.WAITING || thread.getState() == Thread.State.TIMED_WAITING)
+               && Arrays.stream(thread.getStackTrace()).noneMatch(frame -> frame.getClassName().startsWith("org.occurrent"));
+    }
 
-        private HeldCancelMongoModel(ReactiveMongoTemplate template, String eventCollectionName, TimeRepresentation timeRepresentation) {
+    // Holds the cancels of the numbers asked for, counted from the first, and the next pause, each before it reaches the
+    // Mongo model, until its hold is let go. Fails the subscribe of the number asked for, counted from the first.
+    private static final class HoldingMongoModel extends ReactorMongoSubscriptionModel {
+        private static final String FAILED_SUBSCRIBE = "The subscribe failed";
+        private final AtomicInteger cancels = new AtomicInteger();
+        private final AtomicInteger subscribes = new AtomicInteger();
+        private final Map<Integer, Hold> heldCancels = new ConcurrentHashMap<>();
+        private final List<Hold> holds = new CopyOnWriteArrayList<>();
+        private final AtomicReference<@Nullable Hold> heldPause = new AtomicReference<>();
+        private volatile int failingSubscribe = -1;
+
+        private HoldingMongoModel(ReactiveMongoTemplate template, String eventCollectionName, TimeRepresentation timeRepresentation) {
             super(template, eventCollectionName, timeRepresentation);
+        }
+
+        private Hold holdCancel(int number) {
+            Hold hold = new Hold();
+            holds.add(hold);
+            heldCancels.put(number, hold);
+            return hold;
+        }
+
+        private Hold holdNextPause() {
+            Hold hold = new Hold();
+            holds.add(hold);
+            heldPause.set(hold);
+            return hold;
+        }
+
+        private void letGoOfEveryHold() {
+            holds.forEach(Hold::letGo);
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            if (subscribes.incrementAndGet() == failingSubscribe) {
+                throw new IllegalStateException(FAILED_SUBSCRIBE);
+            }
+            return super.subscribe(subscriptionId, filter, startAt, action);
         }
 
         @Override
         public Mono<Void> cancelSubscription(String subscriptionId) {
-            if (cancels.incrementAndGet() == heldCancel) {
-                cancelHeld.countDown();
-                try {
-                    letGo.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
+            @Nullable Hold hold = heldCancels.remove(cancels.incrementAndGet());
+            if (hold != null) {
+                hold.hold();
             }
             return super.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            @Nullable Hold hold = heldPause.getAndSet(null);
+            if (hold != null) {
+                hold.hold();
+            }
+            super.pauseSubscription(subscriptionId);
+        }
+    }
+
+    // A call held where it is reached until it is let go
+    private static final class Hold {
+        private final CountDownLatch reached = new CountDownLatch(1);
+        private final CountDownLatch letGo = new CountDownLatch(1);
+
+        private void hold() {
+            reached.countDown();
+            try {
+                letGo.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        private void awaitReached() throws InterruptedException {
+            assertThat(reached.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("call held").isTrue();
+        }
+
+        private void letGo() {
+            letGo.countDown();
         }
     }
 
