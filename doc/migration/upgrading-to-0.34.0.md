@@ -1548,6 +1548,12 @@ model of your own that lets a subscribe replace a subscription of the same id, i
 the later subscription to that cancel, when the later subscribe reaches the wrapped model after
 `ReactorDurableSubscriptionModel` has decided to cancel and before the cancel does.
 
+Before it starts the subscription in the wrapped model again, `ReactorDurableSubscriptionModel` cancels it there. When
+you cancel the id and subscribe it again while the wrapped model is still taking that cancel, the later subscription can
+be lost on any wrapped model, `ReactorMongoSubscriptionModel` included. The wrapped model cancels by id, so the cancel
+removes the later subscription when it gets there after the later subscribe. That subscription then delivers no event
+written after that, and `isRunning(id)` answers `false`.
+
 The reactor `CheckpointStorage` gains two methods with defaults, `delete(subscriptionId, condition)` and
 `evaluatesDeleteConditions()`. The in-memory and MongoDB reactor storages implement both. On them each try of the
 delete is conditional on the version it read just before, and the checkpoint goes back at once at a higher version. The

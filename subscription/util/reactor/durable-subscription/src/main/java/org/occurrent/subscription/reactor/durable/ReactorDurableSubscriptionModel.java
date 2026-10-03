@@ -413,6 +413,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // model is called. A cancel or a shutdown that comes after this finds the hand-over, and the subscription the
         // wrapped model makes is cancelled there again below. Neither of them waits for the wrapped model to take the
         // subscribe. The shutdown flag is set before the shutdown takes the lock, and read here last.
+        @Nullable Mono<Optional<Checkpoint>> settled = startAtToUse == null ? null : writer.settled;
+        // Set in the same step as the mark, so a pause, a resume, a stop or a start that passes to the wrapped model
+        // from here on is counted, and a start again reads the state of the wrapped model only once it has returned
+        @Nullable KeptLifecycle kept = settled == null ? null : new KeptLifecycle();
         @Nullable Registration refused;
         final boolean startedAgain;
         synchronized (positionLock) {
@@ -422,6 +426,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             startedAgain = refused == null && isStartedAgain(subscriptionId);
             if (refused == null && !startedAgain) {
                 writer.handingOver = Sinks.empty();
+                writer.kept = kept;
             }
         }
         if (startedAgain) {
@@ -435,7 +440,6 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // Never runs once a cancel or a shutdown has reached the writer, so a subscription the wrapped model keeps
         // after the cancel below failed delivers nothing to the caller's action
         Function<CloudEvent, Mono<Void>> liveAction = actionWhileLive(writer, action);
-        @Nullable Mono<Optional<Checkpoint>> settled = startAtToUse == null ? null : writer.settled;
         final Subscription delegated;
         try {
             // A null startAtToUse means a dynamic StartAt opted out of starting, so the wrapped model gets the
@@ -451,12 +455,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         Registration registration = registerDelegated(subscriptionId, writer);
         if (registration == Registration.REGISTERED) {
             handedOver(writer, Mono.empty());
-            if (settled == null) {
+            if (settled == null || kept == null) {
                 return delegated;
-            }
-            KeptLifecycle kept = new KeptLifecycle();
-            synchronized (positionLock) {
-                writer.kept = kept;
             }
             Mono<Subscription> running = settled
                     .flatMap(startAgainFrom -> {
@@ -472,10 +472,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             return new ReactorDurableSubscription(subscriptionId, untilStartedOrShutDown(running.flatMap(Subscription::waitUntilStarted)));
         }
         // A cancel or a shutdown came while the wrapped model took the subscribe, and may have reached that model
-        // before the subscribe did, so the subscription it made is cancelled there now. registerDelegated retired its
-        // writer, so it saves no position meanwhile, and the cancel that came completes only after this, or fails
-        // with what failed it.
-        handedOver(writer, cancelInWrappedModel(delegate, subscriptionId));
+        // before the subscribe did, so the subscription it made is cancelled there now, unless a later subscribe of the
+        // id has one there by then. registerDelegated retired its writer, so it saves no position meanwhile, and the
+        // cancel that came completes only after this, or fails with what failed it.
+        handedOver(writer, cancelUnlessHandedOverAgain(delegate, subscriptionId, writer));
         if (registration == Registration.SHUT_DOWN) {
             throw new SubscriptionModelShutdownException();
         }
@@ -506,6 +506,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                                                         Checkpoint from, Function<CloudEvent, Mono<Void>> liveAction, PositionWriter writer,
                                                         KeptLifecycle kept) {
         Mono<Subscription> subscribedAgain = Mono.fromCallable(() -> {
+            // A cancel of the id that came since the wrapped model's cancel has made that model cancel too, and a
+            // subscribe of the id made after it can have a subscription there, which a wrapped model that lets a
+            // subscribe replace another would end
+            requireNotRetired(writer, subscriptionId);
             final Subscription again;
             try {
                 again = delegate.subscribe(subscriptionId, filter, StartAt.checkpoint(from),
@@ -518,7 +522,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             synchronized (positionLock) {
                 retired = writer.retired;
             }
-            handedOver(writer, retired ? cancelInWrappedModel(delegate, subscriptionId) : Mono.empty());
+            // A cancel that came meanwhile can have reached the wrapped model before this subscribe did, so the
+            // subscription is cancelled there again, unless a subscribe of the id made after that cancel has one there
+            handedOver(writer, retired ? cancelUnlessHandedOverAgain(delegate, subscriptionId, writer) : Mono.empty());
             if (retired) {
                 throw cancelledBeforeItStarted(subscriptionId);
             }
@@ -549,24 +555,35 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 })
                 // What the wait above waits for ends on the thread of a caller, which the calls below must not run on
                 .publishOn(Schedulers.boundedElastic())
-                .then(Mono.fromRunnable(() -> keepWrappedLifecycle(delegate, subscriptionId, writer, kept)))
-                .then(Mono.defer(() -> delegate.cancelSubscription(subscriptionId)))
+                .then(Mono.fromRunnable(() -> keepWrappedLifecycle(delegate, subscriptionId, kept)))
+                // Checked right before the wrapped model is asked, since it cancels by id and would end a subscription
+                // that a subscribe of the id made after a cancel of it has there by then. A cancel and a subscribe of
+                // the id that both come while the wrapped model takes this cancel are not seen.
+                .then(Mono.defer(() -> {
+                    requireNotRetired(writer, subscriptionId);
+                    return delegate.cancelSubscription(subscriptionId);
+                }))
                 .then(subscribedAgain.subscribeOn(Schedulers.boundedElastic()))
                 .flatMap(again -> Mono.fromRunnable(() -> applyKeptLifecycle(delegate, subscriptionId, writer, kept)).thenReturn(again))
                 // A no-op once the hand-over has ended, and ends it when the wrapped model's cancel failed
                 .doOnError(__ -> handedOver(writer, Mono.empty()));
     }
 
-    // The state the wrapped model has for the subscription before it is cancelled there, unless a call asked for one
-    // since the mark in startAgainInWrappedModel
-    private void keepWrappedLifecycle(SubscriptionModel delegate, String subscriptionId, PositionWriter writer, KeptLifecycle kept) {
-        boolean paused = wrappedIsPaused(delegate, subscriptionId);
+    // A cancel, a shutdown, or a subscribe the wrapped model let replace this subscription, while the start again
+    // waited
+    private void requireNotRetired(PositionWriter writer, String subscriptionId) {
         synchronized (positionLock) {
-            // A cancel, a shutdown, or a subscribe the wrapped model let replace this subscription, while the start
-            // again waited
             if (writer.retired) {
                 throw cancelledBeforeItStarted(subscriptionId);
             }
+        }
+    }
+
+    // The state the wrapped model has for the subscription before it is cancelled there, unless a call asked for one
+    // since the mark in startAgainInWrappedModel
+    private void keepWrappedLifecycle(SubscriptionModel delegate, String subscriptionId, KeptLifecycle kept) {
+        boolean paused = wrappedIsPaused(delegate, subscriptionId);
+        synchronized (positionLock) {
             if (kept.paused == null) {
                 kept.ask(paused);
             }
@@ -574,14 +591,24 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // Pauses or resumes the subscription in the wrapped model until it has the state last asked for, then lets the calls
-    // pass to it again. Gives up at a cancel or a shutdown of the id, and at a call the wrapped model refuses.
+    // pass to it again. Gives up at a cancel or a shutdown of the id, and at a call the wrapped model refuses, unless a
+    // call asked again since. The keeping ends in the step that finds nothing left to do, so a call made before that
+    // step is kept and done here, and one made after it passes to the wrapped model.
     private void applyKeptLifecycle(SubscriptionModel delegate, String subscriptionId, PositionWriter writer, KeptLifecycle kept) {
         boolean wrappedPaused = wrappedIsPaused(delegate, subscriptionId);
+        @Nullable RuntimeException refusal = null;
+        long refusedAsk = -1;
+        final Sinks.Empty<Void> unpaused;
+        final boolean gaveUp;
         while (true) {
             final boolean pause;
+            final long ask;
             synchronized (positionLock) {
                 pause = Boolean.TRUE.equals(kept.paused);
-                if (writer.retired || pause == wrappedPaused) {
+                ask = kept.asks;
+                if (writer.retired || pause == wrappedPaused || ask == refusedAsk) {
+                    gaveUp = !writer.retired && pause != wrappedPaused;
+                    unpaused = stopKeeping(writer, kept);
                     break;
                 }
             }
@@ -596,13 +623,16 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 // A stop or a start of the wrapped model can have done it first
                 wrappedPaused = wrappedIsPaused(delegate, subscriptionId);
                 if (wrappedPaused != pause) {
-                    log.warn("Could not {} subscription {} in the wrapped model {} after starting it there again, so it stays {}", pause ? "pause" : "resume",
-                            subscriptionId, subscription.getClass().getName(), wrappedPaused ? "paused" : "running", e);
-                    break;
+                    refusal = e;
+                    refusedAsk = ask;
                 }
             }
         }
-        endKeptLifecycle(writer, kept, null);
+        if (gaveUp) {
+            log.warn("Could not {} subscription {} in the wrapped model {} after starting it there again, so it stays {}", wrappedPaused ? "resume" : "pause",
+                    subscriptionId, subscription.getClass().getName(), wrappedPaused ? "paused" : "running", refusal);
+        }
+        keepingStopped(unpaused, kept, null);
     }
 
     // Ends the keeping of the state asked for, so the calls pass to the wrapped model again, and lets an action held by
@@ -611,12 +641,22 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private void endKeptLifecycle(PositionWriter writer, KeptLifecycle kept, @Nullable Throwable failure) {
         final Sinks.Empty<Void> unpaused;
         synchronized (positionLock) {
-            kept.keeping = false;
-            if (writer.kept == kept) {
-                writer.kept = null;
-            }
-            unpaused = kept.unpaused;
+            unpaused = stopKeeping(writer, kept);
         }
+        keepingStopped(unpaused, kept, failure);
+    }
+
+    // Called under positionLock. Answers what lets an action held by heldWhilePaused go on, which keepingStopped emits
+    // once the lock is released.
+    private static Sinks.Empty<Void> stopKeeping(PositionWriter writer, KeptLifecycle kept) {
+        kept.keeping = false;
+        if (writer.kept == kept) {
+            writer.kept = null;
+        }
+        return kept.unpaused;
+    }
+
+    private static void keepingStopped(Sinks.Empty<Void> unpaused, KeptLifecycle kept, @Nullable Throwable failure) {
         unpaused.tryEmitEmpty();
         if (failure == null) {
             kept.applied.tryEmitEmpty();
@@ -681,33 +721,37 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     // Cancels the subscription of the id in the wrapped model, which only cancels by id, unless a later subscribe of the
     // id has registered one there by then, which that cancel would end instead. Waits for a hand-over of the id under
-    // way first, since it can still register one. A subscribe that only starts its hand-over after the check is not
-    // seen, so a wrapped model that lets it replace the subscription still there can have it cancelled.
-    private void cancelUnlessHandedOverAgain(SubscriptionModel delegate, String subscriptionId, PositionWriter ended) {
+    // way first, since it can still register one, unless a cancel or a shutdown has ended it, since it then registers
+    // nothing and two of those would otherwise wait for each other. A subscribe that only starts its hand-over after
+    // the check is not seen, so a wrapped model that lets it replace the subscription still there can have it
+    // cancelled. Called once, and as soon as it is called, like cancelInWrappedModel.
+    private Mono<Void> cancelUnlessHandedOverAgain(SubscriptionModel delegate, String subscriptionId, PositionWriter ended) {
         final List<Mono<Void>> underWay = new ArrayList<>();
         final boolean handedOverAgain;
         synchronized (positionLock) {
             handedOverAgain = positionWriters.containsKey(subscriptionId);
             for (PositionWriter starting : positionWritersStarting.getOrDefault(subscriptionId, Set.of())) {
                 Sinks.@Nullable Empty<Void> handingOver = starting.handingOver;
-                if (starting != ended && handingOver != null) {
+                if (starting != ended && handingOver != null && !starting.overtakenByCancel && !starting.retired) {
                     underWay.add(handingOver.asMono());
                 }
             }
         }
         if (handedOverAgain) {
-            return;
+            return Mono.empty();
         }
         if (underWay.isEmpty()) {
-            cancelInWrappedModel(delegate, subscriptionId);
-            return;
+            return cancelInWrappedModel(delegate, subscriptionId);
         }
         // The hand-over ends on the thread of the subscribe that made it, which the cancel must not run on
-        Mono.when(underWay).onErrorResume(__ -> Mono.empty())
+        Mono<Void> cancelled = Mono.when(underWay).onErrorResume(__ -> Mono.empty())
                 .publishOn(Schedulers.boundedElastic())
-                .subscribe(unused -> {
-                }, unused -> {
-                }, () -> cancelUnlessHandedOverAgain(delegate, subscriptionId, ended));
+                .then(Mono.defer(() -> cancelUnlessHandedOverAgain(delegate, subscriptionId, ended)))
+                .cache();
+        cancelled.subscribe(unused -> {
+        }, unused -> {
+        });
+        return cancelled;
     }
 
     // Called once, and as soon as it is called. Cached, so a cancel of the id that waits for it does not cancel again.
@@ -1520,18 +1564,16 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // Passes a pause or a resume to the wrapped model, or keeps the state asked for while startAgainInWrappedModel
-    // starts the subscription there again. A call that passes is counted, so a start again that begins meanwhile reads
-    // the state of the wrapped model only once the call has returned.
+    // starts the subscription there again. A call that passes is counted against every subscription of the id that can
+    // still start again, from the mark of its hand-over on, so a start again that begins meanwhile reads the state of
+    // the wrapped model only once the call has returned.
     private @Nullable Subscription passOrKeep(SubscriptionModel delegate, String subscriptionId, boolean pause) {
         final @Nullable KeptLifecycle keeping;
-        final @Nullable KeptLifecycle passing;
+        final List<KeptLifecycle> passing = new ArrayList<>();
         synchronized (positionLock) {
-            @Nullable PositionWriter writer = positionWriters.get(subscriptionId);
-            @Nullable KeptLifecycle kept = writer == null ? null : writer.kept;
-            keeping = kept != null && kept.keeping ? kept : null;
-            passing = kept != null && !kept.keeping ? kept : null;
-            if (passing != null) {
-                passing.passing++;
+            keeping = keeping(subscriptionId);
+            if (keeping == null) {
+                countPassing(subscriptionId, passing);
             }
         }
         if (keeping != null) {
@@ -1540,8 +1582,23 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         try {
             return pass(delegate, subscriptionId, pause);
         } finally {
-            if (passing != null) {
-                passed(passing);
+            passing.forEach(this::passed);
+        }
+    }
+
+    // Called under positionLock. Counts a call that passes to the wrapped model against each subscription of the id
+    // that can still start again, registered or still being handed over, and adds them to passing.
+    private void countPassing(String subscriptionId, List<KeptLifecycle> passing) {
+        Set<PositionWriter> writers = new HashSet<>(positionWritersStarting.getOrDefault(subscriptionId, Set.of()));
+        @Nullable PositionWriter registered = positionWriters.get(subscriptionId);
+        if (registered != null) {
+            writers.add(registered);
+        }
+        for (PositionWriter writer : writers) {
+            @Nullable KeptLifecycle kept = writer.kept;
+            if (kept != null && !kept.keeping) {
+                kept.passing++;
+                passing.add(kept);
             }
         }
     }
@@ -2432,28 +2489,35 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // is kept for it, and the wrapped model answers
     private @Nullable Boolean keptPaused(String subscriptionId) {
         synchronized (positionLock) {
-            @Nullable PositionWriter writer = positionWriters.get(subscriptionId);
-            @Nullable KeptLifecycle kept = writer == null ? null : writer.kept;
-            return kept != null && kept.keeping ? kept.paused : null;
+            @Nullable KeptLifecycle kept = keeping(subscriptionId);
+            return kept == null ? null : kept.paused;
         }
     }
 
     // Called under positionLock
     private boolean isStartedAgain(String subscriptionId) {
+        return keeping(subscriptionId) != null;
+    }
+
+    // Called under positionLock. The state kept for the subscription registered under the id while
+    // startAgainInWrappedModel starts it again, or null when none is kept.
+    private @Nullable KeptLifecycle keeping(String subscriptionId) {
         @Nullable PositionWriter writer = positionWriters.get(subscriptionId);
         @Nullable KeptLifecycle kept = writer == null ? null : writer.kept;
-        return kept != null && kept.keeping;
+        return kept != null && kept.keeping ? kept : null;
     }
 
     // For a stop or a start of the wrapped model. Keeps the state a stop, or a start that resumes every subscription,
     // asks for when it is asked for null, for each id that startAgainInWrappedModel starts again, and counts the call
-    // for each id whose start position is still being recorded, which the caller answers through passed once the
-    // wrapped model has returned.
+    // for each subscription that can still start again, see countPassing, which the caller answers through passed once
+    // the wrapped model has returned.
     private List<KeptLifecycle> keepOrCountForEveryId(@Nullable Boolean pause) {
         final List<KeptLifecycle> passing = new ArrayList<>();
         final List<Sinks.Empty<Void>> unpaused = new ArrayList<>();
         synchronized (positionLock) {
-            for (PositionWriter writer : positionWriters.values()) {
+            Set<PositionWriter> writers = new HashSet<>(positionWriters.values());
+            positionWritersStarting.values().forEach(writers::addAll);
+            for (PositionWriter writer : writers) {
                 @Nullable KeptLifecycle kept = writer.kept;
                 if (kept == null) {
                     continue;
@@ -2561,7 +2625,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // position it was handed from is recorded, with the position to start it again from, if any, see
         // startAtTheCall. Null otherwise.
         private volatile @Nullable Mono<Optional<Checkpoint>> settled;
-        // Set alongside settled once the subscription is registered, and taken away once settled has ended without a
+        // Set when settled is, in the step that marks the hand-over, and taken away once settled has ended without a
         // start again, or once the start again has put the state kept in place in the wrapped model. Read and changed
         // under positionLock only.
         private @Nullable KeptLifecycle kept;
@@ -2580,6 +2644,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         private Sinks.@Nullable Empty<Void> passed;
         // Whether the state kept is paused, null until the start again or a call has read the one the wrapped model has
         private @Nullable Boolean paused;
+        // How many times a state was asked for, so applyKeptLifecycle tells a call made after the wrapped model refused
+        // one from the call it refused
+        private long asks;
         // Emitted once the state kept is no longer paused or the keeping ends, and replaced by a pause
         private Sinks.Empty<Void> unpaused = Sinks.empty();
         // Ends once the wrapped model has the state kept, or fails with what ended the start again
@@ -2589,6 +2656,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         private Sinks.@Nullable Empty<Void> ask(boolean pause) {
             boolean wasPaused = Boolean.TRUE.equals(paused);
             paused = pause;
+            asks++;
             if (pause) {
                 if (!wasPaused) {
                     unpaused = Sinks.empty();
