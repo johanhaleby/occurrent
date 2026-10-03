@@ -43,7 +43,7 @@ import static java.util.Objects.requireNonNull;
  * Every returned {@code Mono} is cold, so nothing is read, stored, or deleted until it is subscribed to. Arguments are
  * still validated eagerly, so a {@code null} fails the calling code and not a subscriber far away.
  * <p>
- * {@link CheckpointWriteCondition} is evaluated for real, not refused. The checkpoint and its version are two
+ * {@link CheckpointWriteCondition} is evaluated for real on a save and on a delete, not refused. The checkpoint and its version are two
  * separate maps, since {@link CheckpointWriteCondition#any()} writes the former and leaves the latter untouched. A
  * refusal signals {@link Mono#error(Throwable)} rather than throwing from assembly.
  */
@@ -116,5 +116,35 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
                 lock.unlock();
             }
         });
+    }
+
+    @Override
+    public Mono<Void> delete(String subscriptionId, CheckpointWriteCondition condition) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(condition, CheckpointWriteCondition.class.getSimpleName() + " cannot be null");
+        return Mono.fromRunnable(() -> {
+            lock.lock();
+            try {
+                Long stored = versions.get(subscriptionId);
+                boolean refused = switch (condition) {
+                    case CheckpointWriteCondition.NotOlderThan notOlderThan -> stored != null && stored > notOlderThan.writeVersion();
+                    case CheckpointWriteCondition.IfAbsent ignored -> checkpoints.containsKey(subscriptionId);
+                    case CheckpointWriteCondition.Any ignored -> false;
+                };
+                if (refused) {
+                    OptionalLong storedVersion = stored == null ? OptionalLong.empty() : OptionalLong.of(stored);
+                    throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, condition);
+                }
+                checkpoints.remove(subscriptionId);
+                versions.remove(subscriptionId);
+            } finally {
+                lock.unlock();
+            }
+        });
+    }
+
+    @Override
+    public boolean evaluatesDeleteConditions() {
+        return true;
     }
 }

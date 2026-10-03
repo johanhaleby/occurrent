@@ -31,18 +31,22 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Records what start position it is asked to read from, and hands back no events, since the tests using it are about
- * the position and the model's own bookkeeping rather than delivery.
+ * Records what start position it is asked to read from, and hands back no events unless a test sets {@link #events},
+ * since most tests using it are about the position and the model's own bookkeeping rather than delivery.
  */
 final class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel {
 
     final List<StartAt> startedAt = new CopyOnWriteArrayList<>();
     /**
+     * What every subscribe hands back. None by default.
+     */
+    Flux<CloudEvent> events = Flux.never();
+    /**
      * Counts the reads at subscription time rather than at assembly time, since that is when a read costs anything and
      * what a caching model has to avoid doing twice.
      */
     final AtomicInteger globalCheckpointReads = new AtomicInteger();
-    @Nullable Checkpoint globalCheckpoint;
+    volatile @Nullable Checkpoint globalCheckpoint;
     boolean failGlobalCheckpoint = false;
     /**
      * How many reads still fail before the rest succeed. A budget rather than a flag, so a test can prove a
@@ -58,7 +62,7 @@ final class RecordingSubscriptionModel implements CheckpointAwareSubscriptionMod
     @Override
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         startedAt.add(startAt);
-        return Flux.never();
+        return events;
     }
 
     /**

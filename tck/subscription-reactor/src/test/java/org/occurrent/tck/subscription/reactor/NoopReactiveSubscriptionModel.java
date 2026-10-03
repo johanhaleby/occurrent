@@ -57,7 +57,7 @@ final class NoopReactiveSubscriptionModel implements SubscriptionModel {
     }
 
     @Override
-    public void cancelSubscription(String subscriptionId) {
+    public Mono<Void> cancelSubscription(String subscriptionId) {
         throw honoursNothing();
     }
 

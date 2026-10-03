@@ -21,16 +21,18 @@ import org.openrewrite.java.JavaParser;
 import org.openrewrite.test.RecipeSpec;
 import org.openrewrite.test.RewriteTest;
 
+import static org.occurrent.rewrite.ReactorCancelSubscriptionStubs.CANCELLABLE_SUBSCRIPTIONS;
+import static org.occurrent.rewrite.ReactorCancelSubscriptionStubs.MONO;
 import static org.occurrent.rewrite.SagaJoinStubs.*;
 import static org.openrewrite.java.Assertions.java;
 import static org.openrewrite.properties.Assertions.properties;
 import static org.openrewrite.yaml.Assertions.yaml;
 
 /**
- * Verifies the umbrella {@code UpgradeToOccurrent_0_34} recipe resolves both its sub-recipes through a
+ * Verifies the umbrella {@code UpgradeToOccurrent_0_34} recipe resolves its sub-recipes through a
  * classpath-scanning Environment, which is what proves the cross-file recipe references actually link. What each
- * sub-recipe does is covered in {@link MigrateSagaJoinToStepConditionTest} and
- * {@link StoreNeutralMongoConfigKeysRenameTest}, so one case per sub-recipe is enough here.
+ * sub-recipe does is covered in {@link MigrateSagaJoinToStepConditionTest}, {@link StoreNeutralMongoConfigKeysRenameTest}
+ * and {@link MigrateReactorCancelSubscriptionReturnTypeTest}, so one case per sub-recipe is enough here.
  */
 class UpgradeToOccurrent_0_34Test implements RewriteTest {
 
@@ -122,6 +124,39 @@ class UpgradeToOccurrent_0_34Test implements RewriteTest {
                         occurrent:
                           subscription:
                             mongodb.restart-on-change-stream-history-lost: false
+                        """
+                )
+        );
+    }
+
+    @Test
+    void returnsAnEmptyMonoFromAReactorCancelSubscriptionThatReturnedVoid() {
+        rewriteRun(
+                spec -> spec.parser(JavaParser.fromJavaVersion().dependsOn(MONO, CANCELLABLE_SUBSCRIPTIONS)),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                        class Model implements CancellableSubscriptions {
+                            @Override
+                            public void cancelSubscription(String subscriptionId) {
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                        import reactor.core.publisher.Mono;
+
+                        class Model implements CancellableSubscriptions {
+                            @Override
+                            public Mono<Void> cancelSubscription(String subscriptionId) {
+                                return Mono.empty();
+                            }
+                        }
                         """
                 )
         );

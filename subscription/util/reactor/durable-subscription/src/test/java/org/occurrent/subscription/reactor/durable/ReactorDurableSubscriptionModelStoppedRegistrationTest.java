@@ -19,9 +19,12 @@ package org.occurrent.subscription.reactor.durable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
@@ -32,6 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Pins where a subscription starts from when it was registered while the model was stopped. Registering reads the
@@ -347,6 +351,42 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         assertThat(delegate.globalCheckpointReads)
                 .as("the position is read once, at registration, and the outcome of that read is what decides this subscription")
                 .hasValue(1);
+    }
+
+    // StartAt.now() means where the feed is when the subscription starts, so a registration that asks for it is not
+    // read for. A caller that must not miss what is written while the model is stopped registers with the model
+    // default, which holds where the feed was at registration. A dynamic start position is read for all the same, in
+    // case it answers the model default.
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_registration_starting_at_the_present_starts_where_the_feed_is_once_it_is_started(boolean dynamic) {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
+        model.stop();
+        model.subscribe(SUBSCRIPTION_ID, null, dynamic ? StartAt.dynamic(StartAt::now) : StartAt.now(), __ -> Mono.empty());
+
+        delegate.globalCheckpoint = new StringBasedCheckpoint("much-later");
+        model.start(true);
+
+        await().atMost(TIMEOUT).until(() -> delegate.startedAt.size() == 1);
+        assertThat(delegate.startedAt.getFirst()).as("start position of the subscription registered while the model was stopped").hasToString("Now");
+        assertThat(delegate.globalCheckpointReads).as("reads of where the feed is").hasValue(dynamic ? 1 : 0);
+    }
+
+    @Test
+    void a_subscribe_refused_as_a_duplicate_or_on_a_shut_down_model_does_not_read_where_the_feed_is() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
+        int readsOfTheRegistration = delegate.globalCheckpointReads.get();
+
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
+                .isInstanceOf(DuplicateSubscriptionIdException.class);
+        model.shutdown();
+        assertThatThrownBy(() -> model.subscribe("another", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
+                .isInstanceOf(SubscriptionModelShutdownException.class);
+
+        assertThat(delegate.globalCheckpointReads).as("reads of where the feed is after the subscribe that registered").hasValue(readsOfTheRegistration);
     }
 
     @Test

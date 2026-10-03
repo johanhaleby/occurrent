@@ -97,9 +97,10 @@ final class WorkingReactiveSubscriptionModel implements SubscriptionModel {
     }
 
     @Override
-    public void cancelSubscription(String subscriptionId) {
+    public Mono<Void> cancelSubscription(String subscriptionId) {
         running.remove(subscriptionId);
         paused.remove(subscriptionId);
+        return Mono.empty();
     }
 
     @Override
