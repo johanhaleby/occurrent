@@ -118,12 +118,16 @@ import static java.util.Objects.requireNonNull;
  * that waits for a running action in {@code pauseSubscription} or that delivers while holding a lock the call takes,
  * never holds the call up, on a platform thread or a virtual one. An event the wrapped model delivers on a thread that
  * is inside a call this model makes into it runs too, and so does one that it hands over once a cancel of the
- * subscription has returned. An event also runs once an interrupt of its thread ends a wait between two looks at the
- * lease, which an interrupt flag already set as such a wait begins does too. When an interrupt ended the wait and the
- * interrupt flag was clear as the event came, the action runs with the flag clear, and the flag is set again once the
- * action returns or throws. In every other case this model does not change the flag, so it can be set while the action runs, for
- * instance when the interrupt comes while this model asks the lease strategy and the strategy then reports the lease
- * held. An event let through by an interrupt can run while another node holds the lease and runs it as well, so it can
+ * subscription has returned or a subscribe of it has thrown. That includes a subscription the wrapped model still
+ * holds, which it can after a cancel that throws in the wrapped model while the subscription is being made. An event
+ * also runs once an interrupt of its thread ends a wait between two looks at the lease, which an interrupt flag already
+ * set as such a wait begins does too. When an interrupt ended the wait and the interrupt flag was clear as the event
+ * came, the action runs with the flag clear, and the flag is set again once the action returns or throws. In every
+ * other case this model does not change the flag, so it can be set while the action runs, for instance when the
+ * interrupt comes while this model asks the lease strategy and the strategy then reports the lease held. A lease
+ * strategy whose {@code hasLock} clears the flag takes the interrupt instead, also one already set when the event came,
+ * and the event then waits for the lease and runs with the flag clear. The MongoDB lease strategies do not change the
+ * flag. An event let through by an interrupt can run while another node holds the lease and runs it as well, so it can
  * be delivered twice, but it is not lost.
  * <br>
  * <br>
@@ -596,9 +600,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private void forgetCancelled(String subscriptionId, @Nullable BeingMade beingMade) {
         @Nullable Delivery beingMadeDelivery = beingMade == null ? null : beingMade.delivery;
         if (beingMadeDelivery != null) {
-            // That subscribe forgets it too, but only once the wrapped model has returned from making the subscription.
-            // Its own rather than whatever is under the id, since a subscribe that does not compete has none and frees
-            // the id without the lock when it fails, so another subscribe of the id can have put one meanwhile.
+            // That subscribe forgets it too, but only once it next takes the lock, which can be after a long wrapped
+            // call. Its own rather than whatever is under the id, since a subscribe that does not compete, or whose
+            // startAt throws, has none and frees the id without the lock, so another subscribe of the id can put one
+            // meanwhile.
             deliveries.remove(subscriptionId, beingMadeDelivery);
             beingMadeDelivery.forget();
         }
@@ -2231,13 +2236,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * <p>
      * It also returns, and the event is delivered as it would be without the lease strategy, once this model calls the
      * wrapped model for a step of its own on the subscription, see {@link #inTheWrappedModelFor}, on a
-     * {@code start(..)} or {@code stop()}, once {@code shutdown()} has begun, once this model has forgotten a cancelled
-     * subscription, when the wrapped model delivers it on a thread that is inside a call this model makes into it, and
-     * when the thread is interrupted during a wait between two looks at the lease or has its interrupt flag set as such
-     * a wait begins. A lease strategy whose {@code hasLock} clears the interrupt flag can take an interrupt that comes
-     * while it is asked, and the event then goes on waiting. Nothing else ends the wait, so an event a wrapped model
-     * delivers while this model is stopped waits for the lease, for this model's next call for the subscription or for
-     * a {@code start(..)}.
+     * {@code start(..)} or {@code stop()}, once {@code shutdown()} has begun, once this model has forgotten the
+     * subscription after a cancel or a subscribe that threw, when the wrapped model delivers it on a thread that is
+     * inside a call this model makes into it, and when the thread is interrupted during a wait between two looks at the
+     * lease or has its interrupt flag set as such a wait begins. A lease strategy whose {@code hasLock} clears the
+     * interrupt flag can take an interrupt, one that comes while it is asked or one already set when the event came,
+     * and the event then goes on waiting. Nothing else ends the wait, so an event a wrapped model delivers while this
+     * model is stopped waits for the lease, for this model's next call for the subscription or for a {@code start(..)}.
      * <p>
      * Returns {@code true} when an interrupt ended the wait and the interrupt flag was clear as the event came, and the
      * flag is then clear. When an interrupt ended the wait and the flag was set as the event came, the flag is set again
