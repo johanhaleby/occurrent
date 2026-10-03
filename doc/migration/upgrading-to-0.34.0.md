@@ -1458,8 +1458,12 @@ for it would let one action that never ends hold up the cancel.
 
 What to do:
 
-1. A call that ignores the result compiles and behaves as before. Recompile code built against 0.33.0, since the return
-   type is part of the method's compiled signature.
+1. A call that ignores the result compiles. Recompile code built against 0.33.0, since the return type is part of the
+   method's compiled signature. It behaves as before, except on a `ReactorDurableSubscriptionModel` that wraps a model
+   that manages named subscriptions, `ReactorMongoSubscriptionModel` for one. When you cancel an id while that model is
+   starting the subscription again in the wrapped model, as described below, a subscribe of the same id throws
+   `DuplicateSubscriptionIdException` until the cancel that the start again sends the wrapped model has returned. The
+   cancel's `Mono` completes only after that, so wait for it before you subscribe the id again, as step 2 describes.
 2. When a later subscribe with the same id has to start from its own `StartAt`, also after a restart, wait for the
    `Mono`, for example with `cancelSubscription(id).block()` or by chaining on it. When it fails, or the process ended
    before it completed, call `cancelSubscription(id)` again. That works in a new process that never subscribed the id.
@@ -1536,7 +1540,11 @@ events between the two.
 A pause, a resume, a `stop()` or a `start(..)` made while `ReactorDurableSubscriptionModel` starts the subscription
 there again succeeds. The subscription has the state you last asked for before your action sees an event from the earlier
 checkpoint, and `isPaused(id)` and `isRunning(id)` answer that state meanwhile. A subscribe of the same id meanwhile is
-refused with `DuplicateSubscriptionIdException`, as the wrapped model refuses it while it has the subscription.
+refused with `DuplicateSubscriptionIdException`, as the wrapped model refuses it while it has the subscription. Before
+its second subscribe, `ReactorDurableSubscriptionModel` cancels the subscription in the wrapped model, which cancels by
+id and so would remove a later subscription of the id. A subscribe is therefore refused until that cancel has returned,
+also after you cancel the id. Your cancel's `Mono` completes only after that, so a subscribe made once it has completed
+is not refused for this reason.
 
 When the checkpoint cannot be recorded, or that second subscribe fails, `ReactorDurableSubscriptionModel` cancels the
 subscription in the wrapped model and its `waitUntilStarted()` fails with that error, since the subscribe has returned
@@ -1547,12 +1555,6 @@ That cancel is not made when a later subscribe of the id has put a subscription 
 model of your own that lets a subscribe replace a subscription of the same id, instead of refusing it, can still lose
 the later subscription to that cancel, when the later subscribe reaches the wrapped model after
 `ReactorDurableSubscriptionModel` has decided to cancel and before the cancel does.
-
-Before it starts the subscription in the wrapped model again, `ReactorDurableSubscriptionModel` cancels it there. When
-you cancel the id and subscribe it again while the wrapped model is still taking that cancel, the later subscription can
-be lost on any wrapped model, `ReactorMongoSubscriptionModel` included. The wrapped model cancels by id, so the cancel
-removes the later subscription when it gets there after the later subscribe. That subscription then delivers no event
-written after that, and `isRunning(id)` answers `false`.
 
 The reactor `CheckpointStorage` gains two methods with defaults, `delete(subscriptionId, condition)` and
 `evaluatesDeleteConditions()`. The in-memory and MongoDB reactor storages implement both. On them each try of the
