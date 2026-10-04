@@ -1220,15 +1220,12 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
      * cancel of the same id runs, and the storage still holds the checkpoint of the cancelled subscription. Reactor
      * refuses the subscribe, by refusing the read of the model default where the subscription is handed to a wrapped
      * model that manages named subscriptions, and by refusing the read a dynamic start position makes itself where this
-     * model drives the subscription on a storage that evaluates a condition on a delete, since this storage has written
-     * the checkpoint back by then and the function is asked on the thread that subscribes. After the refused subscribe
-     * no subscription of the id exists, so the delete goes ahead and removes the checkpoint before the cancel
-     * completes, as it does with no subscribe. Where this model drives the subscription on a storage that evaluates no
-     * condition on a delete, the function waits for the delete and is then asked on a thread that may block, so
-     * nothing refuses it, see {@link ReactorDurableSubscriptionModelCancelCompletionTest}.
+     * model drives the subscription. After the refused subscribe no subscription of the id exists, so the delete goes
+     * ahead and removes the checkpoint before the cancel completes, as it does with no subscribe, whether or not the
+     * storage evaluates a condition on a delete.
      */
     @ParameterizedTest
-    @CsvSource({"false, true", "true, false", "true, true"})
+    @CsvSource({"false, false", "false, true", "true, false", "true, true"})
     void a_subscribe_that_reactor_refuses_while_a_delete_runs_leaves_the_delete_to_remove_the_checkpoint(boolean handsOver, boolean conditionalDeletes) throws Exception {
         // Given
         InMemoryCheckpointStorage store = new InMemoryCheckpointStorage();
