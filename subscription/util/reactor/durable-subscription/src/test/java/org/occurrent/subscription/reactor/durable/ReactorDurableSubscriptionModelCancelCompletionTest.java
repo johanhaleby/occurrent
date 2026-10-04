@@ -152,18 +152,25 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     void a_subscribe_that_did_not_wait_for_the_cancel_resumes_from_the_checkpoint_the_storage_still_holds(boolean conditionalDeletes) {
         // Given
         PositionStorage storage = new PositionStorage(conditionalDeletes);
-        storage.beforeDelete = Mono.delay(Duration.ofMillis(300)).then();
         RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
         runningFromAStoredPosition(model, storage);
+        CountDownLatch releaseDelete = new CountDownLatch(1);
+        storage.releaseHeldDelete = releaseDelete;
 
-        // When
-        model.cancelSubscription(SUBSCRIPTION_ID);
-        subscribe(model);
+        try {
+            // When
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            subscribe(model);
+            releaseDelete.countDown();
 
-        // Then
-        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(feed.startedAt).hasSize(2));
-        assertThat(feed.startedAt.get(1)).as("start position of the subscription made without waiting for the cancel").hasToString(REACHED_BEFORE_THE_CANCEL.asString());
+            // Then
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(feed.startedAt).hasSize(2));
+            assertThat(feed.startedAt.get(1)).as("start position of the subscription made without waiting for the cancel").hasToString(REACHED_BEFORE_THE_CANCEL.asString());
+        } finally {
+            releaseDelete.countDown();
+            model.shutdown();
+        }
     }
 
     @Test
@@ -712,19 +719,26 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     void a_rebuild_that_did_not_wait_for_the_cancel_and_reads_the_stored_position_itself_resumes_from_the_checkpoint_the_storage_still_holds(boolean conditionalDeletes) {
         // Given
         PositionStorage storage = new PositionStorage(conditionalDeletes);
-        storage.beforeDelete = Mono.delay(Duration.ofMillis(300)).then();
         RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
         runningFromAStoredPosition(model, storage);
+        CountDownLatch releaseDelete = new CountDownLatch(1);
+        storage.releaseHeldDelete = releaseDelete;
+        StartAt rebuild = ResumeStartPositions.replayThenResume(SUBSCRIPTION_ID, storage, StartAt.checkpoint(BEGINNING));
 
-        // When
-        model.cancelSubscription(SUBSCRIPTION_ID);
-        model.subscribe(SUBSCRIPTION_ID, null, ResumeStartPositions.replayThenResume(SUBSCRIPTION_ID, storage, StartAt.checkpoint(BEGINNING)), __ -> Mono.empty());
+        try {
+            // When
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            model.subscribe(SUBSCRIPTION_ID, null, releasingOnceAnswered(rebuild, releaseDelete), __ -> Mono.empty());
 
-        // Then
-        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(feed.startedAt).hasSize(2));
-        // The storage still held the checkpoint of the cancelled subscription when the start position read it
-        assertThat(feed.startedAt.get(1)).as("start position of the rebuild subscribed right after the cancel").hasToString(REACHED_BEFORE_THE_CANCEL.asString());
+            // Then
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(feed.startedAt).hasSize(2));
+            // The storage still held the checkpoint of the cancelled subscription when the start position read it
+            assertThat(feed.startedAt.get(1)).as("start position of the rebuild subscribed right after the cancel").hasToString(REACHED_BEFORE_THE_CANCEL.asString());
+        } finally {
+            releaseDelete.countDown();
+            model.shutdown();
+        }
     }
 
     /**
@@ -735,19 +749,26 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     void a_dcb_rebuild_that_did_not_wait_for_the_cancel_and_reads_the_stored_position_itself_resumes_from_the_checkpoint_the_storage_still_holds(boolean conditionalDeletes) {
         // Given
         PositionStorage storage = new PositionStorage(conditionalDeletes);
-        storage.beforeDelete = Mono.delay(Duration.ofMillis(300)).then();
         RecordingSubscriptionModel feed = new RecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
         runningFromAStoredPosition(model, storage);
+        CountDownLatch releaseDelete = new CountDownLatch(1);
+        storage.releaseHeldDelete = releaseDelete;
+        StartAt rebuild = ResumeStartPositions.replayThenResumeDcb(SUBSCRIPTION_ID, storage, DcbStartAt.beginning()).toStartAt();
 
-        // When
-        model.cancelSubscription(SUBSCRIPTION_ID);
-        model.subscribe(SUBSCRIPTION_ID, null, ResumeStartPositions.replayThenResumeDcb(SUBSCRIPTION_ID, storage, DcbStartAt.beginning()).toStartAt(), __ -> Mono.empty());
+        try {
+            // When
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            model.subscribe(SUBSCRIPTION_ID, null, releasingOnceAnswered(rebuild, releaseDelete), __ -> Mono.empty());
 
-        // Then
-        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(feed.startedAt).hasSize(2));
-        // The storage still held the checkpoint of the cancelled subscription when the start position read it
-        assertThat(feed.startedAt.get(1)).as("start position of the DCB rebuild subscribed right after the cancel").hasToString(REACHED_BEFORE_THE_CANCEL.asString());
+            // Then
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(feed.startedAt).hasSize(2));
+            // The storage still held the checkpoint of the cancelled subscription when the start position read it
+            assertThat(feed.startedAt.get(1)).as("start position of the DCB rebuild subscribed right after the cancel").hasToString(REACHED_BEFORE_THE_CANCEL.asString());
+        } finally {
+            releaseDelete.countDown();
+            model.shutdown();
+        }
     }
 
     /**
@@ -758,19 +779,26 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
     void a_rebuild_on_a_named_model_that_did_not_wait_for_the_cancel_and_reads_the_stored_position_itself_resumes_from_the_checkpoint_the_storage_still_holds(boolean conditionalDeletes) {
         // Given
         PositionStorage storage = new PositionStorage(conditionalDeletes);
-        storage.beforeDelete = Mono.delay(Duration.ofMillis(300)).then();
         NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel(WHERE_THE_FEED_IS_NOW);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage);
         runningFromAStoredPosition(model, storage);
+        CountDownLatch releaseDelete = new CountDownLatch(1);
+        storage.releaseHeldDelete = releaseDelete;
+        StartAt rebuild = ResumeStartPositions.replayThenResume(SUBSCRIPTION_ID, storage, StartAt.checkpoint(BEGINNING));
 
-        // When
-        model.cancelSubscription(SUBSCRIPTION_ID);
-        model.subscribe(SUBSCRIPTION_ID, null, ResumeStartPositions.replayThenResume(SUBSCRIPTION_ID, storage, StartAt.checkpoint(BEGINNING)), __ -> Mono.empty())
-                .waitUntilStarted().block(TIMEOUT);
+        try {
+            // When
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            model.subscribe(SUBSCRIPTION_ID, null, releasingOnceAnswered(rebuild, releaseDelete), __ -> Mono.empty())
+                    .waitUntilStarted().block(TIMEOUT);
 
-        // Then
-        // The storage still held the checkpoint of the cancelled subscription when the start position read it
-        assertThat(wrapped.startedAt.get(1)).as("start position of the rebuild subscribed right after the cancel").hasToString(REACHED_BEFORE_THE_CANCEL.asString());
+            // Then
+            // The storage still held the checkpoint of the cancelled subscription when the start position read it
+            assertThat(wrapped.startedAt.get(1)).as("start position of the rebuild subscribed right after the cancel").hasToString(REACHED_BEFORE_THE_CANCEL.asString());
+        } finally {
+            releaseDelete.countDown();
+            model.shutdown();
+        }
     }
 
     /**
@@ -1836,6 +1864,15 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
 
     private static void subscribe(ReactorDurableSubscriptionModel model) {
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+    }
+
+    // Releases the delete the storage holds once the start position has read the storage and answered
+    private static StartAt releasingOnceAnswered(StartAt startAt, CountDownLatch releaseDelete) {
+        return StartAt.dynamic(context -> {
+            StartAt answered = startAt.get(context);
+            releaseDelete.countDown();
+            return answered;
+        });
     }
 
     private static CloudEvent eventAt(Checkpoint checkpoint) {
