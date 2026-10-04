@@ -93,6 +93,10 @@
  *       <td>a new subscription receives what predates it</td>
  *       <td>it receives nothing that predates it</td>
  *       <td>{@code SubscriptionModelConformance}</td></tr>
+ *   <tr><td>{@code aResumeAfterStopReopensTheModel()}</td>
+ *       <td>{@code isRunning()} returns {@code true} once one subscription is resumed after {@code stop()}</td>
+ *       <td>it still returns {@code false} after that resume</td>
+ *       <td>{@code SubscriptionModelConformance}</td></tr>
  *   <tr><td>{@code resumesAfterARestart()}</td>
  *       <td>an event published while nothing ran still arrives</td>
  *       <td>that event is gone and the rebuilt subscription starts at the present</td>
