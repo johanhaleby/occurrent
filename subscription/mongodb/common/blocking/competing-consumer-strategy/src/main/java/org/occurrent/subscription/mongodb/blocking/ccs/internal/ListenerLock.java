@@ -25,10 +25,12 @@ import java.util.Objects;
 @NullMarked
 class ListenerLock {
     private final long version;
+    private final long sentAt;
 
-    public ListenerLock(BsonNumber version) {
+    public ListenerLock(BsonNumber version, long sentAt) {
         Objects.requireNonNull(version, "fencingToken");
         this.version = version.longValue();
+        this.sentAt = sentAt;
     }
 
     /**
@@ -38,6 +40,15 @@ class ListenerLock {
      */
     public long version() {
         return version;
+    }
+
+    /**
+     * The clock reading taken before the request that set this lease was sent. MongoDB set the lease to expire
+     * {@code leaseTime} after it handled that request, which was after this reading, so the lease cannot expire
+     * sooner than {@code leaseTime} after it, as long as the clock of the database and the clock of this node agree.
+     */
+    public long sentAt() {
+        return sentAt;
     }
 
     @Override

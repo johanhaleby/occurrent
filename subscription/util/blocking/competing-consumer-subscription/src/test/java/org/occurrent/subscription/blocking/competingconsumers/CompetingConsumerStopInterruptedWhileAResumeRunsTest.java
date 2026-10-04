@@ -50,9 +50,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * stop() waits for every call that runs a subscription in the wrapped model before it stops that model, so nothing
- * started there is left running once it returns. Interrupting the thread that waits must not cut that wait short, and
- * the interrupt must still be there once stop() returns, for the caller to act on.
+ * stop() waits for a resume of a subscription that does not compete before it stops the wrapped model, since nothing
+ * stops that subscription from delivering once it runs there. Interrupting the thread that waits must not cut that wait
+ * short, and the interrupt must still be there once stop() returns, for the caller to act on. A resume of a competing
+ * subscription stop() does not wait for, see {@link CompetingConsumerDeliversOnlyUnderItsLeaseTest}.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CompetingConsumerStopInterruptedWhileAResumeRunsTest {
@@ -63,22 +64,22 @@ class CompetingConsumerStopInterruptedWhileAResumeRunsTest {
     private static final Duration DOES_NOT_RETURN_WITHIN = Duration.ofMillis(500);
 
     @Test
-    void a_stop_interrupted_while_it_waits_for_a_resume_in_the_wrapped_model_keeps_waiting_and_keeps_the_interrupt_for_its_caller() {
+    void a_stop_interrupted_while_it_waits_for_a_resume_of_a_subscription_that_does_not_compete_keeps_waiting_and_keeps_the_interrupt_for_its_caller() {
         WrappedModel wrapped = new WrappedModel();
         Strategy strategy = new Strategy();
         CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
         ExecutorService otherThreads = Executors.newCachedThreadPool();
-        Gate resumeOfS1 = new Gate();
+        Gate resumeOfN1 = new Gate();
         CompletableFuture<?> resuming = null;
         try {
-            model.subscribe(NODE, "s1", null, StartAt.subscriptionModelDefault(), __ -> {
+            model.subscribe(NODE, "n1", null, StartAt.dynamic(__ -> null), __ -> {
             });
-            model.pauseSubscription("s1");
-            assertThat(wrapped.isPaused("s1")).as("s1 paused in the wrapped model by the user").isTrue();
+            model.pauseSubscription("n1");
+            assertThat(wrapped.isPaused("n1")).as("n1 paused in the wrapped model by the user").isTrue();
             wrapped.events.clear();
-            wrapped.resumeGates.put("s1", resumeOfS1);
-            resuming = CompletableFuture.runAsync(() -> model.resumeSubscription("s1"), otherThreads);
-            assertThat(resumeOfS1.awaitEnteredOnAnotherThread()).as("the resume of s1 waits inside the wrapped model").isTrue();
+            wrapped.resumeGates.put("n1", resumeOfN1);
+            resuming = CompletableFuture.runAsync(() -> model.resumeSubscription("n1"), otherThreads);
+            assertThat(resumeOfN1.awaitEnteredOnAnotherThread()).as("the resume of n1 waits inside the wrapped model").isTrue();
 
             CompletableFuture<Boolean> stopReturnedWithInterruptFlag = new CompletableFuture<>();
             Thread stopping = new Thread(() -> {
@@ -100,13 +101,13 @@ class CompetingConsumerStopInterruptedWhileAResumeRunsTest {
             assertThat(stopReturnedWithInterruptFlag.isDone()).as("[stop() returned while a resume is still inside the wrapped model]").isFalse();
             assertThat(wrapped.stopCalls.get()).as("[the wrapped model is stopped while a resume is still inside it]").isZero();
 
-            resumeOfS1.open();
+            resumeOfN1.open();
             assertThat(stopReturnedWithInterruptFlag).as("stop() once the resume returned").succeedsWithin(EVENTUALLY);
             assertThat(stopReturnedWithInterruptFlag.join()).as("[the interrupt of the stopping thread is still set when stop() returns]").isTrue();
             assertThat(wrapped.stopCalls.get()).as("the wrapped model was stopped once").isEqualTo(1);
-            assertThat(wrapped.events).as("[the wrapped model is stopped after the resume returned]").containsSubsequence("resumed:s1", "stop");
+            assertThat(wrapped.events).as("[the wrapped model is stopped after the resume returned]").containsSubsequence("resumed:n1", "stop");
         } finally {
-            resumeOfS1.open();
+            resumeOfN1.open();
             otherThreads.shutdownNow();
             model.shutdown();
         }

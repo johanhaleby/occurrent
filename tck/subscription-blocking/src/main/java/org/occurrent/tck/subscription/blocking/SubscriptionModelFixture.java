@@ -172,6 +172,20 @@ public interface SubscriptionModelFixture {
     }
 
     /**
+     * Whether resuming one subscription after {@code stop()} makes {@code isRunning()} return {@code true} again.
+     * <p>
+     * Both answers are asserted. A model whose {@code isRunning()} is one running or stopped flag answers {@code true},
+     * since the resume opens that flag again. {@code CompetingConsumerSubscriptionModel} answers {@code false}. Its
+     * {@code isRunning()} says whether the model is started, which {@code start(..)} and {@code stop()} change,
+     * and a resume after {@code stop()} lets that one subscription run without starting the model.
+     * <p>
+     * Declared rather than asked because nothing on {@code SubscriptionModel} reports it.
+     */
+    default boolean aResumeAfterStopReopensTheModel() {
+        return true;
+    }
+
+    /**
      * The longest the suites will wait for something that must arrive, whether that is an event reaching a handler or a
      * subscription reporting itself started.
      * <p>

@@ -166,6 +166,15 @@ class CompetingConsumerSubscriptionModelFixture implements SubscriptionModelFixt
         return orGlobalPositionZero(innerSpringModel.globalCheckpoint());
     }
 
+    /**
+     * False. {@link CompetingConsumerSubscriptionModel#isRunning()} says whether the model is started, and a resume after
+     * {@code stop()} runs that one subscription on a model that stays stopped.
+     */
+    @Override
+    public boolean aResumeAfterStopReopensTheModel() {
+        return false;
+    }
+
     @Override
     public void close() {
         // Shuts down the delegate chain (DurableSubscriptionModel, then SpringMongoSubscriptionModel) and the

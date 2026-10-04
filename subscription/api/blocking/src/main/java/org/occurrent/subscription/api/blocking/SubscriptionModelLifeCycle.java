@@ -29,7 +29,12 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
      * partial resume as "every subscription that was running before {@code stop()} is delivering again" on such a
      * model, check each one individually with {@link #isRunning(String)}. {@link ManualStartSubscriptionModel} answers
      * the same way, even though it holds registrations back on top of the model it wraps. Resuming one subscription
-     * after {@code stop()} makes its {@link #isRunning()} report {@code true} again.
+     * after {@code stop()} makes its {@link #isRunning()} report {@code true} again, as long as the model it wraps
+     * does.
+     * <p>
+     * {@code CompetingConsumerSubscriptionModel} answers differently. Its {@link #isRunning()} says whether the model
+     * is started, which {@link #start} and {@code stop()} change, so it returns {@code false} after such a resume,
+     * until the next {@link #start}, and so does a {@link ManualStartSubscriptionModel} that wraps it.
      */
     void stop();
 
@@ -87,7 +92,8 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
      * Resuming a subscription that {@link #stop()} paused makes {@link #isRunning()} report {@code true} again, even
      * though every other subscription {@code stop()} paused is left exactly as {@code stop()} left it, individually
      * paused and not running, until it too is resumed or {@link #start} is called. See {@link #stop()} for why a
-     * model has no state in between.
+     * model has no state in between, and for {@code CompetingConsumerSubscriptionModel}, which keeps returning
+     * {@code false} until the next {@link #start}.
      *
      * @param subscriptionId The id of the subscription to resume.
      * @throws UnknownSubscriptionException       If this subscription model has no subscription with that id.

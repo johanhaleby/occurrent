@@ -549,6 +549,78 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         assertThat(strategy.holders).containsExactly("x");
     }
 
+    @Test
+    void a_started_model_is_running_while_this_node_holds_no_lease() {
+        strategy.grantOnRegister = false;
+        subscribe("x");
+        model.stop();
+
+        model.start(true);
+
+        assertThat(delegate.isRunning()).as("a start that won no lease does not start the wrapped model").isFalse();
+        assertThat(model.isRunning()).as("the model after start(), with no lease held").isTrue();
+    }
+
+    @Test
+    void a_stopped_model_is_not_running_once_a_resume_wins_a_lease_and_starts_the_wrapped_model() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        model.stop();
+
+        model.resumeSubscription("x");
+
+        assertThat(delegate.isRunning()).as("the resume that won the lease started the wrapped model").isTrue();
+        assertThat(model.isRunning()).as("the model after stop(), with x resumed").isFalse();
+    }
+
+    @Test
+    void a_shut_down_model_is_not_running_although_its_wrapped_model_says_it_is() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+
+        model.shutdown();
+
+        assertThat(delegate.isRunning()).as("the wrapped model, whose shutdown() does nothing").isTrue();
+        assertThat(model.isRunning()).as("the model after shutdown()").isFalse();
+    }
+
+    @Test
+    void a_new_model_over_a_wrapped_model_never_started_is_running() {
+        delegate.started = false;
+
+        assertThat(model.isRunning()).as("the new model").isTrue();
+    }
+
+    // isRunning() returns true here, so a caller that starts the model only while it returns false never resumes these
+    @Test
+    void documents_that_a_subscription_that_does_not_compete_made_on_a_new_model_whose_wrapped_model_was_never_started_stays_paused_until_start_or_a_resume() {
+        delegate.started = false;
+        subscribeNonCompeting("nc1");
+        subscribeNonCompeting("nc2");
+
+        model.start(false);
+        assertThat(model.isPaused("nc1")).as("nc1, after start(false)").isTrue();
+        assertThat(model.isPaused("nc2")).as("nc2, after start(false)").isTrue();
+
+        model.resumeSubscription("nc1");
+        assertThat(model.isRunning("nc1")).as("nc1, after resumeSubscription(nc1)").isTrue();
+        assertThat(model.isPaused("nc2")).as("nc2, after resumeSubscription(nc1)").isTrue();
+
+        model.start();
+        assertThat(model.isRunning("nc2")).as("nc2, after start()").isTrue();
+    }
+
+    @Test
+    void a_subscription_that_does_not_compete_made_while_the_model_is_stopped_stays_paused() {
+        delegate.started = false;
+        model.stop();
+
+        subscribeNonCompeting("nc");
+
+        assertThat(delegate.isRunning()).as("the wrapped model, while this model is stopped").isFalse();
+        assertThat(model.isPaused("nc")).as("nc, made while this model is stopped").isTrue();
+    }
+
     private void subscribe(String subscriptionId) {
         model.subscribe(SUBSCRIBER_ID, subscriptionId, null, StartAt.subscriptionModelDefault(), __ -> {
         });
