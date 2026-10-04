@@ -61,9 +61,9 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 /**
  * A subscription that wins its lease while the wrapped model is not started starts the wrapped model first, as a grant
- * does, so it is never left paused there while this model records it as running. A stop, on the other hand, stops this
- * model whether the wrapped model was started or not, and a subscription made while this model is stopped takes no
- * lease until it is started.
+ * does, so it is never left paused there while this model records it as running. A model built over a wrapped model
+ * that is not started is stopped until its first start. A stop stops this model whether the wrapped model was started
+ * or not, and a subscription made while this model is stopped takes no lease until it is started.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -96,10 +96,12 @@ class CompetingConsumerLeasedSubscriptionsResumeWithTheWrappedModelTest {
         client.close();
     }
 
+    // Stopped by a call to the wrapped model itself, so this model is still started
     @Test
     void a_subscription_that_wins_its_lease_while_the_wrapped_model_is_not_started_starts_it() {
-        SpringMongoSubscriptionModel spring = notStartedSpringModel();
+        SpringMongoSubscriptionModel spring = new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING));
         node = new CompetingConsumerSubscriptionModel(spring, strategy());
+        spring.stop();
         CopyOnWriteArrayList<CloudEvent> handledByX = new CopyOnWriteArrayList<>();
 
         Subscription subscription = node.subscribe("node", "X", null, StartAt.subscriptionModelDefault(), handledByX::add);
@@ -113,18 +115,21 @@ class CompetingConsumerLeasedSubscriptionsResumeWithTheWrappedModelTest {
     }
 
     @Test
-    void a_subscription_that_won_its_lease_before_this_model_was_started_receives_events_after_the_start() {
+    void a_subscription_made_on_a_model_over_a_wrapped_model_not_started_receives_events_only_once_the_model_is_started() {
         node = new CompetingConsumerSubscriptionModel(notStartedSpringModel(), strategy());
         CopyOnWriteArrayList<CloudEvent> handledByX = new CopyOnWriteArrayList<>();
         node.subscribe("node", "X", null, StartAt.subscriptionModelDefault(), handledByX::add);
+        String writtenBeforeTheStart = writeEvent();
 
+        await().during(2, SECONDS).atMost(3, SECONDS).untilAsserted(() -> assertThat(handledByX).as("events X receives before the model is started").isEmpty());
+        assertThat(node.isRunning()).as("the model, before it is started").isFalse();
         node.start();
-        await("X, whose lease the node holds, runs once the model is started").atMost(5, SECONDS).until(() -> node.isRunning("X"));
-        String eventId = writeEvent();
+        await("X runs once the model is started").atMost(5, SECONDS).until(() -> node.isRunning("X"));
+        String writtenAfterTheStart = writeEvent();
 
         await().atMost(5, SECONDS).untilAsserted(() -> assertThat(handledByX).extracting(CloudEvent::getId)
-                .as("X, whose lease the node holds, receives events once the model is started")
-                .contains(eventId));
+                .as("events X receives once the model is started")
+                .contains(writtenBeforeTheStart, writtenAfterTheStart));
     }
 
     @Test
@@ -137,7 +142,7 @@ class CompetingConsumerLeasedSubscriptionsResumeWithTheWrappedModelTest {
         node.stop();
         assertThat(rival.registerCompetingConsumer("X", "rival")).as("another node takes the lease while this node is stopped").isTrue();
         node.start();
-        assertThat(node.getWrappedSubscriptionModel().isRunning()).as("nothing started the wrapped model, since this node won no lease").isFalse();
+        assertThat(node.getWrappedSubscriptionModel().isRunning()).as("the wrapped model, after a start that won no lease").isTrue();
 
         node.stop();
         rival.unregisterCompetingConsumer("X", "rival");

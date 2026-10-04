@@ -55,8 +55,8 @@ import static org.awaitility.Awaitility.await;
 /**
  * A durable model reads the stored position of a subscription to make it from its default start position and to
  * resume it, which takes as long as the database cannot be reached. Neither stop() nor shutdown() waits for the
- * subscribe of one that does not compete while it reads. That subscribe starts the wrapped models before the
- * subscription is made, so the subscription runs once made and is not resumed.
+ * subscribe of one that does not compete while it reads. The wrapped model is not running as the model is built, so the
+ * model is stopped and the subscription runs once start(..) is called.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CompetingConsumerStopAndShutdownDuringADurableSubscribeTest {
@@ -96,14 +96,18 @@ class CompetingConsumerStopAndShutdownDuringADurableSubscribeTest {
     }
 
     @Test
-    void a_subscription_that_does_not_compete_runs_once_its_subscribe_returns_with_no_read_of_its_stored_position() {
+    void a_subscription_that_does_not_compete_made_before_the_first_start_waits_for_it_with_no_read_of_its_stored_position() {
         Fixture fixture = new Fixture();
         try {
             fixture.subscribeNc("now");
 
-            assertThat(fixture.wrapped.log).as("[calls to the wrapped model, which was stopped before the subscribe]").containsExactly("stop", "start false", "subscribe nc running=true");
+            assertThat(fixture.wrapped.log).as("[calls to the wrapped model, which was stopped before the model was built]").containsExactly("stop", "subscribe nc running=false");
             assertThat(fixture.storage.reads).as("reads of the stored position of nc").hasValue(0);
-            assertThat(fixture.wrapped.runs("nc")).as("nc runs in the wrapped model once its subscribe returned").isTrue();
+            assertThat(fixture.wrapped.runs("nc")).as("nc runs in the wrapped model before the first start").isFalse();
+
+            fixture.model.start(false);
+
+            assertThat(fixture.wrapped.runs("nc")).as("nc runs in the wrapped model after the first start(false)").isTrue();
         } finally {
             fixture.model.shutdown();
         }

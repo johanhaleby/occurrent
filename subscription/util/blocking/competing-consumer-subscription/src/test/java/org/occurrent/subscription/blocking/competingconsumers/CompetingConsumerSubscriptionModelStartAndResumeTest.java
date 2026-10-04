@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.blocking.competingconsumers;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
@@ -23,19 +27,24 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -58,11 +67,16 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     private final RecordingDelegate delegate = new RecordingDelegate();
     private final SynchronousLeaseStrategy strategy = new SynchronousLeaseStrategy();
     private final CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(delegate, strategy);
+    // Not running as the model over it is built, as a wrapped model built with autoStartup(false) is
+    private final RecordingDelegate delegateNotRunning = notRunning();
+    private final SynchronousLeaseStrategy strategyOfTheModelBuiltStopped = new SynchronousLeaseStrategy();
+    private final CompetingConsumerSubscriptionModel modelBuiltStopped = new CompetingConsumerSubscriptionModel(delegateNotRunning, strategyOfTheModelBuiltStopped);
 
     // Ends the tries of a consumer that keeps failing
     @AfterEach
     void shutdownTheModel() {
         model.shutdown();
+        modelBuiltStopped.shutdown();
     }
 
     @Test
@@ -198,6 +212,20 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         delegate.startThrows = false;
         strategy.grant("x");
         assertThat(delegate.running).as("x keeps competing for the lease, so the next grant resumes it").containsExactly("x");
+    }
+
+    // The Error is thrown once every subscription has had its turn, as one that fails to start does
+    @Test
+    void a_wrapped_model_that_throws_an_error_on_being_started_does_not_keep_the_subscriptions_from_their_turn() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        model.stop();
+        delegate.startErrorsOnce.set(true);
+
+        Throwable thrown = catchThrowable(() -> model.start(true));
+
+        assertThat(thrown).as("start(), whose caller gets the Error").isInstanceOf(AssertionError.class).hasMessage("The wrapped model failed with an Error on being started");
+        assertThat(delegate.running).as("x, which wins its lease in that start(true) and starts the wrapped model").containsExactly("x");
     }
 
     @Test
@@ -373,7 +401,9 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         model.stop();
         strategy.grantOnRegister = false;
         model.start(true);
-        assertThat(delegate.isRunning()).as("a start that won no lease does not start the wrapped model").isFalse();
+        assertThat(delegate.isRunning()).as("the wrapped model, after a start that won no lease").isTrue();
+        // Stopped by a call to the wrapped model itself, so y wins its lease while that model is stopped
+        delegate.stop();
         strategy.grantOnRegister = true;
 
         subscribe("y");
@@ -389,6 +419,8 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         subscribe("y");
         model.stop();
         model.start(false);
+        // Stopped by a call to the wrapped model itself, since start(false) started it
+        delegate.stop();
         delegate.startThrows = true;
 
         Throwable thrown = catchThrowable(() -> subscribe("x"));
@@ -560,7 +592,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
         model.start(true);
 
-        assertThat(delegate.isRunning()).as("a start that won no lease does not start the wrapped model").isFalse();
+        assertThat(delegate.isRunning()).as("the wrapped model, after a start that won no lease").isTrue();
         assertThat(model.isRunning()).as("the model after start(), with no lease held").isTrue();
     }
 
@@ -588,33 +620,83 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     }
 
     @Test
-    void a_new_model_over_a_wrapped_model_never_started_is_running() {
-        delegate.started = false;
-
-        assertThat(model.isRunning()).as("the new model").isTrue();
+    void a_new_model_is_started_when_its_wrapped_model_runs_and_stopped_when_it_does_not() {
+        assertThat(model.isRunning()).as("a new model over a wrapped model that runs").isTrue();
+        assertThat(modelBuiltStopped.isRunning()).as("a new model over a wrapped model that is not running").isFalse();
     }
 
-    @Test
-    void a_subscription_that_does_not_compete_made_on_a_new_model_whose_wrapped_model_was_never_started_runs_once_made() {
-        delegate.started = false;
+    // The last row is how a caller that reads isRunning() as whether the wrapped model runs starts a model
+    @ParameterizedTest(name = "started by: {0}")
+    @ValueSource(strings = {"start()", "start(false)", "start() only when isRunning() returns false"})
+    void subscriptions_made_on_a_model_built_over_a_wrapped_model_that_is_not_running_run_once_that_model_is_started(String startedBy) {
+        strategyOfTheModelBuiltStopped.grantOnRegister = true;
+        subscribeNonCompeting(modelBuiltStopped, "nc1");
+        subscribeNonCompeting(modelBuiltStopped, "nc2");
+        subscribe(modelBuiltStopped, "x");
+        assertThat(delegateNotRunning.running).as("subscriptions running in the wrapped model before the start").isEmpty();
+        assertThat(strategyOfTheModelBuiltStopped.holders).as("leases held before the start").isEmpty();
 
-        subscribeNonCompeting("nc");
+        switch (startedBy) {
+            case "start()" -> modelBuiltStopped.start();
+            case "start(false)" -> modelBuiltStopped.start(false);
+            default -> {
+                if (!modelBuiltStopped.isRunning()) {
+                    modelBuiltStopped.start();
+                }
+            }
+        }
 
-        assertThat(model.isRunning("nc")).as("nc, once its subscribe returned").isTrue();
-        assertThat(model.isPaused("nc")).as("nc paused, once its subscribe returned").isFalse();
-        assertThat(delegate.isRunning()).as("the wrapped model, once the subscribe of nc returned").isTrue();
+        assertThat(delegateNotRunning.isRunning()).as("the wrapped model, after %s", startedBy).isTrue();
+        assertThat(modelBuiltStopped.isRunning("nc1")).as("nc1, after %s", startedBy).isTrue();
+        assertThat(modelBuiltStopped.isRunning("nc2")).as("nc2, after %s", startedBy).isTrue();
+        assertThat(modelBuiltStopped.isRunning("x")).as("x, after %s", startedBy).isTrue();
     }
 
+    // InMemorySubscriptionModel drops what it is given while it is not running
     @Test
-    void a_subscription_that_does_not_compete_made_on_a_new_model_whose_wrapped_model_is_stopped_is_delivered_what_comes_after_its_subscribe() {
+    void nothing_is_delivered_on_a_model_built_over_a_wrapped_model_that_is_not_running_until_that_model_is_started() {
+        InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel();
+        wrapped.stop();
+        SynchronousLeaseStrategy grants = new SynchronousLeaseStrategy();
+        grants.grantOnRegister = true;
+        CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, grants);
+        List<String> deliveredToNc = new CopyOnWriteArrayList<>();
+        List<String> deliveredToX = new CopyOnWriteArrayList<>();
+        try {
+            subscribeNonCompeting(overInMemory, "nc", deliveredToNc);
+            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), cloudEvent -> deliveredToX.add(cloudEvent.getId()));
+            wrapped.accept(List.of(event("before")));
+
+            overInMemory.start();
+            wrapped.accept(List.of(event("after")));
+
+            await().atMost(5, SECONDS).untilAsserted(() -> {
+                assertThat(deliveredToNc).as("events delivered to nc").contains("after");
+                assertThat(deliveredToX).as("events delivered to x").contains("after");
+            });
+            assertThat(deliveredToNc).as("events delivered to nc").containsExactly("after");
+            assertThat(deliveredToX).as("events delivered to x").containsExactly("after");
+        } finally {
+            overInMemory.shutdown();
+        }
+    }
+
+    // The first start finds no subscription to start the wrapped model for
+    @Test
+    void a_subscription_that_does_not_compete_made_on_a_model_started_before_it_had_any_subscription_runs() {
         InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel();
         wrapped.stop();
         CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, new SynchronousLeaseStrategy());
         List<String> delivered = new CopyOnWriteArrayList<>();
         try {
+            if (!overInMemory.isRunning()) {
+                overInMemory.start();
+            }
             subscribeNonCompeting(overInMemory, "nc", delivered);
+            if (!overInMemory.isRunning()) {
+                overInMemory.start();
+            }
 
-            assertThat(overInMemory.isRunning("nc")).as("nc, once its subscribe returned").isTrue();
             wrapped.accept(List.of(event("e1")));
             await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delivered).as("events delivered to nc").containsExactly("e1"));
         } finally {
@@ -622,35 +704,26 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         }
     }
 
-    // isRunning() returns true here, so this caller never calls start(), which the subscription does not need
     @Test
-    void a_subscription_that_does_not_compete_made_on_a_new_model_whose_wrapped_model_was_never_started_runs_for_a_caller_that_starts_the_model_only_when_it_is_not_running() {
-        delegate.started = false;
-        subscribeNonCompeting("nc");
+    void a_subscription_that_does_not_compete_made_after_a_stop_and_a_start_with_no_subscription_runs() {
+        InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel();
+        CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, new SynchronousLeaseStrategy());
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        try {
+            overInMemory.stop();
+            overInMemory.start();
+            subscribeNonCompeting(overInMemory, "nc", delivered);
 
-        if (!model.isRunning()) {
-            model.start();
+            wrapped.accept(List.of(event("e1")));
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(delivered).as("events delivered to nc").containsExactly("e1"));
+        } finally {
+            overInMemory.shutdown();
         }
-
-        assertThat(model.isRunning("nc")).as("nc, after starting the model only if it was not running").isTrue();
     }
 
+    // A start that starts the wrapped model resumes nothing it holds paused
     @Test
-    void a_subscription_that_does_not_compete_made_on_a_new_model_whose_wrapped_model_was_never_started_runs_after_a_start_without_resuming() {
-        delegate.started = false;
-        subscribeNonCompeting("nc1");
-        subscribeNonCompeting("nc2");
-
-        model.start(false);
-
-        assertThat(model.isRunning("nc1")).as("nc1, after start(false)").isTrue();
-        assertThat(model.isRunning("nc2")).as("nc2, after start(false)").isTrue();
-    }
-
-    // The subscribe starts the wrapped model without resuming what it holds paused, so the subscription the user paused
-    // stays paused
-    @Test
-    void a_subscription_that_does_not_compete_made_while_the_wrapped_model_is_stopped_leaves_another_one_the_user_paused_paused() {
+    void a_start_without_resuming_starts_the_wrapped_model_and_leaves_a_subscription_the_user_paused_paused() {
         InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel();
         CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, new SynchronousLeaseStrategy());
         List<String> deliveredToTheOnePaused = new CopyOnWriteArrayList<>();
@@ -658,13 +731,14 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         try {
             subscribeNonCompeting(overInMemory, "paused", deliveredToTheOnePaused);
             overInMemory.pauseSubscription("paused");
-            // Stopped behind the model's back, so the next subscribe finds it stopped while the model is started
+            // Stopped by a call to the wrapped model itself, so this model is still started
             wrapped.stop();
 
+            overInMemory.start(false);
             subscribeNonCompeting(overInMemory, "made", deliveredToTheOneMade);
 
-            assertThat(overInMemory.isRunning("made")).as("the subscription made while the wrapped model was stopped").isTrue();
-            assertThat(overInMemory.isPaused("paused")).as("the subscription the user paused, once another one was made").isTrue();
+            assertThat(overInMemory.isRunning("made")).as("the subscription made after start(false)").isTrue();
+            assertThat(overInMemory.isPaused("paused")).as("the subscription the user paused, after start(false)").isTrue();
             wrapped.accept(List.of(event("e1")));
             await().atMost(5, SECONDS).untilAsserted(() -> assertThat(deliveredToTheOneMade).as("events delivered to the subscription made").containsExactly("e1"));
             assertThat(deliveredToTheOnePaused).as("events delivered to the subscription the user paused").isEmpty();
@@ -673,19 +747,72 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         }
     }
 
-    // The wrapped model is started before it makes the subscription, so nothing is recorded when that start fails
     @Test
-    void a_subscription_that_does_not_compete_whose_subscribe_failed_to_start_the_wrapped_model_is_made_and_runs_when_subscribed_again() {
-        delegate.started = false;
-        delegate.startThrows = true;
+    void a_start_that_fails_to_start_the_wrapped_model_throws_and_a_later_start_runs_a_subscription_that_does_not_compete() {
+        subscribeNonCompeting(modelBuiltStopped, "nc");
+        delegateNotRunning.startThrows = true;
 
-        Throwable thrown = catchThrowable(() -> subscribeNonCompeting("nc"));
-        delegate.startThrows = false;
-        Throwable thrownTheSecondTime = catchThrowable(() -> subscribeNonCompeting("nc"));
+        Throwable thrown = catchThrowable(modelBuiltStopped::start);
+        delegateNotRunning.startThrows = false;
+        modelBuiltStopped.start();
 
-        assertThat(thrown).as("the subscribe of nc, while the wrapped model fails to start").hasMessage("The wrapped model cannot start right now");
-        assertThat(thrownTheSecondTime).as("the subscribe of nc tried again, once the wrapped model can start").isNull();
-        assertThat(model.isRunning("nc")).as("nc, once its subscribe was tried again").isTrue();
+        assertThat(thrown).as("start(), while the wrapped model fails to start").hasMessage("The wrapped model cannot start right now");
+        assertThat(modelBuiltStopped.isRunning("nc")).as("nc, after a later start()").isTrue();
+    }
+
+    // Started by a call to the wrapped model itself, which this model knows nothing of, so x never competes for its lease
+    @Test
+    void a_competing_subscription_whose_events_are_held_since_its_model_was_never_started_logs_one_warning() {
+        InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel();
+        wrapped.stop();
+        CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, new SynchronousLeaseStrategy());
+        List<String> deliveredToX = new CopyOnWriteArrayList<>();
+        List<String> warnings = new CopyOnWriteArrayList<>();
+        List<String> held = new CopyOnWriteArrayList<>();
+        AppenderBase<ILoggingEvent> appender = recording(warnings, held);
+        try {
+            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), cloudEvent -> deliveredToX.add(cloudEvent.getId()));
+            wrapped.start();
+            wrapped.accept(List.of(event("e1"), event("e2")));
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(held).as("events of x held").hasSize(1));
+
+            // Lets e1 through, after which e2 is held
+            overInMemory.stop();
+
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(held).as("events of x held").hasSize(2));
+            assertThat(deliveredToX).as("events delivered to x").containsExactly("e1");
+            assertThat(warnings).as("warnings").singleElement().asString()
+                    .contains("Call start() on the CompetingConsumerSubscriptionModel, not on the subscription model it wraps")
+                    .contains("subscriptionId=x");
+        } finally {
+            detach(appender);
+            overInMemory.shutdown();
+        }
+    }
+
+    @ParameterizedTest(name = "ended by: {0}")
+    @ValueSource(strings = {"stop()", "shutdown()"})
+    void an_event_held_since_its_model_was_never_started_is_delivered_once_the_model_is(String endedBy) {
+        InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel();
+        wrapped.stop();
+        CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, new SynchronousLeaseStrategy());
+        List<String> deliveredToX = new CopyOnWriteArrayList<>();
+        List<String> held = new CopyOnWriteArrayList<>();
+        AppenderBase<ILoggingEvent> appender = recording(new CopyOnWriteArrayList<>(), held);
+        try {
+            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), cloudEvent -> deliveredToX.add(cloudEvent.getId()));
+            wrapped.start();
+            wrapped.accept(List.of(event("e1")));
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(held).as("events of x held").hasSize(1));
+
+            Runnable end = endedBy.equals("stop()") ? overInMemory::stop : overInMemory::shutdown;
+            assertThat(CompletableFuture.runAsync(end)).as(endedBy).succeedsWithin(Duration.ofSeconds(5));
+
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(deliveredToX).as("events delivered to x after %s", endedBy).containsExactly("e1"));
+        } finally {
+            detach(appender);
+            overInMemory.shutdown();
+        }
     }
 
     @Test
@@ -700,12 +827,20 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     }
 
     private void subscribe(String subscriptionId) {
+        subscribe(model, subscriptionId);
+    }
+
+    private static void subscribe(CompetingConsumerSubscriptionModel model, String subscriptionId) {
         model.subscribe(SUBSCRIBER_ID, subscriptionId, null, StartAt.subscriptionModelDefault(), __ -> {
         });
     }
 
     // A start position that resolves to null here makes the model hand the subscription straight to the wrapped model
     private void subscribeNonCompeting(String subscriptionId) {
+        subscribeNonCompeting(model, subscriptionId);
+    }
+
+    private static void subscribeNonCompeting(CompetingConsumerSubscriptionModel model, String subscriptionId) {
         model.subscribe(SUBSCRIBER_ID, subscriptionId, null, StartAt.dynamic(__ -> null), __ -> {
         });
     }
@@ -720,10 +855,38 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("Tested").build();
     }
 
+    private static RecordingDelegate notRunning() {
+        RecordingDelegate delegate = new RecordingDelegate();
+        delegate.started = false;
+        return delegate;
+    }
+
+    // Records each warning this model logs, and each event of x it holds for the lease
+    private static AppenderBase<ILoggingEvent> recording(List<String> warnings, List<String> held) {
+        AppenderBase<ILoggingEvent> appender = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                String message = event.getFormattedMessage();
+                if (event.getLevel() == Level.WARN) {
+                    warnings.add(message);
+                } else if (message.startsWith("Holding an event until this node may deliver it") && message.contains("subscriptionId=x")) {
+                    held.add(message);
+                }
+            }
+        };
+        appender.start();
+        ((Logger) LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class)).addAppender(appender);
+        return appender;
+    }
+
+    private static void detach(AppenderBase<ILoggingEvent> appender) {
+        ((Logger) LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class)).detachAppender(appender);
+    }
+
     /**
      * Keeps track of which subscriptions deliver and which are paused, and throws when starting any subscription in
-     * {@link #throwsOn}. Asked whether a subscription in {@link #isRunningErrorsOnceOn} runs, it throws an Error, once.
-     * Like {@code SpringMongoSubscriptionModel}, it holds a subscription made while it is stopped
+     * {@link #throwsOn}. Asked whether a subscription in {@link #isRunningErrorsOnceOn} runs, it throws an Error, once,
+     * and so does a start while {@link #startErrorsOnce} is set. Like {@code SpringMongoSubscriptionModel}, it holds a subscription made while it is stopped
      * paused, as well as one made with {@code subscribePaused}, and starts itself to resume a subscription. A subscription delivered twice is listed twice in
      * {@link #running}.
      */
@@ -733,6 +896,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         private final Set<String> paused = ConcurrentHashMap.newKeySet();
         private volatile boolean started = true;
         private volatile boolean startThrows;
+        private final AtomicBoolean startErrorsOnce = new AtomicBoolean();
         private volatile boolean stopThrows;
         private final Set<String> isRunningErrorsOnceOn = ConcurrentHashMap.newKeySet();
 
@@ -774,6 +938,9 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         public void start(boolean resumeSubscriptionsAutomatically) {
             if (startThrows) {
                 throw new IllegalStateException("The wrapped model cannot start right now");
+            }
+            if (startErrorsOnce.compareAndSet(true, false)) {
+                throw new AssertionError("The wrapped model failed with an Error on being started");
             }
             started = true;
         }
