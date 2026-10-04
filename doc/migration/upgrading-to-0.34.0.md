@@ -1331,9 +1331,11 @@ you called again.
      went to another node while the wrapped model made it. It is also one whose `resumeSubscription(..)` failed. The
      model counts that one as paused by itself, also when you had paused it, and the thread from item 1 tries it again.
      While the model is stopped, these also wait for `start(..)`, except one you resumed after `stop()`.
-   - A subscription that doesn't compete has no lease, so a lease this node wins doesn't bring it back. One made while
-     the wrapped model was not running, such as one made after `stop()` and before any resume, waits for
-     `resumeSubscription(..)` or `start(true)` as one you paused does, and `start(false)` keeps it paused.
+   - A subscription that doesn't compete has no lease, so a lease this node wins doesn't bring it back. One made after
+     `stop()` while the wrapped model was not running, such as before any resume, waits for `resumeSubscription(..)` or
+     `start(true)` as one you paused does, and `start(false)` keeps it paused. One made while the model is started runs
+     once `subscribe(..)` returns, see
+     [section 20](#20-a-competing-consumers-isrunning-says-whether-the-model-is-started).
 
    A subscription for which both return `false` is still being tried again, or, when it competes, is waiting for its
    lease.
@@ -1479,12 +1481,14 @@ returns `true` after a `start()` that wins no lease, where 0.33.0 returned `fals
 that doesn't compete. It returns `false` after a resume, until the next `start()`.
 
 A subscription that doesn't compete, made on a started model whose wrapped model is not running, such as a new model
-over one built with `autoStartup(false)`, stays paused until `start()` or `resumeSubscription(..)`, as in 0.33.0. Since
-`isRunning()` returned `false` there in 0.33.0, code that called `start()` whenever `isRunning()` returned `false` got
-the subscription running. That code now finds `isRunning()` returning `true`, no longer calls `start()`, and the
-subscription stays paused. Call `resumeSubscription(id)` once you have made such a subscription, or whenever
-`isPaused(id)` returns `true` for it. `start()` resumes it too, but `start()` is `start(true)`, so on a started model it
-also resumes every other subscription you paused with `pauseSubscription(..)`, competing or not.
+over one built with `autoStartup(false)`, starts the wrapped model and runs once `subscribe(..)` returns, the same way a
+competing one does once this node wins its lease. In 0.33.0 it stayed paused until a call such as `start(..)` or
+`resumeSubscription(..)` got it running, and since `isRunning()` returned `false` there, code that called `start()`
+whenever `isRunning()` returned `false` got it running. Such code now finds `isRunning()` returning `true` and no longer
+calls `start()`, which the subscription doesn't need. Making it doesn't resume another subscription you paused.
+
+To keep a subscription that doesn't compete from running until you start the model, call `stop()` before you subscribe
+it. It then waits for `start()` or `resumeSubscription(..)`, and `start(false)` keeps it paused.
 
 If you called `isRunning()` to find out whether this node delivers events, call `isRunning(id)` for each subscription
 instead. It asks the wrapped model, which runs a competing subscription only on the node that holds its lease.
