@@ -1539,8 +1539,10 @@ subscription in the wrapped model and subscribes it there again from that earlie
 events between the two.
 
 A pause, a resume, a `stop()` or a `start(..)` made while `ReactorDurableSubscriptionModel` starts the subscription
-there again succeeds. The subscription has the state you last asked for before your action sees an event from the earlier
-checkpoint, and `isPaused(id)` and `isRunning(id)` answer that state meanwhile. A subscribe of the same id meanwhile is
+there again is kept and put in place once the subscription is there again. A pause of a subscription that is already
+paused throws `SubscriptionNotRunningException`, and a resume of one that isn't paused throws
+`SubscriptionAlreadyRunningException`. The subscription has the state you last asked for before your action sees an event
+from the earlier checkpoint, and `isPaused(id)` and `isRunning(id)` answer that state meanwhile. A subscribe of the same id meanwhile is
 refused with `DuplicateSubscriptionIdException`, as the wrapped model refuses it while it has the subscription.
 `ReactorDurableSubscriptionModel` cancels the subscription in the wrapped model before its second subscribe, and pauses
 or resumes it there afterwards to give it the state you asked for. The wrapped model takes each of these calls by id, so

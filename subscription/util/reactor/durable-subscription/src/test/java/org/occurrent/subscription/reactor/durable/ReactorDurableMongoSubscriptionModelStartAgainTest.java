@@ -51,9 +51,10 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.net.URI;
@@ -73,12 +74,15 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
@@ -96,7 +100,7 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     private static final String DATABASE = "reactordurablemongostartagain";
     private static final String SUBSCRIPTION_ID = "sub";
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
-    private static final String ERROR_HOOK = "reactor-durable-mongo-start-again";
+    private static final String SCHEDULE_HOOK ="reactor-durable-mongo-start-again";
 
     @Container
     private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
@@ -317,29 +321,92 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
         // Given
         Hold startAgainCancel = mongoModel.holdCancel(2);
         Subscription startedAgain = heldInTheCancelOfTheStartAgain(startAgainCancel);
-        AtomicReference<@Nullable Thread> endedOn = new AtomicReference<>();
-        Hooks.onOperatorError(ERROR_HOOK, (error, data) -> {
-            if (Arrays.stream(error.getStackTrace()).anyMatch(frame -> frame.getClassName().equals(ReactorDurableSubscriptionModel.class.getName()))) {
-                endedOn.compareAndSet(null, Thread.currentThread());
-            }
-            return error;
-        });
+        // The start again goes on from the thread of its cancel once that is let go, on tasks it schedules from there
+        TasksScheduledFrom startAgain = new TasksScheduledFrom(requireNonNull(mongoModel.threadOfCancel(2)));
+        Schedulers.onScheduleHook(SCHEDULE_HOOK, startAgain::counted);
 
         try {
             // When
             model.shutdown();
             startAgainCancel.letGo();
             // Asked once the start again has ended, so what it ended with comes first, see untilStartedOrShutDown
-            await().atMost(TIMEOUT).until(() -> {
-                @Nullable Thread thread = endedOn.get();
-                return thread != null && isIdle(thread);
-            });
+            await().atMost(TIMEOUT).until(startAgain::ended);
             Throwable ended = catchThrowable(() -> startedAgain.waitUntilStarted(TIMEOUT).block());
 
             // Then
             assertThat(ended).as("how the wait for the start of the subscription started again ended").isInstanceOf(SubscriptionModelShutdownException.class);
         } finally {
-            Hooks.resetOnOperatorError(ERROR_HOOK);
+            Schedulers.resetOnScheduleHook(SCHEDULE_HOOK);
+        }
+    }
+
+    @Test
+    void a_cancel_the_mongo_model_blocks_on_interruptibly_after_the_second_subscribe_of_a_start_again_failed_runs_to_its_end() throws Exception {
+        // Given
+        mongoModel.failingSubscribe = 3;
+        Hold cancelOfTheFailedStart = mongoModel.holdCancel(3, true);
+        // The thread of the start again's cancel goes on to subscribe the second time
+        Schedulers.Snapshot schedulers = Schedulers.setFactoryWithSnapshot(new Schedulers.Factory() {
+            @Override
+            public Scheduler newBoundedElastic(int threadCap, int queuedTaskCap, ThreadFactory threadFactory, int ttlSeconds) {
+                return new HeldBackScheduler(Schedulers.Factory.super.newBoundedElastic(threadCap, queuedTaskCap, threadFactory, ttlSeconds),
+                        () -> mongoModel.threadOfCancel(2), cancelOfTheFailedStart.reached);
+            }
+        });
+
+        try {
+            startedAgainInTheMongoModel();
+            cancelOfTheFailedStart.awaitReached();
+            Thread startAgainCancel = requireNonNull(mongoModel.threadOfCancel(2));
+            await().atMost(TIMEOUT).until(() -> doneWithTheStartAgain(startAgainCancel, cancelOfTheFailedStart));
+
+            // When
+            Throwable refused = catchThrowable(() -> subscribe(new CopyOnWriteArrayList<>()));
+            cancelOfTheFailedStart.letGo();
+            cancelOfTheFailedStart.awaitEnded();
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(cancelOfTheFailedStart.interrupted).as("the cancel of the failed start interrupted").isFalse();
+                softly.assertThat(refused).as("how the subscribe while the Mongo model took the cancel of the failed start ended").hasCauseInstanceOf(DuplicateSubscriptionIdException.class);
+            });
+        } finally {
+            mongoModel.letGoOfEveryHold();
+            Schedulers.resetFrom(schedulers);
+        }
+    }
+
+    @Test
+    void a_cancel_the_mongo_model_blocks_on_interruptibly_after_its_cancel_of_a_start_again_failed_runs_to_its_end_and_ends_the_subscription_there() throws Exception {
+        // Given
+        Hold cancelOfTheFailedStart = mongoModel.holdCancel(3, true);
+        Scheduler cancelling = Schedulers.newSingle("cancelling");
+        // Fails on a thread of the Mongo model. The thread that subscribes to the failure records that task as scheduled
+        // only once the cancel of the failed start is held.
+        mongoModel.failCancel(2, Mono.<Void>fromCallable(() -> {
+            throw new IllegalStateException("The cancel failed");
+        }).subscribeOn(new HeldBackScheduler(cancelling, () -> mongoModel.threadOfCancel(2), cancelOfTheFailedStart.reached)));
+
+        try {
+            Subscription startedAgain = startedAgainInTheMongoModel();
+            cancelOfTheFailedStart.awaitReached();
+            Thread startAgainCancel = requireNonNull(mongoModel.threadOfCancel(2));
+            await().atMost(TIMEOUT).until(() -> doneWithTheStartAgain(startAgainCancel, cancelOfTheFailedStart));
+
+            // When
+            cancelOfTheFailedStart.letGo();
+            cancelOfTheFailedStart.awaitEnded();
+            Throwable startAgainEnded = catchThrowable(() -> startedAgain.waitUntilStarted(TIMEOUT).block());
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(startAgainEnded).as("how the start again ended").hasMessage("The cancel failed");
+                softly.assertThat(cancelOfTheFailedStart.interrupted).as("the cancel of the failed start interrupted").isFalse();
+                softly.assertThat(mongoModel.isRunning(SUBSCRIPTION_ID)).as("the subscription running in the Mongo model").isFalse();
+            });
+        } finally {
+            mongoModel.letGoOfEveryHold();
+            cancelling.dispose();
         }
     }
 
@@ -418,6 +485,12 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
         return cloudEvent -> Mono.fromRunnable(() -> delivered.add(Long.parseLong(cloudEvent.getId())));
     }
 
+    // The thread that ran the cancel of the start again has ended that task, and either waits for a new one or runs the
+    // held cancel of the failed start as its next one
+    private static boolean doneWithTheStartAgain(Thread startAgainCancel, Hold cancelOfTheFailedStart) {
+        return isIdle(startAgainCancel) || cancelOfTheFailedStart.heldOn == startAgainCancel;
+    }
+
     // A scheduler thread that has gone back to waiting for its next task
     private static boolean isIdle(Thread thread) {
         return (thread.getState() == Thread.State.WAITING || thread.getState() == Thread.State.TIMED_WAITING)
@@ -425,12 +498,15 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     }
 
     // Holds the cancels of the numbers asked for, counted from the first, and the next pause, each before it reaches the
-    // Mongo model, until its hold is let go. Fails the subscribe of the number asked for, counted from the first.
+    // Mongo model, until its hold is let go. Fails the subscribe of the number asked for, counted from the first, and
+    // answers the cancels of the numbers asked for with a failure instead of reaching the Mongo model.
     private static final class HoldingMongoModel extends ReactorMongoSubscriptionModel {
         private static final String FAILED_SUBSCRIBE = "The subscribe failed";
         private final AtomicInteger cancels = new AtomicInteger();
         private final AtomicInteger subscribes = new AtomicInteger();
         private final Map<Integer, Hold> heldCancels = new ConcurrentHashMap<>();
+        private final Map<Integer, Thread> cancelThreads = new ConcurrentHashMap<>();
+        private final Map<Integer, Mono<Void>> failedCancels = new ConcurrentHashMap<>();
         private final List<Hold> holds = new CopyOnWriteArrayList<>();
         private final AtomicReference<@Nullable Hold> heldPause = new AtomicReference<>();
         private volatile int failingSubscribe = -1;
@@ -440,14 +516,18 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
         }
 
         private Hold holdCancel(int number) {
-            Hold hold = new Hold();
+            return holdCancel(number, false);
+        }
+
+        private Hold holdCancel(int number, boolean interruptibly) {
+            Hold hold = new Hold(interruptibly);
             holds.add(hold);
             heldCancels.put(number, hold);
             return hold;
         }
 
         private Hold holdNextPause() {
-            Hold hold = new Hold();
+            Hold hold = new Hold(false);
             holds.add(hold);
             heldPause.set(hold);
             return hold;
@@ -465,13 +545,30 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
             return super.subscribe(subscriptionId, filter, startAt, action);
         }
 
+        private @Nullable Thread threadOfCancel(int number) {
+            return cancelThreads.get(number);
+        }
+
+        private void failCancel(int number, Mono<Void> failure) {
+            failedCancels.put(number, failure);
+        }
+
         @Override
         public Mono<Void> cancelSubscription(String subscriptionId) {
-            @Nullable Hold hold = heldCancels.remove(cancels.incrementAndGet());
-            if (hold != null) {
-                hold.hold();
+            int number = cancels.incrementAndGet();
+            cancelThreads.put(number, Thread.currentThread());
+            @Nullable Hold hold = heldCancels.remove(number);
+            try {
+                if (hold != null) {
+                    hold.hold();
+                }
+                @Nullable Mono<Void> failure = failedCancels.remove(number);
+                return failure != null ? failure : super.cancelSubscription(subscriptionId);
+            } finally {
+                if (hold != null) {
+                    hold.ended.countDown();
+                }
             }
-            return super.cancelSubscription(subscriptionId);
         }
 
         @Override
@@ -484,18 +581,36 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
         }
     }
 
-    // A call held where it is reached until it is let go
+    // A call held where it is reached until it is let go. One held interruptibly fails when its thread is interrupted,
+    // as a call blocked on a lock or a socket can, without doing what it was called for.
     private static final class Hold {
+        private final boolean interruptibly;
         private final CountDownLatch reached = new CountDownLatch(1);
         private final CountDownLatch letGo = new CountDownLatch(1);
+        private final CountDownLatch ended = new CountDownLatch(1);
+        private volatile boolean interrupted;
+        private volatile @Nullable Thread heldOn;
+
+        private Hold(boolean interruptibly) {
+            this.interruptibly = interruptibly;
+        }
 
         private void hold() {
+            heldOn = Thread.currentThread();
             reached.countDown();
             try {
                 letGo.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
+                interrupted = true;
                 Thread.currentThread().interrupt();
+                if (interruptibly) {
+                    throw new IllegalStateException("Interrupted while held", e);
+                }
             }
+        }
+
+        private void awaitEnded() throws InterruptedException {
+            assertThat(ended.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("held call ended").isTrue();
         }
 
         private void awaitReached() throws InterruptedException {
@@ -504,6 +619,95 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
 
         private void letGo() {
             letGo.countDown();
+        }
+    }
+
+    // Holds the thread that holdsBack answers inside its next schedule(..), after the task is handed over and until the
+    // latch until opens. The task can then end before that thread has recorded it as scheduled. Reactor's subscribeOn of
+    // a Mono.fromCallable that throws then disposes the task from that thread, which interrupts the thread that runs it.
+    private static final class HeldBackScheduler implements Scheduler {
+        private final Scheduler scheduler;
+        private final Supplier<@Nullable Thread> holdsBack;
+        private final CountDownLatch until;
+
+        private HeldBackScheduler(Scheduler scheduler, Supplier<@Nullable Thread> holdsBack, CountDownLatch until) {
+            this.scheduler = scheduler;
+            this.holdsBack = holdsBack;
+            this.until = until;
+        }
+
+        @Override
+        public Disposable schedule(Runnable task) {
+            Disposable scheduled = scheduler.schedule(task);
+            if (until.getCount() > 0 && Thread.currentThread() == holdsBack.get()) {
+                try {
+                    until.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return scheduled;
+        }
+
+        @Override
+        public Disposable schedule(Runnable task, long delay, TimeUnit unit) {
+            return scheduler.schedule(task, delay, unit);
+        }
+
+        @Override
+        public Disposable schedulePeriodically(Runnable task, long initialDelay, long period, TimeUnit unit) {
+            return scheduler.schedulePeriodically(task, initialDelay, period, unit);
+        }
+
+        @Override
+        public Worker createWorker() {
+            return scheduler.createWorker();
+        }
+
+        @Override
+        public void init() {
+            scheduler.init();
+        }
+
+        @Override
+        public void dispose() {
+            scheduler.dispose();
+        }
+
+        @Override
+        public boolean isDisposed() {
+            return scheduler.isDisposed();
+        }
+    }
+
+    // Counts the tasks the thread schedules, and those the tasks counted schedule, until each has run
+    private static final class TasksScheduledFrom {
+        private final Thread thread;
+        private final AtomicInteger notEnded = new AtomicInteger();
+        private final ThreadLocal<Boolean> runningOne = ThreadLocal.withInitial(() -> false);
+
+        private TasksScheduledFrom(Thread thread) {
+            this.thread = thread;
+        }
+
+        private Runnable counted(Runnable task) {
+            if (Thread.currentThread() != thread && !runningOne.get()) {
+                return task;
+            }
+            notEnded.incrementAndGet();
+            return () -> {
+                runningOne.set(true);
+                try {
+                    task.run();
+                } finally {
+                    runningOne.set(false);
+                    notEnded.decrementAndGet();
+                }
+            };
+        }
+
+        private boolean ended() {
+            return notEnded.get() == 0 && isIdle(thread);
         }
     }
 
