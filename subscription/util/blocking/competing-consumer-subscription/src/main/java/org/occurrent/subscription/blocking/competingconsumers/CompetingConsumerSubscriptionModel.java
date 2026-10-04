@@ -495,10 +495,16 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     // A wrapped model that is not running holds a new subscription paused, so it is started before it makes one that
     // does not compete, as it is for a competing consumer. Only that start is counted, so neither stop() nor shutdown()
-    // waits for the subscribe after it. While this model is stopped the wrapped model is not started for it.
+    // waits for the subscribe after it. While this model is stopped the wrapped model is not started for it. Asking
+    // whether it runs lets through no event that waits for the lease of a competing subscription.
     private void startTheWrappedModelBeforeItMakes(BeingMade beingMade) {
         try {
-            runInTheWrappedModel(null, true, () -> null);
+            runInTheWrappedModel(null, false, () -> {
+                if (!callingTheWrappedModel(delegate::isRunning)) {
+                    startTheWrappedModel();
+                }
+                return null;
+            });
         } catch (StoppedMeanwhile e) {
             logDebug("Not starting the wrapped subscription model before it makes a subscription that does not compete, since this model is stopped (subscriptionId={})", beingMade.key.subscriptionId());
         } catch (ShutDownMeanwhile e) {

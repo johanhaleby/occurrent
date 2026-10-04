@@ -1482,13 +1482,18 @@ that doesn't compete. It returns `false` after a resume, until the next `start()
 
 A subscription that doesn't compete, made on a started model whose wrapped model is not running, such as a new model
 over one built with `autoStartup(false)`, starts the wrapped model and runs once `subscribe(..)` returns, the same way a
-competing one does once this node wins its lease. In 0.33.0 it stayed paused until a call such as `start(..)` or
-`resumeSubscription(..)` got it running, and since `isRunning()` returned `false` there, code that called `start()`
-whenever `isRunning()` returned `false` got it running. Such code now finds `isRunning()` returning `true` and no longer
-calls `start()`, which the subscription doesn't need. Making it doesn't resume another subscription you paused.
+competing one does once this node wins its lease. Making it doesn't resume another subscription you paused. In 0.33.0 it
+stayed paused until a call such as `start(..)` or `resumeSubscription(..)` got it running. A competing subscription that
+won its lease after waiting for it started such a wrapped model in 0.33.0 too. Since `isRunning()` returned `false`
+there, code that called `start()` whenever `isRunning()` returned `false` got the subscription that doesn't compete
+running. Such code now finds `isRunning()` returning `true` and no longer calls `start()`, which the subscription doesn't
+need.
 
 To keep a subscription that doesn't compete from running until you start the model, call `stop()` before you subscribe
-it. It then waits for `start()` or `resumeSubscription(..)`, and `start(false)` keeps it paused.
+it. It then waits for `start()` or `resumeSubscription(..)`, and `start(false)` keeps it paused. `stop()` pauses every
+other subscription of the model as well, and `start()` resumes them. Item 4 of
+[section 18](#18-a-competing-consumers-start-and-resumesubscription-log-a-failure-and-return) lists what brings each kind
+back.
 
 If you called `isRunning()` to find out whether this node delivers events, call `isRunning(id)` for each subscription
 instead. It asks the wrapped model, which runs a competing subscription only on the node that holds its lease.

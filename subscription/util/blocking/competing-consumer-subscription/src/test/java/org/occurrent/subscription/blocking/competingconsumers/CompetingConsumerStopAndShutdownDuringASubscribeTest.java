@@ -119,7 +119,7 @@ class CompetingConsumerStopAndShutdownDuringASubscribeTest {
 
     @ParameterizedTest(name = "called while the wrapped model makes s2: {0}, wrapped model running: {1}")
     @CsvSource({"nothing, true", "nothing, false", "start(false), true", "start(false), false", "stop(), true", "stop(), false", "shutdown(), true", "shutdown(), false"})
-    void a_subscription_that_does_not_compete_is_left_as_the_wrapped_model_made_it_unless_a_start_that_resumes_began_meanwhile(String calledMeanwhile, boolean wrappedModelRunning) {
+    void a_subscription_that_does_not_compete_is_left_as_the_wrapped_model_made_it_when_no_start_that_resumes_began_meanwhile(String calledMeanwhile, boolean wrappedModelRunning) {
         List<String> calls = onceTheWrappedModelMadeS2(calledMeanwhile, wrappedModelRunning, fixture -> List.copyOf(fixture.wrapped.callsOnceS2WasMade));
 
         assertThat(calls).as("[what the subscribe of s2 asked of the wrapped model once that model had made s2, with %s called meanwhile]", calledMeanwhile).doesNotContain("isPaused s2", "start false", "resumeSubscription s2");
@@ -187,7 +187,7 @@ class CompetingConsumerStopAndShutdownDuringASubscribeTest {
     }
 
     @Test
-    void a_shutdown_while_a_subscription_that_does_not_compete_is_made_in_a_wrapped_model_its_subscribe_started_is_followed_by_no_start_there() {
+    void a_shutdown_while_a_subscription_that_does_not_compete_is_made_shuts_down_the_wrapped_model_its_subscribe_started_before_it_was_made() {
         Fixture fixture = new Fixture(false);
         Gate subscribeInTheWrappedModel = new Gate();
         try {
