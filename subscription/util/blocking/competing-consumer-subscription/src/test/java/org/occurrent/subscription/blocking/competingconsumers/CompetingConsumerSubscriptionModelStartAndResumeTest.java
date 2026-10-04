@@ -585,27 +585,29 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     }
 
     @Test
-    void a_subscription_that_does_not_compete_made_on_a_new_model_whose_wrapped_model_was_never_started_stays_paused_until_start_resumes_it() {
+    void a_new_model_over_a_wrapped_model_never_started_is_running() {
         delegate.started = false;
-
-        subscribeNonCompeting("nc");
 
         assertThat(model.isRunning()).as("the new model").isTrue();
-        assertThat(model.isPaused("nc")).as("nc, made on that model").isTrue();
-        model.start(false);
-        assertThat(model.isPaused("nc")).as("nc, after start(false)").isTrue();
-        model.start();
-        assertThat(model.isRunning("nc")).as("nc, after start()").isTrue();
     }
 
+    // isRunning() returns true here, so a caller that starts the model only while it returns false never resumes these
     @Test
-    void a_subscription_that_does_not_compete_made_on_a_new_model_whose_wrapped_model_was_never_started_runs_once_resumed() {
+    void documents_that_a_subscription_that_does_not_compete_made_on_a_new_model_whose_wrapped_model_was_never_started_stays_paused_until_start_or_a_resume() {
         delegate.started = false;
-        subscribeNonCompeting("nc");
+        subscribeNonCompeting("nc1");
+        subscribeNonCompeting("nc2");
 
-        model.resumeSubscription("nc");
+        model.start(false);
+        assertThat(model.isPaused("nc1")).as("nc1, after start(false)").isTrue();
+        assertThat(model.isPaused("nc2")).as("nc2, after start(false)").isTrue();
 
-        assertThat(model.isRunning("nc")).as("nc, after resumeSubscription(nc)").isTrue();
+        model.resumeSubscription("nc1");
+        assertThat(model.isRunning("nc1")).as("nc1, after resumeSubscription(nc1)").isTrue();
+        assertThat(model.isPaused("nc2")).as("nc2, after resumeSubscription(nc1)").isTrue();
+
+        model.start();
+        assertThat(model.isRunning("nc2")).as("nc2, after start()").isTrue();
     }
 
     @Test
