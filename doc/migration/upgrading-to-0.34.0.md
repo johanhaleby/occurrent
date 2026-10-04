@@ -1472,10 +1472,12 @@ A `ManualStartSubscriptionModel` that wraps it, which the Spring Boot starter ma
 `SpringMongoSubscriptionModel`, which runs from the start, it answers as in 0.33.0 until its `stop()`. After that, it
 now returns `true` after a `start()` that wins no lease, and `false` after a resume, until the next `start()`.
 
-A subscription that doesn't compete, made on a started model over a wrapped model that nothing has started, now starts
-the wrapped model and runs. In 0.33.0 it stayed paused until `start(..)`, and since `isRunning()` returned `false` there,
-code that called `start()` whenever `isRunning()` returned `false` got it running. That code now finds `isRunning()`
-returning `true` and the subscription already running.
+A subscription that doesn't compete, made on a started model whose wrapped model is not running, such as a new model
+over one built with `autoStartup(false)`, stays paused until `start()` or `resumeSubscription(..)`, as in 0.33.0. Since
+`isRunning()` returned `false` there in 0.33.0, code that called `start()` whenever `isRunning()` returned `false` got
+the subscription running. That code now finds `isRunning()` returning `true`, no longer calls `start()`, and the
+subscription stays paused. Call `start()` once you have made such a subscription, or call `resumeSubscription(id)` when
+`isPaused(id)` returns `true`.
 
 If you called `isRunning()` to find out whether this node delivers events, call `isRunning(id)` for each subscription
 instead. It asks the wrapped model, which runs a subscription only on the node that holds its lease.

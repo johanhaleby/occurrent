@@ -585,14 +585,27 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     }
 
     @Test
-    void a_subscription_that_does_not_compete_runs_when_made_on_a_new_model_whose_wrapped_model_was_never_started() {
+    void a_subscription_that_does_not_compete_made_on_a_new_model_whose_wrapped_model_was_never_started_stays_paused_until_start_resumes_it() {
         delegate.started = false;
 
         subscribeNonCompeting("nc");
 
         assertThat(model.isRunning()).as("the new model").isTrue();
-        assertThat(model.isRunning("nc")).as("nc, made on that model").isTrue();
-        assertThat(model.isPaused("nc")).as("nc, made on that model").isFalse();
+        assertThat(model.isPaused("nc")).as("nc, made on that model").isTrue();
+        model.start(false);
+        assertThat(model.isPaused("nc")).as("nc, after start(false)").isTrue();
+        model.start();
+        assertThat(model.isRunning("nc")).as("nc, after start()").isTrue();
+    }
+
+    @Test
+    void a_subscription_that_does_not_compete_made_on_a_new_model_whose_wrapped_model_was_never_started_runs_once_resumed() {
+        delegate.started = false;
+        subscribeNonCompeting("nc");
+
+        model.resumeSubscription("nc");
+
+        assertThat(model.isRunning("nc")).as("nc, after resumeSubscription(nc)").isTrue();
     }
 
     @Test
