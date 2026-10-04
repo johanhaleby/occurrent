@@ -142,8 +142,8 @@ import static java.util.Objects.requireNonNull;
  * again or this model next calls the wrapped model for that subscription, as it does to pause it once the lease is
  * lost. With the MongoDB lease strategies that is the next refresh that gets through, which they try every 10 seconds
  * with the default lease time of 20 seconds, so the wait goes on for as long as MongoDB can't be reached. The calls
- * that wait are {@link #isRunning()}, {@link #isRunning(String)}, {@link #isPaused(String)} for a subscription this
- * model has not paused and {@link #subscriptionIds()}, which this model passes on to the wrapped model as they are. A
+ * that wait are {@link #isRunning(String)}, {@link #isPaused(String)} for a subscription this model has not paused and
+ * {@link #subscriptionIds()}, which this model passes on to the wrapped model as they are. A
  * pause of another subscription waits too, and so does the loss of the lease of another subscription, since this model
  * passes both on to the wrapped model, and so does a thread of your own that waits for the lock. The subscription
  * models that Occurrent ships hand events over without holding such a lock, so nothing waits with them.
@@ -1408,11 +1408,20 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     /**
+     * Whether this model is started, which is what {@link #start(boolean)} and {@link #stop()} change. A new model is
+     * started. This returns {@code false} once a {@code stop()} is past any {@code start(..)} or {@code stop()} it waits
+     * for, until a later {@code start(..)} gets that far, also while a subscription runs on this node meanwhile, such as
+     * one resumed after that {@code stop()}. Once {@link #shutdown()} has begun it returns {@code false} for good.
+     * <p>
+     * It does not ask the wrapped model, and says nothing about whether this node delivers anything. A started node
+     * that holds no lease returns {@code true}. Call {@link #isRunning(String)} to find out whether a subscription runs
+     * on this node.
+     *
      * @see SubscriptionModelLifeCycle#isRunning()
      */
     @Override
     public boolean isRunning() {
-        return getWrappedSubscriptionModel().isRunning();
+        return !shutDown && !stoppedByUser.get();
     }
 
     /**

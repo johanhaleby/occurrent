@@ -300,10 +300,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * Start a registered subscription, or resume one the wrapped model has paused. Returns the wrapped model's
      * subscription, so waiting on it waits for the real thing.
      * <p>
-     * After {@link #stop()}, resuming one subscription also makes {@link #isRunning()} report {@code true} again, and
-     * a subscription registered after that is started rather than withheld. Every other subscription {@code stop()}
-     * paused stays paused until it too is resumed. On a model that has never been started, resuming one subscription
-     * starts only that one and the rest keep waiting.
+     * After {@link #stop()}, resuming one subscription also makes {@link #isRunning()} report {@code true} again when
+     * the wrapped model does, and a subscription registered after that is started rather than withheld. Every other
+     * subscription {@code stop()} paused stays paused until it too is resumed. On a model that has never been started,
+     * resuming one subscription starts only that one and the rest keep waiting.
      *
      * @throws UnknownSubscriptionException       If neither this model nor the wrapped model has that subscription.
      * @throws SubscriptionAlreadyRunningException If the subscription is already running, including when another

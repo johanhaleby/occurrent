@@ -549,6 +549,41 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         assertThat(strategy.holders).containsExactly("x");
     }
 
+    @Test
+    void a_started_model_is_running_while_this_node_holds_no_lease() {
+        strategy.grantOnRegister = false;
+        subscribe("x");
+        model.stop();
+
+        model.start(true);
+
+        assertThat(delegate.isRunning()).as("a start that won no lease does not start the wrapped model").isFalse();
+        assertThat(model.isRunning()).as("the model after start(), with no lease held").isTrue();
+    }
+
+    @Test
+    void a_stopped_model_is_not_running_once_a_resume_wins_a_lease_and_starts_the_wrapped_model() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+        model.stop();
+
+        model.resumeSubscription("x");
+
+        assertThat(delegate.isRunning()).as("the resume that won the lease started the wrapped model").isTrue();
+        assertThat(model.isRunning()).as("the model after stop(), with x resumed").isFalse();
+    }
+
+    @Test
+    void a_shut_down_model_is_not_running_although_its_wrapped_model_says_it_is() {
+        strategy.grantOnRegister = true;
+        subscribe("x");
+
+        model.shutdown();
+
+        assertThat(delegate.isRunning()).as("the wrapped model, whose shutdown() does nothing").isTrue();
+        assertThat(model.isRunning()).as("the model after shutdown()").isFalse();
+    }
+
     private void subscribe(String subscriptionId) {
         model.subscribe(SUBSCRIBER_ID, subscriptionId, null, StartAt.subscriptionModelDefault(), __ -> {
         });
