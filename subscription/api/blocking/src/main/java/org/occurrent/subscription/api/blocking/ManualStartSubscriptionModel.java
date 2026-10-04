@@ -300,10 +300,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * Start a registered subscription, or resume one the wrapped model has paused. Returns the wrapped model's
      * subscription, so waiting on it waits for the real thing.
      * <p>
-     * After {@link #stop()}, resuming one subscription also makes {@link #isRunning()} report {@code true} again when
-     * the wrapped model does, and a subscription registered after that is started rather than withheld. Every other
-     * subscription {@code stop()} paused stays paused until it too is resumed. On a model that has never been started,
-     * resuming one subscription starts only that one and the rest keep waiting.
+     * After {@link #stop()}, resuming one subscription also ends what {@code stop()} did to this model. From then on
+     * {@link #isRunning()} returns what the wrapped model's {@code isRunning()} returns, and this model hands a
+     * subscription registered after that to the wrapped model rather than holding it back. Whether that subscription
+     * runs is up to the wrapped model. A stopped {@code CompetingConsumerSubscriptionModel} holds it paused, and its
+     * {@code isRunning()} returns {@code false}, until its next {@code start(..)}. Every other subscription
+     * {@code stop()} paused stays paused until it too is resumed. On a model that has never been started, resuming one
+     * subscription starts only that one and the rest keep waiting.
      *
      * @throws UnknownSubscriptionException       If neither this model nor the wrapped model has that subscription.
      * @throws SubscriptionAlreadyRunningException If the subscription is already running, including when another
@@ -410,9 +413,12 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * @return {@code false} until this model is started, even though the wrapped model may be running, because nothing
-     * of its own has been handed to it yet, and {@code false} again after {@link #stop()} until {@link #start(boolean)}
-     * or {@link #resumeSubscription(String)} is called.
+     * @return {@code true} when this model is started and the wrapped model's {@code isRunning()} returns {@code true}.
+     * Before this model is started it returns {@code false}, even though the wrapped model may be running, because
+     * nothing of its own has been handed to it yet. After {@link #stop()} it returns {@code false} until
+     * {@link #start(boolean)} or {@link #resumeSubscription(String)} is called. Over a
+     * {@code CompetingConsumerSubscriptionModel} it stays {@code false} after such a resume, until the next
+     * {@code start(boolean)}, since that model returns {@code false} after its own {@code stop()} until then.
      */
     @Override
     public boolean isRunning() {

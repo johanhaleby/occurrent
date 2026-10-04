@@ -496,6 +496,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             throw new DuplicateSubscriptionIdException(key.subscriptionId());
         }
         BeingMade beingMade = new BeingMade(key);
+        beingMade.startedWhenReserved = !stoppedByUser.get();
+        beingMade.stopsWhenReserved = lastStopBegun;
         subscriptionsBeingMade.put(key.subscriptionId(), beingMade);
         return beingMade;
     }
@@ -510,22 +512,26 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     // Recorded only once the delegate has accepted it. Recording first would leave the id occupied by a subscription
     // that was refused, and the check in subscribe would then refuse it for good. A start(true) since the delegate got
-    // it resumed only what it knew, so the subscription is resumed here.
+    // it resumed only what it knew, so the subscription is resumed here. So is one made while this model was started
+    // and no stop() began, which a wrapped model that nothing has started yet holds paused. Only a start(..) of this
+    // model or a lease won would start that wrapped model otherwise.
     private void recordNonCompetingSubscription(BeingMade beingMade) {
         String subscriptionId = beingMade.key.subscriptionId();
         SubscriptionLock lock = lockSubscription(subscriptionId);
         try {
             boolean made;
+            boolean startedThroughout;
             synchronized (this) {
                 made = !shutDown && !beingMade.cancelled;
                 if (made) {
                     nonCompetingConsumersSubscriptions.add(subscriptionId);
                 }
+                startedThroughout = beingMade.startedWhenReserved && lastStopBegun == beingMade.stopsWhenReserved;
             }
             if (!made) {
                 throw notMade(beingMade);
             }
-            if (beingMade.resumedMeanwhile && !stoppedByUser.get() && delegate.isPaused(subscriptionId)) {
+            if ((beingMade.resumedMeanwhile || startedThroughout) && !stoppedByUser.get() && delegate.isPaused(subscriptionId)) {
                 try {
                     runInTheWrappedModel(null, true, () -> delegate.resumeSubscription(subscriptionId));
                 } catch (StoppedMeanwhile e) {
@@ -2669,6 +2675,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         private volatile @Nullable Delivery delivery;
         // A start(true) since the delegate got it and no stop() after, which resumed only what the delegate knew
         private volatile boolean resumedMeanwhile;
+        // Whether this model was started, and the last stop() that had begun, when the id was reserved. Written and read
+        // under the monitor only
+        private boolean startedWhenReserved;
+        private long stopsWhenReserved;
         // A call failed for the subscription while it was being made, or a lease callback found its lock taken, and
         // what failed is tried again once it is. At once when a lease callback was among them, since nothing failed.
         private volatile boolean triedAgainOnceMade;

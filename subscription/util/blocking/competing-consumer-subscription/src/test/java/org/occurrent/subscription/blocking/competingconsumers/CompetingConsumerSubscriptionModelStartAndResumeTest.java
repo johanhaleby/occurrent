@@ -584,6 +584,28 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         assertThat(model.isRunning()).as("the model after shutdown()").isFalse();
     }
 
+    @Test
+    void a_subscription_that_does_not_compete_runs_when_made_on_a_new_model_whose_wrapped_model_was_never_started() {
+        delegate.started = false;
+
+        subscribeNonCompeting("nc");
+
+        assertThat(model.isRunning()).as("the new model").isTrue();
+        assertThat(model.isRunning("nc")).as("nc, made on that model").isTrue();
+        assertThat(model.isPaused("nc")).as("nc, made on that model").isFalse();
+    }
+
+    @Test
+    void a_subscription_that_does_not_compete_made_while_the_model_is_stopped_stays_paused() {
+        delegate.started = false;
+        model.stop();
+
+        subscribeNonCompeting("nc");
+
+        assertThat(delegate.isRunning()).as("the wrapped model, while this model is stopped").isFalse();
+        assertThat(model.isPaused("nc")).as("nc, made while this model is stopped").isTrue();
+    }
+
     private void subscribe(String subscriptionId) {
         model.subscribe(SUBSCRIBER_ID, subscriptionId, null, StartAt.subscriptionModelDefault(), __ -> {
         });

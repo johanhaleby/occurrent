@@ -73,7 +73,7 @@ whose history was lost when it is told not to restart it, and no longer builds o
 no events. Read
 [section 19](#19-springmongosubscriptionmodel-reads-its-own-cursor-and-a-quiet-durable-subscription-saves-its-position).
 Finally, `CompetingConsumerSubscriptionModel.isRunning()` now says whether the model is started, and no longer returns
-what the wrapped model returns, which on a started node that holds no lease was `false`. Read
+what the wrapped model returns, which after `stop()` and a `start(..)` that won no lease was `false`. Read
 [section 20](#20-a-competing-consumers-isrunning-says-whether-the-model-is-started).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
@@ -1453,14 +1453,29 @@ behavior that a rewrite of the source cannot see.
 ## 20. A competing consumer's `isRunning()` says whether the model is started
 
 This covers `isRunning()` on `CompetingConsumerSubscriptionModel`, the one that takes no subscription id. In 0.33.0 it
-returned what the wrapped model returned. The model starts the wrapped model only once this node holds a lease, so a
-started node that held no lease returned `false`. After `stop()`, a `resumeSubscription(..)` that won its lease made it
-return `true`, and after `shutdown()` it returned `true` for as long as the wrapped model did.
+returned what the wrapped model returned, so the answer depended on what had started the wrapped model.
+
+- A new model returned `true` over a wrapped model that runs, as a `SpringMongoSubscriptionModel` does by default, and
+  `false` over one built with `autoStartup(false)`.
+- After `stop()` and `start(..)`, it returned `false` until this node won a lease, unless the model had a subscription
+  that doesn't compete. `start(..)` starts the wrapped model again only for such a subscription, and a lease this node
+  wins starts it for the subscription the lease belongs to.
+- After `stop()`, a `resumeSubscription(..)` that won its lease made it return `true`.
+- After `shutdown()`, it returned `true` for as long as the wrapped model did.
 
 Now it returns `true` for a new model and after `start(..)`, also while this node holds no lease. It returns `false`
 after `stop()` until the next `start(..)`, also while a subscription you resumed after `stop()` runs on this node. Once
-`shutdown()` has begun, it returns `false` for good. A `ManualStartSubscriptionModel` that wraps it, which the Spring
-Boot starter makes when the subscription mode is `MANUAL`, returns the same once you have called its `start()`.
+`shutdown()` has begun, it returns `false` for good.
+
+A `ManualStartSubscriptionModel` that wraps it, which the Spring Boot starter makes when the subscription mode is
+`MANUAL`, returns `true` when it is started itself and the competing consumer model returns `true`. Over the starter's
+`SpringMongoSubscriptionModel`, which runs from the start, it answers as in 0.33.0 until its `stop()`. After that, it
+now returns `true` after a `start()` that wins no lease, and `false` after a resume, until the next `start()`.
+
+A subscription that doesn't compete, made on a started model over a wrapped model that nothing has started, now starts
+the wrapped model and runs. In 0.33.0 it stayed paused until `start(..)`, and since `isRunning()` returned `false` there,
+code that called `start()` whenever `isRunning()` returned `false` got it running. That code now finds `isRunning()`
+returning `true` and the subscription already running.
 
 If you called `isRunning()` to find out whether this node delivers events, call `isRunning(id)` for each subscription
 instead. It asks the wrapped model, which runs a subscription only on the node that holds its lease.
