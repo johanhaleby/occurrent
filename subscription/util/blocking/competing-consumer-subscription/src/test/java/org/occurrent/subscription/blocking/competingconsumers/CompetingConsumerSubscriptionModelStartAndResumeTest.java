@@ -673,19 +673,19 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         }
     }
 
-    // The wrapped model has made it, so it stays recorded, and its subscribe throws rather than leave it paused unseen
+    // The wrapped model is started before it makes the subscription, so nothing is recorded when that start fails
     @Test
-    void a_subscription_that_does_not_compete_whose_subscribe_fails_to_start_the_wrapped_model_throws_and_runs_after_a_resume() {
+    void a_subscription_that_does_not_compete_whose_subscribe_failed_to_start_the_wrapped_model_is_made_and_runs_when_subscribed_again() {
         delegate.started = false;
         delegate.startThrows = true;
 
         Throwable thrown = catchThrowable(() -> subscribeNonCompeting("nc"));
+        delegate.startThrows = false;
+        Throwable thrownTheSecondTime = catchThrowable(() -> subscribeNonCompeting("nc"));
 
         assertThat(thrown).as("the subscribe of nc, while the wrapped model fails to start").hasMessage("The wrapped model cannot start right now");
-        assertThat(model.isPaused("nc")).as("nc, once its subscribe threw").isTrue();
-        delegate.startThrows = false;
-        model.resumeSubscription("nc");
-        assertThat(model.isRunning("nc")).as("nc, after resumeSubscription(nc)").isTrue();
+        assertThat(thrownTheSecondTime).as("the subscribe of nc tried again, once the wrapped model can start").isNull();
+        assertThat(model.isRunning("nc")).as("nc, once its subscribe was tried again").isTrue();
     }
 
     @Test

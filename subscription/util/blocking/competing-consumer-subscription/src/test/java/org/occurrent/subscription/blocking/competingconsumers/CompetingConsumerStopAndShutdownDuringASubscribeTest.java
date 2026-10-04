@@ -25,6 +25,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -39,6 +40,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,10 +54,10 @@ import static org.awaitility.Awaitility.await;
  * compete for its lease, as one whose registration a stop() gave up does. One that does not compete ends as one made
  * once the stop() had returned. A subscribe that a shutdown() overtook runs nothing in the wrapped model. A competing
  * subscription goes to the wrapped model through subscribe, which these wait at, only when that model refuses
- * subscribePaused, and such a model starts itself on a subscribe here. Once the wrapped model has made one that does
- * not compete, the subscribe resumes it there when that model holds it paused, first starting that model when it does
- * not run, unless a stop() or shutdown() began while it was being made. A stop() or shutdown() that begins while the
- * subscribe does that waits for it, and stops or shuts down the wrapped model after.
+ * subscribePaused, and such a model starts itself on a subscribe here. The subscribe of one that does not compete
+ * starts a wrapped model that does not run before that model makes it, and a stop() or shutdown() that begins during
+ * that start waits for it. Once the wrapped model has made it, the subscribe neither asks whether it is paused there
+ * nor resumes it, unless a start(true) began while it was being made.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CompetingConsumerStopAndShutdownDuringASubscribeTest {
@@ -116,27 +118,54 @@ class CompetingConsumerStopAndShutdownDuringASubscribeTest {
     }
 
     @ParameterizedTest(name = "called while the wrapped model makes s2: {0}, wrapped model running: {1}")
-    @CsvSource({"stop(), true", "stop(), false", "shutdown(), true", "shutdown(), false"})
-    void a_subscription_that_does_not_compete_is_left_as_the_wrapped_model_made_it_when_a_stop_or_shutdown_began_meanwhile(String calledMeanwhile, boolean wrappedModelRunning) {
-        List<String> calls = callsOnceTheWrappedModelMadeS2(calledMeanwhile, wrappedModelRunning);
+    @CsvSource({"nothing, true", "nothing, false", "start(false), true", "start(false), false", "stop(), true", "stop(), false", "shutdown(), true", "shutdown(), false"})
+    void a_subscription_that_does_not_compete_is_left_as_the_wrapped_model_made_it_unless_a_start_that_resumes_began_meanwhile(String calledMeanwhile, boolean wrappedModelRunning) {
+        List<String> calls = onceTheWrappedModelMadeS2(calledMeanwhile, wrappedModelRunning, fixture -> List.copyOf(fixture.wrapped.callsOnceS2WasMade));
 
         assertThat(calls).as("[what the subscribe of s2 asked of the wrapped model once that model had made s2, with %s called meanwhile]", calledMeanwhile).doesNotContain("isPaused s2", "start false", "resumeSubscription s2");
     }
 
-    @ParameterizedTest(name = "called while the wrapped model makes s2: {0}, wrapped model running: {1}")
-    @CsvSource({"nothing, true", "nothing, false", "start(false), true", "start(false), false", "start(true), true", "start(true), false"})
-    void a_subscription_that_does_not_compete_is_resumed_by_its_subscribe_when_the_wrapped_model_made_it_paused_unless_a_stop_began_meanwhile(String calledMeanwhile, boolean wrappedModelRunning) {
-        List<String> calls = callsOnceTheWrappedModelMadeS2(calledMeanwhile, wrappedModelRunning);
+    @ParameterizedTest(name = "called while the wrapped model makes s2: {0}, wrapped model running before the subscribe: {1}")
+    @CsvSource({"nothing, true", "nothing, false", "start(false), true", "start(false), false", "start(true), true", "start(true), false", "stop(), true", "stop(), false", "shutdown(), true", "shutdown(), false"})
+    void a_subscription_that_does_not_compete_runs_once_its_subscribe_returns_unless_a_stop_or_shutdown_began_meanwhile(String calledMeanwhile, boolean wrappedModelRunning) {
+        boolean runs = onceTheWrappedModelMadeS2(calledMeanwhile, wrappedModelRunning, fixture -> fixture.wrapped.runs("s2"));
 
-        if (wrappedModelRunning) {
-            assertThat(calls).as("[what the subscribe of s2 asked of the wrapped model once that model had made s2 running, with %s called meanwhile]", calledMeanwhile).contains("isPaused s2").doesNotContain("resumeSubscription s2");
-        } else {
-            assertThat(calls).as("[what the subscribe of s2 asked of the wrapped model once that model had made s2 paused, with %s called meanwhile]", calledMeanwhile).contains("isPaused s2", "resumeSubscription s2");
+        assertThat(runs).as("[s2 runs in the wrapped model once its subscribe returned, with %s called while the wrapped model made it]", calledMeanwhile)
+                .isEqualTo(calledMeanwhile.equals("nothing") || calledMeanwhile.startsWith("start"));
+    }
+
+    // A pause is refused while the wrapped model makes s2, since s2 is recorded only once that model has made it. The
+    // subscribe holds the lock of s2 from then until it is done with s2, so a pause let through comes after all of it
+    @ParameterizedTest(name = "wrapped model running before the subscribe: {0}")
+    @CsvSource({"true", "false"})
+    void a_pause_while_the_wrapped_model_makes_a_subscription_that_does_not_compete_is_refused_and_one_once_it_is_recorded_stays(boolean wrappedModelRunning) {
+        Fixture fixture = new Fixture(false);
+        Gate subscribeInTheWrappedModel = new Gate();
+        try {
+            if (!wrappedModelRunning) {
+                fixture.wrapped.stop();
+            }
+            fixture.wrapped.nextSubscribeOfS2.set(subscribeInTheWrappedModel);
+            CompletableFuture<Void> subscribing = CompletableFuture.runAsync(() -> fixture.subscribeS2(false));
+            assertThat(subscribeInTheWrappedModel.awaitEntered()).as("the wrapped model is making s2").isTrue();
+
+            assertThat(CompletableFuture.supplyAsync(() -> catchThrowable(() -> fixture.model.pauseSubscription("s2")))).as("[pauseSubscription(s2) while the wrapped model makes s2]")
+                    .succeedsWithin(EVENTUALLY).isInstanceOf(UnknownSubscriptionException.class);
+            CompletableFuture<@Nullable Throwable> pausing = CompletableFuture.supplyAsync(() -> pauseOnceRecorded(fixture.model, "s2"));
+            subscribeInTheWrappedModel.open();
+            assertThat(subscribing).as("the subscribe of s2").succeedsWithin(EVENTUALLY);
+            assertThat(pausing).as("[what pauseSubscription(s2) threw, tried until s2 was recorded]").succeedsWithin(EVENTUALLY).isNull();
+
+            assertThat(fixture.states()).as("[s2 once the subscribe and pause returned, and then once start(false) returned]")
+                    .isEqualTo(new States(new State(true, false, false, true), new State(true, false, false, true)));
+        } finally {
+            subscribeInTheWrappedModel.open();
+            fixture.model.shutdown();
         }
     }
 
     @Test
-    void a_stop_while_a_wrapped_model_that_does_not_run_makes_a_subscription_that_does_not_compete_leaves_it_paused() {
+    void a_stop_while_a_subscription_that_does_not_compete_is_made_in_a_wrapped_model_its_subscribe_started_leaves_it_paused() {
         Fixture fixture = new Fixture(false);
         Gate subscribeInTheWrappedModel = new Gate();
         try {
@@ -158,7 +187,7 @@ class CompetingConsumerStopAndShutdownDuringASubscribeTest {
     }
 
     @Test
-    void a_shutdown_while_a_wrapped_model_that_does_not_run_makes_a_subscription_that_does_not_compete_leaves_that_model_unstarted() {
+    void a_shutdown_while_a_subscription_that_does_not_compete_is_made_in_a_wrapped_model_its_subscribe_started_is_followed_by_no_start_there() {
         Fixture fixture = new Fixture(false);
         Gate subscribeInTheWrappedModel = new Gate();
         try {
@@ -171,16 +200,17 @@ class CompetingConsumerStopAndShutdownDuringASubscribeTest {
             subscribeInTheWrappedModel.open();
 
             assertThat(subscribing).as("the subscribe of s2, which a shutdown() overtook").succeedsWithin(EVENTUALLY).isInstanceOf(IllegalStateException.class);
-            assertThat(fixture.wrapped.lifecycleAndS2).as("[calls to the wrapped model that start, stop or shut it down, or change s2]").containsExactly("stop", "shutdown");
+            assertThat(fixture.wrapped.lifecycleAndS2).as("[calls to the wrapped model that start, stop or shut it down, or change s2]").containsExactly("stop", "start false", "shutdown");
+            assertThat(fixture.wrapped.runs("s2")).as("s2 runs in the wrapped model once the subscribe returned after shutdown()").isFalse();
         } finally {
             subscribeInTheWrappedModel.open();
             fixture.model.shutdown();
         }
     }
 
-    // stop() waits for the start and resume of s2 under way, and pauses s2 after them
+    // stop() waits for the start under way, and stops the wrapped model after it
     @Test
-    void a_stop_while_the_subscribe_of_a_subscription_that_does_not_compete_starts_the_wrapped_model_pauses_it_once_it_runs() {
+    void a_stop_while_the_subscribe_of_a_subscription_that_does_not_compete_starts_the_wrapped_model_stops_that_model_after_and_leaves_it_paused() {
         Fixture fixture = new Fixture(false);
         Gate startOfTheWrappedModel = new Gate();
         try {
@@ -195,7 +225,7 @@ class CompetingConsumerStopAndShutdownDuringASubscribeTest {
             assertThat(subscribing).as("the subscribe of s2").succeedsWithin(EVENTUALLY);
             assertThat(stopping).as("stop() while the subscribe of s2 started the wrapped model").succeedsWithin(EVENTUALLY);
 
-            assertThat(fixture.wrapped.lifecycleAndS2).as("[calls to the wrapped model that start, stop or shut it down, or change s2]").containsExactly("stop", "start false", "resumeSubscription s2", "stop");
+            assertThat(fixture.wrapped.lifecycleAndS2).as("[calls to the wrapped model that start, stop or shut it down, or change s2]").containsExactly("stop", "start false", "stop");
             assertThat(fixture.states()).as("[s2 once the subscribe and stop() returned, and then once start(false) returned]")
                     .isEqualTo(new States(new State(true, false, false, false), new State(true, false, false, true)));
         } finally {
@@ -204,7 +234,7 @@ class CompetingConsumerStopAndShutdownDuringASubscribeTest {
         }
     }
 
-    // shutdown() waits for the start and resume of s2 under way, and shuts the wrapped model down after them
+    // shutdown() waits for the start under way, and shuts the wrapped model down after it
     @Test
     void a_shutdown_while_the_subscribe_of_a_subscription_that_does_not_compete_starts_the_wrapped_model_shuts_it_down_after() {
         Fixture fixture = new Fixture(false);
@@ -221,7 +251,11 @@ class CompetingConsumerStopAndShutdownDuringASubscribeTest {
             assertThat(shuttingDown).as("shutdown() while the subscribe of s2 started the wrapped model").succeedsWithin(EVENTUALLY);
             assertThat(subscribing).as("the subscribe of s2").succeedsWithin(EVENTUALLY);
 
-            assertThat(fixture.wrapped.lifecycleAndS2).as("[calls to the wrapped model that start, stop or shut it down, or change s2]").containsExactly("stop", "start false", "resumeSubscription s2", "shutdown");
+            assertThat(subscribing.join()).as("what the subscribe of s2 threw, which a shutdown() overtook").isInstanceOf(IllegalStateException.class);
+            // The subscribe pauses s2 there when it finds it running once shutdown() began, which it does when it makes
+            // s2 before shutdown() shuts the wrapped model down
+            assertThat(fixture.wrapped.lifecycleAndS2).as("[calls to the wrapped model that start, stop or shut it down, or change s2]")
+                    .startsWith("stop", "start false").endsWith("shutdown").containsOnlyOnce("start false").doesNotContain("resumeSubscription s2");
             assertThat(fixture.wrapped.runs("s2")).as("s2 runs in the wrapped model once shutdown() returned").isFalse();
         } finally {
             startOfTheWrappedModel.open();
@@ -229,7 +263,7 @@ class CompetingConsumerStopAndShutdownDuringASubscribeTest {
         }
     }
 
-    private static List<String> callsOnceTheWrappedModelMadeS2(String calledMeanwhile, boolean wrappedModelRunning) {
+    private static <T> T onceTheWrappedModelMadeS2(String calledMeanwhile, boolean wrappedModelRunning, Function<Fixture, T> outcome) {
         Fixture fixture = new Fixture(false);
         Gate subscribeInTheWrappedModel = new Gate();
         try {
@@ -253,10 +287,22 @@ class CompetingConsumerStopAndShutdownDuringASubscribeTest {
             assertThat(CompletableFuture.runAsync(call)).as("[%s while the wrapped model makes s2]", calledMeanwhile).succeedsWithin(EVENTUALLY);
             subscribeInTheWrappedModel.open();
             assertThat(subscribing).as("the subscribe of s2").succeedsWithin(EVENTUALLY);
-            return List.copyOf(fixture.wrapped.callsOnceS2WasMade);
+            return outcome.apply(fixture);
         } finally {
             subscribeInTheWrappedModel.open();
             fixture.model.shutdown();
+        }
+    }
+
+    // Tries the pause again for as long as the subscription is unknown, and answers what the last try threw
+    private static @Nullable Throwable pauseOnceRecorded(CompetingConsumerSubscriptionModel model, String subscriptionId) {
+        long giveUpAt = System.nanoTime() + EVENTUALLY.toNanos();
+        while (true) {
+            Throwable thrown = catchThrowable(() -> model.pauseSubscription(subscriptionId));
+            if (!(thrown instanceof UnknownSubscriptionException) || System.nanoTime() > giveUpAt) {
+                return thrown;
+            }
+            Thread.yield();
         }
     }
 
