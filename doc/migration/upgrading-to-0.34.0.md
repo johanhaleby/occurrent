@@ -1503,9 +1503,10 @@ wrapped model when it is not running, without resuming what the wrapped model ho
 doesn't compete, made on a started model, runs once `subscribe(..)` returns. That holds unless you called `stop()` on
 the wrapped model itself. The subscription is then made the way that model makes one while it is stopped. Item 4 of
 [section 18](#18-a-competing-consumers-start-and-resumesubscription-log-a-failure-and-return) lists what brings each
-kind of paused subscription back. A `start(..)` that starts the wrapped model also runs each competing subscription
-this node holds the lease for, such as after you called `stop()` on the wrapped model itself. On a wrapped model that
-was running, a competing subscription you paused there yourself stays paused. When the wrapped model fails to start,
+kind of paused subscription back. When the wrapped model was stopped, such as by calling `stop()` on it yourself, each
+competing subscription this node holds the lease for runs there again once a `start(..)`, a lease granted for another
+subscription or a resume of a subscription that doesn't compete starts it, also when that start throws after it took
+effect. A competing subscription you paused on the wrapped model while it ran stays paused. When the wrapped model fails to start,
 `start(..)` throws what failed once every subscription has had its turn, also when the model has only competing
 subscriptions.
 
@@ -1564,6 +1565,11 @@ returned without throwing, each `start(..)`, also one after `stop()`, resumes ev
 makes every competing one compete for its lease, also one that `stop()` paused. The exception is one you paused and
 haven't resumed since, which `start(false)` keeps paused. Once a `start(true)` has resumed one you paused, a later
 `start(false)` resumes it too, also when that `start(true)` threw for another subscription.
+
+A wrapped model of your own that refuses `subscribePaused(..)` with `UnsupportedOperationException` is the exception.
+A competing subscription made before the first `start(..)` registers for its lease straight away. When this node wins
+it, the subscription is subscribed in the wrapped model, which holds it paused since it is not running, so this node
+gives the lease back, and the subscription competes for its lease from that `start(..)` on.
 
 In 0.33.0 nothing stopped such a model, although `isRunning()` returned `false` for it. A competing subscription
 competed for its lease as soon as it was made. A `start()` on the wrapped model got it running once this node held the
