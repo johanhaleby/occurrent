@@ -95,8 +95,8 @@ import static java.util.Objects.requireNonNull;
  * strategy or the wrapped model that throws delays that, and never needs a call from the user to recover. The
  * subscription it failed for is tried again on a thread of its own, with a backoff, until it is where it belongs, and
  * every fifth try that fails again is logged as a warning. {@link #start(boolean)} and
- * {@link #resumeSubscription(String)} log such a failure as a warning and return, and so does {@code subscribe(..)} once
- * the wrapped model has made the subscription. {@link #stop()}, {@link #pauseSubscription(String)} and
+ * {@link #resumeSubscription(String)} log such a failure as a warning and return, and so does {@code subscribe(..)} of a
+ * competing subscription once the wrapped model has made it. {@link #stop()}, {@link #pauseSubscription(String)} and
  * {@link #cancelSubscription(String)} throw it, and a cancel after which the wrapped model no longer holds the
  * subscription forgets it instead of trying it again. A call to the wrapped model can take effect before it throws, so a
  * subscription recorded as running that the wrapped model no longer runs, or cannot say whether it runs, is recorded as
@@ -238,13 +238,18 @@ import static java.util.Objects.requireNonNull;
  * starts it the same way when it is not running, so the wrapped model runs while this model is started, unless {@code
  * stop()} was called on the wrapped model itself. When a call of this model that can start the wrapped model finds it
  * not running, such as after {@code stop()} on the wrapped model itself, each competing subscription this model records
- * as running and whose lease this node holds runs there again once the wrapped model is started. The calls that do this
- * are {@code start(..)}, a lease granted for another subscription, and a resume of a subscription that does not
- * compete, also when starting the wrapped model took effect and then threw. A competing subscription that the wrapped
- * model holds paused while it runs, with no such call having found it stopped since, counts as paused by the user, so it
- * stays paused until it is resumed. That includes one paused by {@code stop()} and {@code start(false)} on the wrapped
- * model itself. A pause through this model that took effect in the wrapped model and then threw counts as the user's
- * pause too. A model built over a wrapped model that is not running is stopped until its first {@code start(..)}, as
+ * as running and whose lease this node holds runs there again once the wrapped model is started, also when starting it
+ * took effect and then threw. Among the calls that do this are {@code start(..)}, a lease granted for another
+ * subscription, a {@code subscribe(..)} that wins its lease and a resume of any subscription. A {@code start(..)}
+ * resumes each such subscription before it returns, unless another call holds the lock of that subscription as the
+ * {@code start(..)} gets to it. The other calls leave it to a try. A subscription the user paused on the wrapped model
+ * before calling {@code stop()} there runs again too, since this model cannot tell that pause from the one {@code
+ * stop()} makes. A competing subscription that the wrapped model holds paused while it runs, with no such call having
+ * found it stopped since, counts as paused by the user. That includes one paused by {@code stop()} and {@code
+ * start(false)} on the wrapped model itself. It stays paused through {@code start(false)}, and so does one whose pause
+ * through this model took effect in the wrapped model and then threw. A resume, {@code start(true)} and a grant of its
+ * lease can run one paused on the wrapped model again.
+ * A model built over a wrapped model that is not running is stopped until its first {@code start(..)}, as
  * if {@code stop()} had been called on it. Until a {@code start(..)} has returned without throwing, each one resumes
  * every subscription that is paused, with either flag, also one {@code stop()} paused, except one the user paused and
  * has not resumed since, which {@code start(false)} keeps paused. Once a {@code start(true)} has resumed such a
@@ -254,7 +259,9 @@ import static java.util.Objects.requireNonNull;
  * one waits. A warning is logged the first time that happens for each such subscription. Calling it on both models, in
  * either order, runs a competing subscription once this node holds its lease. Cancelling a competing subscription
  * directly on the wrapped model is not supported. This model may then take a later subscription with that id in the
- * wrapped model for its own, and pause, resume or cancel it there. A call checks that this model is not stopped under the lock {@code stop()} takes to record that it is,
+ * wrapped model for its own, and pause, resume or cancel it there. Calling {@code stop()} directly on the wrapped model
+ * while a call through this model is under way is not supported either. It can leave a competing subscription whose
+ * lease this node holds paused in the wrapped model. A call checks that this model is not stopped under the lock {@code stop()} takes to record that it is,
  * and {@code stop()} stops the wrapped model only once every call let through before that has returned. So a {@code
  * stop()} that has returned is never followed by a start of the wrapped model for a subscription it overtook, or by a
  * resume there of one that does not compete. {@code stop()} waits for such a call for as long as the call takes. For a
@@ -506,15 +513,19 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      *                                          <p>
      *                                          A failure of the wrapped model or the lease strategy before the wrapped
      *                                          model has made the subscription is thrown too. Nothing is then recorded,
-     *                                          and the registration is given up. A failure once the wrapped model has
-     *                                          made it is logged as a warning instead, the subscription is recorded, and
-     *                                          {@code subscribe} returns. What failed is then tried again on a thread of
-     *                                          its own, until the subscription is registered with the lease strategy
-     *                                          while this model is started, and runs in the wrapped model only while
-     *                                          this node holds its lease. A subscription that does not compete is not
-     *                                          tried again. When resuming it for a {@code start(true)} that came while
-     *                                          the wrapped model made it fails, it stays paused in the wrapped model
-     *                                          until it is resumed or a later {@code start(true)} resumes it.
+     *                                          and the registration is given up. For a competing subscription, a failure
+     *                                          once the wrapped model has made it is logged as a warning instead, the
+     *                                          subscription is recorded, and {@code subscribe} returns. What failed is
+     *                                          then tried again on a thread of its own, until the subscription is
+     *                                          registered with the lease strategy while this model is started, and runs
+     *                                          in the wrapped model only while this node holds its lease. A subscription
+     *                                          that does not compete is not tried again. When resuming it for a
+     *                                          {@code start(true)} that came while the wrapped model made it fails,
+     *                                          {@code subscribe} throws that failure. The subscription is recorded by
+     *                                          then, and unless that resume took effect before it threw, it stays paused
+     *                                          in the wrapped model, where
+     *                                          {@link #resumeSubscription(String)} or a later {@code start(true)}
+     *                                          resumes it and {@link #cancelSubscription(String)} cancels it.
      */
     // Registers with the lease strategy and subscribes in the wrapped model holding neither the monitor nor the
     // subscription's lock, since a registration retries through a whole database outage and a wrapped subscribe can
@@ -580,18 +591,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             if (!made) {
                 throw notMade(beingMade);
             }
-            // Recorded by now, so an exception is logged and subscribe returns, and the subscription stays paused until
-            // something resumes it. An Error is thrown as it is.
+            // Recorded by now, so a failure is thrown with the subscription paused in the wrapped model, where a resume
+            // or a cancel finds it
             try {
                 if (beingMade.resumedMeanwhile && !stoppedByUser.get() && delegate.isPaused(subscriptionId)) {
                     runInTheWrappedModel(null, true, () -> delegate.resumeSubscription(subscriptionId));
                 }
             } catch (StoppedMeanwhile e) {
                 logDebug("Not resuming subscription, since this model was stopped meanwhile (subscriptionId={})", subscriptionId);
-            } catch (ShutDownMeanwhile e) {
-                throw e;
-            } catch (RuntimeException e) {
-                log.warn("Could not resume subscription {}, which a start(true) asked for while the wrapped subscription model made it, so it stays paused there until it is resumed (subscriptionId={})", subscriptionId, subscriptionId, e);
             }
         } finally {
             lock.unlock();
@@ -1396,9 +1403,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * Starts this model, and the wrapped model too when it is not running, without resuming what the wrapped model holds
      * paused. A competing subscription that waits for its lease competes for it again and runs once this node holds it.
      * One whose lease this node holds runs in the wrapped model once this starts it, also when that start took effect
-     * and then threw, unless the wrapped model holds it paused while it runs, which counts as paused by the user. With
-     * {@code resumeSubscriptionsAutomatically} set, a subscription the user or {@code stop()} paused is resumed too.
-     * Without it, such a subscription stays paused until it is resumed. Until a {@code start(..)} has returned without
+     * and then threw, and this resumes it before returning, unless another call holds its lock as this gets to it. One
+     * the wrapped model holds paused while it runs counts as paused by the user. With
+     * {@code resumeSubscriptionsAutomatically} set, a subscription the user or {@code stop()} paused is resumed too, also
+     * one the user paused on the wrapped model. Without it, one paused through this model stays paused until it is
+     * resumed, while a grant of its lease can run one paused on the wrapped model again. Until a {@code start(..)} has returned without
      * throwing, a model built over a wrapped model that was not running resumes every paused subscription either
      * way, also one {@code stop()} paused, except one the user paused and has not resumed since, which
      * {@code start(false)} keeps paused. Once a {@code start(true)} has resumed such a subscription, {@code start(false)}
@@ -1469,14 +1478,22 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         // thread.
         @Nullable RuntimeException firstFailure;
         @Nullable Throwable wrappedModelFailure = null;
+        Set<SubscriptionIdAndSubscriberId> pausedByAStop = new HashSet<>();
         try {
             onceAStartOrStopHasBegun.run();
-            wrappedModelFailure = startTheWrappedModelFor(start);
+            wrappedModelFailure = startTheWrappedModelFor(start, pausedByAStop);
             firstFailure = applyToEverySubscription(start, subscriptionIds, new ArrayList<>(), wrappedModelFailure instanceof RuntimeException failure ? failure : null);
         } catch (Error e) {
             throw wrappedModelFailure instanceof Error first ? first : e;
         } finally {
             doneWith(start, false);
+            // Each one this start(..) did not resume itself, such as one whose lease this node did not hold as the
+            // start got to it. One handed over is left to the call that applies the start(..) to it, which resumes it
+            // there and hands a failure to its try.
+            synchronized (this) {
+                pausedByAStop.removeIf(key -> !pausedByAStopOfTheWrappedModel.contains(key) || handedOver.containsKey(key.subscriptionId()));
+            }
+            resumeOnceThisNodeHoldsTheirLease(pausedByAStop);
         }
         if (wrappedModelFailure instanceof Error error) {
             throw error;
@@ -1488,11 +1505,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
 
     // Also with no subscription, or a subscription that does not compete made after this start(..) would be held paused
     // by a wrapped model nothing starts. What the wrapped model holds paused stays paused. A failure is returned, an
-    // Error too, so the subscriptions still get their turn before start(..) throws it.
-    private @Nullable Throwable startTheWrappedModelFor(Lifecycle start) {
+    // Error too, so the subscriptions still get their turn before start(..) throws it. The competing consumers that
+    // starting it finds paused there by a stop of the wrapped model are added to pausedByAStop instead of being tried
+    // on threads of their own, since the start(..) resumes each of them when it gets to it. A try that took a lock
+    // first would have the start(..) hand that subscription over and return before it runs.
+    private @Nullable Throwable startTheWrappedModelFor(Lifecycle start, Set<SubscriptionIdAndSubscriberId> pausedByAStop) {
         lifecycleAppliedOnThisThread.set(start);
         try {
-            runInTheWrappedModel(null, true, () -> null);
+            runInTheWrappedModel(null, true, false, null, pausedByAStop, () -> null);
             return null;
         } catch (StoppedMeanwhile | ShutDownMeanwhile e) {
             logDebug("Not starting the wrapped subscription model, since this model was stopped or shut down meanwhile");
@@ -1509,7 +1529,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private void startConsumer(CompetingConsumer cc, Lifecycle start) {
         try {
             if (cc.isRunning()) {
-                resumeIfAStopOfTheWrappedModelPausedIt(cc);
+                resumeIfTheWrappedModelHoldsItPaused(cc, start.resumeSubscriptionsAutomatically());
                 return;
             }
             // A waiting consumer competes again whatever the flag says, since nothing paused it. That includes one made
@@ -1537,14 +1557,15 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     // A stop() called on the wrapped model itself pauses every subscription there, and starting it with start(false)
-    // resumes none, so a consumer this node holds the lease for would keep the lease with nothing delivered. Only one
-    // this model found paused that way is resumed, whichever call started the wrapped model again, since one paused
-    // there while the wrapped model kept running was paused there by the user. The lease is asked about first, since
-    // asking the wrapped model lets the held events through. One a resume is registering is left to that resume, as on
-    // a grant. A wrapped model that is not running is started by the resume.
-    private void resumeIfAStopOfTheWrappedModelPausedIt(CompetingConsumer cc) {
+    // resumes none, so a consumer this node holds the lease for would keep the lease with nothing delivered. Unless
+    // alsoOneTheUserPausedThere is set, only one this model found paused that way is resumed, whichever call started
+    // the wrapped model again, since one paused there while the wrapped model kept running was paused there by the
+    // user. A start(true) sets it, since it resumes what the user paused. The lease is asked about first, since asking
+    // the wrapped model lets the held events through. One a resume is registering is left to that resume, as on a
+    // grant. A wrapped model that is not running is started by the resume.
+    private void resumeIfTheWrappedModelHoldsItPaused(CompetingConsumer cc, boolean alsoOneTheUserPausedThere) {
         SubscriptionIdAndSubscriberId key = cc.subscriptionIdAndSubscriberId;
-        if (!pausedByAStopOfTheWrappedModel.contains(key) || resumedOnceRegistered.contains(key) || !hasLock(key.subscriptionId(), key.subscriberId())) {
+        if ((!alsoOneTheUserPausedThere && !pausedByAStopOfTheWrappedModel.contains(key)) || resumedOnceRegistered.contains(key) || !hasLock(key.subscriptionId(), key.subscriberId())) {
             return;
         }
         if (isRunningInTheWrappedModel(key.subscriptionId()) || !isPausedInTheWrappedModel(key.subscriptionId())) {
@@ -2304,7 +2325,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      */
     private <T> T runWithoutHoldingUpAStop(SubscriptionIdAndSubscriberId key, Supplier<T> call) {
         long[] stopsWhenLetIn = new long[1];
-        runInTheWrappedModel(key, true, false, stopsWhenLetIn, () -> null);
+        runInTheWrappedModel(key, true, false, stopsWhenLetIn, null, () -> null);
         @Nullable Delivery delivery = deliveries.get(key.subscriptionId());
         if (delivery != null) {
             delivery.callLetInAfterStop = stopsWhenLetIn[0];
@@ -2653,7 +2674,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * waits for each one let through before that to return before it shuts the wrapped model down.
      */
     private <T> T runInTheWrappedModel(@Nullable SubscriptionIdAndSubscriberId key, boolean startIt, Supplier<T> call) {
-        return runInTheWrappedModel(key, startIt, false, null, call);
+        return runInTheWrappedModel(key, startIt, false, null, null, call);
     }
 
     /**
@@ -2662,11 +2683,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * wrapped model, so it comes either before that {@code stop()} or after it.
      */
     private <T> T runInTheWrappedModelAlsoWhileStopped(Supplier<T> call) {
-        return runInTheWrappedModel(null, false, true, null, call);
+        return runInTheWrappedModel(null, false, true, null, null, call);
     }
 
-    // stopsWhenLetIn receives the last stop() that had begun when the call was let in
-    private <T> T runInTheWrappedModel(@Nullable SubscriptionIdAndSubscriberId key, boolean startIt, boolean alsoWhileStopped, long @Nullable [] stopsWhenLetIn, Supplier<T> call) {
+    // stopsWhenLetIn receives the last stop() that had begun when the call was let in. The competing consumers that
+    // starting the wrapped model finds paused there by a stop of it are added to pausedByAStop when it is given, and
+    // tried on threads of their own otherwise.
+    private <T> T runInTheWrappedModel(@Nullable SubscriptionIdAndSubscriberId key, boolean startIt, boolean alsoWhileStopped, long @Nullable [] stopsWhenLetIn, @Nullable Set<SubscriptionIdAndSubscriberId> pausedByAStop, Supplier<T> call) {
         int[] runsOnThisThread = runsInTheWrappedModelOnThisThread.get();
         @Nullable Lifecycle start = lifecycleAppliedOnThisThread.get();
         @Nullable SubscriptionLock held = key == null ? null : subscriptionLocks.get(key.subscriptionId());
@@ -2720,7 +2743,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     startTheWrappedModel();
                 } finally {
                     // Also when the start took effect and then threw
-                    resumeOnceThisNodeHoldsTheirLease(paused);
+                    if (pausedByAStop == null) {
+                        resumeOnceThisNodeHoldsTheirLease(paused);
+                    } else {
+                        pausedByAStop.addAll(paused);
+                    }
                 }
             }
             return call.get();

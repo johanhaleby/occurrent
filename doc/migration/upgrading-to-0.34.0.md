@@ -1503,12 +1503,22 @@ wrapped model when it is not running, without resuming what the wrapped model ho
 doesn't compete, made on a started model, runs once `subscribe(..)` returns. That holds unless you called `stop()` on
 the wrapped model itself. The subscription is then made the way that model makes one while it is stopped. Item 4 of
 [section 18](#18-a-competing-consumers-start-and-resumesubscription-log-a-failure-and-return) lists what brings each
-kind of paused subscription back. When the wrapped model was stopped, such as by calling `stop()` on it yourself, each
-competing subscription this node holds the lease for runs there again once a `start(..)`, a lease granted for another
-subscription or a resume of a subscription that doesn't compete starts it, also when that start throws after it took
-effect. A competing subscription you paused on the wrapped model while it ran stays paused. When the wrapped model fails to start,
-`start(..)` throws what failed once every subscription has had its turn, also when the model has only competing
-subscriptions.
+kind of paused subscription back.
+
+When the wrapped model was stopped, such as by calling `stop()` on it yourself, each competing subscription this node
+holds the lease for runs there again once a call through the competing consumer model starts it, also when that start
+throws after it took effect. Among the calls that do this are `start(..)`, a lease granted for another subscription, a
+`subscribe(..)` that wins its lease and any `resumeSubscription(..)`, and a `start(..)` resumes such a subscription
+before it returns, unless another call for that subscription is under way.
+
+A competing subscription you paused on the wrapped model while it ran stays paused through `start(false)`, while
+`start(true)` resumes it and a grant of its lease can run it again. One you paused there before stopping the wrapped
+model runs again like the others, since the competing consumer model can't tell that pause from the one `stop()` makes.
+Calling `stop()` on the wrapped model while a call through the competing consumer model is under way isn't supported,
+and can leave a subscription whose lease this node holds paused.
+
+When the wrapped model fails to start, `start(..)` throws what failed once every subscription has had its turn, also
+when the model has only competing subscriptions.
 
 `stop()` waits for a `start(..)` under way to return, and `shutdown()` waits while that `start(..)` starts the wrapped
 model. So when the wrapped model's own `start` doesn't return, neither do `stop()` and `shutdown()`. 0.33.0 did the same
