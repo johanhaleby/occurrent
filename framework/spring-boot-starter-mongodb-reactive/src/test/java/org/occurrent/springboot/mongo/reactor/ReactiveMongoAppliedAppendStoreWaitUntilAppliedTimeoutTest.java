@@ -65,18 +65,20 @@ class ReactiveMongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
         ReactiveMongoOperations mongoOperations = mongoOperationsWithIndexingStubbed();
         AtomicInteger attempts = new AtomicInteger();
         // retryWhen resubscribes to this same Mono rather than calling exists(..) again, so attempts are counted by
-        // subscription, not by the mock's own invocation count.
+        // subscription, not by the mock's own invocation count. The first read finds the append, for the warm-up
+        // wait below.
         when(mongoOperations.exists(any(Query.class), anyString()))
+                .thenReturn(Mono.just(true))
                 .thenReturn(Mono.<Boolean>error(new RuntimeException("store outage")).doOnSubscribe(s -> attempts.incrementAndGet()));
-        // Zero jitter makes the schedule exact: 30+60+120+240+480 = 930 ms to exhaust, well past the 200 ms wait
-        // below, so the 500 ms assertion margin only fails if the wait's own deadline cuts the read off rather than
-        // the retry running to its own exhaustion. The second attempt still lands at 30 ms, well inside the wait.
-        Retry slowRetry = Retry.backoff(5, Duration.ofMillis(30))
-                .maxBackoff(Duration.ofSeconds(2))
-                .jitter(0)
-                .onRetryExhaustedThrow((spec, signal) -> signal.failure());
-        AppliedAppendStore store = new ReactiveMongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7), slowRetry, Backoff.fixed(20));
+        // The first retry resubscribes at once on the calling thread and the second waits a minute, far past the
+        // 200 ms wait below, so the read is still retrying when the deadline arrives however late the scheduler runs.
+        Retry retryAtOnceThenAfterAMinute = Retry.from(signals -> signals.concatMap(signal ->
+                signal.totalRetries() == 0 ? Mono.just(0L) : Mono.delay(Duration.ofMinutes(1))));
+        AppliedAppendStore store = new ReactiveMongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7), retryAtOnceThenAfterAMinute, Backoff.fixed(20));
         Duration timeout = Duration.ofMillis(200);
+        // On a cold JVM, loading the classes behind the read can take most of the 200 ms and let the deadline arrive
+        // before the read has failed once. A wait that finds the append loads them before the measured wait.
+        assertThat(store.waitUntilApplied("orders", AppendId.mint(), timeout)).isTrue();
 
         Instant start = Instant.now();
         boolean applied = store.waitUntilApplied("orders", AppendId.mint(), timeout);
@@ -85,7 +87,8 @@ class ReactiveMongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
         assertThat(applied).isFalse();
         // Limited by the deadline itself, not by however long the retry's own backoff would otherwise run.
         assertThat(elapsed).isLessThan(timeout.plusMillis(500));
-        assertThat(attempts.get()).isGreaterThanOrEqualTo(2);
+        // The first attempt and its retry with no poll after them, so the deadline ended the wait during that retry.
+        assertThat(attempts.get()).isEqualTo(2);
     }
 
     @Test
