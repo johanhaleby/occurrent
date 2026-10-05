@@ -1590,7 +1590,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         } catch (Throwable e) {
             // An Error too is tried again, and then thrown
             triedAgainAfter(cc.subscriptionIdAndSubscriberId, e);
-            if (whatFailed(e) instanceof Error error) {
+            if (e instanceof Error error) {
                 throw error;
             }
         }
@@ -1836,7 +1836,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                             // since the isRunning check above asks the wrapped model
                             return giveTheLeaseBackIfItThrows(resumed, paused.state, () -> resumeInTheWrappedModel(resumed));
                         } else if (competingConsumer.isWaiting()) {
-                            return registerAndStartIfGranted(competingConsumer);
+                            return registerWaitingAndStartIfGranted(competingConsumer);
                         } else if (registerAsRunning(competingConsumer)) {
                             // Paused here, or recorded as running here although the wrapped model does not run it
                             return giveTheLeaseBackIfItThrows(resumed, paused.state, () -> resumeInTheWrappedModel(resumed));
@@ -1857,7 +1857,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                             competingConsumers.put(resumed, new CompetingConsumer(resumed, waiting.meantToRunBefore(stopsAfter(resumed, e))));
                         }
                         triedAgainAfter(resumed, e);
-                        if (whatFailed(e) instanceof Error error) {
+                        if (e instanceof Error error) {
                             throw error;
                         }
                         return new CompetingConsumerSubscription(subscriptionId, subscriberId);
@@ -2342,12 +2342,19 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         private final ArrayDeque<CallWaiting> callsWaiting = new ArrayDeque<>();
         // Signalled when a pause, resume or cancel stops waiting for this lock, so one that let it go first takes it again
         private final Condition callBeforeGone = lock.newCondition();
+        // The failure the call holding the lock last logged a warning with, and how many failures were suppressed in
+        // it then, read and written by that thread only. Forgotten once that call lets go of the lock.
+        private @Nullable Throwable warnedAbout;
+        private int suppressedWhenWarned;
 
         private SubscriptionLock(String subscriptionId) {
             this.subscriptionId = subscriptionId;
         }
 
         private void unlock() {
+            if (lock.getHoldCount() == 1) {
+                warnedAbout = null;
+            }
             lock.unlock();
             stopUsing();
         }
@@ -3763,13 +3770,6 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 throw e;
             }
             triedAgainAfter(key, e);
-        } catch (WarnedAbout e) {
-            // A call of this model that the callback came out of doesn't warn about it again. A lease strategy calling on
-            // its own gets what the wrapped model threw.
-            if (outOfACallOfThisModel) {
-                throw e;
-            }
-            throw thrownAsItWas(whatFailed(e));
         } finally {
             lock.unlock();
         }
@@ -3832,44 +3832,30 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             reconcileLater(key, true);
             return;
         }
-        if (failure instanceof WarnedAbout) {
-            logDebug("A call for CompetingConsumer failed, and what failed was logged with the warning about its lease, so it is tried again (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
+        if (warnedAboutInThisCall(key, failure)) {
+            logDebug("A call for CompetingConsumer failed, and what failed was logged with a warning already, so it is tried again (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
         } else {
             log.warn("A call for CompetingConsumer failed, so it is tried again (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId(), failure);
+            warnedInThisCall(key, failure);
         }
         reconcileLater(key);
     }
 
-    /**
-     * Thrown in place of what the wrapped model threw once the warning about the lease was logged with it, so the call
-     * or try that catches it doesn't warn about it again. Only this model's own calls and tries catch it, and it is
-     * never thrown to the user or to a lease strategy calling on its own, so nothing keeps the failure after them.
-     */
-    private static final class WarnedAbout extends RuntimeException {
-        private final Throwable failure;
-
-        private WarnedAbout(Throwable failure) {
-            super(failure.toString(), failure, true, false);
-            this.failure = failure;
+    // Recorded on the lock of the call under way on this thread for the consumer, which forgets it once that call lets
+    // go of the lock. Nothing is recorded on a thread that doesn't hold that lock.
+    private void warnedInThisCall(SubscriptionIdAndSubscriberId key, Throwable failure) {
+        @Nullable SubscriptionLock held = subscriptionLocks.get(key.subscriptionId());
+        if (held != null && held.lock.isHeldByCurrentThread()) {
+            held.warnedAbout = failure;
+            held.suppressedWhenWarned = failure.getSuppressed().length;
         }
     }
 
-    // What failed. A failure a lease strategy added to a WarnedAbout, such as one from another of its listeners, is
-    // added to it, so this is called at most once for each catch.
-    private static Throwable whatFailed(Throwable thrown) {
-        if (!(thrown instanceof WarnedAbout warned)) {
-            return thrown;
-        }
-        for (Throwable added : warned.getSuppressed()) {
-            warned.failure.addSuppressed(added);
-        }
-        return warned.failure;
-    }
-
-    // Throws failure as it is, also a checked exception that the wrapped model threw without declaring it
-    @SuppressWarnings("unchecked")
-    private static <T extends Throwable> RuntimeException thrownAsItWas(Throwable failure) throws T {
-        throw (T) failure;
+    // Whether the call under way on this thread for the consumer logged a warning with failure, and nothing was added
+    // to it since, such as the failure of another listener of the lease strategy
+    private boolean warnedAboutInThisCall(SubscriptionIdAndSubscriberId key, Throwable failure) {
+        @Nullable SubscriptionLock held = subscriptionLocks.get(key.subscriptionId());
+        return held != null && held.lock.isHeldByCurrentThread() && held.warnedAbout == failure && held.suppressedWhenWarned == failure.getSuppressed().length;
     }
 
     // A call for the consumer failed, so its try waits for the backoff first
@@ -3950,8 +3936,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     return;
                 } catch (Throwable e) {
                     failures++;
-                    // One logged with the warning about its lease counts, but is not warned about again
-                    if (!(e instanceof WarnedAbout) && failures % RECONCILE_TRIES_BETWEEN_WARNINGS == 0) {
+                    // One logged with a warning already counts, but is not warned about again
+                    boolean warned = tried.lastFailureWarnedAbout;
+                    tried.lastFailureWarnedAbout = false;
+                    if (!warned && failures % RECONCILE_TRIES_BETWEEN_WARNINGS == 0) {
                         log.warn("Still could not bring CompetingConsumer to where it belongs after {} tries, so it is tried again (subscriberId={}, subscriptionId={})",
                                 failures, key.subscriberId(), key.subscriptionId(), e);
                     }
@@ -3979,6 +3967,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         private boolean decideAgain;
         private long callsWaitedBefore;
         private volatile boolean atOnce;
+        // Whether the last try that failed logged a warning with what failed, read and written by the try's thread only
+        private boolean lastFailureWarnedAbout;
 
         private Try(boolean atOnce, long callsWaitedBefore) {
             this.atOnce = atOnce;
@@ -4057,6 +4047,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 }
             }
             throw new IllegalStateException("CompetingConsumer (subscriberId=" + key.subscriberId() + ", subscriptionId=" + key.subscriptionId() + ") was not where it belongs after " + CALLS_PER_RECONCILE_TRY + " calls");
+        } catch (Throwable e) {
+            // Asked before the lock is let go of, which forgets it
+            tried.lastFailureWarnedAbout = warnedAboutInThisCall(key, e);
+            throw e;
         } finally {
             triedOnThisThread.remove();
             lock.unlock();
@@ -4295,9 +4289,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * <p>
      * The lease is given back before the warning is logged, so a single warning is logged with what the wrapped model
      * threw and any failure to give the lease back. A lease that could not be given back is warned about also when a
-     * {@code stop()} overtook the call, and the consumer is tried again. Unless a {@code stop()} overtook the call, what
-     * the wrapped model threw is then thrown in a {@link WarnedAbout}, so the call or try that catches it doesn't warn
-     * about it again. A try still counts it as a failed try.
+     * {@code stop()} overtook the call, and so is a failure to make the subscription paused in the wrapped model then.
+     * What the wrapped model threw is thrown as it is. The call or try holding the consumer's lock doesn't warn about
+     * it again, unless something was added to it since, such as the failure of another listener of the lease strategy.
+     * A try still counts it as a failed try.
      */
     private Subscription giveTheLeaseBackIfItThrows(SubscriptionIdAndSubscriberId key, CompetingConsumerState previous, Supplier<Subscription> start) {
         // Asked inside the try, so an Error asking puts the consumer back and tries to give the lease back too
@@ -4312,9 +4307,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 competingConsumers.computeIfPresent(key, (__, current) -> new CompetingConsumer(key, previous));
                 throw e;
             }
+            int suppressedBefore = e.getSuppressed().length;
             if (!ranBefore && runsInTheWrappedModel(key, e)) {
                 log.warn("The wrapped subscription model threw while it started or resumed a subscription this node holds the lease for, but runs it, so the lease is kept (subscriberId={}, subscriptionId={})",
                         key.subscriberId(), key.subscriptionId(), e);
+                warnedInThisCall(key, e);
                 competingConsumers.put(key, new CompetingConsumer(key, new CompetingConsumerState.Running()));
                 // Also tried again, for a wrapped model that could not say whether it runs the subscription
                 reconcileLater(key);
@@ -4337,25 +4334,22 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 // A lease still held would never be granted again, so the consumer is tried again from here
                 reconcileLater(key);
             }
-            boolean overtakenByAStop = e instanceof StoppedMeanwhile;
-            if (overtakenByAStop && givenBack) {
-                logDebug("A stop() overtook the start or resume of a subscription this node holds the lease for, so the lease is given back (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
-            } else if (overtakenByAStop) {
+            if (!(e instanceof StoppedMeanwhile)) {
+                log.warn(givenBack
+                                ? "The wrapped subscription model failed to start itself, or to start or resume a subscription this node holds the lease for, so the lease is given back (subscriberId={}, subscriptionId={})"
+                                : "The wrapped subscription model failed to start itself, or to start or resume a subscription this node holds the lease for, and the lease could not be given back, so it is tried again (subscriberId={}, subscriptionId={})",
+                        key.subscriberId(), key.subscriptionId(), e);
+                warnedInThisCall(key, e);
+            } else if (!givenBack) {
                 log.warn("A stop() overtook the start or resume of a subscription this node holds the lease for, and the lease could not be given back, so it is tried again (subscriberId={}, subscriptionId={})",
                         key.subscriberId(), key.subscriptionId(), e);
-            } else if (givenBack) {
-                log.warn("The wrapped subscription model failed to start itself, or to start or resume a subscription this node holds the lease for, so the lease is given back (subscriberId={}, subscriptionId={})",
+            } else if (e.getSuppressed().length > suppressedBefore) {
+                log.warn("A stop() overtook the start of a subscription this node holds the lease for, and the wrapped subscription model could not make it paused there, so the lease is given back (subscriberId={}, subscriptionId={})",
                         key.subscriberId(), key.subscriptionId(), e);
             } else {
-                log.warn("The wrapped subscription model failed to start itself, or to start or resume a subscription this node holds the lease for, and the lease could not be given back, so it is tried again (subscriberId={}, subscriptionId={})",
-                        key.subscriberId(), key.subscriptionId(), e);
+                logDebug("A stop() overtook the start or resume of a subscription this node holds the lease for, so the lease is given back (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
             }
-            // Thrown as it is when a stop() overtook the call, since what catches a StoppedMeanwhile tries again at once
-            // and reads which stop() calls refused it
-            if (overtakenByAStop) {
-                throw e;
-            }
-            throw new WarnedAbout(e);
+            throw e;
         }
     }
 
@@ -4404,6 +4398,24 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             return startWaitingConsumer(current);
         }
         return new CompetingConsumerSubscription(subscriptionId, subscriberId);
+    }
+
+    // For a resume of a waiting consumer. A stop() that began while the register was under way comes after the resume,
+    // so it pauses the consumer as by the user once the register returns without the lease, as in registerAsRunning.
+    private Subscription registerWaitingAndStartIfGranted(CompetingConsumer cc) {
+        SubscriptionIdAndSubscriberId key = cc.subscriptionIdAndSubscriberId;
+        long stopsBeforeTheRegister;
+        synchronized (wrappedModelStart) {
+            stopsBeforeTheRegister = lastStopBegun;
+        }
+        Subscription subscription = registerAndStartIfGranted(cc);
+        @Nullable LaterStops whileRegistering = stopsWhileRegistering(key, stopsBeforeTheRegister);
+        if (whileRegistering != null) {
+            competingConsumers.computeIfPresent(key, (__, current) -> current.state instanceof CompetingConsumerState.Waiting waiting
+                    ? new CompetingConsumer(key, waiting.meantToRunBefore(whileRegistering))
+                    : current);
+        }
+        return subscription;
     }
 
     void pauseConsumer(CompetingConsumer cc, boolean pausedByUser) {
