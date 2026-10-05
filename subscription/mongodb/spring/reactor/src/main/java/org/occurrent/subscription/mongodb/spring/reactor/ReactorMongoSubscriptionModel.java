@@ -64,6 +64,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -125,6 +126,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     private final ReactiveMongoOperations mongo;
     private final KnownClusterTime knownClusterTime;
+    private final LongSupplier nanoTime;
     private final String eventCollection;
     private final TimeRepresentation timeRepresentation;
     private final ReactorMongoSubscriptionModelConfig config;
@@ -154,10 +156,16 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * @param config             Configure how the subscription model should behave, for example retry backoff and how to handle change stream history lost errors.
      */
     public ReactorMongoSubscriptionModel(ReactiveMongoOperations mongo, String eventCollection, TimeRepresentation timeRepresentation, ReactorMongoSubscriptionModelConfig config) {
+        this(mongo, eventCollection, timeRepresentation, config, System::nanoTime);
+    }
+
+    // nanoTime stands in for System.nanoTime(), so a test can act at the moment the model notes the present
+    ReactorMongoSubscriptionModel(ReactiveMongoOperations mongo, String eventCollection, TimeRepresentation timeRepresentation, ReactorMongoSubscriptionModelConfig config, LongSupplier nanoTime) {
         this.mongo = requireNonNull(mongo, ReactiveMongoOperations.class.getSimpleName() + " cannot be null");
         this.eventCollection = requireNonNull(eventCollection, "Event collection cannot be null");
         this.timeRepresentation = requireNonNull(timeRepresentation, "Time representation cannot be null");
         this.config = requireNonNull(config, ReactorMongoSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
+        this.nanoTime = requireNonNull(nanoTime, "nanoTime cannot be null");
         this.knownClusterTime = KnownClusterTime.of(mongo);
     }
 
@@ -324,7 +332,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 // An empty reply would complete the change stream Flux with no error, so nothing would restart it
                 .switchIfEmpty(Mono.error(() -> new IllegalStateException("MongoDB returned no reply to " + MongoCommons.SERVER_CLOCK_COMMAND.toJson())))
                 .flatMap(reply -> {
-                    BsonTimestamp helloStart = MongoCommons.operationTimeAsOf(reply, System.nanoTime() - present.nanoTime());
+                    BsonTimestamp helloStart = MongoCommons.operationTimeAsOf(reply, nanoTime.getAsLong() - present.nanoTime());
                     if (helloStart == null) {
                         return Mono.error(new NoServerClockException(reply));
                     }
@@ -335,7 +343,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     }
 
     private Present presentNow() {
-        return new Present(System.nanoTime(), knownClusterTime.read());
+        // The cluster time first, so a write through the same client that comes after the moment can't have advanced
+        // it before it's read
+        BsonTimestamp known = knownClusterTime.read();
+        return new Present(nanoTime.getAsLong(), known);
     }
 
     // The moment StartAt.now() and the model default stand for, and the newest cluster time the client knew then

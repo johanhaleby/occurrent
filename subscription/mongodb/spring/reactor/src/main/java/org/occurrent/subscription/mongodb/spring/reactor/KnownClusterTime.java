@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.spring.reactor;
 
+import com.mongodb.MongoInterruptedException;
 import com.mongodb.reactivestreams.client.MongoCluster;
 import org.bson.BsonTimestamp;
 import org.jspecify.annotations.NullMarked;
@@ -28,6 +29,7 @@ import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The newest cluster time the MongoDB driver has seen on the client behind a {@link ReactiveMongoOperations}. The
@@ -48,6 +50,7 @@ final class KnownClusterTime {
 
     private final @Nullable Object clock;
     private final @Nullable Method getClusterTime;
+    private final AtomicBoolean warnedAboutAFailedRead = new AtomicBoolean();
 
     private KnownClusterTime(@Nullable Object clock, @Nullable Method getClusterTime) {
         this.clock = clock;
@@ -59,6 +62,8 @@ final class KnownClusterTime {
      * whose reads all answer {@code null} when it can't.
      */
     static KnownClusterTime of(ReactiveMongoOperations mongo) {
+        Object clock;
+        Method getClusterTime;
         try {
             if (!(mongo instanceof ReactiveMongoTemplate template)
                     || !(template.getMongoDatabaseFactory() instanceof ReactiveMongoClusterCapable clusterCapable)) {
@@ -75,16 +80,40 @@ final class KnownClusterTime {
             Method getCluster = mongoClientImpl.getDeclaredMethod("getCluster");
             getCluster.setAccessible(true);
             Object cluster = getCluster.invoke(mongoCluster);
-            Object clock = Class.forName(CLUSTER, false, driverClassLoader).getMethod("getClock").invoke(cluster);
-            Method getClusterTime = Class.forName(CLUSTER_CLOCK, false, driverClassLoader).getMethod("getClusterTime");
-            KnownClusterTime knownClusterTime = new KnownClusterTime(clock, getClusterTime);
-            // Read once, so a clock that answers something other than a BsonTimestamp is found here
-            knownClusterTime.readOrThrow();
-            return knownClusterTime;
+            clock = Class.forName(CLUSTER, false, driverClassLoader).getMethod("getClock").invoke(cluster);
+            getClusterTime = Class.forName(CLUSTER_CLOCK, false, driverClassLoader).getMethod("getClusterTime");
         } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
             warnCannotRead("looking up the driver's internal clock failed", e);
             return UNREADABLE;
         }
+        return of(clock, getClusterTime);
+    }
+
+    /**
+     * Reads the cluster time by calling {@code getClusterTime} on {@code clock}. Logs a warning and returns a
+     * {@code KnownClusterTime} whose reads all answer {@code null} when that method doesn't answer a
+     * {@link BsonTimestamp}, or when reading it once fails for any other reason than the calling thread being
+     * interrupted.
+     */
+    static KnownClusterTime of(Object clock, Method getClusterTime) {
+        if (!BsonTimestamp.class.isAssignableFrom(getClusterTime.getReturnType())) {
+            warnCannotRead(getClusterTime + " answers a " + getClusterTime.getReturnType().getName() + " and not a " + BsonTimestamp.class.getName(), null);
+            return UNREADABLE;
+        }
+        KnownClusterTime knownClusterTime = new KnownClusterTime(clock, getClusterTime);
+        try {
+            // Read once, so a clock that can't be read is found here and not at the first subscription
+            knownClusterTime.readOrThrow();
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            if (isInterruption(e)) {
+                // Only this thread was interrupted, so later reads can still succeed
+                Thread.currentThread().interrupt();
+            } else {
+                warnCannotRead("reading the driver's internal clock failed", e);
+                return UNREADABLE;
+            }
+        }
+        return knownClusterTime;
     }
 
     boolean isReadable() {
@@ -92,6 +121,9 @@ final class KnownClusterTime {
     }
 
     /**
+     * Logs a warning the first time a read fails for another reason than the calling thread being interrupted, and
+     * at debug level after that.
+     *
      * @return The newest cluster time the client has seen, or {@code null} when it has seen none or the clock can't be read
      */
     @Nullable BsonTimestamp read() {
@@ -101,8 +133,15 @@ final class KnownClusterTime {
         try {
             return readOrThrow();
         } catch (ReflectiveOperationException | RuntimeException e) {
-            // The driver throws when the calling thread is interrupted while it waits for the clock's lock
-            log.debug("Couldn't read the cluster time the MongoDB driver knows", e);
+            if (isInterruption(e)) {
+                // The driver throws when the calling thread is interrupted while it waits for the clock's lock
+                Thread.currentThread().interrupt();
+                log.debug("Didn't read the cluster time the MongoDB driver knows, because the thread was interrupted", e);
+            } else if (warnedAboutAFailedRead.compareAndSet(false, true)) {
+                warnCannotRead("reading the driver's internal clock failed", e);
+            } else {
+                log.debug("Couldn't read the cluster time the MongoDB driver knows", e);
+            }
             return null;
         }
     }
@@ -112,6 +151,11 @@ final class KnownClusterTime {
             return null;
         }
         return (BsonTimestamp) getClusterTime.invoke(clock);
+    }
+
+    private static boolean isInterruption(Throwable throwable) {
+        Throwable cause = throwable instanceof InvocationTargetException invocationTargetException ? invocationTargetException.getCause() : throwable;
+        return cause instanceof MongoInterruptedException;
     }
 
     private static void warnCannotRead(String reason, @Nullable Throwable throwable) {
