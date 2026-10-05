@@ -30,6 +30,7 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 
+import java.time.Duration;
 import java.util.Date;
 import java.util.OptionalLong;
 import java.util.concurrent.TimeUnit;
@@ -121,6 +122,58 @@ class MongoCommonsTest {
         BsonTimestamp result = MongoCommons.operationTimeAsOf(new Document("ok", 1.0), 0);
 
         assertThat(result).isNull();
+    }
+
+    private static final BsonTimestamp HELLO_START = new BsonTimestamp(1_700_000_020, 0);
+    private static final Duration MAX_AGE = Duration.ofSeconds(15);
+
+    @Test
+    void start_of_is_the_hello_start_when_no_cluster_time_is_known() {
+        BsonTimestamp result = MongoCommons.startOf(HELLO_START, null, MAX_AGE);
+
+        assertThat(result).isEqualTo(HELLO_START);
+    }
+
+    @Test
+    void start_of_is_the_hello_start_when_the_known_cluster_time_is_more_than_max_age_older() {
+        BsonTimestamp result = MongoCommons.startOf(HELLO_START, new BsonTimestamp(1_700_000_004, 9), MAX_AGE);
+
+        assertThat(result).isEqualTo(HELLO_START);
+    }
+
+    @Test
+    void start_of_is_just_after_the_known_cluster_time_when_it_is_exactly_max_age_older() {
+        BsonTimestamp result = MongoCommons.startOf(HELLO_START, new BsonTimestamp(1_700_000_005, 9), MAX_AGE);
+
+        assertThat(result).isEqualTo(new BsonTimestamp(1_700_000_005, 10));
+    }
+
+    @Test
+    void start_of_is_just_after_a_fresh_known_cluster_time_that_is_before_the_hello_start() {
+        BsonTimestamp result = MongoCommons.startOf(HELLO_START, new BsonTimestamp(1_700_000_017, 3), MAX_AGE);
+
+        assertThat(result).isEqualTo(new BsonTimestamp(1_700_000_017, 4));
+    }
+
+    @Test
+    void start_of_moves_to_the_next_second_when_the_known_increment_is_at_its_maximum() {
+        BsonTimestamp result = MongoCommons.startOf(HELLO_START, new BsonTimestamp(1_700_000_017, Integer.MAX_VALUE), MAX_AGE);
+
+        assertThat(result).isEqualTo(new BsonTimestamp(1_700_000_018, 0));
+    }
+
+    @Test
+    void start_of_is_never_later_than_the_hello_start_when_the_known_cluster_time_is_ahead_of_it() {
+        BsonTimestamp result = MongoCommons.startOf(HELLO_START, new BsonTimestamp(1_700_000_025, 1), MAX_AGE);
+
+        assertThat(result).isEqualTo(HELLO_START);
+    }
+
+    @Test
+    void start_of_is_the_hello_start_when_just_after_the_known_cluster_time_is_the_hello_start() {
+        BsonTimestamp result = MongoCommons.startOf(new BsonTimestamp(1_700_000_020, 5), new BsonTimestamp(1_700_000_020, 4), MAX_AGE);
+
+        assertThat(result).isEqualTo(new BsonTimestamp(1_700_000_020, 5));
     }
 
     @Test

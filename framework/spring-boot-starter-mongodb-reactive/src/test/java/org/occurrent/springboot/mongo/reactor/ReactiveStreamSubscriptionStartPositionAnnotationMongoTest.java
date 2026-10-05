@@ -60,7 +60,7 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Proves that {@code DEFAULT} and {@code NOW} on the reactive {@link StreamSubscription} never replay history written
- * more than a second before they subscribe, only deliver live events, exactly as {@code OccurrentReactiveMongoAutoConfigurationWiringTest}'s fail-loud
+ * through the same MongoClient more than a second before they subscribe, only deliver live events, exactly as {@code OccurrentReactiveMongoAutoConfigurationWiringTest}'s fail-loud
  * tests document as the supported alternative to a time-based start (which the reactive stack rejects outright, since
  * it has no stream catch-up model).
  */
@@ -168,7 +168,7 @@ class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
         }
 
         // Waits a second and a half once the history is written, since a subscription started at the present can
-        // also receive what was written up to a second before it, which the at-least-once contract allows
+        // also receive what the same MongoClient wrote up to a second before it, which the at-least-once contract allows
         @PostConstruct
         void appendHistory() throws InterruptedException {
             applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("historic"))).block();
