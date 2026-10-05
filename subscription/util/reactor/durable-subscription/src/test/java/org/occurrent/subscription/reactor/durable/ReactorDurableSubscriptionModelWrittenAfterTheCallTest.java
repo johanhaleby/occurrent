@@ -79,6 +79,9 @@ import static org.awaitility.Awaitility.await;
 class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
+    // The retry pending at the end of the test waits at most about 1.2 seconds, so a retry that was already due has
+    // fired by then
+    private static final Duration LONGER_THAN_THE_RETRY_PENDING_AT_THE_END = Duration.ofMillis(1500);
     private static final String SUBSCRIPTION_ID = "sub";
     private static final String POSITION_READ_FAILED = "The position of the feed cannot be read right now";
     private static final String DELETE_FAILED = "The storage cannot delete right now";
@@ -940,6 +943,7 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
                 case "pause" -> model.pauseSubscription(SUBSCRIPTION_ID);
                 default -> model.stop();
             }
+            waitUntilStill(feed, logged, LONGER_THAN_THE_RETRY_PENDING_AT_THE_END);
             int readsAtTheEnd = feed.reads.get();
             long retriesAtTheEnd = retryWarnings(logged);
             letTimePass(Duration.ofSeconds(6));
@@ -959,6 +963,24 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     // Time for a warning to come that would come every 10 seconds
     private static void letTimePass(Duration time) {
         await().pollDelay(time).atMost(time.plusSeconds(5)).until(() -> true);
+    }
+
+    // Returns once neither the reads nor the retry warnings changed for quiet, or after TIMEOUT, so that a model that
+    // keeps retrying fails on the assertions that follow
+    private static void waitUntilStill(Feed feed, LoggedByTheModel logged, Duration quiet) {
+        long[] seen = {-1, -1};
+        long[] stillSince = {System.nanoTime()};
+        catchThrowable(() -> await().atMost(TIMEOUT).pollInterval(Duration.ofMillis(50)).until(() -> {
+            long reads = feed.reads.get();
+            long retries = retryWarnings(logged);
+            long now = System.nanoTime();
+            if (reads != seen[0] || retries != seen[1]) {
+                seen[0] = reads;
+                seen[1] = retries;
+                stillSince[0] = now;
+            }
+            return now - stillSince[0] > quiet.toNanos();
+        }));
     }
 
     private static long retryWarnings(LoggedByTheModel logged) {
