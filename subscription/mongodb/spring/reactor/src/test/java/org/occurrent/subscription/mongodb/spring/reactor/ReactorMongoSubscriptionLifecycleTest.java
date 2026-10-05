@@ -100,7 +100,7 @@ public class ReactorMongoSubscriptionLifecycleTest {
         mongoClient = MongoClients.create(connectionString);
         reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         // A collection of its own for every test, since a subscription started at the present can also receive what
-        // was written up to a second before it, which would otherwise include the previous test's events
+        // was written shortly before it, which would otherwise include the previous test's events
         eventCollection = "events-" + UUID.randomUUID();
         subscriptionModel = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollection, TimeRepresentation.RFC_3339_STRING);
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
