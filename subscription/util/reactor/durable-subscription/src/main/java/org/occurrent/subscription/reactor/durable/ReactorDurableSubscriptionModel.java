@@ -60,6 +60,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -144,14 +145,17 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * feed was when the call was made, however late it answers. So the subscription delivers what was written after the
  * call returned. A subscription from {@link StartAt#now()} begins from such a read of its subscribe too, so one
  * registered on a stopped model, or paused before it started, delivers what was written after the subscribe once it
- * starts. When that read answers nothing, the subscription opens its feed at {@link StartAt#now()} each time it
- * starts, as in 0.33.0. When it fails, it is read again after a delay that about doubles, with a {@code WARN} for each
- * failure, until it answers or the subscription is cancelled, paused, stopped or shut down. A wrapped model that does
- * not override {@code globalCheckpointAsOfNow()} answers with where its feed is when the read runs, so a subscription
- * over it can skip what was written between the call and the read, as that method documents. A subscription whose
- * read never answers does not start, and holds up neither a call nor another subscription. A dynamic start
- * position on a stopped model is asked only once the model is started, so when it answers the subscription-model
- * default, the subscription starts from where the feed was at the start rather than at the subscribe.
+ * starts. A dynamic start position that answers {@link StartAt#now()} begins from such a read of the call that starts
+ * the subscription. When that read answers nothing, the subscription opens its feed at {@link StartAt#now()} each time
+ * it starts, as in 0.33.0. When it fails, or has not answered after 10 seconds, it is read again after a delay that
+ * about doubles, with a {@code WARN} for each attempt, and the subscription keeps trying until the read answers or the
+ * subscription is cancelled, paused, stopped or shut down. A wrapped model that does not override
+ * {@code globalCheckpointAsOfNow()} answers with where its feed is when the read runs, so a subscription over it can
+ * skip what was written between the call and the read, as that method documents. A subscription from the
+ * subscription-model default whose read never answers does not start, and holds up neither a call nor another
+ * subscription. A dynamic start position on a stopped model is asked only once the model is started, and when it
+ * answers the subscription-model default, the subscription starts from where the feed was at the subscribe, since the
+ * subscribe reads that in case it does.
  * <p>
  * The refusal is thrown from {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} when the wrapped model
  * manages named subscriptions of its own, which is the caller's own call and needs no log to reach anybody. When this
@@ -203,6 +207,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // doubling up to the longest, with jitter
     private static final Duration FIRST_DELETE_RETRY_AFTER = Duration.ofMillis(100);
     private static final Duration LONGEST_DELETE_RETRY_AFTER = Duration.ofSeconds(5);
+    // How long a read of where the feed was, for a subscription from StartAt.now(), may go unanswered before it counts
+    // as failed and is logged and read again
+    private static final Duration PRESENT_READ_COUNTS_AS_FAILED_AFTER = Duration.ofSeconds(10);
 
     private final CheckpointAwareSubscriptionModel subscription;
     private final CheckpointStorage storage;
@@ -231,8 +238,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // They are not registered yet, so a cancel marks them overtaken, which ends the subscribe at its next check.
     private final Map<String, Set<PositionWriter>> positionWritersStarting = new HashMap<>();
     // The position writes that have started and not ended yet, by subscription id, each with the checkpoint it writes,
-    // in the order they started
-    private final Map<String, SequencedMap<Mono<Void>, Checkpoint>> positionWritesInFlight = new HashMap<>();
+    // in the order they started. Empty for a resolveFirstCheckpointRace, which may end without writing anything.
+    private final Map<String, SequencedMap<Mono<Void>, Optional<Checkpoint>>> positionWritesInFlight = new HashMap<>();
     // The latest delete of a stored position that cancelSubscription started for each id, until it has ended. A
     // subscription of the id that starts meanwhile takes it over, see takeOverPositionDelete.
     private final Map<String, PositionDelete> positionDeletes = new HashMap<>();
@@ -1189,11 +1196,15 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         });
     }
 
-    // present until it answers, read again after each failure with a delay that about doubles, logged at WARN. Ends
-    // only when what subscribed to it is disposed, which a cancel, a pause, a stop or a shutdown of the subscription
-    // does.
+    // present until it answers, read again after each failure with a delay that about doubles, logged at WARN. A read
+    // that has not answered after PRESENT_READ_COUNTS_AS_FAILED_AFTER counts as failed, so a wrapped model that never
+    // answers is logged too. Ends only when what subscribed to it is disposed, which a cancel, a pause, a stop or a
+    // shutdown of the subscription does.
     private Mono<Optional<Checkpoint>> untilPresentIsRead(String subscriptionId, Mono<Optional<Checkpoint>> present) {
-        return present.retryWhen(Retry.from(retries -> retries.concatMap(retry -> {
+        return present.timeout(PRESENT_READ_COUNTS_AS_FAILED_AFTER, Mono.error(() -> new TimeoutException(
+                        "Where the feed was when subscription " + subscriptionId + " asked to start from the present did not answer within "
+                        + PRESENT_READ_COUNTS_AS_FAILED_AFTER.toSeconds() + " seconds")))
+                .retryWhen(Retry.from(retries -> retries.concatMap(retry -> {
             Throwable failure = retry.failure();
             long failedAttempts = retry.totalRetries() + 1;
             log.warn("Could not read where the feed was when subscription {} asked to start from the present, on attempt {}. Trying again. The subscription opens its feed once this read answers.",
@@ -1719,7 +1730,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 if (writer.retired || writer.overtakenByCancel) {
                     return whenRetired;
                 }
-                positionWritesInFlight.computeIfAbsent(subscriptionId, __ -> new LinkedHashMap<>()).put(writeEnded, writing);
+                // A resolveFirstCheckpointRace that answers nothing wrote nothing, so until it answers a delete
+                // waits for it, and a takeover doesn't start from its candidate, see takeOverPositionDelete. Once it
+                // answers, storage holds what it answered.
+                positionWritesInFlight.computeIfAbsent(subscriptionId, __ -> new LinkedHashMap<>())
+                        .put(writeEnded, emptyMayHaveWritten ? Optional.of(writing) : Optional.empty());
             }
             Mono<T> started = Mono.defer(write)
                     // Before the write counts as ended, so whoever waits for that end reads it
@@ -1745,7 +1760,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     private void positionWriteEnded(String subscriptionId, Mono<Void> writeEnded) {
         synchronized (positionLock) {
-            @Nullable SequencedMap<Mono<Void>, Checkpoint> inFlight = positionWritesInFlight.get(subscriptionId);
+            @Nullable SequencedMap<Mono<Void>, Optional<Checkpoint>> inFlight = positionWritesInFlight.get(subscriptionId);
             if (inFlight != null && inFlight.remove(writeEnded) != null && inFlight.isEmpty()) {
                 positionWritesInFlight.remove(subscriptionId);
             }
@@ -2514,8 +2529,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         @Nullable Checkpoint restored = null;
         final @Nullable Checkpoint writing;
         synchronized (positionLock) {
-            @Nullable SequencedMap<Mono<Void>, Checkpoint> inFlight = positionWritesInFlight.get(subscriptionId);
-            writing = inFlight == null || inFlight.isEmpty() ? null : inFlight.lastEntry().getValue();
+            @Nullable SequencedMap<Mono<Void>, Optional<Checkpoint>> inFlight = positionWritesInFlight.get(subscriptionId);
+            // The newest one that writes a checkpoint
+            writing = inFlight == null ? null
+                    : inFlight.sequencedValues().reversed().stream().flatMap(Optional::stream).findFirst().orElse(null);
             for (@Nullable PositionDelete delete = positionDeletes.get(subscriptionId); delete != null; delete = delete.earlier) {
                 // Retired, and still reached from a later delete of the id that runs after it
                 if (delete.retired) {
@@ -2820,11 +2837,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * The subscriptions are started one after the other on the calling thread, so a dynamic start position that takes
      * long to answer delays the ones after it in this call. It does not hold up a call for another subscription id. A
      * subscription that waits for a write back holds up neither this call nor the others.
-     * This call reads no position of where the feed is and waits for none. A subscription from the subscription-model
-     * default starts from the position asked for when it was registered, and one from {@link StartAt#now()} from where
-     * the feed was at its subscribe, see the class documentation, so a read that never answers holds up neither this
-     * call nor the other subscriptions. A dynamic start position runs at this call, so when it answers the
-     * subscription-model default, the subscription starts from where the feed was at this call.
+     * This call waits for no read of where the feed is. A subscription from the subscription-model default starts from
+     * the position asked for when it was registered, and one from {@link StartAt#now()} from where the feed was at its
+     * subscribe, see the class documentation, so a read that never answers holds up neither this call nor the other
+     * subscriptions. A dynamic start position runs at this call. When it answers the subscription-model default, the
+     * subscription starts from where the feed was at its subscribe, and when it answers {@link StartAt#now()}, from
+     * where the feed was at this call.
      *
      * @see SubscriptionModelLifeCycle#start(boolean)
      */

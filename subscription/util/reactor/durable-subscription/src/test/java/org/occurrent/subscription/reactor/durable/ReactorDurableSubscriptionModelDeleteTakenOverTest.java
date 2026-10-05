@@ -1126,6 +1126,54 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         }
     }
 
+    /**
+     * A subscription from the model default is registered on a stopped model while storage holds 2, and the feed is at
+     * 4. The start asks the storage to settle which of the two is the first position, and the storage holds that
+     * answer while the caller cancels the subscription and something outside this model removes what is stored. A
+     * subscribe of the id then takes the delete of the cancel over. The storage answers that it cannot compare the two
+     * and wrote nothing, so 4 was never stored, and the subscribe that finds nothing stored starts from where the feed
+     * was at its call, as a new subscription.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_subscribe_that_takes_over_a_delete_waiting_for_a_settled_first_position_does_not_start_from_the_position_it_never_wrote(boolean conditionalDeletes) throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(conditionalDeletes);
+        Feed feed = new Feed();
+        feed.write();
+        feed.write();
+        storage.storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("2"), CheckpointWriteCondition.any()).block(TIMEOUT);
+        feed.write();
+        feed.write();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        CountDownLatch releaseResolver = new CountDownLatch(1);
+        storage.resolverGate = releaseResolver;
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+
+        try {
+            model.stop();
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>()));
+            model.start(true);
+            assertThat(storage.resolverEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the start asks the storage to settle the first position").isTrue();
+            feed.write();
+            model.cancelSubscription(SUBSCRIPTION_ID);
+            storage.storage.delete(SUBSCRIPTION_ID).block(TIMEOUT);
+
+            // When
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(delivered));
+            long writtenAfterTheSubscribe = feed.write();
+            releaseResolver.countDown();
+            long writtenOnceSettled = feed.write();
+
+            // Then
+            await().atMost(TIMEOUT).until(() -> delivered.contains(writtenOnceSettled));
+            assertThat(delivered).as("events delivered to the subscription").containsExactly(writtenAfterTheSubscribe, writtenOnceSettled);
+        } finally {
+            releaseResolver.countDown();
+            model.shutdown();
+        }
+    }
+
     // What a subscribe of the id from the model default delivered, of an event written before it and one written after
     private record Later(List<Long> delivered, long writtenBefore, long writtenAfter) {
     }
@@ -1314,7 +1362,8 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     // Holds a delete, the next write back, the next position write, the next read or every conditional write at a
     // version, while the latch it was given is closed. It can also fail every read, store a checkpoint of another node
     // right before the next write on the condition that nothing is stored, settle a first-position race by position,
-    // apply the next delete and then fail it, and hold the next read on the thread that subscribes to it.
+    // apply the next delete and then fail it, hold the next read on the thread that subscribes to it, and hold a
+    // first-position race that then settles nothing.
     private static final class GatedStorage implements CheckpointStorage {
         private final InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         private final boolean conditionalDeletes;
@@ -1332,6 +1381,9 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         private volatile @Nullable CountDownLatch notOlderThanGate;
         private volatile @Nullable Checkpoint storedElsewhereBeforeIfAbsent;
         private volatile boolean resolvesRaceByPosition;
+        // Set, a first-position race is held until it opens, and then answers that it cannot compare and wrote nothing
+        private volatile @Nullable CountDownLatch resolverGate;
+        private final CountDownLatch resolverEntered = new CountDownLatch(1);
         // Set, the next delete removes the checkpoint and then fails, as one whose answer is lost on the way back
         private volatile boolean nextDeleteAppliesThenFails;
         private final CountDownLatch appliedDeleteFailed = new CountDownLatch(1);
@@ -1372,6 +1424,11 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
 
         @Override
         public Mono<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+            @Nullable CountDownLatch gate = resolverGate;
+            if (gate != null) {
+                resolverEntered.countDown();
+                return held(gate).then(Mono.empty());
+            }
             if (!resolvesRaceByPosition) {
                 return Mono.empty();
             }

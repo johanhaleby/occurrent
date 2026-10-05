@@ -497,6 +497,41 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     }
 
     /**
+     * The read of where the feed was at the subscribe never answers for a subscription from StartAt.now(), or from a
+     * dynamic start position that answers it, as from a database that does not respond. Once it has gone unanswered
+     * for a while it counts as failed, so a warning says the subscription waits for it, and it is read again. Once
+     * the database answers, the subscription starts from where the feed was at the subscribe, so what is written while
+     * the read hangs is delivered.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_subscription_from_now_whose_read_of_where_the_feed_was_never_answers_logs_a_warning_and_reads_it_again(boolean dynamic) {
+        // Given
+        Feed feed = new Feed();
+        feed.readHangs = true;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        StartAt startAt = dynamic ? StartAt.dynamic(StartAt::now) : StartAt.now();
+
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            // When
+            Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, startAt, deliveredTo(delivered));
+            long writtenWhileTheReadHangs = feed.write();
+            await().atMost(Duration.ofSeconds(20)).until(() -> logged.at(Level.WARN).stream().anyMatch(message -> message.contains("on attempt 1")));
+            feed.readHangs = false;
+            subscription.waitUntilStarted().block(Duration.ofSeconds(30));
+            long writtenAfterTheStart = feed.write();
+
+            // Then
+            await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(writtenAfterTheStart)));
+            assertThat(delivered).as("events delivered to the subscription").containsExactly(ids(List.of(writtenWhileTheReadHangs, writtenAfterTheStart)).toArray(String[]::new));
+            assertThat(logged.at(Level.WARN)).as("warnings logged").anyMatch(message -> message.startsWith("Could not read where the feed was when subscription " + SUBSCRIPTION_ID + " asked to start from the present"));
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    /**
      * A subscription registered while this model was stopped, from a dynamic start position that answers the model
      * default, is refused when the model is started if the position read at registration failed. The handle the
      * subscribe returned is the only one the caller holds, so the refusal ends its wait there rather than leaving it

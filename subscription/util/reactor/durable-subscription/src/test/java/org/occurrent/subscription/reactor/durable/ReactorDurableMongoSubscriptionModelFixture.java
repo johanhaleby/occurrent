@@ -51,8 +51,10 @@ class ReactorDurableMongoSubscriptionModelFixture implements SubscriptionModelFi
 
     // What ReactorMongoSubscriptionModelFixture.howFarBackANewSubscriptionMayStart() declares for the model this
     // fixture wraps, which this module cannot reach since that fixture is a test class of another module. Kept equal
-    // to it by hand, for every fixture and test here that starts a new subscription on reactive Mongo.
-    static final Duration HOW_FAR_BACK_THE_REACTIVE_MONGO_MODEL_MAY_START = Duration.ofSeconds(1);
+    // to it by hand, for every fixture and test here that starts a new subscription on reactive Mongo. The model can
+    // start from a cluster time up to 15 seconds before the second the server's clock showed at the call, so a new
+    // subscription can deliver what was written up to 16 seconds before it.
+    static final Duration HOW_FAR_BACK_THE_REACTIVE_MONGO_MODEL_MAY_START = Duration.ofSeconds(16);
 
     private final String streamId = UUID.randomUUID().toString();
 
