@@ -79,9 +79,8 @@ import static org.awaitility.Awaitility.await;
 class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
-    // The retry pending at the end of the test waits at most about 1.2 seconds, so a retry that was already due has
-    // fired by then
-    private static final Duration LONGER_THAN_THE_RETRY_PENDING_AT_THE_END = Duration.ofMillis(1500);
+    // The model waits at most 5 seconds before a retry, so a retry still pending at the end has come by then
+    private static final Duration LONGER_THAN_THE_LONGEST_WAIT_BEFORE_A_RETRY = Duration.ofSeconds(6);
     private static final String SUBSCRIPTION_ID = "sub";
     private static final String POSITION_READ_FAILED = "The position of the feed cannot be read right now";
     private static final String DELETE_FAILED = "The storage cannot delete right now";
@@ -923,7 +922,8 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     /**
      * The read of where the feed was always fails for a subscription from StartAt.now(), and the subscription retries it
      * while it waits. After the subscription is cancelled or paused, or the model is stopped, nothing waits any longer,
-     * so the wrapped model is not asked again and no warning for a retry comes.
+     * so the wrapped model is asked at most once more, by a retry already starting at the call, and no warning for a
+     * retry comes.
      */
     @ParameterizedTest
     @ValueSource(strings = {"cancel", "pause", "stop"})
@@ -935,7 +935,11 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
         try (LoggedByTheModel logged = new LoggedByTheModel()) {
             model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> Mono.empty());
-            await().atMost(TIMEOUT).until(() -> retryWarnings(logged) >= 2);
+            // Polled often, so the end comes right after the fourth warning, while the retry it announces still waits at
+            // least 400 milliseconds
+            await().atMost(TIMEOUT).pollInterval(Duration.ofMillis(10)).until(() -> retryWarnings(logged) >= 4);
+            int readsBeforeTheEnd = feed.reads.get();
+            long retriesBeforeTheEnd = retryWarnings(logged);
 
             // When
             switch (end) {
@@ -943,14 +947,11 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
                 case "pause" -> model.pauseSubscription(SUBSCRIPTION_ID);
                 default -> model.stop();
             }
-            waitUntilStill(feed, logged, LONGER_THAN_THE_RETRY_PENDING_AT_THE_END);
-            int readsAtTheEnd = feed.reads.get();
-            long retriesAtTheEnd = retryWarnings(logged);
-            letTimePass(Duration.ofSeconds(6));
+            letTimePass(LONGER_THAN_THE_LONGEST_WAIT_BEFORE_A_RETRY);
 
             // Then
-            assertThat(feed.reads.get()).as("reads of where the feed was made after the " + end).isEqualTo(readsAtTheEnd);
-            assertThat(retryWarnings(logged)).as("warnings logged for a retry of the read after the " + end).isEqualTo(retriesAtTheEnd);
+            assertThat(feed.reads.get()).as("reads of where the feed was, " + readsBeforeTheEnd + " before the " + end).isLessThanOrEqualTo(readsBeforeTheEnd + 1);
+            assertThat(retryWarnings(logged)).as("warnings logged for a retry of the read, " + retriesBeforeTheEnd + " before the " + end).isEqualTo(retriesBeforeTheEnd);
         } finally {
             model.shutdown();
         }
@@ -963,24 +964,6 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     // Time for a warning to come that would come every 10 seconds
     private static void letTimePass(Duration time) {
         await().pollDelay(time).atMost(time.plusSeconds(5)).until(() -> true);
-    }
-
-    // Returns once neither the reads nor the retry warnings changed for quiet, or after TIMEOUT, so that a model that
-    // keeps retrying fails on the assertions that follow
-    private static void waitUntilStill(Feed feed, LoggedByTheModel logged, Duration quiet) {
-        long[] seen = {-1, -1};
-        long[] stillSince = {System.nanoTime()};
-        catchThrowable(() -> await().atMost(TIMEOUT).pollInterval(Duration.ofMillis(50)).until(() -> {
-            long reads = feed.reads.get();
-            long retries = retryWarnings(logged);
-            long now = System.nanoTime();
-            if (reads != seen[0] || retries != seen[1]) {
-                seen[0] = reads;
-                seen[1] = retries;
-                stillSince[0] = now;
-            }
-            return now - stillSince[0] > quiet.toNanos();
-        }));
     }
 
     private static long retryWarnings(LoggedByTheModel logged) {
