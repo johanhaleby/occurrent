@@ -580,8 +580,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             if (!made) {
                 throw notMade(beingMade);
             }
-            // Recorded by now, so a failure is logged and subscribe returns, and the subscription stays paused until
-            // something resumes it
+            // Recorded by now, so an exception is logged and subscribe returns, and the subscription stays paused until
+            // something resumes it. An Error is thrown as it is.
             try {
                 if (beingMade.resumedMeanwhile && !stoppedByUser.get() && delegate.isPaused(subscriptionId)) {
                     runInTheWrappedModel(null, true, () -> delegate.resumeSubscription(subscriptionId));
@@ -590,7 +590,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 logDebug("Not resuming subscription, since this model was stopped meanwhile (subscriptionId={})", subscriptionId);
             } catch (ShutDownMeanwhile e) {
                 throw e;
-            } catch (Throwable e) {
+            } catch (RuntimeException e) {
                 log.warn("Could not resume subscription {}, which a start(true) asked for while the wrapped subscription model made it, so it stays paused there until it is resumed (subscriptionId={})", subscriptionId, subscriptionId, e);
             }
         } finally {
