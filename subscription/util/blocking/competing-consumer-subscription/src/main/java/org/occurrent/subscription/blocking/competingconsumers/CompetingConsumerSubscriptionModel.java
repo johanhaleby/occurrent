@@ -242,13 +242,20 @@ import static java.util.Objects.requireNonNull;
  * took effect and then threw. Among the calls that do this are {@code start(..)}, a lease granted for another
  * subscription, a {@code subscribe(..)} that wins its lease and a resume of any subscription. A {@code start(..)}
  * resumes each such subscription before it returns, unless another call holds the lock of that subscription as the
- * {@code start(..)} gets to it. The other calls leave it to a try. A subscription the user paused on the wrapped model
- * before calling {@code stop()} there runs again too, since this model cannot tell that pause from the one {@code
- * stop()} makes. A competing subscription that the wrapped model holds paused while it runs, with no such call having
- * found it stopped since, counts as paused by the user. That includes one paused by {@code stop()} and {@code
- * start(false)} on the wrapped model itself. It stays paused through {@code start(false)}, and so does one whose pause
- * through this model took effect in the wrapped model and then threw. A resume, {@code start(true)} and a grant of its
- * lease can run one paused on the wrapped model again.
+ * {@code start(..)} gets to it. The other calls leave it to a try.
+ * <br>
+ * <br>
+ * Pause a competing subscription through {@link #pauseSubscription(String)} on this model, not on the wrapped model.
+ * This model decides whether a competing subscription runs. One it records as running and whose lease this node holds
+ * runs again on the next {@code start(..)}, with or without resuming subscriptions automatically, on a grant of its
+ * lease while this model is started and on a resume of it, also when the wrapped model holds it paused while it runs.
+ * So a pause called directly on the wrapped model lasts only until one of those calls, and so does a {@code stop()} and
+ * {@code start(..)} called on the wrapped model itself. A subscription the user paused on the wrapped model before
+ * calling {@code stop()} there runs again on any of the calls above that start the wrapped model. One whose pause
+ * through this model took effect in the wrapped model and then threw counts as paused through this model, and stays
+ * paused through {@code start(false)}.
+ * <br>
+ * <br>
  * A model built over a wrapped model that is not running is stopped until its first {@code start(..)}, as
  * if {@code stop()} had been called on it. Until a {@code start(..)} has returned without throwing, each one resumes
  * every subscription that is paused, with either flag, also one {@code stop()} paused, except one the user paused and
@@ -422,8 +429,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private final Set<String> pausedByTheUserBeforeAStartReturned = ConcurrentHashMap.newKeySet();
     // The competing consumers recorded as running here when this model found the wrapped model not running, which
     // paused them there. Each is resumed there once this node holds its lease and the wrapped model runs, and is removed
-    // from the set once it is resumed or found running there. One paused there while the wrapped model kept running stays out of
-    // it, since the user paused it there.
+    // from the set once it is resumed or found running there. One paused there while the wrapped model kept running stays
+    // out of it, and runs again on a start(..), a grant of its lease or a resume of it.
     private final Set<SubscriptionIdAndSubscriberId> pausedByAStopOfTheWrappedModel = ConcurrentHashMap.newKeySet();
     // Set once a start(..) has thrown, until a later one returns without throwing, so isRunning() returns false and a
     // caller that starts this model only when it is not running tries again
@@ -1400,18 +1407,17 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     /**
-     * Starts this model, and the wrapped model too when it is not running, without resuming what the wrapped model holds
-     * paused. A competing subscription that waits for its lease competes for it again and runs once this node holds it.
-     * One whose lease this node holds runs in the wrapped model once this starts it, also when that start took effect
-     * and then threw, and this resumes it before returning, unless another call holds its lock as this gets to it. One
-     * the wrapped model holds paused while it runs counts as paused by the user. With
-     * {@code resumeSubscriptionsAutomatically} set, a subscription the user or {@code stop()} paused is resumed too, also
-     * one the user paused on the wrapped model. Without it, one paused through this model stays paused until it is
-     * resumed, while a grant of its lease can run one paused on the wrapped model again. Until a {@code start(..)} has returned without
-     * throwing, a model built over a wrapped model that was not running resumes every paused subscription either
-     * way, also one {@code stop()} paused, except one the user paused and has not resumed since, which
-     * {@code start(false)} keeps paused. Once a {@code start(true)} has resumed such a subscription, {@code start(false)}
-     * resumes it too, also when that {@code start(true)} threw.
+     * Starts this model, and starts the wrapped model with {@code start(false)} when it is not running. A competing
+     * subscription that waits for its lease competes for it again and runs once this node holds it. One whose lease this
+     * node holds runs in the wrapped model once this starts it, also when that start took effect and then threw, and
+     * this resumes it before returning, unless another call holds its lock as this gets to it. With either flag, this
+     * also resumes one the wrapped model holds paused while it runs, such as one the user paused directly on the wrapped
+     * model. With {@code resumeSubscriptionsAutomatically} set, a subscription the user or {@code stop()} paused through
+     * this model is resumed too. Without it, such a subscription stays paused until it is resumed. Until a
+     * {@code start(..)} has returned without throwing, a model built over a wrapped model that was not running resumes
+     * every paused subscription either way, also one {@code stop()} paused, except one the user paused and has not
+     * resumed since, which {@code start(false)} keeps paused. Once a {@code start(true)} has resumed such a subscription,
+     * {@code start(false)} resumes it too, also when that {@code start(true)} threw.
      * <p>
      * {@code stop()} waits for this to return, and {@code shutdown()} waits while this starts the wrapped model, for as
      * long as the wrapped model takes to start.
@@ -1529,7 +1535,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private void startConsumer(CompetingConsumer cc, Lifecycle start) {
         try {
             if (cc.isRunning()) {
-                resumeIfTheWrappedModelHoldsItPaused(cc, start.resumeSubscriptionsAutomatically());
+                resumeIfTheWrappedModelHoldsItPaused(cc);
                 return;
             }
             // A waiting consumer competes again whatever the flag says, since nothing paused it. That includes one made
@@ -1556,23 +1562,21 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
     }
 
-    // A stop() called on the wrapped model itself pauses every subscription there, and starting it with start(false)
-    // resumes none, so a consumer this node holds the lease for would keep the lease with nothing delivered. Unless
-    // alsoOneTheUserPausedThere is set, only one this model found paused that way is resumed, whichever call started
-    // the wrapped model again, since one paused there while the wrapped model kept running was paused there by the
-    // user. A start(true) sets it, since it resumes what the user paused. The lease is asked about first, since asking
-    // the wrapped model lets the held events through. One a resume is registering is left to that resume, as on a
-    // grant. A wrapped model that is not running is started by the resume.
-    private void resumeIfTheWrappedModelHoldsItPaused(CompetingConsumer cc, boolean alsoOneTheUserPausedThere) {
+    // A consumer recorded as running here that the wrapped model holds paused would keep its lease with nothing
+    // delivered, whether a stop() of the wrapped model or a pause called on it directly paused it there. Either flag
+    // resumes it, since only a pause through this model keeps a consumer this node holds the lease for from running.
+    // The lease is asked about first, since asking the wrapped model lets the held events through. One a resume is
+    // registering is left to that resume, as on a grant. A wrapped model that is not running is started by the resume.
+    private void resumeIfTheWrappedModelHoldsItPaused(CompetingConsumer cc) {
         SubscriptionIdAndSubscriberId key = cc.subscriptionIdAndSubscriberId;
-        if ((!alsoOneTheUserPausedThere && !pausedByAStopOfTheWrappedModel.contains(key)) || resumedOnceRegistered.contains(key) || !hasLock(key.subscriptionId(), key.subscriberId())) {
+        if (resumedOnceRegistered.contains(key) || !hasLock(key.subscriptionId(), key.subscriberId())) {
             return;
         }
         if (isRunningInTheWrappedModel(key.subscriptionId()) || !isPausedInTheWrappedModel(key.subscriptionId())) {
             pausedByAStopOfTheWrappedModel.remove(key);
             return;
         }
-        logDebug("Resuming CompetingConsumer that holds its lease and that a stop of the wrapped model paused (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
+        logDebug("Resuming CompetingConsumer that holds its lease and that the wrapped model holds paused (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
         giveTheLeaseBackIfItThrows(key, cc.state, () -> resumeInTheWrappedModel(key));
     }
 
@@ -3537,7 +3541,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             case CompetingConsumerState.Running running -> {
                 // One the wrapped model runs already has what this callback would give it, and so does one a resume is
                 // registering, which that resume runs once the register returns. One it does not run otherwise, which a
-                // failed call can cause, is resumed, since no other grant comes for it.
+                // failed call or a pause called on the wrapped model itself can cause, is resumed, since no other grant
+                // comes for it.
                 if (resumedOnceRegistered.contains(key)) {
                     return;
                 }

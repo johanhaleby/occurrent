@@ -1083,29 +1083,6 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     }
 
     @Test
-    void a_start_without_resuming_keeps_a_competing_subscription_paused_that_the_user_paused_directly_on_a_wrapped_model_that_was_running() {
-        InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel();
-        SynchronousLeaseStrategy grants = new SynchronousLeaseStrategy();
-        grants.grantOnRegister = true;
-        CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, grants);
-        List<String> deliveredToX = new CopyOnWriteArrayList<>();
-        try {
-            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), cloudEvent -> deliveredToX.add(cloudEvent.getId()));
-            await().atMost(5, SECONDS).until(() -> overInMemory.isRunning("x"));
-            wrapped.pauseSubscription("x");
-
-            overInMemory.start(false);
-            wrapped.accept(List.of(event("e1")));
-            wrapped.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
-
-            assertThat(wrapped.isPaused("x")).as("x in the wrapped model, which the user paused there, after start(false)").isTrue();
-            assertThat(deliveredToX).as("events delivered to x, which the user paused in the wrapped model").isEmpty();
-        } finally {
-            overInMemory.shutdown();
-        }
-    }
-
-    @Test
     void a_start_that_resumes_what_the_user_paused_clears_the_pause_of_a_competing_subscription_although_it_throws_for_another_so_a_later_start_without_resuming_runs_it() {
         FailingInMemory wrapped = new FailingInMemory();
         wrapped.stop();
@@ -1178,31 +1155,6 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
             assertThat(thrownOnStart).as("start(false), whose start of the wrapped model took effect and then threw").isNotNull();
             await().atMost(5, SECONDS).untilAsserted(() -> assertThat(deliveredToX).as("events delivered to x, which holds its lease, after a start of the wrapped model that took effect and then threw").containsExactly("e1"));
             assertThat(grants.holders).as("the subscriptions this node holds the lease for, after that start").containsExactly("x");
-        } finally {
-            overInMemory.shutdown();
-        }
-    }
-
-    @Test
-    void a_start_without_resuming_keeps_a_competing_subscription_paused_that_the_user_paused_directly_once_the_wrapped_model_was_started_again_directly() {
-        InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel();
-        SynchronousLeaseStrategy grants = new SynchronousLeaseStrategy();
-        grants.grantOnRegister = true;
-        CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, grants);
-        List<String> deliveredToX = new CopyOnWriteArrayList<>();
-        try {
-            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), cloudEvent -> deliveredToX.add(cloudEvent.getId()));
-            await().atMost(5, SECONDS).until(() -> overInMemory.isRunning("x"));
-            wrapped.stop();
-            wrapped.start();
-            wrapped.pauseSubscription("x");
-
-            overInMemory.start(false);
-            wrapped.accept(List.of(event("e1")));
-            wrapped.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
-
-            assertThat(wrapped.isPaused("x")).as("x in the wrapped model, which the user paused there once it was started again directly, after start(false)").isTrue();
-            assertThat(deliveredToX).as("events delivered to x, which the user paused in the wrapped model").isEmpty();
         } finally {
             overInMemory.shutdown();
         }
@@ -1372,28 +1324,75 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         }
     }
 
-    @ParameterizedTest(name = "paused by {0}")
-    @ValueSource(strings = {"stop() and start(false) on the wrapped model", "a pause on the wrapped model"})
-    void a_start_that_resumes_subscriptions_runs_a_competing_subscription_this_node_holds_the_lease_for_that_the_wrapped_model_holds_paused(String pausedBy) {
+    @ParameterizedTest(name = "paused by {0}, then {1}")
+    @CsvSource({
+            "a pause on the wrapped model, start(false)",
+            "a pause on the wrapped model, start(true)",
+            "stop() and start(false) on the wrapped model, start(false)",
+            "stop() and start(false) on the wrapped model, start(true)",
+            "stop() and start() on the wrapped model and then a pause there, start(false)",
+            "stop() and start() on the wrapped model and then a pause there, start(true)",
+            "a pause on the wrapped model and then stop() there, start(false)",
+            "a pause on the wrapped model and then stop() there, start(true)"})
+    void a_start_with_either_flag_runs_a_competing_subscription_this_node_holds_the_lease_for_that_the_wrapped_model_holds_paused(String pausedBy, String start) {
         InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel();
         SynchronousLeaseStrategy grants = new SynchronousLeaseStrategy();
         grants.grantOnRegister = true;
         CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, grants);
+        List<String> deliveredToX = new CopyOnWriteArrayList<>();
         try {
-            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), __ -> {
-            });
+            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), cloudEvent -> deliveredToX.add(cloudEvent.getId()));
             await().atMost(5, SECONDS).until(() -> overInMemory.isRunning("x"));
-            if (pausedBy.startsWith("stop()")) {
-                wrapped.stop();
-                wrapped.start(false);
-            } else {
-                wrapped.pauseSubscription("x");
+            switch (pausedBy) {
+                case "a pause on the wrapped model" -> wrapped.pauseSubscription("x");
+                case "stop() and start(false) on the wrapped model" -> {
+                    wrapped.stop();
+                    wrapped.start(false);
+                }
+                case "stop() and start() on the wrapped model and then a pause there" -> {
+                    wrapped.stop();
+                    wrapped.start();
+                    wrapped.pauseSubscription("x");
+                }
+                case "a pause on the wrapped model and then stop() there" -> {
+                    wrapped.pauseSubscription("x");
+                    wrapped.stop();
+                }
+                default -> throw new IllegalArgumentException(pausedBy);
             }
 
-            overInMemory.start(true);
+            overInMemory.start(start.equals("start(true)"));
+            wrapped.accept(List.of(event("e1")));
 
-            assertThat(wrapped.isRunning("x")).as("x, which holds its lease, after %s and then start(true)", pausedBy).isTrue();
-            assertThat(grants.holders).as("the subscriptions this node holds the lease for, after start(true)").containsExactly("x");
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(deliveredToX).as("events delivered to x, which holds its lease, after %s and then %s", pausedBy, start).containsExactly("e1"));
+            assertThat(grants.holders).as("the subscriptions this node holds the lease for, after %s", start).containsExactly("x");
+        } finally {
+            overInMemory.shutdown();
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"a grant of its lease", "a resume of it"})
+    void a_grant_of_its_lease_or_a_resume_of_it_runs_a_competing_subscription_the_user_paused_directly_on_the_wrapped_model(String then) {
+        InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel();
+        SynchronousLeaseStrategy grants = new SynchronousLeaseStrategy();
+        grants.grantOnRegister = true;
+        CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, grants);
+        List<String> deliveredToX = new CopyOnWriteArrayList<>();
+        try {
+            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), cloudEvent -> deliveredToX.add(cloudEvent.getId()));
+            await().atMost(5, SECONDS).until(() -> overInMemory.isRunning("x"));
+            wrapped.pauseSubscription("x");
+
+            if (then.equals("a grant of its lease")) {
+                grants.grant("x");
+            } else {
+                overInMemory.resumeSubscription("x");
+            }
+            wrapped.accept(List.of(event("e1")));
+
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(deliveredToX).as("events delivered to x, which holds its lease, after a pause on the wrapped model and then %s", then).containsExactly("e1"));
+            assertThat(grants.holders).as("the subscriptions this node holds the lease for, after %s", then).containsExactly("x");
         } finally {
             overInMemory.shutdown();
         }
