@@ -1564,9 +1564,23 @@ model has written that checkpoint back, asks the function only once it is writte
 `StartAt.now()`, the subscription starts from where the feed was at `subscribe(..)`, where in 0.33.0 the wrapped model
 opened its feed at the present. That read is asked again and warned about the same way, and the wrapped model does not
 get the subscription before it answers. A `stop()` or a pause does not end its retries, only an answer, a cancel or a
-shutdown does. Until the wrapped model has the subscription, a pause, a resume, a `stop()` or a `start(..)` is kept and
-given to it once it has. So a subscription paused meanwhile delivers nothing until it is resumed, and a resume of one
-that was not paused throws `SubscriptionAlreadyRunningException`, as for any running subscription.
+shutdown does.
+
+Until the wrapped model has the subscription, a pause or a resume of it is kept and given to that model once it has it,
+so a subscription paused meanwhile delivers nothing until it is resumed. A `stop()` or a `start(..)` reaches the wrapped
+model at once, and only its effect on the waiting subscription is kept, a pause for `stop()` and a resume for
+`start(true)`. `start(false)` records no resume, so a subscription that waits while the model is stopped stays paused
+after it.
+
+Until a call asks for a state, the waiting subscription is paused while the wrapped model is stopped and running
+otherwise, as `ReactorMongoSubscriptionModel` registers a subscription made while it is stopped. A pause of a paused
+subscription throws `SubscriptionNotRunningException`, and a resume of one that isn't paused throws
+`SubscriptionAlreadyRunningException`. A wrapped model of your own that registers a subscription made while it is
+stopped as running has it running once it gets it, so until then `isPaused(..)` answers `true` and a pause throws where
+that model would not. The durable model cannot ask a model that doesn't know the id how it will register it.
+
+A `subscribe(..)` of the id while the subscription waits throws `DuplicateSubscriptionIdException` at the call, as in
+0.33.0.
 
 There is no recipe for this change. Where a subscription starts is runtime behavior that a rewrite of the source cannot
 see.

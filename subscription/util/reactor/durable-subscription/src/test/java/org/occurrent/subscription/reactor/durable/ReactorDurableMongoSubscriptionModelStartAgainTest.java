@@ -42,6 +42,8 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionModelShutdownException;
+import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
@@ -75,10 +77,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -583,17 +587,189 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
         });
     }
 
+    /**
+     * A pause of the id made while a subscribe that would wait to be handed to the Mongo model reads where the feed is,
+     * and that the Mongo model is still taking when that subscribe goes on, has the subscribe refused at the call. The
+     * subscribe checks for such a call and starts keeping a pause in one step, so the pause comes either before that
+     * step, as here, or after it, and is then kept.
+     */
+    @Test
+    void a_subscribe_that_would_wait_to_be_handed_to_the_mongo_model_is_refused_while_the_mongo_model_takes_a_pause_of_the_id_made_during_that_subscribe() throws Exception {
+        // Given
+        cancelledWhileTheDeleteIsHeld(() -> {
+        });
+        Hold readOfWhereTheFeedIs = mongoModel.holdNextReadOfWhereTheFeedIs();
+        Hold pauseInTheMongoModel = mongoModel.holdNextPause();
+        CompletableFuture<Subscription> subscribed = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::now),
+                action(new CopyOnWriteArrayList<>())), caller);
+        readOfWhereTheFeedIs.awaitReached();
+
+        // When
+        CompletableFuture<Void> paused = CompletableFuture.runAsync(() -> model.pauseSubscription(SUBSCRIPTION_ID), canceller);
+        pauseInTheMongoModel.awaitReached();
+        readOfWhereTheFeedIs.letGo();
+        @Nullable Throwable subscribeFailed = failureOf(subscribed);
+        pauseInTheMongoModel.letGo();
+        @Nullable Throwable pauseFailed = failureOf(paused);
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(subscribeFailed).as("how the subscribe made while the Mongo model took the pause ended").isInstanceOf(DuplicateSubscriptionIdException.class);
+            softly.assertThat(pauseFailed).as("how the pause, which the Mongo model took for an id it doesn't know, ended").isInstanceOf(UnknownSubscriptionException.class);
+        });
+    }
+
+    /**
+     * A subscribe of the id while a paused subscription of it waits to be handed to the Mongo model is refused at the
+     * call, as the Mongo model refuses a subscribe of an id it has. The pause stays in place for the subscription that
+     * waited, which delivers nothing until it is resumed.
+     */
+    @Test
+    void a_subscribe_of_the_id_while_a_paused_subscription_of_it_waits_to_be_handed_to_the_mongo_model_is_refused_and_the_first_stays_paused() throws Exception {
+        // Given
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        Subscription waiting = waitingToBeHandedOver(StartAt::now, delivered);
+        Throwable pauseFailed = catchThrowable(() -> model.pauseSubscription(SUBSCRIPTION_ID));
+
+        // When
+        @Nullable Throwable secondRefused = failureOf(CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(),
+                action(new CopyOnWriteArrayList<>())), canceller));
+        storage.deleteLetGo.countDown();
+        Throwable startFailed = catchThrowable(() -> waiting.waitUntilStarted(TIMEOUT).block());
+        Throwable notPausedThere = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> mongoModel.isPaused(SUBSCRIPTION_ID)));
+        long writtenWhilePaused = write();
+        Throwable resumeFailed = catchThrowable(() -> model.resumeSubscription(SUBSCRIPTION_ID).waitUntilStarted(TIMEOUT).block());
+        Throwable notDelivered = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> delivered.contains(writtenWhilePaused)));
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(pauseFailed).as("how the pause while the subscription waited to be handed over ended").isNull();
+            softly.assertThat(secondRefused).as("how a subscribe of the id while the paused subscription waited ended").isInstanceOf(DuplicateSubscriptionIdException.class);
+            softly.assertThat(startFailed).as("how waiting for the paused subscription to start ended").isNull();
+            softly.assertThat(notPausedThere).as("how waiting for the subscription to be paused in the Mongo model ended").isNull();
+            softly.assertThat(resumeFailed).as("how the resume ended").isNull();
+            softly.assertThat(notDelivered).as("how waiting for the event written while it was paused ended").isNull();
+        });
+    }
+
+    /**
+     * A second subscribe of the id from a dynamic start position while the first waits to be handed to the Mongo model
+     * is refused at the call, as the Mongo model refuses a subscribe of an id it has, and the first starts.
+     */
+    @Test
+    void a_second_subscribe_of_the_id_while_the_first_waits_to_be_handed_to_the_mongo_model_is_refused_at_the_call() throws Exception {
+        // Given
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        Subscription waiting = waitingToBeHandedOver(StartAt::now, delivered);
+
+        // When
+        @Nullable Throwable secondRefused = failureOf(CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::now),
+                action(new CopyOnWriteArrayList<>())), canceller));
+        storage.deleteLetGo.countDown();
+        Throwable startFailed = catchThrowable(() -> waiting.waitUntilStarted(TIMEOUT).block());
+        long written = write();
+        Throwable notDelivered = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> delivered.contains(written)));
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(secondRefused).as("how the second subscribe of the id ended").isInstanceOf(DuplicateSubscriptionIdException.class);
+            softly.assertThat(startFailed).as("how waiting for the first subscription to start ended").isNull();
+            softly.assertThat(notDelivered).as("how waiting for the event written once it started ended").isNull();
+        });
+    }
+
+    /**
+     * On a stopped model, a subscription that waits to be handed to the Mongo model is paused, as the Mongo model
+     * registers a subscription made while it is stopped. A pause is refused as for a paused subscription, and a resume
+     * starts it once the Mongo model has it.
+     */
+    @Test
+    void on_a_stopped_model_a_subscription_that_waits_to_be_handed_to_the_mongo_model_is_paused_and_a_resume_starts_it() throws Exception {
+        // Given
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        waitingToBeHandedOver(StartAt::now, delivered, model::stop);
+
+        // When
+        boolean pausedWhileWaiting = model.isPaused(SUBSCRIPTION_ID);
+        Throwable pauseRefused = catchThrowable(() -> model.pauseSubscription(SUBSCRIPTION_ID));
+        AtomicReference<@Nullable Subscription> resumed = new AtomicReference<>();
+        Throwable resumeFailed = catchThrowable(() -> resumed.set(model.resumeSubscription(SUBSCRIPTION_ID)));
+        storage.deleteLetGo.countDown();
+        Throwable startFailed = catchThrowable(() -> requireNonNull(resumed.get()).waitUntilStarted(TIMEOUT).block());
+        long written = write();
+        Throwable notDelivered = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> delivered.contains(written)));
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(pausedWhileWaiting).as("whether the subscription that waited on the stopped model was paused").isTrue();
+            softly.assertThat(pauseRefused).as("how the pause while it waited ended").isInstanceOf(SubscriptionNotRunningException.class);
+            softly.assertThat(resumeFailed).as("how the resume while it waited ended").isNull();
+            softly.assertThat(startFailed).as("how waiting for the resumed subscription to start ended").isNull();
+            softly.assertThat(notDelivered).as("how waiting for the event written once it started ended").isNull();
+        });
+    }
+
+    /**
+     * On a stopped model, a subscription that waits to be handed to the Mongo model stays paused through a start that
+     * resumes nothing, as one the Mongo model registered while it was stopped does, and a resume starts it.
+     */
+    @Test
+    void on_a_stopped_model_a_subscription_that_waits_to_be_handed_to_the_mongo_model_stays_paused_through_a_start_that_resumes_nothing() throws Exception {
+        // Given
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        waitingToBeHandedOver(StartAt::now, delivered, model::stop);
+
+        // When
+        model.start(false);
+        boolean pausedWhileWaiting = model.isPaused(SUBSCRIPTION_ID);
+        storage.deleteLetGo.countDown();
+        Throwable notPausedThere = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> mongoModel.isPaused(SUBSCRIPTION_ID)));
+        long writtenWhilePaused = write();
+        Throwable resumeFailed = catchThrowable(() -> model.resumeSubscription(SUBSCRIPTION_ID).waitUntilStarted(TIMEOUT).block());
+        Throwable notDelivered = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> delivered.contains(writtenWhilePaused)));
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(pausedWhileWaiting).as("whether the subscription that waited was paused after the start").isTrue();
+            softly.assertThat(notPausedThere).as("how waiting for the subscription to be paused in the Mongo model ended").isNull();
+            softly.assertThat(resumeFailed).as("how the resume ended").isNull();
+            softly.assertThat(notDelivered).as("how waiting for the event written while it was paused ended").isNull();
+        });
+    }
+
     // Subscribes the id and cancels it while the delete of its stored checkpoint is held, then subscribes it again from a
     // dynamic start position that answers what startAt does. Returns that subscription, which waits for the delete.
     private Subscription waitingToBeHandedOver(Supplier<StartAt> startAt, List<Long> delivered) throws Exception {
+        return waitingToBeHandedOver(startAt, delivered, () -> {
+        });
+    }
+
+    // As above, and runs beforeTheSubscribe once the delete is held
+    private Subscription waitingToBeHandedOver(Supplier<StartAt> startAt, List<Long> delivered, Runnable beforeTheSubscribe) throws Exception {
+        cancelledWhileTheDeleteIsHeld(beforeTheSubscribe);
+        return CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(startAt), action(delivered)), caller)
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    // Subscribes the id and cancels it while the delete of its stored checkpoint is held, then runs then
+    private void cancelledWhileTheDeleteIsHeld(Runnable then) throws Exception {
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), action(new CopyOnWriteArrayList<>())).waitUntilStarted(TIMEOUT).block();
         write();
         await().atMost(TIMEOUT).until(() -> storage.storage.read(SUBSCRIPTION_ID).blockOptional(TIMEOUT).isPresent());
         storage.holdsDeletes = true;
         model.cancelSubscription(SUBSCRIPTION_ID);
         assertThat(storage.deleteEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete held").isTrue();
-        return CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(startAt), action(delivered)), caller)
-                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        then.run();
+    }
+
+    // What the call failed with, or null when it returned
+    private static @Nullable Throwable failureOf(CompletableFuture<?> call) throws InterruptedException, TimeoutException {
+        try {
+            call.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            return null;
+        } catch (ExecutionException e) {
+            return e.getCause();
+        }
     }
 
     // Subscribes the id and cancels it while the delete of its checkpoint is held. Subscribes it again from the model
@@ -686,9 +862,10 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
                && Arrays.stream(thread.getStackTrace()).noneMatch(frame -> frame.getClassName().startsWith("org.occurrent"));
     }
 
-    // Holds the cancels of the numbers asked for, counted from the first, and the next pause, each before it reaches the
-    // Mongo model, until its hold is let go. Fails the subscribe of the number asked for, counted from the first, and
-    // answers the cancels of the numbers asked for with a failure instead of reaching the Mongo model.
+    // Holds the cancels of the numbers asked for, counted from the first, the next pause and the next read of where the
+    // feed is, each before it reaches the Mongo model, until its hold is let go. Fails the subscribe of the number asked
+    // for, counted from the first, and answers the cancels of the numbers asked for with a failure instead of reaching
+    // the Mongo model.
     private static final class HoldingMongoModel extends ReactorMongoSubscriptionModel {
         private static final String FAILED_SUBSCRIBE = "The subscribe failed";
         private final AtomicInteger cancels = new AtomicInteger();
@@ -699,6 +876,7 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
         private final Map<Integer, Mono<Void>> failedCancels = new ConcurrentHashMap<>();
         private final List<Hold> holds = new CopyOnWriteArrayList<>();
         private final AtomicReference<@Nullable Hold> heldPause = new AtomicReference<>();
+        private final AtomicReference<@Nullable Hold> heldReadOfWhereTheFeedIs = new AtomicReference<>();
         private volatile int failingSubscribe = -1;
 
         private HoldingMongoModel(ReactiveMongoTemplate template, String eventCollectionName, TimeRepresentation timeRepresentation) {
@@ -723,8 +901,25 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
             return hold;
         }
 
+        private Hold holdNextReadOfWhereTheFeedIs() {
+            Hold hold = new Hold(false);
+            holds.add(hold);
+            heldReadOfWhereTheFeedIs.set(hold);
+            return hold;
+        }
+
         private void letGoOfEveryHold() {
             holds.forEach(Hold::letGo);
+        }
+
+        // Held when asked, on the thread that asks, before the Mono is returned
+        @Override
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            @Nullable Hold hold = heldReadOfWhereTheFeedIs.getAndSet(null);
+            if (hold != null) {
+                hold.hold();
+            }
+            return super.globalCheckpointAsOfNow();
         }
 
         @Override

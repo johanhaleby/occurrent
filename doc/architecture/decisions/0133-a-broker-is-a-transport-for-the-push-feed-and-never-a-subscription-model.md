@@ -1811,16 +1811,33 @@ resume waits for it. Where the durable model hands the subscription to a wrapped
 written back, and then has one such read running. Its retries end only when the read answers or the subscription is
 cancelled or the model is shut down, and a stop of the model or a pause of the subscription does not end them. A
 subscription from any dynamic `StartAt` whose `subscribe(..)` comes in that window reaches the wrapped model only once
-the checkpoint is written back and its start position is known. A pause, a resume, a `stop()` or a `start(..)` until
-then is kept, and the wrapped model gets it once it has the subscription. So a subscription paused meanwhile delivers
-nothing until it is resumed. Where the durable model drives a subscription with a dynamic
-`StartAt`, it can read where the feed is twice, once at the `subscribe(..)` for the subscription-model default in case
-the function answers it, and once at the first start when the function answers `StartAt.now()`. On both paths a cancel
-of the subscription or a shutdown cancels the read and ends its warnings. Where the durable model drives the
+the checkpoint is written back and its start position is known. Where the durable model drives a subscription with a
+dynamic `StartAt`, it can read where the feed is twice, once at the `subscribe(..)` for the subscription-model default
+in case the function answers it, and once at the first start when the function answers `StartAt.now()`. On both paths a
+cancel of the subscription or a shutdown cancels the read and ends its warnings. Where the durable model drives the
 subscription, the read for the subscription-model default warns the same way. Without the warning a wrapped model that
 never answers would keep the subscription from starting with nothing in the log. None of these reads holds up a call or
 another subscription. Where the durable model hands the subscription to a wrapped model, the wait for the read of the
 subscription-model default, described below, still logs nothing.
+
+Until the wrapped model has a subscription that waits for the write back, a pause or a resume of it is kept, and the
+wrapped model gets it once it has the subscription, so a subscription paused meanwhile delivers nothing until it is
+resumed. A `stop()` or a `start(..)` reaches the wrapped model at once, and only its effect on the waiting subscription
+is kept, a pause for `stop()` and a resume for `start(true)`. `start(false)` records no resume. When it finds the
+wrapped model stopped, the waiting subscription stays paused after it, as `ReactorMongoSubscriptionModel` keeps a
+subscription it registered while stopped paused through such a start. Until a call asks for a state, the durable model
+answers for the waiting subscription as `ReactorMongoSubscriptionModel` will once it has it, paused while that model is
+stopped and running otherwise, since that model registers a subscription made while it is stopped as paused. So
+`isPaused(..)`, `isRunning(..)`, a pause and a resume answer as they will after the hand-over. A wrapped model of your
+own that registers such a subscription as running has it running once it gets it, and until then `isPaused(..)` answers
+`true` and a pause throws `SubscriptionNotRunningException`, where that model would not. The durable model cannot ask a
+model that does not know the id yet how it will register it. A `subscribe(..)` of the id while the subscription waits
+throws `DuplicateSubscriptionIdException` at the call, as the wrapped model throws for a subscription it has. In 0.33.0
+the wrapped model got the subscription at the call, so such a `subscribe(..)` threw there too. The durable model checks
+that no other subscription of the id is registered or starting, checks that no cancel or shutdown ended the
+subscription, and starts keeping the calls for the id in one step under one lock. A call for the id therefore comes
+before that step, where a pause or a resume finds the id unknown and a `subscribe(..)` is refused, or after it, where
+the call is kept.
 
 This amends a sentence of [ADR 89](0089-manual-subscription-mode-on-the-reactive-stack.md), which shipped in 0.33.0 and
 says a registration naming its own `StartAt` is not read for, `StartAt.now()` included. Where the durable model drives
