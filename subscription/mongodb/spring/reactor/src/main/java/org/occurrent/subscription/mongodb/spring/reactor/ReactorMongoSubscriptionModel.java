@@ -90,10 +90,11 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * A subscription started with {@link StartAt#now()} or the model default starts from the moment
  * {@code subscribe(String, ...)} is called, or, for the plain {@link Flux}, the moment it's subscribed to. That holds
  * when the model is stopped too, so a subscription registered then and started later also receives the events written
- * in between. The model asks MongoDB for its clock after that moment and opens the change stream at the start of the
- * second the clock showed at the moment. So every event written after the moment is delivered, and so can events
- * written up to a second before it. See {@link #globalCheckpointAsOfNow()} for when the answer can be later than the
- * moment.
+ * in between. The model asks MongoDB for its clock after that moment, subtracts the time that has passed since, and
+ * opens the change stream at the start of the second that gives. The time that has passed includes the time the reply
+ * took to reach the client, so the second can begin that much earlier. So every event written after the moment is
+ * delivered, and so can events written up to a second before it, plus the time the reply took to arrive. See
+ * {@link #globalCheckpointAsOfNow()} for when the answer can be later than the moment.
  */
 @NullMarked
 public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions {
@@ -366,9 +367,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     }
 
     /**
-     * Answers with the start of the second the MongoDB server's clock showed when this method was called. The server
-     * is asked when the returned {@code Mono} is subscribed to. A subscription started from the answer receives every
-     * event written after the call, and can also receive the events written up to a second before it.
+     * Answers with the start of the second the MongoDB server's clock showed when this method was called, worked back
+     * from a reply the server sends when the returned {@code Mono} is subscribed to. A subscription started from the
+     * answer receives every event written after the call, and can also receive the events written up to a second
+     * before it, plus the time that reply took to reach the client.
      * <p>
      * Fails when the server can't be reached, and when its reply has no clock to read. The answer can be later than the
      * call if the server's clock is stepped forward between the call and the subscription, or if the server that

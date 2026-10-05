@@ -172,6 +172,24 @@ public interface SubscriptionModelFixture {
     }
 
     /**
+     * How long before {@code subscribe(..)} an event can have been published and still reach a new subscription that
+     * starts at the present. Only asked when {@link #replaysHistoryToANewSubscription()} answers {@code false}.
+     * <p>
+     * Zero by default, which owes a new subscription that receives nothing published before it. A model that can't
+     * tell exactly where the present is, and starts a little earlier rather than risk skipping an event written right
+     * after {@code subscribe(..)} returns, declares how much earlier. The suite then waits that long, and a tenth of a
+     * second more, between publishing and subscribing wherever it asserts that an earlier event doesn't arrive. The
+     * tenth of a second is there because a model measures the moment on its own clock, which can trail the suite's by
+     * the time a reply takes to reach it. Both answers are asserted, since an event published longer ago than this
+     * still owes its absence.
+     * <p>
+     * Declared rather than asked because nothing on {@code SubscriptionModel} reports it.
+     */
+    default Duration howFarBackANewSubscriptionMayStart() {
+        return Duration.ZERO;
+    }
+
+    /**
      * Whether resuming one subscription after {@code stop()} makes {@code isRunning()} return {@code true} again.
      * <p>
      * Both answers are asserted. A model whose {@code isRunning()} is one running or stopped flag answers {@code true},

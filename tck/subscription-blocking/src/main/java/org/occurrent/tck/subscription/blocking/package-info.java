@@ -93,6 +93,11 @@
  *       <td>a new subscription receives what predates it</td>
  *       <td>it receives nothing that predates it</td>
  *       <td>{@code SubscriptionModelConformance}</td></tr>
+ *   <tr><td>{@code howFarBackANewSubscriptionMayStart()}, a {@code Duration} asked only when the row above answers
+ *       {@code false}</td>
+ *       <td>zero owes a new subscription that receives nothing published before it</td>
+ *       <td>a longer window owes one that receives nothing published longer ago than the window</td>
+ *       <td>{@code SubscriptionModelConformance}</td></tr>
  *   <tr><td>{@code aResumeAfterStopReopensTheModel()}</td>
  *       <td>{@code isRunning()} returns {@code true} once one subscription is resumed after {@code stop()}</td>
  *       <td>it still returns {@code false} after that resume</td>
