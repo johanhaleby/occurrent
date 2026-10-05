@@ -1797,16 +1797,18 @@ A wrapped model that does not override `globalCheckpointAsOfNow()` answers with 
 a subscription over it can skip what was written between the call and the read, as in 0.33.0. A `subscribe(..)` with a
 dynamic `StartAt` on a stopped model that the durable model drives runs its function only once the model is started, as
 in 0.33.0. When it answers the subscription-model default, the subscription starts from where the feed was at the
-`subscribe(..)`, which reads that in case it does, and when it answers `StartAt.now()`, from where the feed was at the
-start. For `StartAt.now()`, and for a dynamic `StartAt` that answers it, a read that answers nothing makes the
+`subscribe(..)`, which reads that in case it does, and when it answers `StartAt.now()`, from where the feed was at its
+first start. For `StartAt.now()`, and for a dynamic `StartAt` that answers it, a read that answers nothing makes the
 subscription open its feed at `StartAt.now()` each time it starts, as in 0.33.0. A read that fails is read again after a
-delay that about doubles, with a warning for each attempt, until it answers or the subscription is cancelled, paused,
-stopped or shut down. A read that is slow to answer is waited for however long it takes, and the subscription logs a
-warning every 10 seconds that it still waits. Where the durable model drives the subscription, the read for the
-subscription-model default warns the same way. Without the warning a wrapped model that never answers would keep the
-subscription from starting with nothing in the log. None of these reads holds up a call or another subscription. Where
-the durable model hands the subscription to a wrapped model, the wait for the read of the subscription-model default,
-described below, still logs nothing.
+delay that about doubles, with a warning for each attempt, until it answers. A read that is slow to answer is waited for
+however long it takes, and the subscription logs a warning every 10 seconds that it still waits. Each subscription has
+at most one such read running, whether the durable model drives it or hands it to a wrapped model, and every start and
+resume of the subscription waits for that read instead of asking again. A cancel of the subscription or a shutdown
+cancels the read and ends its warnings. A pause or a stop does not cancel it, and a resume waits for it. Where the
+durable model drives the subscription, the read for the subscription-model default warns the same way. Without the
+warning a wrapped model that never answers would keep the subscription from starting with nothing in the log. None of
+these reads holds up a call or another subscription. Where the durable model hands the subscription to a wrapped model,
+the wait for the read of the subscription-model default, described below, still logs nothing.
 
 This amends a sentence of [ADR 89](0089-manual-subscription-mode-on-the-reactive-stack.md), which shipped in 0.33.0 and
 says a registration naming its own `StartAt` is not read for, `StartAt.now()` included. Where the durable model drives
