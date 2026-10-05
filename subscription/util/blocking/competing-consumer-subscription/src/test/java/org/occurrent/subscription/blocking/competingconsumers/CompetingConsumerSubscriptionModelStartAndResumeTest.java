@@ -19,6 +19,7 @@ package org.occurrent.subscription.blocking.competingconsumers;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.AppenderBase;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -1618,6 +1619,110 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         }
     }
 
+    @Test
+    void a_lease_that_could_not_be_given_back_after_a_resume_failed_in_the_wrapped_model_is_warned_about_with_both_failures() {
+        FailingInMemory wrapped = new FailingInMemory();
+        SynchronousLeaseStrategy grants = new SynchronousLeaseStrategy();
+        grants.grantOnRegister = true;
+        CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, grants);
+        List<String> warnings = new CopyOnWriteArrayList<>();
+        AppenderBase<ILoggingEvent> appender = warningsWithWhatTheyCarry(warnings);
+        try {
+            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), __ -> {
+            });
+            await().atMost(5, SECONDS).until(() -> overInMemory.isRunning("x"));
+            overInMemory.pauseSubscription("x");
+            wrapped.resumeThrowsOn.add("x");
+            grants.releaseThrows = true;
+
+            // Registers x, which wins the lease there and then, fails to resume it in the wrapped model, and cannot give the lease back
+            overInMemory.resumeSubscription("x");
+
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(warnings).as("the warnings, one of which should carry the failure to give the lease of x back")
+                    .anyMatch(warning -> warning.contains("The wrapped model cannot resume x right now [suppressed The lease store cannot release x]")));
+        } finally {
+            detach(appender);
+            grants.releaseThrows = false;
+            overInMemory.shutdown();
+        }
+    }
+
+    @ParameterizedTest(name = "with a grant that failed to start it before the first stop(): {0}")
+    @ValueSource(booleans = {true, false})
+    void a_waiting_competing_subscription_the_user_resumed_is_not_paused_by_a_later_stop(boolean aGrantFailedBeforeTheFirstStop) {
+        FailingInMemory wrapped = new FailingInMemory();
+        SynchronousLeaseStrategy grants = new SynchronousLeaseStrategy();
+        CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, grants);
+        try {
+            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), __ -> {
+            });
+            await().atMost(5, SECONDS).until(() -> grants.registered.contains("x") && noTryUnderWayFor("x"));
+            if (aGrantFailedBeforeTheFirstStop) {
+                // Made paused in the wrapped model or not, x fails to start there
+                wrapped.subscribeThrowsOn.add("x");
+                wrapped.resumeThrowsOn.add("x");
+                assertThat(catchThrowable(() -> grants.grant("x"))).as("the grant of x, which the wrapped model fails to start").isNotNull();
+                await().atMost(5, SECONDS).until(() -> grants.calls.contains("release x") && noTryUnderWayFor("x"));
+                wrapped.subscribeThrowsOn.clear();
+                wrapped.resumeThrowsOn.clear();
+            }
+            overInMemory.stop();
+            await().atMost(5, SECONDS).until(() -> noTryUnderWayFor("x"));
+            overInMemory.start(false);
+            await().atMost(5, SECONDS).until(() -> noTryUnderWayFor("x"));
+            assertThat(overInMemory.isPaused("x")).as("x, after a stop() that came after the grant that failed to start it, and start(false)").isEqualTo(aGrantFailedBeforeTheFirstStop);
+            if (aGrantFailedBeforeTheFirstStop) {
+                // Waits for its lease, which this node does not hold
+                overInMemory.resumeSubscription("x");
+                await().atMost(5, SECONDS).until(() -> noTryUnderWayFor("x"));
+            }
+
+            overInMemory.stop();
+            await().atMost(5, SECONDS).until(() -> noTryUnderWayFor("x"));
+            overInMemory.start(false);
+            await().atMost(5, SECONDS).until(() -> noTryUnderWayFor("x"));
+
+            assertThat(overInMemory.isPaused("x")).as("x, which waited for its lease when stop() came, after start(false)").isFalse();
+        } finally {
+            overInMemory.shutdown();
+        }
+    }
+
+    @Test
+    void a_grant_whose_failure_gave_the_lease_back_mutes_no_later_warning_on_its_thread_when_the_wrapped_model_throws_that_exception_again() {
+        IllegalStateException failsEveryTime = new IllegalStateException("The wrapped model throws this exception every time it fails");
+        FailingInMemory wrapped = new FailingInMemory();
+        wrapped.throwsEveryTime = failsEveryTime;
+        SynchronousLeaseStrategy grants = new SynchronousLeaseStrategy();
+        grants.grantOnRegister = true;
+        CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, grants);
+        List<String> warningsWithTheCause = new CopyOnWriteArrayList<>();
+        AppenderBase<ILoggingEvent> appender = warningsCarrying(failsEveryTime.getMessage(), warningsWithTheCause);
+        try {
+            overInMemory.subscribe(SUBSCRIBER_ID, "y", null, StartAt.now(), __ -> {
+            });
+            await().atMost(5, SECONDS).until(() -> overInMemory.isRunning("y"));
+            grants.grantOnRegister = false;
+            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), __ -> {
+            });
+            await().atMost(5, SECONDS).until(() -> grants.registered.contains("x") && noTryUnderWayFor("x"));
+            wrapped.subscribeThrowsOn.add("x");
+            wrapped.resumeThrowsOn.add("x");
+            assertThat(catchThrowable(() -> grants.grant("x"))).as("what the grant of x, which the wrapped model fails to start, throws").isSameAs(failsEveryTime);
+            assertThat(warningsWithTheCause).as("the warnings once the grant of x threw").containsExactly("the lease is given back");
+            wrapped.isRunningThrowsOn.add("y");
+
+            // On the same thread, asks the wrapped model whether it runs y, which throws the same exception
+            grants.grant("y");
+
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(warningsWithTheCause).as("the warnings once the grant of y failed too")
+                    .contains("A call for CompetingConsumer failed, so it is tried again (subscriberId=subscriber, subscriptionId=y)"));
+        } finally {
+            detach(appender);
+            overInMemory.shutdown();
+        }
+    }
+
     // Each warning this model logs with the given cause, recorded as "the lease is given back" for the warning that says
     // so, and as its message otherwise
     private static AppenderBase<ILoggingEvent> warningsCarrying(String cause, List<String> warnings) {
@@ -1633,6 +1738,33 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         appender.start();
         ((Logger) LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class)).addAppender(appender);
         return appender;
+    }
+
+    // Each warning this model logs, as the message of the failure it was logged with, and of each failure suppressed
+    // there, in brackets
+    private static AppenderBase<ILoggingEvent> warningsWithWhatTheyCarry(List<String> warnings) {
+        AppenderBase<ILoggingEvent> appender = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getLevel() == Level.WARN) {
+                    warnings.add(carried(event.getThrowableProxy()));
+                }
+            }
+        };
+        appender.start();
+        ((Logger) LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class)).addAppender(appender);
+        return appender;
+    }
+
+    private static String carried(@Nullable IThrowableProxy failure) {
+        if (failure == null) {
+            return "nothing";
+        }
+        StringBuilder carried = new StringBuilder(failure.getMessage());
+        for (IThrowableProxy suppressed : failure.getSuppressed()) {
+            carried.append(" [suppressed ").append(carried(suppressed)).append("]");
+        }
+        return carried.toString();
     }
 
     private static boolean noTryUnderWayFor(String subscriptionId) {
@@ -1829,15 +1961,19 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     /**
      * An {@link InMemorySubscriptionModel} that throws on the next {@code start(..)} when {@link #startThrowsOnce} is
      * set, starts and then throws on the next one when {@link #startTakesEffectThenThrowsOnce} is set, and throws on
-     * resuming a subscription in {@link #resumeThrowsOn}. While {@link #isRunningIsSlowOnceOnATry} is set, the first
-     * question on the thread of a try whether a subscription runs takes 700 ms. Once {@link #blockTheNextQuestionOnATry()}
-     * is called, the next such question waits until {@link #letTheQuestionsGoOn()} is called, or for 30 seconds at the
-     * most.
+     * resuming a subscription in {@link #resumeThrowsOn}, on making one in {@link #subscribeThrowsOn}, and on being asked
+     * whether one in {@link #isRunningThrowsOn} runs. Those three throw {@link #throwsEveryTime} once it is set. While
+     * {@link #isRunningIsSlowOnceOnATry} is set, the first question on the thread of a try whether a subscription runs
+     * takes 700 ms. Once {@link #blockTheNextQuestionOnATry()} is called, the next such question waits until
+     * {@link #letTheQuestionsGoOn()} is called, or for 30 seconds at the most.
      */
     private static final class FailingInMemory extends InMemorySubscriptionModel {
         private final AtomicBoolean startThrowsOnce = new AtomicBoolean();
         private final AtomicBoolean startTakesEffectThenThrowsOnce = new AtomicBoolean();
         private final Set<String> resumeThrowsOn = ConcurrentHashMap.newKeySet();
+        private final Set<String> subscribeThrowsOn = ConcurrentHashMap.newKeySet();
+        private final Set<String> isRunningThrowsOn = ConcurrentHashMap.newKeySet();
+        private volatile @Nullable RuntimeException throwsEveryTime;
         private final AtomicBoolean isRunningIsSlowOnceOnATry = new AtomicBoolean();
         private final AtomicBoolean isRunningBlocksOnceOnATry = new AtomicBoolean();
         private final CountDownLatch questionBlocking = new CountDownLatch(1);
@@ -1871,6 +2007,9 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
                     Thread.currentThread().interrupt();
                 }
             }
+            if (isRunningThrowsOn.contains(subscriptionId)) {
+                throw failure("The wrapped model cannot say whether it runs " + subscriptionId + " right now");
+            }
             return super.isRunning(subscriptionId);
         }
 
@@ -1886,11 +2025,24 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         }
 
         @Override
+        public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            if (subscribeThrowsOn.contains(subscriptionId)) {
+                throw failure("The wrapped model cannot subscribe " + subscriptionId + " right now");
+            }
+            return super.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
         public Subscription resumeSubscription(String subscriptionId) {
             if (resumeThrowsOn.contains(subscriptionId)) {
-                throw new IllegalStateException("The wrapped model cannot resume " + subscriptionId + " right now");
+                throw failure("The wrapped model cannot resume " + subscriptionId + " right now");
             }
             return super.resumeSubscription(subscriptionId);
+        }
+
+        private RuntimeException failure(String message) {
+            @Nullable RuntimeException everyTime = throwsEveryTime;
+            return everyTime != null ? everyTime : new IllegalStateException(message);
         }
     }
 
@@ -1943,7 +2095,8 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
      * thread, as a lease strategy does for a lease that changed hands. {@link #grant(String)} plays a refresh round
      * granting a lease that another node gave up, which, as with the MongoDB lease strategies, only a registered
      * consumer can win. Releasing a lease keeps the consumer registered, unregistering does not. Both tell the listeners
-     * when the consumer held the lease, a release only while {@link #tellsTheListenersAboutARelease} is set. Asked
+     * when the consumer held the lease, a release only while {@link #tellsTheListenersAboutARelease} is set. A release
+     * throws, and keeps the lease, while {@link #releaseThrows} is set. Asked
      * whether this node holds the lease of a subscription in {@link #hasLockErrorsOnceOn}, it throws an Error, once.
      * Once {@link #blockTheNextRegisterOnATry()} is called, the next register on the thread of a try waits until
      * {@link #letTheRegistersGoOn()} is called, or for 30 seconds at the most.
@@ -1958,6 +2111,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         private volatile boolean grantOnRegister;
         private volatile boolean registerThrows;
         private volatile boolean tellsTheListenersAboutARelease = true;
+        private volatile boolean releaseThrows;
         private final AtomicBoolean registerBlocksOnceOnATry = new AtomicBoolean();
         private final CountDownLatch registerBlocking = new CountDownLatch(1);
         private final CountDownLatch registersMayGoOn = new CountDownLatch(1);
@@ -2030,6 +2184,9 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         @Override
         public void releaseCompetingConsumer(String subscriptionId, String subscriberId) {
             calls.add("release " + subscriptionId);
+            if (releaseThrows) {
+                throw new IllegalStateException("The lease store cannot release " + subscriptionId);
+            }
             if (holders.remove(subscriptionId) && tellsTheListenersAboutARelease) {
                 listeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
             }
