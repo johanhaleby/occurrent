@@ -53,6 +53,22 @@ import static org.mockito.Mockito.when;
 @Timeout(10)
 class MongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
 
+    /**
+     * A fresh JVM can spend most of a 200 ms wait loading the classes behind a failing read and its retry, so the
+     * deadline passes before the first retry and the store makes only one attempt. This loads them on a store of
+     * its own, so the mocks a test verifies count only that test's wait.
+     */
+    private static void loadTheClassesBehindAFailingWait() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        IndexOperations indexOperations = mock(IndexOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(indexOperations);
+        when(indexOperations.ensureIndex(any())).thenThrow(new RuntimeException("store outage")).thenReturn("index");
+        when(mongoOperations.exists(any(Query.class), anyString())).thenThrow(new RuntimeException("store outage")).thenReturn(true);
+        RetryStrategy fastRetry = RetryStrategy.exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(50), 2.0);
+        new MongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7), fastRetry, Backoff.fixed(20))
+                .waitUntilApplied("orders", AppendId.mint(), Duration.ofSeconds(5));
+    }
+
     @Test
     void returns_false_within_its_timeout_against_a_store_whose_reads_keep_failing() {
         MongoOperations mongoOperations = mock(MongoOperations.class);
@@ -62,6 +78,7 @@ class MongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
         RetryStrategy fastRetry = RetryStrategy.exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(50), 2.0);
         AppliedAppendStore store = new MongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7), fastRetry, Backoff.fixed(20));
         Duration timeout = Duration.ofMillis(200);
+        loadTheClassesBehindAFailingWait();
 
         Instant start = Instant.now();
         boolean applied = store.waitUntilApplied("orders", AppendId.mint(), timeout);
@@ -83,6 +100,7 @@ class MongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
         RetryStrategy fastRetry = RetryStrategy.exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(50), 2.0);
         AppliedAppendStore store = new MongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7), fastRetry, Backoff.fixed(20));
         Duration timeout = Duration.ofMillis(200);
+        loadTheClassesBehindAFailingWait();
 
         Instant start = Instant.now();
         boolean applied = store.waitUntilApplied("orders", AppendId.mint(), timeout);
