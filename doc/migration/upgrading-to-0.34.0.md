@@ -1516,9 +1516,15 @@ throws after it took effect. Among the calls that do this are `start(..)`, a lea
 
 `start(..)` returns without waiting for such a subscription to run, also for one you paused directly on the wrapped
 model. Each one is resumed on another thread, and tried again until the subscription runs, loses its lease, or is
-paused or cancelled through the competing consumer model. A resume that fails logs a warning. So a resume that blocks
-in the wrapped model holds up neither `start(..)`, `stop()` nor any other subscription. If your code expects a
-subscription to run the moment `start(..)` returns, wait for `isRunning(id)` to return `true` instead.
+paused or cancelled through the competing consumer model. A resume that fails logs a warning. So a resume of such a
+subscription that blocks in the wrapped model holds up neither `start(..)`, `stop()` nor any other subscription. If
+your code expects a subscription to run the moment `start(..)` returns, wait for `isRunning(id)` to return `true`
+instead.
+
+`start(..)` still waits while it makes a competing subscription that waits for its lease compete, and while it resumes
+one that lost its lease or, as `start(true)`, one paused by the competing consumer model's `pauseSubscription(..)` or
+`stop()`. A `start(true)` in 0.33.0 waited for both too. A start or resume that blocks in the wrapped model there holds
+up that `start(..)`, and a `stop()` that waits for it.
 
 A competing subscription you paused directly on the wrapped model runs again too, see [Pause a competing subscription
 through the competing consumer model](#pause-a-competing-subscription-through-the-competing-consumer-model) below.
@@ -1605,7 +1611,9 @@ subscription you paused before then stays paused. A `start(..)` that throws does
 returned without throwing, each `start(..)`, also one after `stop()`, resumes every subscription that doesn't compete and
 makes every competing one compete for its lease, also one that `stop()` paused. The exception is one you paused and
 haven't resumed since, which `start(false)` keeps paused. Once a `start(true)` has resumed one you paused, a later
-`start(false)` resumes it too, also when that `start(true)` threw for another subscription.
+`start(false)` resumes it too, also when that `start(true)` threw for another subscription. A `start(false)` returns
+without waiting for a competing subscription that `stop()` paused to run again, as in [section
+20](#20-a-competing-consumers-isrunning-says-whether-the-model-is-started).
 
 A wrapped model of your own that refuses `subscribePaused(..)` with `UnsupportedOperationException` is the exception.
 A competing subscription made before the first `start(..)` registers for its lease straight away. When this node wins

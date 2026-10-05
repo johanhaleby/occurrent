@@ -1022,6 +1022,7 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
             overInMemory.stop();
 
             overInMemory.start(false);
+            await().atMost(5, SECONDS).until(() -> overInMemory.isRunning("x"));
             wrapped.accept(List.of(event("e1")));
             wrapped.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
 
@@ -1105,8 +1106,10 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
 
             overInMemory.start(false);
 
-            assertThat(grants.holders).as("the subscriptions this node holds the lease for, after start(true), stop() and start(false)").containsExactly("x");
-            assertThat(overInMemory.isRunning("x")).as("x, whose pause start(true) undid, after start(true), stop() and start(false)").isTrue();
+            await().atMost(5, SECONDS).untilAsserted(() -> {
+                assertThat(grants.holders).as("the subscriptions this node holds the lease for, after start(true), stop() and start(false)").containsExactly("x");
+                assertThat(overInMemory.isRunning("x")).as("x, whose pause start(true) undid, after start(true), stop() and start(false)").isTrue();
+            });
         } finally {
             overInMemory.shutdown();
         }
@@ -1486,6 +1489,71 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         }
     }
 
+    @Test
+    void a_start_without_resuming_returns_while_the_wrapped_model_blocks_in_resuming_a_competing_subscription_that_stop_paused_before_a_start_returned_and_the_subscription_runs_once_that_resume_returns() throws Exception {
+        ResumeBlocksInMemory wrapped = new ResumeBlocksInMemory();
+        wrapped.stop();
+        SynchronousLeaseStrategy grants = new SynchronousLeaseStrategy();
+        grants.grantOnRegister = true;
+        CompetingConsumerSubscriptionModel builtStopped = new CompetingConsumerSubscriptionModel(wrapped, grants);
+        List<String> deliveredToX = new CopyOnWriteArrayList<>();
+        try {
+            builtStopped.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), cloudEvent -> deliveredToX.add(cloudEvent.getId()));
+            wrapped.startTakesEffectThenThrowsOnce.set(true);
+            assertThat(catchThrowable(() -> builtStopped.start(false))).as("the first start(false), whose start of the wrapped model took effect and then threw").isNotNull();
+            await().atMost(5, SECONDS).until(() -> builtStopped.isRunning("x"));
+            builtStopped.stop();
+            wrapped.resumeBlocksOn.add("x");
+
+            CompletableFuture<Void> started = onAThreadOfItsOwn(() -> builtStopped.start(false));
+
+            assertThat(started).as("start(false) on a model built stopped, after a start that threw and a stop(), while the wrapped model blocks in resuming x").succeedsWithin(Duration.ofSeconds(3));
+            assertThat(wrapped.resumeBlocking.await(5, SECONDS)).as("the wrapped model was asked to resume x").isTrue();
+            wrapped.letTheResumesGoOn();
+            await().atMost(5, SECONDS).until(() -> builtStopped.isRunning("x"));
+            wrapped.accept(List.of(event("e1")));
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(deliveredToX).as("events delivered to x, which holds its lease, once its resume in the wrapped model returned").containsExactly("e1"));
+        } finally {
+            wrapped.letTheResumesGoOn();
+            builtStopped.shutdown();
+        }
+    }
+
+    @Test
+    void the_warning_that_a_resume_in_the_wrapped_model_failed_and_the_lease_was_given_back_carries_what_the_wrapped_model_threw() {
+        FailingInMemory wrapped = new FailingInMemory();
+        SynchronousLeaseStrategy grants = new SynchronousLeaseStrategy();
+        grants.grantOnRegister = true;
+        CompetingConsumerSubscriptionModel overInMemory = new CompetingConsumerSubscriptionModel(wrapped, grants);
+        List<String> causesWarnedAbout = new CopyOnWriteArrayList<>();
+        AppenderBase<ILoggingEvent> appender = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                String message = event.getFormattedMessage();
+                if (event.getLevel() == Level.WARN && message.contains("so the lease is given back") && message.contains("subscriptionId=x")) {
+                    causesWarnedAbout.add(event.getThrowableProxy() == null ? "no cause" : event.getThrowableProxy().getClassName() + ": " + event.getThrowableProxy().getMessage());
+                }
+            }
+        };
+        appender.start();
+        ((Logger) LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class)).addAppender(appender);
+        try {
+            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), __ -> {
+            });
+            await().atMost(5, SECONDS).until(() -> overInMemory.isRunning("x"));
+            wrapped.pauseSubscription("x");
+            wrapped.resumeThrowsOn.add("x");
+
+            overInMemory.start(false);
+
+            await().atMost(5, SECONDS).untilAsserted(() -> assertThat(causesWarnedAbout).as("the causes of the warnings that the resume of x failed and its lease was given back")
+                    .isNotEmpty().allMatch(cause -> cause.equals("java.lang.IllegalStateException: The wrapped model cannot resume x right now")));
+        } finally {
+            detach(appender);
+            overInMemory.shutdown();
+        }
+    }
+
     // A thread of its own, not one of the common pool, so a call that blocks keeps no later call from running
     private static CompletableFuture<Void> onAThreadOfItsOwn(Runnable call) {
         CompletableFuture<Void> done = new CompletableFuture<>();
@@ -1720,12 +1788,21 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
     /**
      * An {@link InMemorySubscriptionModel} whose resume of a subscription in {@link #resumeBlocksOn} waits until
      * {@link #letTheResumesGoOn()} is called, or for 30 seconds at the most. {@link #resumeBlocking} opens once such a
-     * resume has begun.
+     * resume has begun. A start while {@link #startTakesEffectThenThrowsOnce} is set takes effect and then throws, once.
      */
     private static final class ResumeBlocksInMemory extends InMemorySubscriptionModel {
         private final Set<String> resumeBlocksOn = ConcurrentHashMap.newKeySet();
         private final CountDownLatch resumeBlocking = new CountDownLatch(1);
         private final CountDownLatch resumesMayGoOn = new CountDownLatch(1);
+        private final AtomicBoolean startTakesEffectThenThrowsOnce = new AtomicBoolean();
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            super.start(resumeSubscriptionsAutomatically);
+            if (startTakesEffectThenThrowsOnce.compareAndSet(true, false)) {
+                throw new IllegalStateException("The wrapped model started and then threw");
+            }
+        }
 
         @Override
         public Subscription resumeSubscription(String subscriptionId) {
