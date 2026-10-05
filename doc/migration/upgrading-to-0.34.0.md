@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Twenty things are worth reading, four of them compile-time breaks. At compile time, if you use the flow saga's
+The guide has twenty-one sections, four of them about compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -72,10 +72,14 @@ whose history was lost when it is told not to restart it, and no longer builds o
 `DurableSubscriptionModel` over a MongoDB model also writes a checkpoint once a minute for a subscription that receives
 no events. Read
 [section 19](#19-springmongosubscriptionmodel-reads-its-own-cursor-and-a-quiet-durable-subscription-saves-its-position).
-Finally, `CompetingConsumerSubscriptionModel.isRunning()` now says whether the model is started, and no longer returns
+Then `CompetingConsumerSubscriptionModel.isRunning()` now says whether the model is started, and no longer returns
 what the wrapped model returns, which after `stop()` and a `start(..)` that won no lease was `false`, unless the model
 had a subscription that doesn't compete. Read
 [section 20](#20-a-competing-consumers-isrunning-says-whether-the-model-is-started).
+Finally, a `ReactorMongoSubscriptionModel` subscription started at the present now starts from the moment
+`subscribe(..)` is called. It can receive events written up to a second before the call, and one whose change stream
+first opens after its history is gone stops, unless you configure the model to restart it. Read
+[section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1491,3 +1495,35 @@ instead. It asks the wrapped model, which runs a competing subscription only on 
 
 There is no recipe for this change. The call compiles as before, and what it returns is runtime behavior that a rewrite
 of the source cannot see.
+
+## 21. A reactive MongoDB subscription started at the present starts from the `subscribe(..)` call
+
+This covers `ReactorMongoSubscriptionModel`. In 0.33.0 a subscription started with `StartAt.now()` or the model default
+started at the present of the moment its change stream opened, after `subscribe(..)` had returned, so an event written
+in between was never delivered.
+
+Now the model notes the moment `subscribe(..)` is called, or the moment the `Flux` from `subscribe(filter, startAt)` is
+subscribed to, and opens the change stream at the start of the second the server's clock showed then. Three things
+change with it.
+
+- A new subscription can receive events written up to a second before `subscribe(..)` was called, plus the time the
+  reply to the model's `hello` took to reach the client.
+- A subscription made while the model is stopped receives the events written between `subscribe(..)` and `start()`. In
+  0.33.0 it started at the present of `start()`.
+- A subscription whose change stream first opens longer after `subscribe(..)` than the oplog keeps history, because the
+  model was stopped or the subscription paused until then, gets the handling `restartSubscriptionsOnChangeStreamHistoryLost`
+  configures. With the model's default, `false`, the subscription stops, the model logs an error, and `isRunning(id)`
+  returns `false`. `waitUntilStarted()` has already reported it started by then. In 0.33.0 it opened at the present and
+  skipped the events written in between.
+
+What to do:
+
+- Make sure your handlers can receive an event they have already handled. Delivery is at least once, which already
+  allowed repeats, so a handler written for that needs no change.
+- To have a subscription whose history is gone restart at the present, skipping the events in between as in 0.33.0,
+  create the model with `ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(true)`.
+  The reactive Spring Boot starter turns it on unless you set `occurrent.subscription.mongodb.restart-on-change-stream-history-lost`
+  to `false`.
+
+There is no recipe for this change. Where a subscription starts is runtime behavior that a rewrite of the source cannot
+see.
