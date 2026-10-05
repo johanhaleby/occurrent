@@ -151,7 +151,9 @@ class CompetingConsumerOverAStoppedWrappedModelTest {
         rival = strategy();
         assertThat(rival.registerCompetingConsumer("X", "rival")).isTrue();
         node.start(true);
-        assertThat(nativeModel.isRunning()).as("a start that won no lease does not start the wrapped model").isFalse();
+        assertThat(nativeModel.isRunning()).as("the wrapped model, after a start that won no lease").isTrue();
+        // Stopped by a call to the wrapped model itself, so Y wins its lease while that model is stopped
+        nativeModel.stop();
         CopyOnWriteArrayList<CloudEvent> handled = new CopyOnWriteArrayList<>();
 
         node.subscribe("node", "Y", null, StartAt.subscriptionModelDefault(), handled::add);
