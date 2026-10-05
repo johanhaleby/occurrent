@@ -30,7 +30,9 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 
+import java.util.Date;
 import java.util.OptionalLong;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -91,6 +93,32 @@ class MongoCommonsTest {
     @Test
     void operation_time_after_is_null_when_the_reply_carries_none() {
         BsonTimestamp result = MongoCommons.operationTimeAfter(new Document("ok", 1.0));
+
+        assertThat(result).isNull();
+    }
+
+    @Test
+    void operation_time_as_of_is_the_start_of_the_second_the_server_clock_showed_the_elapsed_time_before_the_reply() {
+        // 1_700_000_001.200 at the reply, 150 ms after the moment, so 1_700_000_001.049 at the moment
+        Document reply = new Document("ok", 1.0).append("localTime", new Date(1_700_000_001_200L));
+
+        BsonTimestamp result = MongoCommons.operationTimeAsOf(reply, TimeUnit.MILLISECONDS.toNanos(150));
+
+        assertThat(result).isEqualTo(new BsonTimestamp(1_700_000_001, 0));
+    }
+
+    @Test
+    void operation_time_as_of_falls_in_the_previous_second_when_the_elapsed_time_crosses_a_second() {
+        Document reply = new Document("ok", 1.0).append("localTime", new Date(1_700_000_001_200L));
+
+        BsonTimestamp result = MongoCommons.operationTimeAsOf(reply, TimeUnit.MILLISECONDS.toNanos(200));
+
+        assertThat(result).isEqualTo(new BsonTimestamp(1_700_000_000, 0));
+    }
+
+    @Test
+    void operation_time_as_of_is_null_when_the_reply_has_no_local_time() {
+        BsonTimestamp result = MongoCommons.operationTimeAsOf(new Document("ok", 1.0), 0);
 
         assertThat(result).isNull();
     }

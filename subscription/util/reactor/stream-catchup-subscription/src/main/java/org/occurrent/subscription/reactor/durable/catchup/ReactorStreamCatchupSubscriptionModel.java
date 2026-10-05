@@ -316,6 +316,11 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         return subscriptionModel.globalCheckpoint();
     }
 
+    @Override
+    public Mono<Checkpoint> globalCheckpointAsOfNow() {
+        return subscriptionModel.globalCheckpointAsOfNow();
+    }
+
     /**
      * Subscribe to stream events matching {@code filter}, starting from a {@code position}-based
      * {@link StartAt#checkpoint(Checkpoint)} built from {@link GlobalCheckpoint} (for

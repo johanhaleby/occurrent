@@ -266,6 +266,11 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
         return subscriptionModel.globalCheckpoint();
     }
 
+    @Override
+    public Mono<Checkpoint> globalCheckpointAsOfNow() {
+        return subscriptionModel.globalCheckpointAsOfNow();
+    }
+
     /**
      * Subscribe to DCB events matching {@code criteria}. A {@link DcbStartAt} that carries a {@code position} (for
      * example {@link DcbStartAt#beginning()} or {@link DcbStartAt#afterPosition(long)}) replays history from that

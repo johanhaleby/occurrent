@@ -59,12 +59,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Proves that {@code DEFAULT} and {@code NOW} on the reactive {@link StreamSubscription} never replay pre-existing
- * history, only deliver live events, exactly as {@code OccurrentReactiveMongoAutoConfigurationWiringTest}'s fail-loud
+ * Proves that {@code DEFAULT} and {@code NOW} on the reactive {@link StreamSubscription} never replay history written
+ * more than a second before they subscribe, only deliver live events, exactly as {@code OccurrentReactiveMongoAutoConfigurationWiringTest}'s fail-loud
  * tests document as the supported alternative to a time-based start (which the reactive stack rejects outright, since
  * it has no stream catch-up model).
  */
-@DisplayName("Reactive StreamSubscription startAt: DEFAULT and NOW never replay")
+@DisplayName("Reactive StreamSubscription startAt: DEFAULT and NOW never replay history older than a second")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @SpringBootTest(
         classes = ReactiveStreamSubscriptionStartPositionAnnotationMongoTest.StartPositionApplication.class,
@@ -90,7 +90,7 @@ class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
     private NowPositionSubscriber nowPositionSubscriber;
 
     @Test
-    void default_and_now_never_replay_pre_existing_history_only_live_events() {
+    void default_and_now_never_replay_history_older_than_a_second_only_live_events() {
         // Neither subscriber's handler is ever invoked for the historic event, and consequently neither
         // sees it in received() either, even after settling.
         await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
@@ -140,7 +140,8 @@ class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
                     .build();
         }
 
-        // Appends history before either subscriber starts, so a wrongly-replaying subscriber would be caught.
+        // Appends history before either subscriber starts, so a wrongly-replaying subscriber would be caught. Both
+        // subscribe more than a second after it, see HistoryAppender.
         @Bean
         HistoryAppender historyAppender(ApplicationService<TestEvent> applicationService) {
             return new HistoryAppender(applicationService);
@@ -166,9 +167,12 @@ class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
             this.applicationService = applicationService;
         }
 
+        // Waits a second and a half once the history is written, since a subscription started at the present can
+        // also receive what was written up to a second before it, which the at-least-once contract allows
         @PostConstruct
-        void appendHistory() {
+        void appendHistory() throws InterruptedException {
             applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("historic"))).block();
+            Thread.sleep(1500);
         }
     }
 

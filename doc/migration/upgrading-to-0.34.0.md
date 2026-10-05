@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-This guide covers twenty-one changes, five of them compile-time breaks. At compile time, if you use the flow saga's
+The guide has twenty-two sections, five of them about compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -72,13 +72,17 @@ whose history was lost when it is told not to restart it, and no longer builds o
 `DurableSubscriptionModel` over a MongoDB model also writes a checkpoint once a minute for a subscription that receives
 no events. Read
 [section 19](#19-springmongosubscriptionmodel-reads-its-own-cursor-and-a-quiet-durable-subscription-saves-its-position).
-The reactor `cancelSubscription(..)` returns a `Mono<Void>`, which is a fifth compile-time break for a class that
-implements it. Read
-[section 20](#20-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted).
-Finally, `CompetingConsumerSubscriptionModel.isRunning()` now says whether the model is started, and no longer returns
+Then `CompetingConsumerSubscriptionModel.isRunning()` now says whether the model is started, and no longer returns
 what the wrapped model returns, which after `stop()` and a `start(..)` that won no lease was `false`, unless the model
 had a subscription that doesn't compete. Read
-[section 21](#21-a-competing-consumers-isrunning-says-whether-the-model-is-started).
+[section 20](#20-a-competing-consumers-isrunning-says-whether-the-model-is-started).
+Then a `ReactorMongoSubscriptionModel` subscription started at the present now starts from the moment
+`subscribe(..)` is called. It can receive events written up to a second before the call, and one whose change stream
+first opens after its history is gone stops, unless you configure the model to restart it. Read
+[section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call).
+Finally, the reactor `cancelSubscription(..)` returns a `Mono<Void>`, which is a fifth compile-time break for a class
+that implements it. Read
+[section 22](#22-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1458,7 +1462,76 @@ Boot starter has no property for the interval, so define your own `SubscriptionM
 There is no recipe for these changes. The removed constructor has no replacement to rewrite to, and the rest is runtime
 behavior that a rewrite of the source cannot see.
 
-## 20. A reactor `cancelSubscription(..)` returns a `Mono` that completes once the stored state is deleted
+## 20. A competing consumer's `isRunning()` says whether the model is started
+
+This covers `isRunning()` on `CompetingConsumerSubscriptionModel`, the one that takes no subscription id. In 0.33.0 it
+returned what the wrapped model returned, so the answer depended on what had started the wrapped model.
+
+- A new model returned `true` over a wrapped model that runs, as a `SpringMongoSubscriptionModel` does by default, and
+  `false` over one built with `autoStartup(false)`.
+- After `stop()` and `start(..)`, it returned `false` until this node won a lease, unless the model had a subscription
+  that doesn't compete. `start(..)` starts the wrapped model again only for such a subscription, and a lease this node
+  wins starts it for the subscription the lease belongs to.
+- After `stop()`, a `resumeSubscription(..)` that won its lease made it return `true`.
+- After `shutdown()`, it returned `true` for as long as the wrapped model did.
+
+Now it returns `true` for a new model and after `start(..)`, also while this node holds no lease. It returns `false`
+after `stop()` until the next `start(..)`, also while a subscription you resumed after `stop()` runs on this node. Once
+`shutdown()` has begun, it returns `false` for good.
+
+A `ManualStartSubscriptionModel` that wraps it, which the Spring Boot starter makes when the subscription mode is
+`MANUAL`, returns `true` when it is started itself and the competing consumer model returns `true`. Over the starter's
+`SpringMongoSubscriptionModel`, which runs from the start, it answers as in 0.33.0 until its `stop()`. After that, it
+returns `true` after a `start()` that wins no lease, where 0.33.0 returned `false` unless the model had a subscription
+that doesn't compete. It returns `false` after a resume, until the next `start()`.
+
+A subscription that doesn't compete, made on a started model whose wrapped model is not running, such as a new model
+over one built with `autoStartup(false)`, stays paused until `start()` or `resumeSubscription(..)`, as in 0.33.0. Since
+`isRunning()` returned `false` there in 0.33.0, code that called `start()` whenever `isRunning()` returned `false` got
+the subscription running. That code now finds `isRunning()` returning `true`, no longer calls `start()`, and the
+subscription stays paused. Call `resumeSubscription(id)` once you have made such a subscription, or whenever
+`isPaused(id)` returns `true` for it. `start()` resumes it too, but `start()` is `start(true)`, so on a started model it
+also resumes every other subscription you paused with `pauseSubscription(..)`, competing or not.
+
+If you called `isRunning()` to find out whether this node delivers events, call `isRunning(id)` for each subscription
+instead. It asks the wrapped model, which runs a competing subscription only on the node that holds its lease.
+
+There is no recipe for this change. The call compiles as before, and what it returns is runtime behavior that a rewrite
+of the source cannot see.
+
+## 21. A reactive MongoDB subscription started at the present starts from the `subscribe(..)` call
+
+This covers `ReactorMongoSubscriptionModel`. In 0.33.0 a subscription started with `StartAt.now()` or the model default
+started at the present of the moment its change stream opened, after `subscribe(..)` had returned, so an event written
+in between was never delivered.
+
+Now the model notes the moment `subscribe(..)` is called, or the moment the `Flux` from `subscribe(filter, startAt)` is
+subscribed to, and opens the change stream at the start of the second the server's clock showed then. Three things
+change with it.
+
+- A new subscription can receive events written up to a second before `subscribe(..)` was called, plus the time the
+  reply to the model's `hello` took to reach the client.
+- A subscription made while the model is stopped receives the events written between `subscribe(..)` and `start()`. In
+  0.33.0 it started at the present of `start()`.
+- A subscription whose change stream first opens longer after `subscribe(..)` than the oplog keeps history, because the
+  model was stopped or the subscription paused until then, gets the handling `restartSubscriptionsOnChangeStreamHistoryLost`
+  configures. With the model's default, `false`, the subscription stops, the model logs an error, and `isRunning(id)`
+  returns `false`. `waitUntilStarted()` has already reported it started by then. In 0.33.0 it opened at the present and
+  skipped the events written in between.
+
+What to do:
+
+- Make sure your handlers can receive an event they have already handled. Delivery is at least once, which already
+  allowed repeats, so a handler written for that needs no change.
+- To have a subscription whose history is gone restart at the present, skipping the events in between as in 0.33.0,
+  create the model with `ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(true)`.
+  The reactive Spring Boot starter turns it on unless you set `occurrent.subscription.mongodb.restart-on-change-stream-history-lost`
+  to `false`.
+
+There is no recipe for this change. Where a subscription starts is runtime behavior that a rewrite of the source cannot
+see.
+
+## 22. A reactor `cancelSubscription(..)` returns a `Mono` that completes once the stored state is deleted
 
 This covers the reactor `CancellableSubscriptions`, which every reactor `SubscriptionModel` extends, the reactor
 `DcbSubscriptionModel`, and the reactor `DcbSubscriptions.cancel(..)`. In 0.33.0 `cancelSubscription(..)` returned
@@ -1711,40 +1784,3 @@ A reactor catch-up model cancelled before its replay handed the subscription ove
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has. A wrapped model
 you wrote yourself can therefore get `cancelSubscription(..)` for an id it was never given in this process. It stops
 nothing then, and deletes what it stores for that id, as `CancellableSubscriptions` describes.
-
-## 21. A competing consumer's `isRunning()` says whether the model is started
-
-This covers `isRunning()` on `CompetingConsumerSubscriptionModel`, the one that takes no subscription id. In 0.33.0 it
-returned what the wrapped model returned, so the answer depended on what had started the wrapped model.
-
-- A new model returned `true` over a wrapped model that runs, as a `SpringMongoSubscriptionModel` does by default, and
-  `false` over one built with `autoStartup(false)`.
-- After `stop()` and `start(..)`, it returned `false` until this node won a lease, unless the model had a subscription
-  that doesn't compete. `start(..)` starts the wrapped model again only for such a subscription, and a lease this node
-  wins starts it for the subscription the lease belongs to.
-- After `stop()`, a `resumeSubscription(..)` that won its lease made it return `true`.
-- After `shutdown()`, it returned `true` for as long as the wrapped model did.
-
-Now it returns `true` for a new model and after `start(..)`, also while this node holds no lease. It returns `false`
-after `stop()` until the next `start(..)`, also while a subscription you resumed after `stop()` runs on this node. Once
-`shutdown()` has begun, it returns `false` for good.
-
-A `ManualStartSubscriptionModel` that wraps it, which the Spring Boot starter makes when the subscription mode is
-`MANUAL`, returns `true` when it is started itself and the competing consumer model returns `true`. Over the starter's
-`SpringMongoSubscriptionModel`, which runs from the start, it answers as in 0.33.0 until its `stop()`. After that, it
-returns `true` after a `start()` that wins no lease, where 0.33.0 returned `false` unless the model had a subscription
-that doesn't compete. It returns `false` after a resume, until the next `start()`.
-
-A subscription that doesn't compete, made on a started model whose wrapped model is not running, such as a new model
-over one built with `autoStartup(false)`, stays paused until `start()` or `resumeSubscription(..)`, as in 0.33.0. Since
-`isRunning()` returned `false` there in 0.33.0, code that called `start()` whenever `isRunning()` returned `false` got
-the subscription running. That code now finds `isRunning()` returning `true`, no longer calls `start()`, and the
-subscription stays paused. Call `resumeSubscription(id)` once you have made such a subscription, or whenever
-`isPaused(id)` returns `true` for it. `start()` resumes it too, but `start()` is `start(true)`, so on a started model it
-also resumes every other subscription you paused with `pauseSubscription(..)`, competing or not.
-
-If you called `isRunning()` to find out whether this node delivers events, call `isRunning(id)` for each subscription
-instead. It asks the wrapped model, which runs a competing subscription only on the node that holds its lease.
-
-There is no recipe for this change. The call compiles as before, and what it returns is runtime behavior that a rewrite
-of the source cannot see.

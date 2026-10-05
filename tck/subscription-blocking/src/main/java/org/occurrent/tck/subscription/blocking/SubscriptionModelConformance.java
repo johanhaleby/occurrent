@@ -35,6 +35,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.ConformanceEvents;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -113,6 +114,34 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
         }
         requireNonNull(fixture.aCheckpointToStartFrom(),
                 fixture.getClass().getName() + " returned null from aCheckpointToStartFrom()");
+        Duration howFarBack = requireNonNull(fixture.howFarBackANewSubscriptionMayStart(),
+                fixture.getClass().getName() + " returned null from howFarBackANewSubscriptionMayStart()");
+        if (howFarBack.isNegative()) {
+            throw new IllegalArgumentException(fixture.getClass().getName() + " declared a "
+                    + "howFarBackANewSubscriptionMayStart() of " + howFarBack + ". A subscription can't start later "
+                    + "than it was made, so use Duration.ZERO for one that receives nothing published before it.");
+        }
+    }
+
+    // Half a second more than the fixture declares, see SubscriptionModelFixture.howFarBackANewSubscriptionMayStart()
+    private static final Duration MARGIN_PAST_HOW_FAR_BACK = Duration.ofMillis(500);
+
+    /**
+     * Waits until what was published so far is older than a new subscription may reach back to, so a test asserting
+     * that it never arrives isn't asking about events the model is allowed to deliver. Returns at once for a model
+     * that declares zero, and for one that replays its history to a new subscription, which owes every earlier event.
+     */
+    private void waitUntilWhatWasPublishedIsOutOfReachOfANewSubscription() {
+        Duration howFarBack = fixture().howFarBackANewSubscriptionMayStart();
+        if (howFarBack.isZero() || fixture().replaysHistoryToANewSubscription()) {
+            return;
+        }
+        try {
+            Thread.sleep(howFarBack.plus(MARGIN_PAST_HOW_FAR_BACK));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting past howFarBackANewSubscriptionMayStart()", e);
+        }
     }
 
     private static String subscriptionId() {
@@ -296,6 +325,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
         void replays_history_to_a_new_subscription_or_starts_where_it_was_told_as_the_fixture_declares() {
             CloudEvent beforeAnythingSubscribed = ConformanceEvents.event("1", "NameDefined");
             publish(beforeAnythingSubscribed);
+            waitUntilWhatWasPublishedIsOutOfReachOfANewSubscription();
 
             RecordedEvents recorded = subscribeAndWait(subscriptionId());
 
@@ -729,6 +759,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
 
             // A second subscription is what proves the model is still delivering, so the first one's silence means
             // cancelled rather than broken. Where a model feeds only one subscription, cancelling freed the slot.
+            waitUntilWhatWasPublishedIsOutOfReachOfANewSubscription();
             RecordedEvents afterCancel = subscribeAndWait(subscriptionId());
             CloudEvent afterCancelEvent = ConformanceEvents.event("2", "NameWasChanged");
             publish(afterCancelEvent);

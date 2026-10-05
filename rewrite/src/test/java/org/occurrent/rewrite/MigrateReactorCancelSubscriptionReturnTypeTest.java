@@ -86,7 +86,7 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
                 class Model implements CancellableSubscriptions, org.occurrent.subscription.api.blocking.CancellableSubscriptions {
                     private final Set<String> ids = new HashSet<>();
 
-                    // TODO: split this class into a blocking and a reactor adapter, since from Occurrent 0.34.0 the blocking cancelSubscription(String) returns void and the reactor one Mono<Void>, and no one method implements both. See section 20 of doc/migration/upgrading-to-0.34.0.md
+                    // TODO: split this class into a blocking and a reactor adapter, since from Occurrent 0.34.0 the blocking cancelSubscription(String) returns void and the reactor one Mono<Void>, and no one method implements both. See section 22 of doc/migration/upgrading-to-0.34.0.md
                     @Override
                     public void cancelSubscription(String subscriptionId) {
                         ids.remove(subscriptionId);
