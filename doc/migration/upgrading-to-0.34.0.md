@@ -1512,8 +1512,13 @@ kind of paused subscription back.
 When the wrapped model was stopped, such as by calling `stop()` on it yourself, each competing subscription this node
 holds the lease for runs there again once a call through the competing consumer model starts it, also when that start
 throws after it took effect. Among the calls that do this are `start(..)`, a lease granted for another subscription, a
-`subscribe(..)` that wins its lease and any `resumeSubscription(..)`, and a `start(..)` resumes such a subscription
-before it returns, unless another call for that subscription is under way.
+`subscribe(..)` that wins its lease and any `resumeSubscription(..)`.
+
+`start(..)` returns without waiting for such a subscription to run, also for one you paused directly on the wrapped
+model. Each one is resumed on another thread, and tried again until the subscription runs, loses its lease, or is
+paused or cancelled through the competing consumer model. A resume that fails logs a warning. So a resume that blocks
+in the wrapped model holds up neither `start(..)`, `stop()` nor any other subscription. If your code expects a
+subscription to run the moment `start(..)` returns, wait for `isRunning(id)` to return `true` instead.
 
 A competing subscription you paused directly on the wrapped model runs again too, see [Pause a competing subscription
 through the competing consumer model](#pause-a-competing-subscription-through-the-competing-consumer-model) below.
@@ -1611,6 +1616,9 @@ In 0.33.0 nothing stopped such a model, although `isRunning()` returned `false` 
 competed for its lease as soon as it was made. A `start()` on the wrapped model got it running once this node held the
 lease, and one that won the lease after waiting for it ran with no `start()` at all. Now neither runs before `start(..)`
 on the competing consumer model.
+
+To tell whether the wrapped model runs, the constructor of `CompetingConsumerSubscriptionModel` now calls `isRunning()`
+on the wrapped model, which 0.33.0 never did. When that call throws, the constructor throws the same exception.
 
 Call `start()` on the `CompetingConsumerSubscriptionModel`. Code that also calls `start()` on the wrapped model, before
 or after, keeps working, and a competing subscription runs once this node holds its lease. Calling `start()` on the
