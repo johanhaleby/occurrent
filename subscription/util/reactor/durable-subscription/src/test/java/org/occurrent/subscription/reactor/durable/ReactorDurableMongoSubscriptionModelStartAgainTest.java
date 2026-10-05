@@ -679,6 +679,85 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     }
 
     /**
+     * A subscribe of the id while another subscribe of it still runs its dynamic start position starts, as the Mongo
+     * model takes it when nothing of the id waits to be handed over. The other subscribe then throws what its start
+     * position threw.
+     */
+    @Test
+    void a_subscribe_of_the_id_while_another_runs_a_start_position_that_then_throws_starts() throws Exception {
+        // Given
+        CountDownLatch inTheStartPosition = new CountDownLatch(1);
+        CountDownLatch startPositionLetGo = new CountDownLatch(1);
+        CompletableFuture<Subscription> other = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(() -> {
+            inTheStartPosition.countDown();
+            try {
+                startPositionLetGo.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            throw new IllegalStateException("The start position failed");
+        }), action(new CopyOnWriteArrayList<>())), caller);
+        assertThat(inTheStartPosition.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start position reached").isTrue();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+
+        // When
+        Throwable subscribeFailed = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), action(delivered)).waitUntilStarted(TIMEOUT).block());
+        startPositionLetGo.countDown();
+        @Nullable Throwable otherFailed = failureOf(other);
+        long written = write();
+        Throwable notDelivered = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> delivered.contains(written)));
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(subscribeFailed).as("how the subscribe while the other ran its start position ended").isNull();
+            softly.assertThat(otherFailed).as("how the other subscribe ended").isInstanceOf(IllegalStateException.class);
+            softly.assertThat(notDelivered).as("how waiting for the event written once it started ended").isNull();
+        });
+    }
+
+    /**
+     * A subscribe of the id that still reads where the feed is when another subscription of it starts to wait to be
+     * handed to the Mongo model is refused once it has read, since a pause kept for the waiting subscription would not
+     * reach it. The pause holds the waiting subscription, which delivers once it is resumed.
+     */
+    @Test
+    void a_subscribe_of_the_id_that_reads_where_the_feed_is_when_another_starts_to_wait_to_be_handed_to_the_mongo_model_is_refused_and_a_pause_holds_the_other() throws Exception {
+        // Given
+        cancelledWhileTheDeleteIsHeld(() -> {
+        });
+        Hold readOfWhereTheFeedIs = mongoModel.holdNextReadOfWhereTheFeedIs();
+        List<Long> deliveredToTheReading = new CopyOnWriteArrayList<>();
+        CompletableFuture<Subscription> reading = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(),
+                action(deliveredToTheReading)), canceller);
+        readOfWhereTheFeedIs.awaitReached();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        Subscription waiting = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::now), action(delivered)), caller)
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        Throwable pauseFailed = catchThrowable(() -> model.pauseSubscription(SUBSCRIPTION_ID));
+
+        // When
+        readOfWhereTheFeedIs.letGo();
+        @Nullable Throwable readingRefused = failureOf(reading);
+        storage.deleteLetGo.countDown();
+        Throwable startFailed = catchThrowable(() -> waiting.waitUntilStarted(TIMEOUT).block());
+        Throwable notPausedThere = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> mongoModel.isPaused(SUBSCRIPTION_ID)));
+        long writtenWhilePaused = write();
+        Throwable resumeFailed = catchThrowable(() -> model.resumeSubscription(SUBSCRIPTION_ID).waitUntilStarted(TIMEOUT).block());
+        Throwable notDelivered = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> delivered.contains(writtenWhilePaused)));
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(pauseFailed).as("how the pause while the subscription waited to be handed over ended").isNull();
+            softly.assertThat(readingRefused).as("how the subscribe that read where the feed is ended").isInstanceOf(DuplicateSubscriptionIdException.class);
+            softly.assertThat(startFailed).as("how waiting for the paused subscription to start ended").isNull();
+            softly.assertThat(notPausedThere).as("how waiting for the subscription to be paused in the Mongo model ended").isNull();
+            softly.assertThat(resumeFailed).as("how the resume ended").isNull();
+            softly.assertThat(notDelivered).as("how waiting for the event written while it was paused ended").isNull();
+            softly.assertThat(deliveredToTheReading).as("events delivered to the refused subscribe").isEmpty();
+        });
+    }
+
+    /**
      * On a stopped model, a subscription that waits to be handed to the Mongo model is paused, as the Mongo model
      * registers a subscription made while it is stopped. A pause is refused as for a paused subscription, and a resume
      * starts it once the Mongo model has it.

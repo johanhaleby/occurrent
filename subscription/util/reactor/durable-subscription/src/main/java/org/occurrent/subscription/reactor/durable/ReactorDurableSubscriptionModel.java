@@ -472,9 +472,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         return handOver(delegate, subscriptionId, filter, startAt, resolvedStartAt, action, writer);
     }
 
-    // Answers false when a cancel of the id came first, and throws for a shutdown that came first or a subscription
-    // of the id that the wrapped model still holds. Checked before the function of a dynamic start position runs, so
-    // neither of the first two runs it, and again under positionLock in handOver.
+    // Answers false when a cancel of the id came first, and throws for a shutdown that came first, a subscription of
+    // the id that the wrapped model still holds, or one that waits to be handed over. Checked before the function of a
+    // dynamic start position runs, so neither of the first two runs it, and again under positionLock in handOver.
     private boolean mayStartDelegated(String subscriptionId, PositionWriter writer) {
         @Nullable Registration refusedFirst = refusedRegistrationNow(writer);
         if (refusedFirst == Registration.SHUT_DOWN) {
@@ -488,7 +488,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // completed would start from it.
         final boolean refusedAsDuplicateFirst;
         synchronized (positionLock) {
-            refusedAsDuplicateFirst = refusesSubscribeOf(subscriptionId);
+            refusedAsDuplicateFirst = refusesSubscribeOf(subscriptionId) || keepsForAnotherWriter(subscriptionId, writer);
         }
         if (refusedAsDuplicateFirst) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
@@ -510,10 +510,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                                                     StartAt startAt, Function<CloudEvent, Mono<Void>> action, PositionWriter writer,
                                                     Mono<Checkpoint> present) {
         // The wrapped model doesn't know the id until handOver, so a pause, a resume, a stop or a start until then is
-        // kept here, and handOver puts it in place there. The checks of mayStartDelegated, a check that no other
-        // subscription of the id is registered or starting, and the start of the keeping are one step under
-        // positionLock. A call for the id then finds the id unknown, a subscribe of it refused, or the keeping in place,
-        // and never comes between the checks and the keeping.
+        // kept here, and handOver puts it in place there. The checks of mayStartDelegated and holdsAnotherWriter and the
+        // start of the keeping are one step under positionLock. A call for the id then finds the id unknown, a subscribe
+        // of it refused, or the keeping in place, and never comes between the checks and the keeping.
         KeptLifecycle kept = new KeptLifecycle();
         final @Nullable Registration refused;
         final boolean refusedAsDuplicate;
@@ -599,7 +598,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         final @Nullable KeptLifecycle kept;
         synchronized (positionLock) {
             refused = refusedRegistration(writer);
-            refusedAsDuplicate = refused == null && refusesSubscribeOf(subscriptionId);
+            refusedAsDuplicate = refused == null && (refusesSubscribeOf(subscriptionId) || keepsForAnotherWriter(subscriptionId, writer));
             if (refused == null && !refusedAsDuplicate) {
                 writer.handingOver = Sinks.empty();
                 if (writer.kept == null && settled != null) {
@@ -1754,12 +1753,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // For a subscribe that hands the subscription to the wrapped model, which reads where to start before it registers.
-    // A subscribe of an id that another subscribe still starts under is refused, as the wrapped model refuses one of
-    // two subscribes of an id, so a state kept for the id is kept for the one subscription that can start.
+    // Refused while another subscription of the id waits to be handed over, since a pause or a resume kept for the
+    // waiting subscription would never reach the new one.
     private PositionWriter startingPositionWriter(String subscriptionId) {
         PositionWriter writer = new PositionWriter();
         synchronized (positionLock) {
-            if (startsAnotherWriter(subscriptionId, writer)) {
+            if (keepsForAnotherWriter(subscriptionId, writer)) {
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
             positionWritersStarting.computeIfAbsent(subscriptionId, __ -> new HashSet<>()).add(writer);
@@ -1767,10 +1766,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         return writer;
     }
 
-    // Called under positionLock. A writer that a cancel overtook, or that was retired, no longer starts.
-    private boolean startsAnotherWriter(String subscriptionId, PositionWriter writer) {
+    // Called under positionLock. Whether a pause, a resume, a stop or a start is kept for another subscription of the
+    // id that still starts, see startDelegatedOnceRestored. A writer that a cancel overtook, or that was retired, no
+    // longer starts.
+    private boolean keepsForAnotherWriter(String subscriptionId, PositionWriter writer) {
         for (PositionWriter starting : positionWritersStarting.getOrDefault(subscriptionId, Set.of())) {
-            if (starting != writer && startsStill(starting)) {
+            if (starting != writer && startsStill(starting) && keepingFor(starting) != null) {
                 return true;
             }
         }
@@ -1782,11 +1783,21 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         return !writer.retired && !writer.overtakenByCancel;
     }
 
-    // Called under positionLock, for a subscription that waits to be handed over, which the wrapped model refuses as a
-    // duplicate only once it is handed over, by then long after the call
+    // Called under positionLock, for a subscription that would wait to be handed over. Another subscription of the id
+    // that the wrapped model has, or is taking, or that waits to be handed over itself, would make the wrapped model
+    // refuse the waiting subscription only once it is handed over, long after the call. A subscription of the id that
+    // still reads where to start is refused at its own hand-over instead, see keepsForAnotherWriter.
     private boolean holdsAnotherWriter(String subscriptionId, PositionWriter writer) {
         @Nullable PositionWriter registered = positionWriters.get(subscriptionId);
-        return registered != null && registered != writer && !registered.retired || startsAnotherWriter(subscriptionId, writer);
+        if (registered != null && registered != writer && !registered.retired) {
+            return true;
+        }
+        for (PositionWriter starting : positionWritersStarting.getOrDefault(subscriptionId, Set.of())) {
+            if (starting != writer && startsStill(starting) && starting.handingOver != null) {
+                return true;
+            }
+        }
+        return keepsForAnotherWriter(subscriptionId, writer);
     }
 
     // Called under positionLock. A writer still registered under the id belongs to a generation the new writer
@@ -3099,8 +3110,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         if (registered != null) {
             return keepingFor(registered);
         }
-        // At most one writer of the id still starts, see startingPositionWriter, and one a cancel overtook keeps nothing
-        // that a later call is to reach
+        // At most one writer of the id that still starts keeps a state, see keepsForAnotherWriter, and one a cancel
+        // overtook keeps nothing that a later call is to reach
         for (PositionWriter starting : positionWritersStarting.getOrDefault(subscriptionId, Set.of())) {
             @Nullable KeptLifecycle kept = startsStill(starting) ? keepingFor(starting) : null;
             if (kept != null) {
