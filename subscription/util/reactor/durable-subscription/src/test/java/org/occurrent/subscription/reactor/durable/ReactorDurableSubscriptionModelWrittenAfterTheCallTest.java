@@ -497,38 +497,101 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     }
 
     /**
-     * The read of where the feed was at the subscribe never answers for a subscription from StartAt.now(), or from a
-     * dynamic start position that answers it, as from a database that does not respond. Once it has gone unanswered
-     * for a while it counts as failed, so a warning says the subscription waits for it, and it is read again. Once
-     * the database answers, the subscription starts from where the feed was at the subscribe, so what is written while
-     * the read hangs is delivered.
+     * The read of where the feed was takes 12 seconds to answer for a subscription from a dynamic start position that
+     * answers StartAt.now(), as from a slow database. The subscription waits for it with a warning that it still
+     * waits, and once the read answers it starts from where the feed was at the subscribe, so what is written while
+     * the read runs is delivered.
      */
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void a_subscription_from_now_whose_read_of_where_the_feed_was_never_answers_logs_a_warning_and_reads_it_again(boolean dynamic) {
+    @Test
+    void a_subscription_from_a_dynamic_start_position_answering_now_whose_read_of_where_the_feed_was_is_slow_warns_and_starts_once_it_answers() {
         // Given
         Feed feed = new Feed();
-        feed.readHangs = true;
+        feed.answerDelay = Duration.ofSeconds(12);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
         List<String> delivered = new CopyOnWriteArrayList<>();
-        StartAt startAt = dynamic ? StartAt.dynamic(StartAt::now) : StartAt.now();
 
         try (LoggedByTheModel logged = new LoggedByTheModel()) {
             // When
-            Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, startAt, deliveredTo(delivered));
-            long writtenWhileTheReadHangs = feed.write();
-            await().atMost(Duration.ofSeconds(20)).until(() -> logged.at(Level.WARN).stream().anyMatch(message -> message.contains("on attempt 1")));
-            feed.readHangs = false;
+            Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::now), deliveredTo(delivered));
+            long writtenWhileTheReadRuns = feed.write();
             subscription.waitUntilStarted().block(Duration.ofSeconds(30));
             long writtenAfterTheStart = feed.write();
 
             // Then
             await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(writtenAfterTheStart)));
-            assertThat(delivered).as("events delivered to the subscription").containsExactly(ids(List.of(writtenWhileTheReadHangs, writtenAfterTheStart)).toArray(String[]::new));
-            assertThat(logged.at(Level.WARN)).as("warnings logged").anyMatch(message -> message.startsWith("Could not read where the feed was when subscription " + SUBSCRIPTION_ID + " asked to start from the present"));
+            assertThat(delivered).as("events delivered to the subscription").containsExactly(ids(List.of(writtenWhileTheReadRuns, writtenAfterTheStart)).toArray(String[]::new));
+            assertThat(logged.at(Level.WARN)).as("warnings logged").anyMatch(message -> message.startsWith(stillWaiting(SUBSCRIPTION_ID)));
         } finally {
             model.shutdown();
         }
+    }
+
+    /**
+     * The read of where the feed was never answers for a subscription from StartAt.now(), or from a dynamic start
+     * position that answers it, as from a database that does not respond. The subscription doesn't start, and it
+     * warns every 10 seconds that it still waits, while the read it waits for keeps running and is not read again.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_subscription_from_now_whose_read_of_where_the_feed_was_never_answers_keeps_warning_that_it_waits(boolean dynamic) {
+        // Given
+        Feed feed = new Feed();
+        feed.readHangs = true;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+        StartAt startAt = dynamic ? StartAt.dynamic(StartAt::now) : StartAt.now();
+
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            // When
+            model.subscribe(SUBSCRIPTION_ID, null, startAt, __ -> Mono.empty());
+            await().atMost(Duration.ofSeconds(20)).until(() -> stillWaitingWarnings(logged) >= 1);
+            int readsAtTheFirstWarning = feed.reads.get();
+            await().atMost(Duration.ofSeconds(20)).until(() -> stillWaitingWarnings(logged) >= 2);
+
+            // Then
+            assertThat(feed.reads.get()).as("reads of where the feed was between the first and the second warning").isEqualTo(readsAtTheFirstWarning);
+            assertThat(feed.started()).as("subscriptions that began reading from the feed").isZero();
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    /**
+     * The read of where the feed was never answers for a subscription from the model default that storage holds
+     * nothing for, subscribed on a running or a stopped model. The subscription doesn't start, and warns that it still
+     * waits for the read.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_subscription_from_the_model_default_whose_read_of_where_the_feed_was_never_answers_warns_that_it_waits(boolean stopped) {
+        // Given
+        Feed feed = new Feed();
+        feed.readHangs = true;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+        if (stopped) {
+            model.stop();
+        }
+
+        try (LoggedByTheModel logged = new LoggedByTheModel()) {
+            // When
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+            if (stopped) {
+                model.start(true);
+            }
+
+            // Then
+            await().atMost(Duration.ofSeconds(20)).until(() -> stillWaitingWarnings(logged) >= 1);
+            assertThat(feed.started()).as("subscriptions that began reading from the feed").isZero();
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    private static String stillWaiting(String subscriptionId) {
+        return "Subscription " + subscriptionId + " is still waiting for the wrapped model to answer where its feed was";
+    }
+
+    private static long stillWaitingWarnings(LoggedByTheModel logged) {
+        return logged.at(Level.WARN).stream().filter(message -> message.startsWith(stillWaiting(SUBSCRIPTION_ID))).count();
     }
 
     /**

@@ -1543,14 +1543,14 @@ written between `subscribe(..)` and the start. A subscription whose `StartAt.dyn
 starts from such a read too, of the call that starts it, where in 0.33.0 it opened its feed at the present.
 
 When `globalCheckpointAsOfNow()` answers nothing, the subscription opens its feed at the present each time it starts, as
-in 0.33.0. When it fails, or has not answered after 10 seconds, it is asked again after a delay that about doubles, with
-a warning for each attempt, and the subscription does not start until it answers or the subscription is cancelled,
-paused, stopped or shut down. Your model answers what its `globalCheckpoint()` answers unless it overrides
-`globalCheckpointAsOfNow()`, so a model whose `globalCheckpoint()` always fails or never answers keeps such a
-subscription from starting, where 0.33.0 started it. Override `globalCheckpointAsOfNow()` to answer `Mono.empty()` for
-the 0.33.0 start. A subscription from the subscription-model default refuses that answer, as it refuses the failure. To
-also deliver what is written between the call and the read, override `globalCheckpointAsOfNow()` to answer with where
-your feed was when it was called.
+in 0.33.0. When it fails, it is asked again after a delay that about doubles, with a warning for each attempt, and the
+subscription does not start until it answers or the subscription is cancelled, paused, stopped or shut down. When it is
+slow to answer, the subscription waits for it however long it takes, with a warning every 10 seconds that it still
+waits. Your model answers what its `globalCheckpoint()` answers unless it overrides `globalCheckpointAsOfNow()`, so a
+model whose `globalCheckpoint()` always fails or never answers keeps such a subscription from starting, where 0.33.0
+started it. Override `globalCheckpointAsOfNow()` to answer `Mono.empty()` for the 0.33.0 start. A subscription from the
+subscription-model default refuses that answer, as it refuses the failure. To also deliver what is written between the
+call and the read, override `globalCheckpointAsOfNow()` to answer with where your feed was when it was called.
 
 There is no recipe for this change. Where a subscription starts is runtime behavior that a rewrite of the source cannot
 see.
@@ -1789,10 +1789,10 @@ the subscription delivers what you write after the call returned, also when it w
 paused before it started, see section 21 for `StartAt.now()`. A `subscribe(..)` on a running model asks storage first
 and asks the wrapped model only when no checkpoint is stored. `start(..)` waits for no read of where the feed is, so a
 read that never answers holds up neither the start nor the other subscriptions it starts. A subscription from the
-subscription-model default whose read never answers does not start, and one from `StartAt.now()` reads it again with a
-warning, see section 21. A `StartAt.dynamic(..)` function on a stopped model runs only once the model is started. When
-it answers the subscription-model default, the subscription starts from where the feed was at the `subscribe(..)`, and
-when it answers `StartAt.now()`, from where the feed was at the start.
+subscription-model default, or from `StartAt.now()`, whose read never answers does not start, and logs a warning every
+10 seconds that it still waits, see section 21. A `StartAt.dynamic(..)` function on a stopped model runs only once the
+model is started. When it answers the subscription-model default, the subscription starts from where the feed was at the
+`subscribe(..)`, and when it answers `StartAt.now()`, from where the feed was at the start.
 
 A wrapped model of your own that does not override `globalCheckpointAsOfNow()` answers with where its feed is when the
 read runs, so a subscription over it can still skip what you write between the call and the read, as in 0.33.0. Override
