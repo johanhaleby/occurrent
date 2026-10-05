@@ -29,11 +29,13 @@ import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
@@ -407,6 +409,41 @@ public class MongoCommons {
      */
     public static @Nullable BsonTimestamp operationTimeAfter(Document reply) {
         return reply.get(OPERATION_TIME) instanceof BsonTimestamp ? getServerOperationTime(reply, 1) : null;
+    }
+
+    /**
+     * The command a subscription model sends to read the server's wall clock, from the {@code localTime} field of the
+     * reply. It needs no privilege. MongoDB 4.2.0 to 4.2.9 don't know it, so send
+     * {@link #LEGACY_SERVER_CLOCK_COMMAND} instead when it fails with {@link #COMMAND_NOT_FOUND_ERROR_CODE}.
+     */
+    public static final Document SERVER_CLOCK_COMMAND = new Document("hello", 1);
+
+    /**
+     * The name {@link #SERVER_CLOCK_COMMAND} has on MongoDB 4.2.0 to 4.2.9. Its reply has the same {@code localTime}.
+     */
+    public static final Document LEGACY_SERVER_CLOCK_COMMAND = new Document("isMaster", 1);
+
+    public static final int COMMAND_NOT_FOUND_ERROR_CODE = 59;
+
+    /**
+     * The earliest operation time in the second the server's wall clock showed {@code elapsedNanos} before
+     * {@code reply}, a reply to {@link #SERVER_CLOCK_COMMAND}, arrived. Pass the time since the moment of interest, as
+     * measured with {@link System#nanoTime()} once the reply has arrived, which counts the round trip as well. A change
+     * stream opened at the answer receives every write made after that moment, since MongoDB never gives a write an
+     * operation time earlier than the second its wall clock shows when it writes. The time this measures
+     * back from is the server's own clock, so a client clock that is ahead of or behind the server doesn't move the
+     * answer. It can still be later than the moment if the server's clock is stepped forward between the moment and the
+     * reply.
+     *
+     * @return The operation time, or {@code null} when the reply has no {@code localTime}
+     */
+    public static @Nullable BsonTimestamp operationTimeAsOf(Document reply, long elapsedNanos) {
+        if (!(reply.get("localTime") instanceof Date localTime)) {
+            return null;
+        }
+        // One millisecond less, since toMillis rounds the elapsed time down
+        long millisAtTheMoment = localTime.getTime() - TimeUnit.NANOSECONDS.toMillis(elapsedNanos) - 1;
+        return new BsonTimestamp((int) Math.floorDiv(millisAtTheMoment, 1000L), 0);
     }
 
     /**

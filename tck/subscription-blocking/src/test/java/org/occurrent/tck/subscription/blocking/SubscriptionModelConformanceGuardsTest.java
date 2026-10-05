@@ -152,6 +152,39 @@ class SubscriptionModelConformanceGuardsTest {
     }
 
     @Test
+    void reject_a_fixture_that_declares_no_window_for_how_far_back_a_new_subscription_may_start() {
+        SubscriptionModelFixture fixture = new StubFixture(NoopSubscriptionModel.INSTANCE) {
+            @Override
+            @SuppressWarnings("NullAway")
+            public Duration howFarBackANewSubscriptionMayStart() {
+                return null;
+            }
+        };
+        SubscriptionModelConformance suite = suiteWith(fixture);
+
+        assertThatThrownBy(suite::createFixtureAndCheckItsDeclaration)
+                .isExactlyInstanceOf(NullPointerException.class)
+                .hasMessageContaining(fixture.getClass().getName())
+                .hasMessageContaining("returned null from howFarBackANewSubscriptionMayStart()");
+    }
+
+    @Test
+    void reject_a_fixture_that_declares_a_new_subscription_may_start_after_it_was_made() {
+        SubscriptionModelFixture fixture = new StubFixture(NoopSubscriptionModel.INSTANCE) {
+            @Override
+            public Duration howFarBackANewSubscriptionMayStart() {
+                return Duration.ofSeconds(-1);
+            }
+        };
+        SubscriptionModelConformance suite = suiteWith(fixture);
+
+        assertThatThrownBy(suite::createFixtureAndCheckItsDeclaration)
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(fixture.getClass().getName())
+                .hasMessageContaining("declared a howFarBackANewSubscriptionMayStart() of PT-1S");
+    }
+
+    @Test
     void close_the_fixture_after_a_test_even_when_the_test_failed() {
         CountingFixture counting = new CountingFixture();
         SubscriptionModelConformance suite = suiteWith(counting);

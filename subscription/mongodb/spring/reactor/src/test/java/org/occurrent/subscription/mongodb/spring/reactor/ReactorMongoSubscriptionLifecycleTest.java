@@ -92,15 +92,19 @@ public class ReactorMongoSubscriptionLifecycleTest {
     private ReactorMongoSubscriptionModel subscriptionModel;
     private ReactiveMongoTemplate reactiveMongoTemplate;
     private ObjectMapper objectMapper;
+    private String eventCollection;
 
     @BeforeEach
     void createEventStore() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reactivelifecycle");
         mongoClient = MongoClients.create(connectionString);
         reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
-        subscriptionModel = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        // A collection of its own for every test, since a subscription started at the present can also receive what
+        // was written up to a second before it, which would otherwise include the previous test's events
+        eventCollection = "events-" + UUID.randomUUID();
+        subscriptionModel = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollection, TimeRepresentation.RFC_3339_STRING);
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(eventCollection).transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         objectMapper = new ObjectMapper();
     }
@@ -377,7 +381,7 @@ public class ReactorMongoSubscriptionLifecycleTest {
         // rather than racing the retry it means to cancel. Pause disposes the subscription's pipeline, which is what
         // cancels a scheduled retry, and nothing else pins that: a pause that merely stopped new deliveries would
         // leave the retry timer live and the action would run again while "paused".
-        ReactorMongoSubscriptionModel slowRetry = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events",
+        ReactorMongoSubscriptionModel slowRetry = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollection,
                 TimeRepresentation.RFC_3339_STRING, new ReactorMongoSubscriptionModelConfig().backoff(Duration.ofSeconds(1), Duration.ofSeconds(2)));
         try {
             String subscriptionId = UUID.randomUUID().toString();
@@ -436,18 +440,23 @@ public class ReactorMongoSubscriptionLifecycleTest {
         // Then: it's tracked as paused, not running, and an event written while stopped is not delivered
         assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue();
         assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
-        mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1"))).block();
+        NameDefined writtenWhileStopped = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1");
+        mongoEventStore.write("1", 0, serialize(writtenWhileStopped)).block();
         await().atMost(Duration.ofSeconds(1)).during(Duration.ofMillis(500)).untilAsserted(() -> assertThat(state).isEmpty());
 
         // When
         subscriptionModel.start();
-        mongoEventStore.write("2", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2"))).block();
+        NameDefined writtenOnceStarted = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2");
+        mongoEventStore.write("2", 0, serialize(writtenOnceStarted)).block();
 
-        // Then: exactly one delivery. If the subscription created while stopped had stayed live underneath instead
-        // of being disposed, this event would be delivered twice: once on that leaked subscription and once on the
-        // one resumeSubscription starts here.
-        await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
-        assertThat(state).extracting(CloudEvent::getId).doesNotHaveDuplicates();
+        // Then: both arrive once started, the first too since the subscription starts where subscribe was called,
+        // and each arrives once. If the subscription created while stopped had stayed live underneath instead of
+        // being disposed, the first would have arrived while stopped and the second twice, once on that leaked
+        // subscription and once on the one start() resumes here.
+        await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                assertThat(state).extracting(CloudEvent::getId).contains(writtenOnceStarted.eventId()));
+        await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(1)).untilAsserted(() ->
+                assertThat(state).extracting(CloudEvent::getId).containsExactly(writtenWhileStopped.eventId(), writtenOnceStarted.eventId()));
     }
 
     @Test

@@ -107,6 +107,20 @@ class ReactorMongoSubscriptionModelFixture implements SubscriptionModelFixture {
     }
 
     /**
+     * A subscription started at the present opens its change stream at the first operation time in the second the
+     * server's clock showed when {@code subscribe(..)} was called. An operation time is a whole second and a counter
+     * of the writes within it, and the counter can't be read off a clock, so the start is that second's beginning. The
+     * subscription can then also deliver what was written up to a second before the call, plus the time the reply with
+     * the clock took to reach the client. The at-least-once contract allows that, and it's what keeps the subscription
+     * from skipping what is written between the call returning and the change stream opening. The suite waits half a
+     * second past this, which covers a reply that takes up to that long to arrive.
+     */
+    @Override
+    public Duration howFarBackANewSubscriptionMayStart() {
+        return Duration.ofSeconds(1);
+    }
+
+    /**
      * This model reads a change stream and is checkpoint aware, so the honest answer is whatever it reports from
      * its own {@code globalCheckpoint()}. That {@code Mono} can complete empty when the server refuses
      * {@code hostInfo}, which blocks to null here.
