@@ -56,14 +56,15 @@ import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
 import reactor.util.retry.RetryBackoffSpec;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -90,21 +91,42 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * A subscription started with {@link StartAt#now()} or the model default starts from the moment
  * {@code subscribe(String, ...)} is called, or, for the plain {@link Flux}, the moment it's subscribed to. That holds
  * when the model is stopped too, so a subscription registered then and started later also receives the events written
- * in between. The model asks MongoDB for its clock after that moment, subtracts the time that has passed since, and
- * opens the change stream at the start of the second that gives. The time that has passed includes the time the reply
- * took to reach the client, so the second can begin that much earlier. Events written up to a second before the
- * moment can then be delivered as well, plus the time the reply took to arrive.
+ * in between.
  * <p>
- * Every event written after the moment is delivered as long as the server's clock is right. The start can be later
- * than the moment, and the subscription then skips the events written in between, when the clock is stepped forward
- * between the moment and the reply, after a failover to a replica set member whose clock is ahead, and when the
- * question goes to a {@code mongos} whose clock is ahead of the shard that writes.
+ * At that moment the model reads the newest cluster time the MongoDB driver has seen on this client. MongoDB gives
+ * every write a cluster time later than any cluster time the writing client has sent it, and the driver sends the
+ * newest one it has seen with every command. When the change stream opens, the model also asks MongoDB for its clock
+ * with {@code hello} and works back to the start of the second the clock showed at the moment. It opens the change
+ * stream just after the cluster time it read, or at the start of that second if that is earlier.
+ * <p>
+ * When the cluster time it read is at most 15 seconds older than the server's clock, every event written after the
+ * moment through the same {@code MongoClient} is delivered, whatever the server's clock shows. So is every event
+ * another client writes to a replica set, unless another member becomes primary in between. On a sharded cluster,
+ * and after the primary changes, MongoDB can give another client's write a cluster time earlier than the one the
+ * model read. That write is still delivered when its cluster time is no earlier than the start of the second the
+ * server's clock showed.
+ * <p>
+ * The model starts from the server's clock alone when it can't read the driver's cluster time, when the driver has
+ * seen none yet, and when it is more than 15 seconds older than the server's clock. The driver only learns a newer
+ * cluster time when the client sends a command, so an idle client can know one that is minutes old. The start can then
+ * be later than the moment, and the subscription skips the events written in between. That happens when the clock is
+ * stepped forward between the moment and the reply, after a failover to a replica set member whose clock is ahead, and
+ * when {@code hello} goes to a {@code mongos} whose clock is ahead of the shard that writes.
+ * <p>
+ * A new subscription can also receive events written up to 16 seconds before the moment, plus the time the reply to
+ * {@code hello} took to reach the client. The events the same {@code MongoClient} wrote reach back at most a second,
+ * plus that time.
  */
 @NullMarked
 public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions {
     private static final Logger log = LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
+    // Above the 10 seconds between the no-op writes an idle replica set makes, so a client that is idle but has heard
+    // from the server since the last one still starts from the cluster time it knows
+    private static final Duration KNOWN_CLUSTER_TIME_MAX_AGE = Duration.ofSeconds(15);
 
     private final ReactiveMongoOperations mongo;
+    private final KnownClusterTime knownClusterTime;
+    private final LongSupplier nanoTime;
     private final String eventCollection;
     private final TimeRepresentation timeRepresentation;
     private final ReactorMongoSubscriptionModelConfig config;
@@ -134,10 +156,17 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * @param config             Configure how the subscription model should behave, for example retry backoff and how to handle change stream history lost errors.
      */
     public ReactorMongoSubscriptionModel(ReactiveMongoOperations mongo, String eventCollection, TimeRepresentation timeRepresentation, ReactorMongoSubscriptionModelConfig config) {
+        this(mongo, eventCollection, timeRepresentation, config, System::nanoTime);
+    }
+
+    // nanoTime stands in for System.nanoTime(), so a test can act at the moment the model notes the present
+    ReactorMongoSubscriptionModel(ReactiveMongoOperations mongo, String eventCollection, TimeRepresentation timeRepresentation, ReactorMongoSubscriptionModelConfig config, LongSupplier nanoTime) {
         this.mongo = requireNonNull(mongo, ReactiveMongoOperations.class.getSimpleName() + " cannot be null");
         this.eventCollection = requireNonNull(eventCollection, "Event collection cannot be null");
         this.timeRepresentation = requireNonNull(timeRepresentation, "Time representation cannot be null");
         this.config = requireNonNull(config, ReactorMongoSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
+        this.nanoTime = requireNonNull(nanoTime, "nanoTime cannot be null");
+        this.knownClusterTime = KnownClusterTime.of(mongo);
     }
 
     @Override
@@ -149,7 +178,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         // Flux.defer gives each subscriber its own tracked position.
         return Flux.defer(() -> {
             AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
-            return resilientChangeStream(filter, currentStartAt, new AtomicLong(System.nanoTime()), currentStartAt::set, null);
+            return resilientChangeStream(filter, currentStartAt, new AtomicReference<>(presentNow()), currentStartAt::set, null);
         });
     }
 
@@ -176,10 +205,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         // unbounded retry forever: waitUntilStarted() never answers and isRunning(id) keeps saying yes. A dynamic
         // position is a no-op in there, for a reason checkStartPosition documents.
         MongoCommons.checkStartPosition(startAt, new SubscriptionModelContext(ReactorMongoSubscriptionModel.class));
-        return startInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), new AtomicLong(System.nanoTime()), action);
+        return startInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), new AtomicReference<>(presentNow()), action);
     }
 
-    private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, AtomicLong presentAt, Function<CloudEvent, Mono<Void>> action) {
+    private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt, Function<CloudEvent, Mono<Void>> action) {
         if (!running) {
             // Model stopped: don't subscribe, so waitUntilStarted() doesn't complete for a subscription that
             // won't deliver anything until start(true)/resumeSubscription actually starts it.
@@ -228,8 +257,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return new ReactorMongoSubscription(subscriptionId, internalSubscription.started);
     }
 
-    // presentAt is the System.nanoTime() of the moment StartAt.now() and the model default stand for
-    private Flux<CloudEvent> resilientChangeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, AtomicLong presentAt, Consumer<StartAt> onDocumentRead, Sinks.@Nullable Empty<Void> startedSink) {
+    // presentAt is the moment StartAt.now() and the model default stand for
+    private Flux<CloudEvent> resilientChangeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt, Consumer<StartAt> onDocumentRead, Sinks.@Nullable Empty<Void> startedSink) {
         return changeStream(filter, currentStartAt, presentAt, onDocumentRead, startedSink)
                 .retryWhen(unboundedBackoff()
                         .filter(throwable -> shouldRestart(throwable, currentStartAt, presentAt)));
@@ -240,7 +269,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return Retry.backoff(Long.MAX_VALUE, config.minBackoff).maxBackoff(config.maxBackoff);
     }
 
-    private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, AtomicLong presentAt, Consumer<StartAt> onDocumentRead, Sinks.@Nullable Empty<Void> startedSink) {
+    private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt, Consumer<StartAt> onDocumentRead, Sinks.@Nullable Empty<Void> startedSink) {
         SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
         return Mono.defer(() -> openingPosition(currentStartAt, presentAt, subscriptionModelContext)).flatMapMany(openingPosition -> {
             // builder::resumeAt maps to the driver's startAtOperationTime here rather than to a resume token,
@@ -279,7 +308,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     // Does what MongoCommons.resolveOpeningPosition does without blocking, and opens at presentAt rather than at the
     // time the server answers. Its javadoc says why a position that resolves to the present is recorded before the
     // change stream opens.
-    private Mono<StartAt> openingPosition(AtomicReference<StartAt> currentStartAt, AtomicLong presentAt, SubscriptionModelContext subscriptionModelContext) {
+    private Mono<StartAt> openingPosition(AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt, SubscriptionModelContext subscriptionModelContext) {
         StartAt tracked = currentStartAt.get();
         StartAt resolved = tracked.get(subscriptionModelContext);
         if (!MongoCommons.opensAtThePresent(resolved)) {
@@ -294,24 +323,40 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 });
     }
 
-    // The earliest operation time in the second the server's clock showed at the moment nanoTime was recorded. Asks
-    // the server only when subscribed to.
-    private Mono<BsonTimestamp> operationTimeAsOf(long nanoTime) {
+    // Where a change stream that starts at the present opens, see MongoCommons.startOf. Asks the server only when
+    // subscribed to.
+    private Mono<BsonTimestamp> operationTimeAsOf(Present present) {
         return Mono.defer(() -> mongo.executeCommand(MongoCommons.SERVER_CLOCK_COMMAND))
                 .onErrorResume(throwable -> hasMongoErrorCode(throwable, MongoCommons.COMMAND_NOT_FOUND_ERROR_CODE),
                         __ -> mongo.executeCommand(MongoCommons.LEGACY_SERVER_CLOCK_COMMAND))
                 // An empty reply would complete the change stream Flux with no error, so nothing would restart it
                 .switchIfEmpty(Mono.error(() -> new IllegalStateException("MongoDB returned no reply to " + MongoCommons.SERVER_CLOCK_COMMAND.toJson())))
                 .flatMap(reply -> {
-                    BsonTimestamp operationTime = MongoCommons.operationTimeAsOf(reply, System.nanoTime() - nanoTime);
-                    return operationTime == null ? Mono.error(new NoServerClockException(reply)) : Mono.just(operationTime);
+                    BsonTimestamp helloStart = MongoCommons.operationTimeAsOf(reply, nanoTime.getAsLong() - present.nanoTime());
+                    if (helloStart == null) {
+                        return Mono.error(new NoServerClockException(reply));
+                    }
+                    BsonTimestamp start = MongoCommons.startOf(helloStart, present.knownClusterTime(), KNOWN_CLUSTER_TIME_MAX_AGE);
+                    log.debug("Opening at {}, from the server's clock {} and the cluster time {} the client knew", start, helloStart, present.knownClusterTime());
+                    return Mono.just(start);
                 });
+    }
+
+    private Present presentNow() {
+        // The cluster time first, so a write through the same client that comes after the moment can't have advanced
+        // it before it's read
+        BsonTimestamp known = knownClusterTime.read();
+        return new Present(nanoTime.getAsLong(), known);
+    }
+
+    // The moment StartAt.now() and the model default stand for, and the newest cluster time the client knew then
+    private record Present(long nanoTime, @Nullable BsonTimestamp knownClusterTime) {
     }
 
     // ChangeStreamHistoryLost (286) restarts from StartAt.now() only when configured to. Everything else
     // (failover, transient network error, anything the driver itself couldn't resume) restarts from the
     // tracked position. Mirrors NativeMongoSubscriptionModel and SpringMongoSubscriptionModel.
-    private boolean shouldRestart(Throwable throwable, AtomicReference<StartAt> currentStartAt, AtomicLong presentAt) {
+    private boolean shouldRestart(Throwable throwable, AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt) {
         if (throwable instanceof NoServerClockException) {
             log.error("Cannot work out where to start the subscription, will not restart subscription!", throwable);
             return false;
@@ -320,7 +365,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             if (config.restartSubscriptionsOnChangeStreamHistoryLost) {
                 log.warn("There was not enough oplog to resume the subscription, will restart subscription from current time.", throwable);
                 // Set before currentStartAt, so an opening that reads StartAt.now() also reads this moment
-                presentAt.set(System.nanoTime());
+                presentAt.set(presentNow());
                 currentStartAt.set(StartAt.now());
                 return true;
             } else {
@@ -371,19 +416,25 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     }
 
     /**
-     * Answers with the start of the second the MongoDB server's clock showed when this method was called, worked back
-     * from a reply the server sends when the returned {@code Mono} is subscribed to. A subscription started from the
-     * answer receives every event written after the call, and can also receive the events written up to a second
-     * before it, plus the time that reply took to reach the client.
+     * Answers with the position a subscription started with {@link StartAt#now()} at the time of this call would start
+     * from, see the class documentation. The model reads the newest cluster time the driver has seen when this method
+     * is called, and asks the server for its clock when the returned {@code Mono} is subscribed to.
      * <p>
-     * Fails when the server can't be reached, and when its reply has no clock to read. The answer can be later than the
-     * call, so that a subscription started from it skips the events written in between. That happens when the server's
-     * clock is stepped forward between the call and the reply, after a failover to a replica set member whose clock is
-     * ahead, and when the question goes to a {@code mongos} whose clock is ahead of the shard that writes.
+     * A subscription started from the answer receives every event written after the call through the same
+     * {@code MongoClient}, and every event another client writes to a replica set unless another member becomes primary
+     * in between, as long as the cluster time the driver had seen is at most 15 seconds older than the server's clock.
+     * It can also receive the events written up to 16 seconds before the call, plus the time the reply took to reach
+     * the client.
+     * <p>
+     * Fails when the server can't be reached, and when its reply has no clock to read. When the driver's cluster time
+     * can't be used, the answer is the start of the second the server's clock showed at the call, and it can be later
+     * than the call, so that a subscription started from it skips the events written in between. That happens when the
+     * server's clock is stepped forward between the call and the reply, after a failover to a replica set member whose
+     * clock is ahead, and when the question goes to a {@code mongos} whose clock is ahead of the shard that writes.
      */
     @Override
     public Mono<Checkpoint> globalCheckpointAsOfNow() {
-        return operationTimeAsOf(System.nanoTime()).map(MongoOperationTimeCheckpoint::new);
+        return operationTimeAsOf(presentNow()).map(MongoOperationTimeCheckpoint::new);
     }
 
     /**
@@ -532,12 +583,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     private static final class InternalSubscription {
         final Disposable disposable;
         final AtomicReference<StartAt> currentStartAt;
-        final AtomicLong presentAt;
+        final AtomicReference<Present> presentAt;
         final @Nullable SubscriptionFilter filter;
         final Function<CloudEvent, Mono<Void>> action;
         final Mono<Void> started;
 
-        private InternalSubscription(Disposable disposable, AtomicReference<StartAt> currentStartAt, AtomicLong presentAt, @Nullable SubscriptionFilter filter, Function<CloudEvent, Mono<Void>> action, Mono<Void> started) {
+        private InternalSubscription(Disposable disposable, AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt, @Nullable SubscriptionFilter filter, Function<CloudEvent, Mono<Void>> action, Mono<Void> started) {
             this.disposable = disposable;
             this.currentStartAt = currentStartAt;
             this.presentAt = presentAt;

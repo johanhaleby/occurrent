@@ -97,7 +97,7 @@ class ReactorMongoSubscriptionModelLegacyTimeFormatFilterTest {
         String database = Objects.requireNonNull(connectionString.getDatabase());
         mongoTemplate = new ReactiveMongoTemplate(mongoClient, database);
         // A collection of its own for every test, since a subscription started at the present can also receive what
-        // was written up to a second before it, which would otherwise include the previous test's events
+        // was written shortly before it, which would otherwise include the previous test's events
         eventCollectionName = "events-" + UUID.randomUUID();
         preparationCollectionName = eventCollectionName + "-preparation";
         subscriptionModel = new ReactorMongoSubscriptionModel(mongoTemplate, eventCollectionName, TimeRepresentation.RFC_3339_STRING);
@@ -178,7 +178,7 @@ class ReactorMongoSubscriptionModelLegacyTimeFormatFilterTest {
      * back the same document with its {@code time} field rewritten to the legacy {@code OffsetDateTime.toString()}
      * rendering of the same instant, ready to be inserted once a subscription is listening. Simulates a document
      * written before the upgrade to a canonical shape (ADR 79). The canonical write goes to that other collection
-     * because a subscription started at the present can also receive what was written up to a second before it, and
+     * because a subscription started at the present can also receive what was written shortly before it, and
      * would then see the canonical write as well. The position that collection gave it is removed, since the event
      * collection hands out its own and would give a later write the same one. An event with no position is what a
      * store holds until positions are backfilled.

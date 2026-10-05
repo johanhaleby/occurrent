@@ -201,7 +201,7 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
         }
 
         // Waits a second and a half once the history is written, since a subscription started at the present can
-        // also receive what was written up to a second before it, which the at-least-once contract allows
+        // also receive what the same MongoClient wrote up to a second before it, which the at-least-once contract allows
         @PostConstruct
         void appendHistory() throws InterruptedException {
             List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(

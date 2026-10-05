@@ -77,7 +77,7 @@ what the wrapped model returns, which after `stop()` and a `start(..)` that won 
 had a subscription that doesn't compete. Read
 [section 20](#20-a-competing-consumers-isrunning-says-whether-the-model-is-started).
 Then a `ReactorMongoSubscriptionModel` subscription started at the present now starts from the moment
-`subscribe(..)` is called. It can receive events written up to a second before the call, and one whose change stream
+`subscribe(..)` is called. It can receive events written up to 16 seconds before the call, and one whose change stream
 first opens after its history is gone stops, unless you configure the model to restart it. Read
 [section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call).
 Finally, a new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running runs a competing
@@ -1528,11 +1528,16 @@ started at the present of the moment its change stream opened, after `subscribe(
 in between was never delivered.
 
 Now the model notes the moment `subscribe(..)` is called, or the moment the `Flux` from `subscribe(filter, startAt)` is
-subscribed to, and opens the change stream at the start of the second the server's clock showed then. Three things
-change with it.
+subscribed to, and the newest cluster time the MongoDB driver has seen on that client. It opens the change stream just
+after that cluster time, or at the start of the second the server's clock showed at the moment if that is earlier.
+When that cluster time is at most 15 seconds older than the server's clock, every event written through the same
+`MongoClient` after the call is delivered. On a replica set so is every event another client writes, unless another
+member becomes primary in between. The `ReactorMongoSubscriptionModel` javadoc says what happens otherwise. Three
+things change with it.
 
-- A new subscription can receive events written up to a second before `subscribe(..)` was called, plus the time the
-  reply to the model's `hello` took to reach the client.
+- A new subscription can receive events written up to 16 seconds before `subscribe(..)` was called, plus the time the
+  reply to the model's `hello` took to reach the client. Events written through the same `MongoClient` reach back at
+  most a second, plus that time.
 - A subscription made while the model is stopped receives the events written between `subscribe(..)` and `start()`. In
   0.33.0 it started at the present of `start()`.
 - A subscription whose change stream first opens longer after `subscribe(..)` than the oplog keeps history, because the

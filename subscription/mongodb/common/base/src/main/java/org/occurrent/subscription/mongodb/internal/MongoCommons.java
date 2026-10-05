@@ -29,6 +29,7 @@ import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 
+import java.time.Duration;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -444,6 +445,33 @@ public class MongoCommons {
         // One millisecond less, since toMillis rounds the elapsed time down
         long millisAtTheMoment = localTime.getTime() - TimeUnit.NANOSECONDS.toMillis(elapsedNanos) - 1;
         return new BsonTimestamp((int) Math.floorDiv(millisAtTheMoment, 1000L), 0);
+    }
+
+    /**
+     * Where a change stream that starts at a moment of interest opens. {@code helloStart} is what
+     * {@link #operationTimeAsOf(Document, long)} answered for that moment, and {@code knownClusterTime} is the newest
+     * cluster time the client had seen at that moment, or {@code null} when it had seen none.
+     * <p>
+     * MongoDB gives every write a cluster time later than any cluster time the client sent with it, and the driver
+     * sends the newest one it has seen with every command. So a change stream opened just after {@code knownClusterTime}
+     * receives every write the same client makes after the moment, whatever the server's clock shows. The answer is
+     * that position or {@code helloStart}, whichever is earlier, so it's never later than {@code helloStart}.
+     * <p>
+     * A client that has sent no command for a while knows a cluster time that old, and opening there would deliver
+     * everything written since. So when {@code knownClusterTime} is more than {@code maxAge} older than
+     * {@code helloStart}, or {@code null}, the answer is {@code helloStart}.
+     */
+    public static BsonTimestamp startOf(BsonTimestamp helloStart, @Nullable BsonTimestamp knownClusterTime, Duration maxAge) {
+        requireNonNull(helloStart, "helloStart cannot be null");
+        requireNonNull(maxAge, "maxAge cannot be null");
+        if (knownClusterTime == null || (long) helloStart.getTime() - knownClusterTime.getTime() > maxAge.toSeconds()) {
+            return helloStart;
+        }
+        // MongoDB moves to the next second rather than let the increment pass Integer.MAX_VALUE
+        BsonTimestamp afterKnown = knownClusterTime.getInc() == Integer.MAX_VALUE
+                ? new BsonTimestamp(knownClusterTime.getTime() + 1, 0)
+                : new BsonTimestamp(knownClusterTime.getTime(), knownClusterTime.getInc() + 1);
+        return afterKnown.compareTo(helloStart) < 0 ? afterKnown : helloStart;
     }
 
     /**
