@@ -347,6 +347,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // written under the consumer's lock. A grant during the register finds them recorded as running before the wrapped
     // model runs them.
     private final Set<SubscriptionIdAndSubscriberId> resumedOnceRegistered = ConcurrentHashMap.newKeySet();
+    // The failure that the last warning about a lease given back on this thread was logged with, so the call or try that
+    // catches it there does not warn about it again
+    private final ThreadLocal<@Nullable Throwable> warnedAboutOnThisThread = new ThreadLocal<>();
     // Waited for after a call failed, and doubled after each failure that follows, up to the most. A lease callback
     // handed to a try is acted on without waiting, since nothing failed.
     private static final Duration RECONCILE_FIRST_BACKOFF = Duration.ofMillis(100);
@@ -1631,9 +1634,15 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // the loss of its lease, or as waiting again when it never ran, the consumer competes again. Its try registers it,
     // runs it in the wrapped model once this node holds its lease, and tries again as for any consumer that lost its
     // lease, so a resume that blocks in the wrapped model holds up only that try.
+    // A stop() that comes after the start(false), until the register of the try returns without the lease, pauses it as
+    // by the user, as it would have had the start(false) run it before returning. Recorded as lost to the lease alone,
+    // the next start(false) would resume it.
     private void leaveItsResumeFromAPauseToItsTry(CompetingConsumer cc) {
         SubscriptionIdAndSubscriberId key = cc.subscriptionIdAndSubscriberId;
-        competingConsumers.put(key, cc.isPausedWhileWaiting() ? cc.restoreWaiting() : cc.registerPaused(false));
+        LaterStops laterStops = stopsAfterThisCall(key);
+        competingConsumers.put(key, new CompetingConsumer(key, cc.state instanceof CompetingConsumerState.PausedWhileWaiting paused
+                ? paused.waiting.meantToRunBefore(laterStops)
+                : new CompetingConsumerState.Paused(false, laterStops)));
         reconcileLater(key, true);
     }
 
@@ -2882,6 +2891,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         private boolean includeAny() {
             return upTo > after;
         }
+
+        // The ones numbered at most stop
+        private LaterStops upToStop(long stop) {
+            return new LaterStops(after, Math.min(upTo, stop));
+        }
     }
 
     // Every stop() that comes after the call under way on this thread for the consumer, which is every one that began
@@ -3814,8 +3828,19 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             reconcileLater(key, true);
             return;
         }
-        log.warn("A call for CompetingConsumer failed, so it is tried again (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId(), failure);
+        if (warnedAboutAlready(failure)) {
+            logDebug("A call for CompetingConsumer failed and gave its lease back, so it is tried again (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
+        } else {
+            log.warn("A call for CompetingConsumer failed, so it is tried again (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId(), failure);
+        }
         reconcileLater(key);
+    }
+
+    // Whether the last warning about a lease given back on this thread was logged with the failure. Forgets it either way.
+    private boolean warnedAboutAlready(Throwable failure) {
+        @Nullable Throwable warned = warnedAboutOnThisThread.get();
+        warnedAboutOnThisThread.remove();
+        return warned == failure;
     }
 
     // A call for the consumer failed, so its try waits for the backoff first
@@ -3896,7 +3921,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     return;
                 } catch (Throwable e) {
                     failures++;
-                    if (failures % RECONCILE_TRIES_BETWEEN_WARNINGS == 0) {
+                    // One that gave the lease back was warned about with what failed, so it counts but is not warned about again
+                    if (!warnedAboutAlready(e) && failures % RECONCILE_TRIES_BETWEEN_WARNINGS == 0) {
                         log.warn("Still could not bring CompetingConsumer to where it belongs after {} tries, so it is tried again (subscriberId={}, subscriptionId={})",
                                 failures, key.subscriberId(), key.subscriptionId(), e);
                     }
@@ -4093,7 +4119,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         String subscriptionId = key.subscriptionId();
         if (!Boolean.TRUE.equals(registrations.get(key))) {
             return () -> {
-                registerCompetingConsumer(subscriptionId, key.subscriberId());
+                if (!registerCompetingConsumer(subscriptionId, key.subscriberId())) {
+                    laterStopsEndWithTheRegister(key);
+                }
                 return false;
             };
         }
@@ -4145,6 +4173,17 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             competingConsumers.put(key, cc.registerPaused(false));
         }
         return null;
+    }
+
+    // Once a register of a try returned without the lease. A stop() that begins after it finds the consumer waiting for
+    // its lease, as after a register on the thread of the call meant to run the consumer, so only one that began before
+    // pauses it as by the user.
+    private void laterStopsEndWithTheRegister(SubscriptionIdAndSubscriberId key) {
+        long stopsSoFar;
+        synchronized (wrappedModelStart) {
+            stopsSoFar = lastStopBegun;
+        }
+        competingConsumers.computeIfPresent(key, (__, cc) -> cc.meantToRunBeforeStopsUpTo(stopsSoFar));
     }
 
     // Pauses the consumer in the wrapped model if that model runs it, as stop() does, and unregisters it. One the wrapped
@@ -4224,6 +4263,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * <p>
      * A {@code stop()} that comes after the call, one that refused it included, pauses the consumer as by the user once
      * it is applied to it, as it would have paused it had the call run first.
+     * <p>
+     * The warning that the lease is given back is logged with what the wrapped model threw. The call or try on this thread
+     * that catches that failure next logs no warning of its own for it, and a try still counts it as a failed try.
      */
     private Subscription giveTheLeaseBackIfItThrows(SubscriptionIdAndSubscriberId key, CompetingConsumerState previous, Supplier<Subscription> start) {
         // Asked inside the try, so an Error asking puts the consumer back and tries to give the lease back too
@@ -4251,6 +4293,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             } else {
                 log.warn("The wrapped subscription model failed to start itself, or to start or resume a subscription this node holds the lease for, so the lease is given back (subscriberId={}, subscriptionId={})",
                         key.subscriberId(), key.subscriptionId(), e);
+                warnedAboutOnThisThread.set(e);
             }
             LaterStops laterStops = stopsAfter(key, e);
             if (previous instanceof CompetingConsumerState.Waiting waiting && laterStops.includeAny() && e instanceof StoppedMeanwhile && heldPausedInTheWrappedModel(key, waiting, e)) {
@@ -4376,6 +4419,16 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 laterStops = waiting.laterStops;
             }
             return laterStops != null && laterStops.include(stop);
+        }
+
+        // The same consumer, which a stop() numbered above stop no longer pauses as by the user
+        CompetingConsumer meantToRunBeforeStopsUpTo(long stop) {
+            if (state instanceof CompetingConsumerState.Paused paused && paused.laterStops != null) {
+                return new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Paused(paused.pausedByUser, paused.laterStops.upToStop(stop)));
+            } else if (state instanceof CompetingConsumerState.Waiting waiting && waiting.laterStops != null) {
+                return new CompetingConsumer(subscriptionIdAndSubscriberId, waiting.meantToRunBefore(waiting.laterStops.upToStop(stop)));
+            }
+            return this;
         }
 
         boolean isPausedFor(String subscriptionId) {
