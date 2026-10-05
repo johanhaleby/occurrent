@@ -1557,6 +1557,17 @@ the 0.33.0 start. A subscription from the subscription-model default refuses tha
 also deliver what is written between the call and the read, override `globalCheckpointAsOfNow()` to answer with where
 your feed was when it was called.
 
+Where `ReactorDurableSubscriptionModel` wraps a model that manages named subscriptions, such as
+`ReactorMongoSubscriptionModel`, it hands the subscription to that model. A `subscribe(..)` from `StartAt.dynamic(..)`
+that comes after a `cancelSubscription(..)` of the same id found a stored checkpoint to delete, and before the durable
+model has written that checkpoint back, asks the function only once it is written back. When the function then answers
+`StartAt.now()`, the subscription starts from where the feed was at `subscribe(..)`, where in 0.33.0 the wrapped model
+opened its feed at the present. That read is asked again and warned about the same way, and the wrapped model does not
+get the subscription before it answers. A `stop()` or a pause does not end its retries, only an answer, a cancel or a
+shutdown does. Until the wrapped model has the subscription, a pause, a resume, a `stop()` or a `start(..)` is kept and
+given to it once it has. So a subscription paused meanwhile delivers nothing until it is resumed, and a resume of one
+that was not paused throws `SubscriptionAlreadyRunningException`, as for any running subscription.
+
 There is no recipe for this change. Where a subscription starts is runtime behavior that a rewrite of the source cannot
 see.
 

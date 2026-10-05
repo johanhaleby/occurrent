@@ -29,6 +29,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -37,6 +39,7 @@ import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionModelShutdownException;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
@@ -497,6 +500,100 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
             Schedulers.resetFrom(schedulers);
             cancelling.dispose();
         }
+    }
+
+    /**
+     * A subscription from a dynamic start position waits to be handed to the Mongo model until a cancel of the id has
+     * deleted the checkpoint and storage holds it again, and the Mongo model doesn't know the id until then. A pause
+     * made meanwhile is kept and put in place once the Mongo model has the subscription, so nothing is delivered until a
+     * resume, and the event written while it was paused is delivered after the resume. The dynamic start position
+     * answers StartAt.now() or the subscription-model default.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_pause_while_the_subscription_waits_to_be_handed_to_the_mongo_model_is_kept_until_it_is_resumed(boolean fromTheDefault) throws Exception {
+        // Given
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        Subscription subscription = waitingToBeHandedOver(fromTheDefault ? StartAt::subscriptionModelDefault : StartAt::now, delivered);
+
+        // When
+        Throwable pauseFailed = catchThrowable(() -> model.pauseSubscription(SUBSCRIPTION_ID));
+        storage.deleteLetGo.countDown();
+        Throwable startFailed = catchThrowable(() -> subscription.waitUntilStarted(TIMEOUT).block());
+        Throwable notPausedThere = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> mongoModel.isPaused(SUBSCRIPTION_ID)));
+        long writtenWhilePaused = write();
+        Throwable resumeFailed = catchThrowable(() -> model.resumeSubscription(SUBSCRIPTION_ID).waitUntilStarted(TIMEOUT).block());
+        long writtenAfterTheResume = write();
+        Throwable notDelivered = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> delivered.contains(writtenAfterTheResume)));
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(pauseFailed).as("how the pause while the subscription waited to be handed over ended").isNull();
+            softly.assertThat(startFailed).as("how waiting for the subscription to start ended").isNull();
+            softly.assertThat(notPausedThere).as("how waiting for the subscription to be paused in the Mongo model ended").isNull();
+            softly.assertThat(resumeFailed).as("how the resume ended").isNull();
+            softly.assertThat(notDelivered).as("how waiting for the event written after the resume ended").isNull();
+            softly.assertThat(delivered).as("events delivered").contains(writtenWhilePaused, writtenAfterTheResume);
+        });
+    }
+
+    /**
+     * A resume of a subscription that waits to be handed to the Mongo model, and that nobody paused, is refused as for a
+     * subscription that runs, and the subscription starts once it is handed over.
+     */
+    @Test
+    void a_resume_while_the_subscription_waits_to_be_handed_to_the_mongo_model_is_refused_as_it_runs() throws Exception {
+        // Given
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        Subscription subscription = waitingToBeHandedOver(StartAt::now, delivered);
+
+        // When
+        Throwable refused = catchThrowable(() -> model.resumeSubscription(SUBSCRIPTION_ID));
+        storage.deleteLetGo.countDown();
+        Throwable startFailed = catchThrowable(() -> subscription.waitUntilStarted(TIMEOUT).block());
+        long written = write();
+        Throwable notDelivered = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> delivered.contains(written)));
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(refused).as("how the resume while the subscription waited to be handed over ended").isInstanceOf(SubscriptionAlreadyRunningException.class);
+            softly.assertThat(startFailed).as("how waiting for the subscription to start ended").isNull();
+            softly.assertThat(notDelivered).as("how waiting for the event written once it started ended").isNull();
+        });
+    }
+
+    /**
+     * A cancel of a subscription that waits to be handed to the Mongo model ends it before the Mongo model has it.
+     */
+    @Test
+    void a_cancel_while_the_subscription_waits_to_be_handed_to_the_mongo_model_ends_it_before_the_mongo_model_has_it() throws Exception {
+        // Given
+        Subscription subscription = waitingToBeHandedOver(StartAt::now, new CopyOnWriteArrayList<>());
+
+        // When
+        Throwable cancelThrew = catchThrowable(() -> model.cancelSubscription(SUBSCRIPTION_ID));
+        storage.deleteLetGo.countDown();
+        Throwable startEnded = catchThrowable(() -> subscription.waitUntilStarted(TIMEOUT).block());
+
+        // Then
+        SoftAssertions.assertSoftly(softly -> {
+            softly.assertThat(cancelThrew).as("how the cancel while the subscription waited to be handed over ended").isNull();
+            softly.assertThat(startEnded).as("how waiting for the subscription to start ended").isInstanceOf(CancellationException.class);
+            softly.assertThat(mongoModel.isRunning(SUBSCRIPTION_ID) || mongoModel.isPaused(SUBSCRIPTION_ID)).as("the Mongo model holding the subscription").isFalse();
+        });
+    }
+
+    // Subscribes the id and cancels it while the delete of its stored checkpoint is held, then subscribes it again from a
+    // dynamic start position that answers what startAt does. Returns that subscription, which waits for the delete.
+    private Subscription waitingToBeHandedOver(Supplier<StartAt> startAt, List<Long> delivered) throws Exception {
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), action(new CopyOnWriteArrayList<>())).waitUntilStarted(TIMEOUT).block();
+        write();
+        await().atMost(TIMEOUT).until(() -> storage.storage.read(SUBSCRIPTION_ID).blockOptional(TIMEOUT).isPresent());
+        storage.holdsDeletes = true;
+        model.cancelSubscription(SUBSCRIPTION_ID);
+        assertThat(storage.deleteEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete held").isTrue();
+        return CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(startAt), action(delivered)), caller)
+                .get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     // Subscribes the id and cancels it while the delete of its checkpoint is held. Subscribes it again from the model

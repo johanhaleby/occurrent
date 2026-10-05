@@ -1807,9 +1807,13 @@ and every start and resume of it waits for that read instead of asking again. It
 the subscription is cancelled, paused, stopped or shut down. A pause or a stop does not cancel a read that runs, and a
 resume waits for it. Where the durable model hands the subscription to a wrapped model, a registration from
 `StartAt.now()` is not read for. A dynamic `StartAt` that answers `StartAt.now()` is read for only when its
-`subscribe(..)` comes while a cancel of the id still deletes the checkpoint, and then has one such read running. Its
-retries end only when the read answers or the subscription is cancelled or the model is shut down, and a stop of the
-model or a pause of the subscription does not end them. Where the durable model drives a subscription with a dynamic
+`subscribe(..)` comes after a try of a cancel's delete of the id read a stored checkpoint and before that checkpoint is
+written back, and then has one such read running. Its retries end only when the read answers or the subscription is
+cancelled or the model is shut down, and a stop of the model or a pause of the subscription does not end them. A
+subscription from any dynamic `StartAt` whose `subscribe(..)` comes in that window reaches the wrapped model only once
+the checkpoint is written back and its start position is known. A pause, a resume, a `stop()` or a `start(..)` until
+then is kept, and the wrapped model gets it once it has the subscription. So a subscription paused meanwhile delivers
+nothing until it is resumed. Where the durable model drives a subscription with a dynamic
 `StartAt`, it can read where the feed is twice, once at the `subscribe(..)` for the subscription-model default in case
 the function answers it, and once at the first start when the function answers `StartAt.now()`. On both paths a cancel
 of the subscription or a shutdown cancels the read and ends its warnings. Where the durable model drives the

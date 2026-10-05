@@ -40,9 +40,11 @@ import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.net.URI;
@@ -56,6 +58,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -79,8 +82,6 @@ import static org.awaitility.Awaitility.await;
 class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
-    // The model waits at most 5 seconds before a retry, so a retry still pending at the end has come by then
-    private static final Duration LONGER_THAN_THE_LONGEST_WAIT_BEFORE_A_RETRY = Duration.ofSeconds(6);
     private static final String SUBSCRIPTION_ID = "sub";
     private static final String POSITION_READ_FAILED = "The position of the feed cannot be read right now";
     private static final String DELETE_FAILED = "The storage cannot delete right now";
@@ -920,40 +921,52 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     }
 
     /**
-     * The read of where the feed was always fails for a subscription from StartAt.now(), and the subscription retries it
-     * while it waits. After the subscription is cancelled or paused, or the model is stopped, nothing waits any longer,
-     * so the wrapped model is asked at most once more, by a retry already starting at the call, and no warning for a
-     * retry comes.
+     * The read of where the feed was always fails for a subscription from StartAt.now(), and each retry of it waits here
+     * until the test lets it go. A cancel or a pause of the subscription, or a stop of the model, while a retry waits
+     * disposes that retry, so letting it go reads nothing and warns of nothing. With no end, letting it go reads once
+     * more, warns once more, and the next retry waits.
      */
     @ParameterizedTest
-    @ValueSource(strings = {"cancel", "pause", "stop"})
-    void a_read_of_where_the_feed_was_that_always_fails_is_not_retried_once_the_subscription_is_cancelled_or_paused_or_the_model_is_stopped(String end) {
+    @ValueSource(strings = {"cancel", "pause", "stop", "no end"})
+    void a_retry_of_a_read_of_where_the_feed_was_that_always_fails_that_waits_when_the_subscription_is_cancelled_or_paused_or_the_model_is_stopped_never_comes(String end) {
         // Given
+        HeldDelays delays = new HeldDelays();
+        Schedulers.Snapshot schedulers = Schedulers.setFactoryWithSnapshot(delays);
         Feed feed = new Feed();
         feed.readFails = true;
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
 
         try (LoggedByTheModel logged = new LoggedByTheModel()) {
             model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> Mono.empty());
-            // Polled often, so the end comes right after the fourth warning, while the retry it announces still waits at
-            // least 400 milliseconds
-            await().atMost(TIMEOUT).pollInterval(Duration.ofMillis(10)).until(() -> retryWarnings(logged) >= 4);
+            await().atMost(TIMEOUT).until(() -> delays.waiting() == 1);
+            // Each retry let go fails on this thread, and the next one then waits, so the fourth warning has come
+            for (int retry = 0; retry < 3; retry++) {
+                delays.letGo();
+            }
             int readsBeforeTheEnd = feed.reads.get();
-            long retriesBeforeTheEnd = retryWarnings(logged);
+            long warningsBeforeTheEnd = retryWarnings(logged);
 
             // When
             switch (end) {
                 case "cancel" -> model.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
                 case "pause" -> model.pauseSubscription(SUBSCRIPTION_ID);
-                default -> model.stop();
+                case "stop" -> model.stop();
+                default -> {
+                }
             }
-            letTimePass(LONGER_THAN_THE_LONGEST_WAIT_BEFORE_A_RETRY);
+            int waitingAfterTheEnd = delays.waiting();
+            delays.letGo();
 
             // Then
-            assertThat(feed.reads.get()).as("reads of where the feed was, " + readsBeforeTheEnd + " before the " + end).isLessThanOrEqualTo(readsBeforeTheEnd + 1);
-            assertThat(retryWarnings(logged)).as("warnings logged for a retry of the read, " + retriesBeforeTheEnd + " before the " + end).isEqualTo(retriesBeforeTheEnd);
+            int more = end.equals("no end") ? 1 : 0;
+            String after = more == 1 ? "with no end" : "after the " + end;
+            assertThat(waitingAfterTheEnd).as("retries waiting " + after).isEqualTo(more);
+            assertThat(feed.reads.get() - readsBeforeTheEnd).as("reads of where the feed was " + after + ", once the retries waiting were let go").isEqualTo(more);
+            assertThat(retryWarnings(logged) - warningsBeforeTheEnd).as("warnings logged for a retry of the read " + after + ", once the retries waiting were let go").isEqualTo(more);
+            assertThat(delays.waiting()).as("retries waiting " + after + ", once the retries waiting were let go").isEqualTo(more);
         } finally {
             model.shutdown();
+            Schedulers.resetFrom(schedulers);
         }
     }
 
@@ -2207,6 +2220,102 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             long position = present.incrementAndGet();
             written.tryEmitNext(eventAt(position));
             return position;
+        }
+    }
+
+    /**
+     * The parallel scheduler of Reactor, which {@code Mono.delay} runs on, with each task it is asked to run after a
+     * delay held until {@link #letGo()} runs it on the calling thread. A held task that is disposed never runs.
+     */
+    private static final class HeldDelays implements Schedulers.Factory {
+        private final List<HeldDelay> held = new CopyOnWriteArrayList<>();
+
+        @Override
+        public Scheduler newParallel(int parallelism, ThreadFactory threadFactory) {
+            return new Holding(Schedulers.Factory.super.newParallel(parallelism, threadFactory));
+        }
+
+        int waiting() {
+            return (int) held.stream().filter(delay -> !delay.isDisposed()).count();
+        }
+
+        // Runs each task waiting now. One that such a task schedules waits for the next call
+        void letGo() {
+            for (HeldDelay delay : List.copyOf(held)) {
+                if (delay.state.compareAndSet(HeldDelay.WAITING, HeldDelay.RAN)) {
+                    delay.task.run();
+                }
+            }
+        }
+
+        private final class Holding implements Scheduler {
+            private final Scheduler scheduler;
+
+            private Holding(Scheduler scheduler) {
+                this.scheduler = scheduler;
+            }
+
+            @Override
+            public Disposable schedule(Runnable task) {
+                return scheduler.schedule(task);
+            }
+
+            @Override
+            public Disposable schedule(Runnable task, long delay, TimeUnit unit) {
+                if (delay <= 0) {
+                    return scheduler.schedule(task);
+                }
+                HeldDelay heldDelay = new HeldDelay(task);
+                held.add(heldDelay);
+                return heldDelay;
+            }
+
+            @Override
+            public Disposable schedulePeriodically(Runnable task, long initialDelay, long period, TimeUnit unit) {
+                return scheduler.schedulePeriodically(task, initialDelay, period, unit);
+            }
+
+            @Override
+            public Worker createWorker() {
+                return scheduler.createWorker();
+            }
+
+            @Override
+            public void init() {
+                scheduler.init();
+            }
+
+            @Override
+            public void dispose() {
+                scheduler.dispose();
+            }
+
+            @Override
+            public boolean isDisposed() {
+                return scheduler.isDisposed();
+            }
+        }
+    }
+
+    private static final class HeldDelay implements Disposable {
+        private static final int WAITING = 0;
+        private static final int RAN = 1;
+        private static final int DISPOSED = 2;
+        private final Runnable task;
+        private final AtomicInteger state = new AtomicInteger(WAITING);
+
+        private HeldDelay(Runnable task) {
+            this.task = task;
+        }
+
+        @Override
+        public void dispose() {
+            state.compareAndSet(WAITING, DISPOSED);
+        }
+
+        @Override
+        public boolean isDisposed() {
+            return state.get() != WAITING;
         }
     }
 
