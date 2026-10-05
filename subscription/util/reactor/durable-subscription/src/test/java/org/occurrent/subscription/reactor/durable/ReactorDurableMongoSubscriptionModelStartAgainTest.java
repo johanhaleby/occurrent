@@ -100,6 +100,9 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     private static final String DATABASE = "reactordurablemongostartagain";
     private static final String SUBSCRIPTION_ID = "sub";
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
+    // How far back the reactive Mongo model may start a new subscription, and half a second for the reply to arrive
+    private static final Duration LONGER_THAN_A_NEW_SUBSCRIPTION_LOOKS_BACK =
+            ReactorDurableMongoSubscriptionModelFixture.HOW_FAR_BACK_THE_REACTIVE_MONGO_MODEL_MAY_START.plusMillis(500);
     private static final String SCHEDULE_HOOK ="reactor-durable-mongo-start-again";
 
     @Container
@@ -532,8 +535,11 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     private record Later(List<Long> delivered, long writtenBefore, List<Long> writtenAfter, @Nullable Throwable failed) {
     }
 
-    private Later subscribeAgain() {
+    private Later subscribeAgain() throws InterruptedException {
         long writtenBefore = write();
+        // A new subscription from the model default can also receive what was written shortly before it, so only one
+        // that resumes from a checkpoint the cancel should have deleted receives what was written before this
+        Thread.sleep(LONGER_THAN_A_NEW_SUBSCRIPTION_LOOKS_BACK.toMillis());
         List<Long> delivered = new CopyOnWriteArrayList<>();
         Throwable failed = catchThrowable(() -> subscribe(delivered).waitUntilStarted(TIMEOUT).block());
         List<Long> writtenAfter = List.of(write(), write());

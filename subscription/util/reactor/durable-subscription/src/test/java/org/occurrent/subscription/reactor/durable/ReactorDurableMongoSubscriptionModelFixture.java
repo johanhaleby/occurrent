@@ -49,6 +49,11 @@ import java.util.UUID;
  */
 class ReactorDurableMongoSubscriptionModelFixture implements SubscriptionModelFixture {
 
+    // What ReactorMongoSubscriptionModelFixture.howFarBackANewSubscriptionMayStart() declares for the model this
+    // fixture wraps, which this module cannot reach since that fixture is a test class of another module. Kept equal
+    // to it by hand, for every fixture and test here that starts a new subscription on reactive Mongo.
+    static final Duration HOW_FAR_BACK_THE_REACTIVE_MONGO_MODEL_MAY_START = Duration.ofSeconds(1);
+
     private final String streamId = UUID.randomUUID().toString();
 
     private final ReactorMongoEventStore eventStore;
@@ -109,6 +114,17 @@ class ReactorDurableMongoSubscriptionModelFixture implements SubscriptionModelFi
     @Override
     public boolean retriesAFailingHandler() {
         return true;
+    }
+
+    /**
+     * A new subscription with no stored checkpoint starts where {@code globalCheckpointAsOfNow()} of the wrapped
+     * {@link ReactorMongoSubscriptionModel} puts the moment of {@code subscribe(..)}, which can be somewhat before the
+     * call. So it can also deliver what was written that long before the call, as far back as
+     * {@code ReactorMongoSubscriptionModelFixture} declares for the same reason.
+     */
+    @Override
+    public Duration howFarBackANewSubscriptionMayStart() {
+        return HOW_FAR_BACK_THE_REACTIVE_MONGO_MODEL_MAY_START;
     }
 
     /**

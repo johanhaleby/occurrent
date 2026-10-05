@@ -139,6 +139,11 @@ class ReactorDurableSubscriptionModelStartAtNowTest {
             public Mono<Checkpoint> globalCheckpoint() {
                 return wrapped.globalCheckpoint();
             }
+
+            @Override
+            public Mono<Checkpoint> globalCheckpointAsOfNow() {
+                return wrapped.globalCheckpointAsOfNow();
+            }
         };
     }
 

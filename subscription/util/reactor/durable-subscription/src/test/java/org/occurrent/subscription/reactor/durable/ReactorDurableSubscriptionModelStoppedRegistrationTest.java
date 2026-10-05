@@ -353,13 +353,12 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
                 .hasValue(1);
     }
 
-    // StartAt.now() means where the feed is when the subscription starts, so a registration that asks for it is not
-    // read for. A caller that must not miss what is written while the model is stopped registers with the model
-    // default, which holds where the feed was at registration. A dynamic start position is read for all the same, in
-    // case it answers the model default.
+    // StartAt.now() starts where the feed was at the subscribe, so what is written while the model is stopped is
+    // delivered once it is started. A dynamic start position is asked at the start, and one that answers StartAt.now()
+    // starts where the feed is then, as it would have had the model been running.
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void a_registration_starting_at_the_present_starts_where_the_feed_is_once_it_is_started(boolean dynamic) {
+    void a_registration_starting_at_the_present_starts_where_the_feed_was_at_the_subscribe_and_a_dynamic_one_where_it_is_at_the_start(boolean dynamic) {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
         model.stop();
@@ -369,8 +368,11 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         model.start(true);
 
         await().atMost(TIMEOUT).until(() -> delegate.startedAt.size() == 1);
-        assertThat(delegate.startedAt.getFirst()).as("start position of the subscription registered while the model was stopped").hasToString("Now");
-        assertThat(delegate.globalCheckpointReads).as("reads of where the feed is").hasValue(dynamic ? 1 : 0);
+        assertThat(delegate.startedAt.getFirst()).as("start position of the subscription registered while the model was stopped")
+                .hasToString(dynamic ? "much-later" : "at-registration");
+        // A dynamic start position reads once at the subscribe, in case it answers the model default at the start, and
+        // once at the start for the StartAt.now() it answered
+        assertThat(delegate.globalCheckpointReads).as("reads of where the feed is").hasValue(dynamic ? 2 : 1);
     }
 
     @Test

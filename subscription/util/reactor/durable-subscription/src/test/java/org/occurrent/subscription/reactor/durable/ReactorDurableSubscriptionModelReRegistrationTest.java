@@ -36,7 +36,6 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
-import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
@@ -108,11 +107,8 @@ class ReactorDurableSubscriptionModelReRegistrationTest {
     private static void subscribeCancelAndSubscribeAgain(ReactorDurableSubscriptionModel model, Sinks.One<Checkpoint> firstAttemptRead,
                                                          StringBasedCheckpoint secondAttemptPosition) {
 
-        // Made on a thread that may not block, since on one that may the subscribe waits for that read before it
-        // returns
-        Subscription first = Mono.fromCallable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.<Void>empty()))
-                .subscribeOn(Schedulers.parallel())
-                .block(TIMEOUT);
+        // Returns without waiting for the position read, which firstAttemptRead keeps unanswered
+        Subscription first = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.<Void>empty());
         assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
 
         // Cancelling and registering again under the same id is the documented recovery from a registration that

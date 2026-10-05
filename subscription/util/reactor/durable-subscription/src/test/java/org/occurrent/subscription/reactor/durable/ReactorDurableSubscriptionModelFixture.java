@@ -120,6 +120,18 @@ class ReactorDurableSubscriptionModelFixture implements SubscriptionModelFixture
     }
 
     /**
+     * A new subscription with no stored checkpoint starts where {@code globalCheckpointAsOfNow()} of the catch-up model
+     * puts the moment of {@code subscribe(..)}. The catch-up model asks the {@link ReactorMongoSubscriptionModel} it
+     * wraps, which can answer with a moment somewhat before the call. So the subscription can also deliver what was
+     * written that long before the call, as far back as {@code ReactorMongoSubscriptionModelFixture} declares for the
+     * same reason.
+     */
+    @Override
+    public Duration howFarBackANewSubscriptionMayStart() {
+        return ReactorDurableMongoSubscriptionModelFixture.HOW_FAR_BACK_THE_REACTIVE_MONGO_MODEL_MAY_START;
+    }
+
+    /**
      * The durable model passes {@code globalCheckpoint()} straight through to the wrapped catch-up model, which in
      * turn passes it through to the underlying {@link ReactorMongoSubscriptionModel}, so the honest answer is what
      * that reports. Its {@code Mono} can complete empty when the server refuses {@code hostInfo}, which blocks to

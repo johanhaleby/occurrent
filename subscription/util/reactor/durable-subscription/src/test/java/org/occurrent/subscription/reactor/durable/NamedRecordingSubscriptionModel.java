@@ -87,6 +87,11 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
     }
 
     @Override
+    public Mono<Checkpoint> globalCheckpointAsOfNow() {
+        return feed.globalCheckpointAsOfNow();
+    }
+
+    @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
                                   Function<CloudEvent, Mono<Void>> action) {
         calls.add("subscribe " + subscriptionId + " began");

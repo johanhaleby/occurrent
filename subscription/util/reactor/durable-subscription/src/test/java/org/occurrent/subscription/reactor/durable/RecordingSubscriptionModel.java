@@ -71,12 +71,24 @@ final class RecordingSubscriptionModel implements CheckpointAwareSubscriptionMod
      */
     @Override
     public Mono<Checkpoint> globalCheckpoint() {
-        return Mono.defer(() -> {
-            globalCheckpointReads.incrementAndGet();
-            if (failGlobalCheckpoint || failGlobalCheckpointTimes-- > 0) {
-                return Mono.error(new IllegalStateException("Cannot read the position right now"));
-            }
-            return Mono.justOrEmpty(globalCheckpoint);
-        });
+        return Mono.defer(() -> read(globalCheckpoint));
+    }
+
+    /**
+     * Answers with {@link #globalCheckpoint} as it was at the call, read and counted when subscribed to, as
+     * {@link #globalCheckpoint()} is.
+     */
+    @Override
+    public Mono<Checkpoint> globalCheckpointAsOfNow() {
+        @Nullable Checkpoint atTheCall = globalCheckpoint;
+        return Mono.defer(() -> read(atTheCall));
+    }
+
+    private Mono<Checkpoint> read(@Nullable Checkpoint answer) {
+        globalCheckpointReads.incrementAndGet();
+        if (failGlobalCheckpoint || failGlobalCheckpointTimes-- > 0) {
+            return Mono.error(new IllegalStateException("Cannot read the position right now"));
+        }
+        return Mono.justOrEmpty(answer);
     }
 }
