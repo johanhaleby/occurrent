@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-The guide has twenty-two sections, five of them about compile-time breaks. At compile time, if you use the flow saga's
+The guide has twenty-three sections, five of them about compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -74,7 +74,8 @@ no events. Read
 [section 19](#19-springmongosubscriptionmodel-reads-its-own-cursor-and-a-quiet-durable-subscription-saves-its-position).
 Then `CompetingConsumerSubscriptionModel.isRunning()` now says whether the model is started, and no longer returns
 what the wrapped model returns, which after `stop()` and a `start(..)` that won no lease was `false`, unless the model
-had a subscription that doesn't compete. Read
+had a subscription that doesn't compete. A competing subscription you paused directly on the wrapped model also runs
+again on the competing consumer model's next `start(..)`, a grant of its lease or a resume of it. Read
 [section 20](#20-a-competing-consumers-isrunning-says-whether-the-model-is-started).
 Then a `ReactorMongoSubscriptionModel` subscription started at the present now starts from the moment
 `subscribe(..)` is called. It can receive events written up to 16 seconds before the call, and one whose change stream
@@ -82,9 +83,12 @@ first opens after its history is gone stops, unless you configure the model to r
 `ReactorDurableSubscriptionModel` subscription at `StartAt.now()` over a model of your own that is not a
 `SubscriptionModel` now starts from the `subscribe(..)` call too. Read
 [section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call).
+A new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running runs a competing
+subscription only once you call its own `start(..)`, and calling `start()` on the wrapped model instead never gets one
+running. Read [section 22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start).
 Finally, the reactor `cancelSubscription(..)` returns a `Mono<Void>`, which is a fifth compile-time break for a class
 that implements it. Read
-[section 22](#22-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted).
+[section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1296,19 +1300,20 @@ you called again.
 1. Both now log the failure as a warning and return. A thread of its own tries the subscription again, with the backoff
    the MongoDB lease strategies use by default, until it is registered for its lease and runs only while this node
    holds it. Every fifth try that fails is logged as a warning.
-2. `start(..)` still throws the first failure of a subscription that does not compete. When another call for that
-   subscription is under way, `start(..)` returns instead, and a thread of its own tries the subscription again once
-   that call has returned, until it succeeds. A pause, resume or cancel of the subscription made while it still fails
-   ends those tries and is made all the same. It doesn't end the tries to start the wrapped model, which go on until
-   one succeeds, or until `stop()` or `shutdown()`. `pauseSubscription(..)` and `cancelSubscription(..)` still throw
-   what failed in their own call, and item 3 says what `stop()` throws. A pause, resume or cancel first applies each
-   `start(..)` and `stop()` that began before it and is still waiting to be applied, also one that has not got to that
-   subscription yet. What fails there for a competing subscription is left to the thread from item 1, as it is when
-   the `start(..)` or `stop()` gets there itself. One that fails for a subscription that does not compete, or throws an
-   `Error`, is given up. That `start(..)` or `stop()` doesn't throw the failure, which is logged as a warning. When the
-   failure is an `Error`, the pause, resume or cancel throws it once its own call is made. A pause,
-   resume or cancel made from inside a call this model makes to the lease strategy or the wrapped model for that
-   subscription applies none of them first. `stop()` gives up no other call.
+2. `start(..)` still throws the first failure of a subscription that does not compete, and a failure to start the
+   wrapped model, see [section 20](#20-a-competing-consumers-isrunning-says-whether-the-model-is-started). When another
+   call for a subscription that does not compete is under way, `start(..)` returns instead of throwing what fails for
+   it, and a thread of its own tries the subscription again once that call has returned, until it succeeds. A pause,
+   resume or cancel of the subscription made while it still fails ends those tries and is made all the same. It doesn't
+   end the tries to start the wrapped model, which go on until one succeeds, or until `stop()` or `shutdown()`.
+   `pauseSubscription(..)` and `cancelSubscription(..)` still throw what failed in their own call, and item 3 says what
+   `stop()` throws. A pause, resume or cancel first applies each `start(..)` and `stop()` that began before it and is
+   still waiting to be applied, also one that has not got to that subscription yet. What fails there for a competing
+   subscription is left to the thread from item 1, as it is when the `start(..)` or `stop()` gets there itself. One that
+   fails for a subscription that does not compete, or throws an `Error`, is given up. That `start(..)` or `stop()`
+   doesn't throw the failure, which is logged as a warning. When the failure is an `Error`, the pause, resume or cancel
+   throws it once its own call is made. A pause, resume or cancel made from inside a call this model makes to the lease
+   strategy or the wrapped model for that subscription applies none of them first. `stop()` gives up no other call.
 3. For a competing subscription, remove code that caught the exception from `start(..)` or `resumeSubscription(..)` to
    call again. Neither throws what the lease strategy or the wrapped model threw for that subscription now, unless it is
    an `Error`, and the thread from item 1 makes the call again. Keep that code for a subscription that does not compete.
@@ -1334,15 +1339,25 @@ you called again.
    subscription only on the node that holds its lease. `isPaused(id)` returns `true` both for a subscription that waits
    for you and for one that comes back without a call, and nothing it returns tells the two apart.
    - A subscription that `pauseSubscription(..)` or `stop()` paused waits for `resumeSubscription(..)` or
-     `start(true)`.
+     `start(true)`. On a model built over a wrapped model that is not running, `start(false)` also brings back one that
+     `stop()` paused, until a `start(..)` has returned without throwing, see
+     [section 22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start).
    - The other competing subscriptions come back once this node holds their lease. That is one that lost its lease,
      one whose `resumeSubscription(..)` didn't win the lease, one made while the model was stopped, and one whose lease
      went to another node while the wrapped model made it. It is also one whose `resumeSubscription(..)` failed. The
      model counts that one as paused by itself, also when you had paused it, and the thread from item 1 tries it again.
      While the model is stopped, these also wait for `start(..)`, except one you resumed after `stop()`.
-   - A subscription that doesn't compete has no lease, so a lease this node wins doesn't bring it back. One made while
-     the wrapped model was not running, such as one made after `stop()` and before any resume, waits for
-     `resumeSubscription(..)` or `start(true)` as one you paused does, and `start(false)` keeps it paused.
+   - A competing subscription you paused directly on the wrapped model, and not through the competing consumer model,
+     comes back on the next `start(..)`, with either flag, on a grant of its lease and on `resumeSubscription(..)`, see
+     [section 20](#pause-a-competing-subscription-through-the-competing-consumer-model).
+   - A subscription that doesn't compete has no lease, so a lease this node wins doesn't bring it back. One made after
+     `stop()` while the wrapped model was not running, such as before any resume, waits for `resumeSubscription(..)` or
+     `start(true)` as one you paused does, and `start(false)` keeps it paused. One made before the first `start(..)` of
+     a model built over a wrapped model that is not running is resumed by that `start(..)`, with either flag, unless you
+     paused it and the flag is `false`, see
+     [section 22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start). One made
+     while the model is started runs once `subscribe(..)` returns, unless you called `stop()` on the wrapped model
+     itself.
 
    A subscription for which both return `false` is still being tried again, or, when it competes, is waiting for its
    lease.
@@ -1470,16 +1485,19 @@ This covers `isRunning()` on `CompetingConsumerSubscriptionModel`, the one that 
 returned what the wrapped model returned, so the answer depended on what had started the wrapped model.
 
 - A new model returned `true` over a wrapped model that runs, as a `SpringMongoSubscriptionModel` does by default, and
-  `false` over one built with `autoStartup(false)`.
+  `false` over one built with `autoStartup(false)`, which it still does.
 - After `stop()` and `start(..)`, it returned `false` until this node won a lease, unless the model had a subscription
-  that doesn't compete. `start(..)` starts the wrapped model again only for such a subscription, and a lease this node
-  wins starts it for the subscription the lease belongs to.
+  that doesn't compete. `start(..)` started the wrapped model again only for such a subscription, and a lease this node
+  won started it for the subscription the lease belongs to.
 - After `stop()`, a `resumeSubscription(..)` that won its lease made it return `true`.
 - After `shutdown()`, it returned `true` for as long as the wrapped model did.
 
-Now it returns `true` for a new model and after `start(..)`, also while this node holds no lease. It returns `false`
-after `stop()` until the next `start(..)`, also while a subscription you resumed after `stop()` runs on this node. Once
-`shutdown()` has begun, it returns `false` for good.
+Now it returns `true` for a new model over a wrapped model that runs, and after `start(..)`, also while this node holds
+no lease. A new model over a wrapped model that is not running is stopped until its first `start(..)`, see [section
+22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start). It returns `false` after
+`stop()` until the next `start(..)`, also while a subscription you resumed after `stop()` runs on this node. After a
+`start(..)` that throws, it returns `false` until a later `start(..)` returns without throwing. Once `shutdown()` has
+begun, it returns `false` for good.
 
 A `ManualStartSubscriptionModel` that wraps it, which the Spring Boot starter makes when the subscription mode is
 `MANUAL`, returns `true` when it is started itself and the competing consumer model returns `true`. Over the starter's
@@ -1487,19 +1505,68 @@ A `ManualStartSubscriptionModel` that wraps it, which the Spring Boot starter ma
 returns `true` after a `start()` that wins no lease, where 0.33.0 returned `false` unless the model had a subscription
 that doesn't compete. It returns `false` after a resume, until the next `start()`.
 
-A subscription that doesn't compete, made on a started model whose wrapped model is not running, such as a new model
-over one built with `autoStartup(false)`, stays paused until `start()` or `resumeSubscription(..)`, as in 0.33.0. Since
-`isRunning()` returned `false` there in 0.33.0, code that called `start()` whenever `isRunning()` returned `false` got
-the subscription running. That code now finds `isRunning()` returning `true`, no longer calls `start()`, and the
-subscription stays paused. Call `resumeSubscription(id)` once you have made such a subscription, or whenever
-`isPaused(id)` returns `true` for it. `start()` resumes it too, but `start()` is `start(true)`, so on a started model it
-also resumes every other subscription you paused with `pauseSubscription(..)`, competing or not.
+Code that calls `start()` only when `isRunning()` returns `false` keeps working. Over a wrapped model that is not
+running, `isRunning()` returns `false` until the first `start(..)`, so that code calls it. When a `start(..)` throws,
+`isRunning()` returns `false` again, so that code tries again. Every `start(..)` starts the
+wrapped model when it is not running, without resuming what the wrapped model holds paused, so a subscription that
+doesn't compete, made on a started model, runs once `subscribe(..)` returns. That holds unless you called `stop()` on
+the wrapped model itself. The subscription is then made the way that model makes one while it is stopped. Item 4 of
+[section 18](#18-a-competing-consumers-start-and-resumesubscription-log-a-failure-and-return) lists what brings each
+kind of paused subscription back.
+
+When the wrapped model was stopped, such as by calling `stop()` on it yourself, each competing subscription this node
+holds the lease for runs there again once a call through the competing consumer model starts it, also when that start
+throws after it took effect. Among the calls that do this are `start(..)`, a lease granted for another subscription, a
+`subscribe(..)` that wins its lease and any `resumeSubscription(..)`.
+
+`start(..)` returns without waiting for such a subscription to run, also for one you paused directly on the wrapped
+model. Each one is resumed on another thread, and tried again until the subscription runs, loses its lease, or is
+paused or cancelled through the competing consumer model. A resume that fails logs a warning. So a resume of such a
+subscription that blocks in the wrapped model holds up neither `start(..)`, `stop()` nor any other subscription. If
+your code expects a subscription to run the moment `start(..)` returns, wait for `isRunning(id)` to return `true`
+instead.
+
+`start(..)` still waits while it makes a competing subscription that waits for its lease compete, and while it resumes
+one that lost its lease or, as `start(true)`, one paused by the competing consumer model's `pauseSubscription(..)` or
+`stop()`. A `start(true)` in 0.33.0 waited for both too. A start or resume that blocks in the wrapped model there holds
+up that `start(..)`, and a `stop()` that waits for it.
+
+A competing subscription you paused directly on the wrapped model runs again too, see [Pause a competing subscription
+through the competing consumer model](#pause-a-competing-subscription-through-the-competing-consumer-model) below.
+Calling `stop()` on the wrapped model while a call through the competing consumer model is under way isn't supported,
+and can leave a subscription whose lease this node holds paused.
+
+When the wrapped model fails to start, `start(..)` throws what failed once every subscription has had its turn, also
+when the model has only competing subscriptions.
+
+`stop()` waits for a `start(..)` under way to return, and `shutdown()` waits while that `start(..)` starts the wrapped
+model. So when the wrapped model's own `start` doesn't return, neither do `stop()` and `shutdown()`. 0.33.0 did the same
+for a model with a subscription that doesn't compete, since only then did its `start(..)` start the wrapped model. Now
+it happens for any model whose wrapped model is not running when `start(..)` is called.
 
 If you called `isRunning()` to find out whether this node delivers events, call `isRunning(id)` for each subscription
 instead. It asks the wrapped model, which runs a competing subscription only on the node that holds its lease.
 
 There is no recipe for this change. The call compiles as before, and what it returns is runtime behavior that a rewrite
 of the source cannot see.
+
+### Pause a competing subscription through the competing consumer model
+
+The competing consumer model now decides whether a competing subscription runs. Its next `start(..)`, with either flag,
+a grant of the subscription's lease and a `resumeSubscription(..)` of it run the subscription again when this node holds
+its lease and you didn't pause it through the competing consumer model's own `pauseSubscription(..)`. That undoes a
+pause you called directly on the wrapped model, and a `stop()` and `start(..)` you called on the wrapped model itself.
+
+In 0.33.0 a pause called directly on the wrapped model survived `start(..)`, with either flag, and a grant of the lease,
+and only `resumeSubscription(..)` undid it. The pause that a `stop()` and `start(..)` called on the wrapped model itself
+left survived the same way.
+
+Pause a competing subscription with `pauseSubscription(..)` on the `CompetingConsumerSubscriptionModel`, not on the
+wrapped model, and resume it with `resumeSubscription(..)` on the competing consumer model. A pause through the
+competing consumer model also gives up this node's lease, so another node can take the subscription over.
+
+There is no recipe for this part either. Whether the model you pause a subscription on is the wrapped model of a
+competing consumer model is decided at runtime, which a rewrite of the source cannot see.
 
 ## 21. A reactive MongoDB subscription started at the present starts from the `subscribe(..)` call
 
@@ -1585,7 +1652,49 @@ A `subscribe(..)` of the id while the subscription waits throws `DuplicateSubscr
 There is no recipe for this change. Where a subscription starts is runtime behavior that a rewrite of the source cannot
 see.
 
-## 22. A reactor `cancelSubscription(..)` returns a `Mono` that completes once the stored state is deleted
+## 22. A competing consumer over a wrapped model that is not running waits for its own `start()`
+
+A new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running, such as a
+`SpringMongoSubscriptionModel` built with `autoStartup(false)`, is stopped until you call its own `start(..)`, as if
+`stop()` had been called on it. A subscription made before then is held paused in the wrapped model, and a competing one
+doesn't compete for its lease. That `start(..)` starts the wrapped model, resumes every subscription that doesn't
+compete, also as `start(false)`, and makes every competing subscription compete for its lease. With `start(false)`, a
+subscription you paused before then stays paused. A `start(..)` that throws doesn't count as the first. Until one has
+returned without throwing, each `start(..)`, also one after `stop()`, resumes every subscription that doesn't compete and
+makes every competing one compete for its lease, also one that `stop()` paused. The exception is one you paused and
+haven't resumed since, which `start(false)` keeps paused. Once a `start(true)` has resumed one you paused, a later
+`start(false)` resumes it too, also when that `start(true)` threw for another subscription. A `start(false)` returns
+without waiting for a competing subscription that `stop()` paused to run again, as in [section
+20](#20-a-competing-consumers-isrunning-says-whether-the-model-is-started).
+
+A wrapped model of your own that refuses `subscribePaused(..)` with `UnsupportedOperationException` is the exception.
+A competing subscription made before the first `start(..)` registers for its lease straight away. When this node wins
+it, the subscription is subscribed in the wrapped model, which holds it paused since it is not running, so this node
+gives the lease back, and the subscription competes for its lease from that `start(..)` on.
+
+In 0.33.0 nothing stopped such a model, although `isRunning()` returned `false` for it. A competing subscription
+competed for its lease as soon as it was made. A `start()` on the wrapped model got it running once this node held the
+lease, and one that won the lease after waiting for it ran with no `start()` at all. Now neither runs before `start(..)`
+on the competing consumer model.
+
+To tell whether the wrapped model runs, the constructor of `CompetingConsumerSubscriptionModel` now calls `isRunning()`
+on the wrapped model, which 0.33.0 never did. When that call throws, the constructor throws the same exception.
+
+Call `start()` on the `CompetingConsumerSubscriptionModel`. Code that also calls `start()` on the wrapped model, before
+or after, keeps working, and a competing subscription runs once this node holds its lease. Calling `start()` on the
+wrapped model instead runs the subscriptions that don't compete, but no competing subscription competes for its lease, so every
+event the wrapped model hands one waits. A warning that names the subscription and this step is logged the first time
+that happens for each such subscription. A `stop()` or `shutdown()` on the competing consumer model hands the events
+that wait to the handler. Code that started neither model now delivers nothing and logs nothing, since the wrapped model
+hands no event over.
+
+Over a wrapped model that runs as the competing consumer model is built, such as a `SpringMongoSubscriptionModel` with
+the default configuration, nothing changes.
+
+There is no recipe for this change. Which model your code starts, and whether it was running as the competing consumer
+model was built, is runtime behavior that a rewrite of the source cannot see.
+
+## 23. A reactor `cancelSubscription(..)` returns a `Mono` that completes once the stored state is deleted
 
 This covers the reactor `CancellableSubscriptions`, which every reactor `SubscriptionModel` extends, the reactor
 `DcbSubscriptionModel`, and the reactor `DcbSubscriptions.cancel(..)`. In 0.33.0 `cancelSubscription(..)` returned

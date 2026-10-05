@@ -54,11 +54,12 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * A node runs the action of a competing subscription only while the lease strategy reports its lease held, also while
- * a call for another subscription waits inside the wrapped model, and {@code stop()} and {@code shutdown()} do not wait
- * for a resume of a competing subscription that can no longer deliver.
+ * a call for another subscription waits inside the wrapped model or a subscription that does not compete is made, and
+ * {@code stop()} and {@code shutdown()} do not wait for a resume of a competing subscription that can no longer deliver.
  * <p>
- * Each test has s1 and s2 on one wrapped model, and a grant of s1 whose resume waits inside the wrapped model. Another
- * node then takes the lease of s2, and an event for s2 arrives while the wrapped model still runs s2.
+ * A test of a resume that waits has s1 and s2 on one wrapped model, and a grant of s1 whose resume waits inside the
+ * wrapped model. Another node then takes the lease of s2, and an event for s2 arrives while the wrapped model still runs
+ * s2.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -135,6 +136,24 @@ class CompetingConsumerDeliversOnlyUnderItsLeaseTest {
                 .isEmpty();
     }
 
+    @Test
+    void a_subscription_whose_lease_another_node_took_before_this_node_is_told_delivers_nothing_when_one_that_does_not_compete_is_subscribed() {
+        delivered.put("s2", new CopyOnWriteArrayList<>());
+        model.subscribe(NODE, "s2", null, StartAt.subscriptionModelDefault(), event -> delivered.get("s2").add(event.getId()));
+        strategy.anotherNodeTakesBeforeThisNodeIsTold("s2");
+        Thread delivering = wrapped.publish("s2", "e1");
+        assertThat(delivering).as("the thread delivering e1 to s2").isNotNull();
+        await().atMost(EVENTUALLY).until(() -> strategy.refusedOn.contains(delivering));
+
+        // A start position that resolves to null here makes the model hand the subscription straight to the wrapped model
+        model.subscribe(NODE, "nc", null, StartAt.dynamic(__ -> null), __ -> {
+        });
+
+        assertThat(deliveredWithin(NOT_DELIVERED_WITHIN, "s2"))
+                .as("[s2 delivered an event that waited for its lease once a subscription that does not compete was subscribed]")
+                .isEmpty();
+    }
+
     // s1 and s2 run on this node. Another node takes s1 and gives it back, and the grant of s1 that follows resumes s1
     // in the wrapped model, where the resume waits.
     private void theGrantOfS1WaitsInsideTheWrappedModel() {
@@ -208,6 +227,8 @@ class CompetingConsumerDeliversOnlyUnderItsLeaseTest {
         private final Set<String> candidates = ConcurrentHashMap.newKeySet();
         private final List<CompetingConsumerListener> listeners = new CopyOnWriteArrayList<>();
         private final Map<String, ExecutorService> notifiers = new ConcurrentHashMap<>();
+        // Every thread told that this node holds no lease, which a thread delivering an event is once the event waits
+        private final Set<Thread> refusedOn = ConcurrentHashMap.newKeySet();
 
         @Override
         public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
@@ -228,7 +249,11 @@ class CompetingConsumerDeliversOnlyUnderItsLeaseTest {
 
         @Override
         public boolean hasLock(String subscriptionId, String subscriberId) {
-            return NODE.equals(holders.get(subscriptionId));
+            boolean held = NODE.equals(holders.get(subscriptionId));
+            if (!held) {
+                refusedOn.add(Thread.currentThread());
+            }
+            return held;
         }
 
         @Override
@@ -285,16 +310,17 @@ class CompetingConsumerDeliversOnlyUnderItsLeaseTest {
         private final Set<String> pausedIds = new HashSet<>();
         private boolean running = true;
 
-        private void publish(String subscriptionId, String eventId) {
+        // Returns the thread the event is delivered on, or null when the subscription doesn't run
+        private @Nullable Thread publish(String subscriptionId, String eventId) {
             Consumer<CloudEvent> action;
             synchronized (this) {
                 if (!running || !runningIds.contains(subscriptionId)) {
-                    return;
+                    return null;
                 }
                 action = actions.get(subscriptionId);
             }
             CloudEvent event = CloudEventBuilder.v1().withId(eventId).withSource(URI.create("urn:test")).withType("Tested").build();
-            Thread.ofPlatform().daemon().start(() -> {
+            return Thread.ofPlatform().daemon().start(() -> {
                 try {
                     action.accept(event);
                 } catch (RuntimeException ignored) {
