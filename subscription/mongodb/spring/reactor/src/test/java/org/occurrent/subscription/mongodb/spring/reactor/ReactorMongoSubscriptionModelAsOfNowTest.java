@@ -31,9 +31,12 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -54,6 +57,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
@@ -68,6 +72,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -105,6 +110,31 @@ class ReactorMongoSubscriptionModelAsOfNowTest {
     void dispose() {
         disposables.forEach(Disposable::dispose);
         mongoClient.close();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("startsAtThePresent")
+    void a_named_subscription_receives_an_event_written_right_after_subscribe_returns_while_the_server_clock_is_held_back(StartAt startAt) throws InterruptedException {
+        // Given
+        Sinks.Empty<Void> released = Sinks.empty();
+        ReactorMongoSubscriptionModel model = model(command -> released.asMono().then(Mono.empty()));
+        disposables.add(model::shutdown);
+        Set<String> delivered = ConcurrentHashMap.newKeySet();
+        model.subscribe("subscription", null, startAt, cloudEvent -> Mono.fromRunnable(() -> delivered.add(cloudEvent.getId())));
+
+        // When
+        write("written-after-subscribe-returned");
+        // Held past the next second, so a start taken from the server clock without subtracting the time since the call is after the event
+        Thread.sleep(1100);
+        released.tryEmitEmpty();
+        writeUntilDelivered("written-once-the-clock-arrived", delivered);
+
+        // Then
+        assertThat(delivered).contains("written-after-subscribe-returned");
+    }
+
+    private static Stream<Named<StartAt>> startsAtThePresent() {
+        return Stream.of(Named.of("StartAt.now()", StartAt.now()), Named.of("the model default", StartAt.subscriptionModelDefault()));
     }
 
     @Test

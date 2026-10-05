@@ -123,8 +123,8 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
         }
     }
 
-    // A tenth of a second more than the fixture declares, see SubscriptionModelFixture.howFarBackANewSubscriptionMayStart()
-    private static final Duration MARGIN_PAST_HOW_FAR_BACK = Duration.ofMillis(100);
+    // Half a second more than the fixture declares, see SubscriptionModelFixture.howFarBackANewSubscriptionMayStart()
+    private static final Duration MARGIN_PAST_HOW_FAR_BACK = Duration.ofMillis(500);
 
     /**
      * Waits until what was published so far is older than a new subscription may reach back to, so a test asserting

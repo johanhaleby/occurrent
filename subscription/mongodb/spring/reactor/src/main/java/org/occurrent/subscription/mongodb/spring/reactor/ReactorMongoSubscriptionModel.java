@@ -92,9 +92,13 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * when the model is stopped too, so a subscription registered then and started later also receives the events written
  * in between. The model asks MongoDB for its clock after that moment, subtracts the time that has passed since, and
  * opens the change stream at the start of the second that gives. The time that has passed includes the time the reply
- * took to reach the client, so the second can begin that much earlier. So every event written after the moment is
- * delivered, and so can events written up to a second before it, plus the time the reply took to arrive. See
- * {@link #globalCheckpointAsOfNow()} for when the answer can be later than the moment.
+ * took to reach the client, so the second can begin that much earlier. Events written up to a second before the
+ * moment can then be delivered as well, plus the time the reply took to arrive.
+ * <p>
+ * Every event written after the moment is delivered as long as the server's clock is right. The start can be later
+ * than the moment, and the subscription then skips the events written in between, when the clock is stepped forward
+ * between the moment and the reply, after a failover to a replica set member whose clock is ahead, and when the
+ * question goes to a {@code mongos} whose clock is ahead of the shard that writes.
  */
 @NullMarked
 public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions {
@@ -373,9 +377,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * before it, plus the time that reply took to reach the client.
      * <p>
      * Fails when the server can't be reached, and when its reply has no clock to read. The answer can be later than the
-     * call if the server's clock is stepped forward between the call and the subscription, or if the server that
-     * answers has a clock ahead of the one that writes an event, which can happen after a replica set failover or on a
-     * sharded cluster.
+     * call, so that a subscription started from it skips the events written in between. That happens when the server's
+     * clock is stepped forward between the call and the reply, after a failover to a replica set member whose clock is
+     * ahead, and when the question goes to a {@code mongos} whose clock is ahead of the shard that writes.
      */
     @Override
     public Mono<Checkpoint> globalCheckpointAsOfNow() {

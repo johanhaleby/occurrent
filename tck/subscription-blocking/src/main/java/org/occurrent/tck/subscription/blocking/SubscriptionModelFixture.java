@@ -177,11 +177,11 @@ public interface SubscriptionModelFixture {
      * <p>
      * Zero by default, which owes a new subscription that receives nothing published before it. A model that can't
      * tell exactly where the present is, and starts a little earlier rather than risk skipping an event written right
-     * after {@code subscribe(..)} returns, declares how much earlier. The suite then waits that long, and a tenth of a
-     * second more, between publishing and subscribing wherever it asserts that an earlier event doesn't arrive. The
-     * tenth of a second is there because a model measures the moment on its own clock, which can trail the suite's by
-     * the time a reply takes to reach it. Both answers are asserted, since an event published longer ago than this
-     * still owes its absence.
+     * after {@code subscribe(..)} returns, declares how much earlier. The suite then waits that long, and half a second
+     * more, between publishing and subscribing wherever it asserts that an earlier event doesn't arrive. The extra half
+     * second is for a model that works out the moment from a reply its store sends, since a reply that arrives late on
+     * a loaded machine moves the start back by as much. An event published longer ago than that must still not arrive,
+     * so a model that starts further back than it declares fails those assertions.
      * <p>
      * Declared rather than asked because nothing on {@code SubscriptionModel} reports it.
      */
