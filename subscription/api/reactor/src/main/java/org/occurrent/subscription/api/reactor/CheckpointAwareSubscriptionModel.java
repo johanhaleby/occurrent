@@ -47,4 +47,24 @@ public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel,
      */
     @Override
     Mono<Checkpoint> globalCheckpoint();
+
+    /**
+     * The global checkpoint at the moment this method is called. Unlike most {@link Mono}s, the one returned doesn't wait for
+     * a subscriber before it does its work. The moment is taken when the method is called, and the returned {@code Mono}
+     * works out the position for that moment later, when it's subscribed to. A subscription started from the answer
+     * receives every event written after the call, even when the {@code Mono} is subscribed to long after it.
+     * <p>
+     * The answer may be earlier than the call, so a subscription started from it can also receive some events written
+     * just before the call. A model that overrides this method should fail the {@code Mono} when it can't answer for
+     * the moment of the call, rather than answer with a later position.
+     * <p>
+     * The default implementation returns {@link #globalCheckpoint()}, which works out the position when it's subscribed
+     * to, so events written between the call and the subscription can be skipped.
+     *
+     * @return A {@link Mono} that emits the global checkpoint as of the call, fails when the position can't be
+     * worked out, or, for a model that doesn't override this method, behaves like {@link #globalCheckpoint()}.
+     */
+    default Mono<Checkpoint> globalCheckpointAsOfNow() {
+        return globalCheckpoint();
+    }
 }

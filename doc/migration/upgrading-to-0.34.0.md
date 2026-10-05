@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Twenty-one things are worth reading, four of them compile-time breaks. At compile time, if you use the flow saga's
+The guide has twenty-two sections, four of them about compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -76,9 +76,13 @@ Then `CompetingConsumerSubscriptionModel.isRunning()` now says whether the model
 what the wrapped model returns, which after `stop()` and a `start(..)` that won no lease was `false`, unless the model
 had a subscription that doesn't compete. Read
 [section 20](#20-a-competing-consumers-isrunning-says-whether-the-model-is-started).
+Then a `ReactorMongoSubscriptionModel` subscription started at the present now starts from the moment
+`subscribe(..)` is called. It can receive events written up to a second before the call, and one whose change stream
+first opens after its history is gone stops, unless you configure the model to restart it. Read
+[section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call).
 Finally, a new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running runs a competing
 subscription only once you call its own `start(..)`, and calling `start()` on the wrapped model instead never gets one
-running. Read [section 21](#21-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start).
+running. Read [section 22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1331,7 +1335,7 @@ you called again.
    - A subscription that `pauseSubscription(..)` or `stop()` paused waits for `resumeSubscription(..)` or
      `start(true)`. On a model built over a wrapped model that is not running, `start(false)` also brings back one that
      `stop()` paused, until a `start(..)` has returned without throwing, see
-     [section 21](#21-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start).
+     [section 22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start).
    - The other competing subscriptions come back once this node holds their lease. That is one that lost its lease,
      one whose `resumeSubscription(..)` didn't win the lease, one made while the model was stopped, and one whose lease
      went to another node while the wrapped model made it. It is also one whose `resumeSubscription(..)` failed. The
@@ -1342,7 +1346,7 @@ you called again.
      `start(true)` as one you paused does, and `start(false)` keeps it paused. One made before the first `start(..)` of
      a model built over a wrapped model that is not running is resumed by that `start(..)`, with either flag, unless you
      paused it and the flag is `false`, see
-     [section 21](#21-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start). One made
+     [section 22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start). One made
      while the model is started runs once `subscribe(..)` returns, unless you called `stop()` on the wrapped model
      itself.
 
@@ -1481,7 +1485,7 @@ returned what the wrapped model returned, so the answer depended on what had sta
 
 Now it returns `true` for a new model over a wrapped model that runs, and after `start(..)`, also while this node holds
 no lease. A new model over a wrapped model that is not running is stopped until its first `start(..)`, see [section
-21](#21-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start). It returns `false` after
+22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start). It returns `false` after
 `stop()` until the next `start(..)`, also while a subscription you resumed after `stop()` runs on this node. After a
 `start(..)` that throws, it returns `false` until a later `start(..)` returns without throwing. Once `shutdown()` has
 begun, it returns `false` for good.
@@ -1516,7 +1520,39 @@ instead. It asks the wrapped model, which runs a competing subscription only on 
 There is no recipe for this change. The call compiles as before, and what it returns is runtime behavior that a rewrite
 of the source cannot see.
 
-## 21. A competing consumer over a wrapped model that is not running waits for its own `start()`
+## 21. A reactive MongoDB subscription started at the present starts from the `subscribe(..)` call
+
+This covers `ReactorMongoSubscriptionModel`. In 0.33.0 a subscription started with `StartAt.now()` or the model default
+started at the present of the moment its change stream opened, after `subscribe(..)` had returned, so an event written
+in between was never delivered.
+
+Now the model notes the moment `subscribe(..)` is called, or the moment the `Flux` from `subscribe(filter, startAt)` is
+subscribed to, and opens the change stream at the start of the second the server's clock showed then. Three things
+change with it.
+
+- A new subscription can receive events written up to a second before `subscribe(..)` was called, plus the time the
+  reply to the model's `hello` took to reach the client.
+- A subscription made while the model is stopped receives the events written between `subscribe(..)` and `start()`. In
+  0.33.0 it started at the present of `start()`.
+- A subscription whose change stream first opens longer after `subscribe(..)` than the oplog keeps history, because the
+  model was stopped or the subscription paused until then, gets the handling `restartSubscriptionsOnChangeStreamHistoryLost`
+  configures. With the model's default, `false`, the subscription stops, the model logs an error, and `isRunning(id)`
+  returns `false`. `waitUntilStarted()` has already reported it started by then. In 0.33.0 it opened at the present and
+  skipped the events written in between.
+
+What to do:
+
+- Make sure your handlers can receive an event they have already handled. Delivery is at least once, which already
+  allowed repeats, so a handler written for that needs no change.
+- To have a subscription whose history is gone restart at the present, skipping the events in between as in 0.33.0,
+  create the model with `ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(true)`.
+  The reactive Spring Boot starter turns it on unless you set `occurrent.subscription.mongodb.restart-on-change-stream-history-lost`
+  to `false`.
+
+There is no recipe for this change. Where a subscription starts is runtime behavior that a rewrite of the source cannot
+see.
+
+## 22. A competing consumer over a wrapped model that is not running waits for its own `start()`
 
 A new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running, such as a
 `SpringMongoSubscriptionModel` built with `autoStartup(false)`, is stopped until you call its own `start(..)`, as if
