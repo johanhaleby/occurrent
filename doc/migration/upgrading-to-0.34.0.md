@@ -1642,9 +1642,20 @@ after it.
 Until a call asks for a state, the waiting subscription is paused while the wrapped model is stopped and running
 otherwise, as `ReactorMongoSubscriptionModel` registers a subscription made while it is stopped. A pause of a paused
 subscription throws `SubscriptionNotRunningException`, and a resume of one that isn't paused throws
-`SubscriptionAlreadyRunningException`. A wrapped model of your own that registers a subscription made while it is
-stopped as running has it running once it gets it, so until then `isPaused(..)` answers `true` and a pause throws where
-that model would not. The durable model cannot ask a model that doesn't know the id how it will register it.
+`SubscriptionAlreadyRunningException`. The durable model cannot ask a model that doesn't know the id how it will
+register it.
+
+A resume of the waiting subscription while `ReactorMongoSubscriptionModel` is stopped is kept, and doesn't start that
+model, where in 0.33.0 its `resumeSubscription(..)` started it. So a subscription of another id that you make after the
+resume, and before the waiting subscription is handed over, is registered paused and stays paused. Call `start(..)` on
+the model before that subscribe. A subscription of another id that is already paused this way starts with `start()` or
+a resume of it.
+
+A wrapped model of your own that registers a subscription made while it is stopped as running differs from 0.33.0 while
+the subscription waits. `isPaused(..)` answers `true` for it and a pause of it throws `SubscriptionNotRunningException`,
+where that model would answer `false` and pause it. A `start(false)` while that model is stopped keeps the subscription
+paused once that model has it, where in 0.33.0 it ran. Resume it to start it. Without a pause, a `stop()` or such a
+`start(false)` meanwhile, it runs once that model has it.
 
 A `subscribe(..)` of the id while the subscription waits throws `DuplicateSubscriptionIdException` at the call, as in
 0.33.0.

@@ -1829,15 +1829,21 @@ subscription it registered while stopped paused through such a start. Until a ca
 answers for the waiting subscription as `ReactorMongoSubscriptionModel` will once it has it, paused while that model is
 stopped and running otherwise, since that model registers a subscription made while it is stopped as paused. So
 `isPaused(..)`, `isRunning(..)`, a pause and a resume answer as they will after the hand-over. A wrapped model of your
-own that registers such a subscription as running has it running once it gets it, and until then `isPaused(..)` answers
-`true` and a pause throws `SubscriptionNotRunningException`, where that model would not. The durable model cannot ask a
-model that does not know the id yet how it will register it. A `subscribe(..)` of the id while the subscription waits
-throws `DuplicateSubscriptionIdException` at the call, as the wrapped model throws for a subscription it has. In 0.33.0
-the wrapped model got the subscription at the call, so such a `subscribe(..)` threw there too. The durable model checks
-that no other subscription of the id is registered or starting, checks that no cancel or shutdown ended the
-subscription, and starts keeping the calls for the id in one step under one lock. A call for the id therefore comes
-before that step, where a pause or a resume finds the id unknown and a `subscribe(..)` is refused, or after it, where
-the call is kept.
+own that registers such a subscription as running pays more. Until it has the subscription, `isPaused(..)` answers
+`true` and a pause throws `SubscriptionNotRunningException`, where that model would not. A `start(false)` while that
+model is stopped keeps the subscription paused there after the hand-over, where 0.33.0 left it running, so it delivers
+nothing until it is resumed. The durable model cannot ask a model that does not know the id yet how it will register
+it. A `subscribe(..)` of the id while the subscription waits throws `DuplicateSubscriptionIdException` at the call, as
+the wrapped model throws for a subscription it has. In 0.33.0 the wrapped model got the subscription at the call, so
+such a `subscribe(..)` threw there too. The durable model checks that no other subscription of the id is registered,
+being taken by the wrapped model or waiting itself, checks that no cancel or shutdown ended the subscription, and starts
+keeping the calls for the id in one step under one lock. A `subscribe(..)` of the id that still reads where to start at
+that step is refused once it has read, before the wrapped model gets it, since a pause kept for the waiting subscription
+would not reach it. A call for the id therefore comes before that step or after it. Before it, a pause or a resume
+finds the id unknown in the wrapped model, and while that call is still under way there the `subscribe(..)` itself
+throws `DuplicateSubscriptionIdException`, as point 1 of
+[section 23 of the 0.34.0 upgrade guide](../../migration/upgrading-to-0.34.0.md#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted)
+describes. After it, the call is kept.
 
 This amends a sentence of [ADR 89](0089-manual-subscription-mode-on-the-reactive-stack.md), which shipped in 0.33.0 and
 says a registration naming its own `StartAt` is not read for, `StartAt.now()` included. Where the durable model drives
