@@ -78,6 +78,18 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * {@code ReactorDurableSubscriptionModel} gives for the same registration.
  * {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turns the refusal into a
  * start without a recorded position, accepting the loss window it documents.
+ * <p>
+ * A subscribe of an id the wrapped model already holds, running or paused, is refused with
+ * {@link DuplicateSubscriptionIdException} before anything is read from or written to the {@link CheckpointStorage}.
+ * The wrapped model is asked through {@link IntrospectableSubscriptions#subscriptionIds()} when it implements that, and
+ * through {@link SubscriptionModelLifeCycle#isRunning(String)} and {@link SubscriptionModelLifeCycle#isPaused(String)}
+ * otherwise, so a wrapped model of your own has to answer those for each id. A subscribe that gets past that check and
+ * is then refused by the wrapped model has its first position deleted again through
+ * {@link CheckpointStorage#deleteIfUnchanged(String, Checkpoint, java.util.OptionalLong)}, since a paused subscription
+ * of the id would otherwise resume from it and skip the events it had not handled. A storage that can't do that,
+ * under a wrapped model that does not implement {@link IntrospectableSubscriptions}, leaves that position behind when
+ * the two answers miss an id a pause or a resume is moving. This model logs a warning naming both when it is
+ * created.
  */
 @NullMarked
 public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
@@ -194,6 +206,15 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         this.subscriptionModel = subscriptionModel;
         this.config = config;
         this.writeVersionSource = writeVersionSource;
+        if (!storage.deletesIfUnchanged() && !(subscriptionModel instanceof IntrospectableSubscriptions)) {
+            log.warn("Checkpoint storage {} cannot delete a checkpoint only if it is unchanged, and the wrapped subscription " +
+                     "model {} cannot list its subscriptions. A subscribe of an id the wrapped model already holds, made while " +
+                     "isRunning(id) and isPaused(id) both miss it, can then store a start position that the refused subscribe " +
+                     "leaves behind, and a paused subscription of that id resumes from it, skipping the events it had not " +
+                     "handled when it was paused. Implement deleteIfUnchanged(String, Checkpoint, OptionalLong) and " +
+                     "deletesIfUnchanged() on the storage, or IntrospectableSubscriptions on the wrapped model, to close that.",
+                    storage.getClass().getName(), subscriptionModel.getClass().getName());
+        }
         HistoryLossReportingSubscriptions.findIn(subscriptionModel)
                 .ifPresent(model -> model.addHistoryLossListener(historyLossListener));
         if (config.quietPositionSaveInterval != null) {
@@ -304,13 +325,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // they open a change stream, outside this lock, so a cancelSubscription can run while it reads the
         // checkpoint or writes the first position.
         return underLockFor(subscriptionId, () -> {
-            // Refused here because generateStartAtPositionFrom stores a first position for the id, which a refusal from
-            // the wrapped model would leave behind. A pause of the id can hide it from both checks for a moment, and
-            // the wrapped model then refuses the subscribe after that position is stored
-            if (subscriptionModel.isRunning(subscriptionId) || subscriptionModel.isPaused(subscriptionId)) {
+            // Refused here, before generateStartAtPositionFrom stores a first position for the id. When the wrapped
+            // model's answers miss the id and it refuses the subscribe below, the first position is deleted again
+            if (wrappedModelHolds(subscriptionId)) {
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
-            StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
+            AtomicReference<@Nullable Checkpoint> firstPositionStored = new AtomicReference<>();
+            StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt, firstPositionStored::set);
             if (startAtToUse == null) {
                 // Not allowed to start, delegate to the wrapped subscription instead. Whether it was already
                 // marked is captured before marking it, so a duplicate attempt against an already-active,
@@ -355,9 +376,18 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     registration.delivered(delivery, stored);
                 }
             };
-            Subscription subscription = holdPaused
-                    ? subscriptionModel.subscribePaused(subscriptionId, filter, startAtToUse, checkpointingAction)
-                    : subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, checkpointingAction);
+            Subscription subscription;
+            try {
+                subscription = holdPaused
+                        ? subscriptionModel.subscribePaused(subscriptionId, filter, startAtToUse, checkpointingAction)
+                        : subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, checkpointingAction);
+            } catch (DuplicateSubscriptionIdException refusal) {
+                Checkpoint firstPosition = firstPositionStored.get();
+                if (firstPosition != null) {
+                    deleteFirstPositionOfARefusedSubscribe(subscriptionId, firstPosition, refusal);
+                }
+                throw refusal;
+            }
             // Cleared only now, after the delegate accepted this managed subscription, not before: a previous
             // subscribe may have left this id opted out and still active, and a duplicate id the delegate refuses
             // must leave that active subscription's marker alone rather than losing it to this failed attempt.
@@ -366,6 +396,33 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             registrations.put(subscriptionId, registration);
             return subscription;
         });
+    }
+
+    // subscriptionIds() of a model that lists its subscriptions answers in one step for an id that is running or
+    // paused. The two separate questions otherwise asked can both miss an id that a pause or a resume moves between
+    // running and paused while they are asked
+    private boolean wrappedModelHolds(String subscriptionId) {
+        if (subscriptionModel instanceof IntrospectableSubscriptions introspectable) {
+            return introspectable.subscriptionIds().contains(subscriptionId);
+        }
+        return subscriptionModel.isRunning(subscriptionId) || subscriptionModel.isPaused(subscriptionId);
+    }
+
+    // Left behind, the first position would be where a paused subscription of the id resumes from, skipping the
+    // events it had not handled when it was paused. Deleted only if it is still the one this call stored, so a
+    // checkpoint the running subscription of the id has written since stays. No version, since ifAbsent() and any()
+    // write none of their own. The refusal is what the caller gets either way
+    private void deleteFirstPositionOfARefusedSubscribe(String subscriptionId, Checkpoint firstPosition, DuplicateSubscriptionIdException refusal) {
+        if (!storage.deletesIfUnchanged()) {
+            return;
+        }
+        try {
+            storage.deleteIfUnchanged(subscriptionId, firstPosition, OptionalLong.empty());
+        } catch (RuntimeException e) {
+            if (e != refusal) {
+                refusal.addSuppressed(e);
+            }
+        }
     }
 
     // A version from writeVersionSource stamps notOlderThan. An empty answer or no source stamps any(). Always the
@@ -382,8 +439,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // the caller. Thrown from inside the dynamic supplier it would surface on the wrapped model's own evaluation
     // path instead, which NativeMongoSubscriptionModel runs under a retry wrapper that would re-evaluate forever
     // and tell nobody. Answers the checkpoint it recorded, for the supplier's first evaluation, and null when
-    // something was stored already or the override let an unanswerable source through.
-    private @Nullable Checkpoint recordFirstPositionOrRefuse(String subscriptionId) {
+    // something was stored already or the override let an unanswerable source through. Hands storedByThisCall a
+    // position only when this call's own write stored it.
+    private @Nullable Checkpoint recordFirstPositionOrRefuse(String subscriptionId, Consumer<Checkpoint> storedByThisCall) {
         Checkpoint checkpoint = storage.read(subscriptionId);
         if (checkpoint != null) {
             return null;
@@ -409,15 +467,17 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                             "starts from that checkpoint and is never refused this way. Subscribing with a " +
                                             "StartAt of your own records no position and makes no such promise.");
         }
-        return saveFirstPosition(subscriptionId, globalCheckpoint);
+        return saveFirstPosition(subscriptionId, globalCheckpoint, storedByThisCall);
     }
 
     // Pinned with ifAbsent(), the same protocol ManualStartSubscriptionModel and ReactorDurableSubscriptionModel
     // use, rather than the read-then-write this replaced, which could overwrite a first checkpoint another node
     // wrote in between. A storage able to compare the two settles a lost race by position instead, through
     // resolveFirstCheckpointRace. One that cannot falls back to reading the stored position back and checking it
-    // is the one this node itself computed.
-    private Checkpoint saveFirstPosition(String subscriptionId, Checkpoint globalCheckpoint) {
+    // is the one this node itself computed. storedByThisCall gets the position when this call's own write stored it,
+    // and not when the position was settled by a write of someone else's. A storage may report an ifAbsent() write
+    // of the value already stored as done, and then that write counts as this call's too.
+    private Checkpoint saveFirstPosition(String subscriptionId, Checkpoint globalCheckpoint, Consumer<Checkpoint> storedByThisCall) {
         if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
             // Nothing here can make a storage that writes unconditionally do otherwise, so this is the write
             // before this method existed and two nodes recording a first position at the same moment keep the
@@ -429,10 +489,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                      "Answer true from evaluatesWriteConditionsFor(String) on a storage that does evaluate " +
                      "ifAbsent(), or use one of the storages Occurrent ships, to close that.",
                     storage.getClass().getName(), subscriptionId);
-            return storage.save(subscriptionId, globalCheckpoint);
+            Checkpoint saved = storage.save(subscriptionId, globalCheckpoint);
+            storedByThisCall.accept(saved);
+            return saved;
         }
         try {
-            return storage.save(subscriptionId, globalCheckpoint, CheckpointWriteCondition.ifAbsent());
+            Checkpoint saved = storage.save(subscriptionId, globalCheckpoint, CheckpointWriteCondition.ifAbsent());
+            storedByThisCall.accept(saved);
+            return saved;
         } catch (CheckpointWriteConditionNotFulfilledException e) {
             return storage.resolveFirstCheckpointRace(subscriptionId, globalCheckpoint)
                           .orElseGet(() -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, globalCheckpoint));
@@ -450,7 +514,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // the caller's model-default fallback a few lines below, which would skip everything between here and now.
     private Checkpoint saveFirstPositionOrAdoptWhatWon(String subscriptionId, Checkpoint globalCheckpoint) {
         try {
-            return saveFirstPosition(subscriptionId, globalCheckpoint);
+            return saveFirstPosition(subscriptionId, globalCheckpoint, __ -> {
+            });
         } catch (StartPositionAlreadyPinnedException e) {
             return e.positionStored.orElse(globalCheckpoint);
         }
@@ -477,12 +542,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     @Nullable
-    private StartAt generateStartAtPositionFrom(String subscriptionId, StartAt originalStartAt) {
+    private StartAt generateStartAtPositionFrom(String subscriptionId, StartAt originalStartAt, Consumer<Checkpoint> firstPositionStored) {
         final StartAt startAtToUse;
         if (originalStartAt.isDefault()) {
             // Consumed by the supplier's first evaluation, so the position recorded just now is not read back or,
             // on a storage that answers reads from somewhere the write has not reached, saved a second time.
-            AtomicReference<@Nullable Checkpoint> recordedFirstPosition = new AtomicReference<>(recordFirstPositionOrRefuse(subscriptionId));
+            AtomicReference<@Nullable Checkpoint> recordedFirstPosition = new AtomicReference<>(recordFirstPositionOrRefuse(subscriptionId, firstPositionStored));
             StartAt startAtIfNoSubscriptionFound = StartAt.subscriptionModelDefault();
             startAtToUse = StartAt.dynamic(() -> {
                 Checkpoint recorded = recordedFirstPosition.getAndSet(null);
@@ -504,7 +569,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             var subscriptionModelContext = new SubscriptionModelContext(DurableSubscriptionModel.class);
             var nextStartAt = originalStartAt.get(subscriptionModelContext);
             if (nextStartAt != null) {
-                return generateStartAtPositionFrom(subscriptionId, nextStartAt);
+                return generateStartAtPositionFrom(subscriptionId, nextStartAt, firstPositionStored);
             }
             return null;
         } else {

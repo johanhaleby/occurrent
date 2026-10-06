@@ -22,6 +22,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -156,10 +157,9 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     /**
-     * Copilot review on PR #823 (issue #737, finding 2). The managed path's marker removal ran before the delegate
-     * subscribe call, so a managed subscribe the delegate refused as a duplicate against a still-active, opted-out
-     * subscription for the same id still lost that active subscription's marker, even though nothing about it
-     * actually changed.
+     * The managed path's marker removal used to run before the delegate subscribe call, so a managed subscribe the
+     * delegate refused as a duplicate against a still-active, opted-out subscription for the same id still lost that
+     * active subscription's marker, even though nothing about it actually changed.
      */
     @Test
     void a_failed_managed_subscribe_against_an_active_opted_out_id_does_not_disturb_its_marker() {
@@ -170,10 +170,10 @@ class DurableSubscriptionModelResumeRepositioningTest {
         model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
         }).waitUntilStarted();
 
-        // Same id, still active and opted out. This call resolves managed, and the delegate refuses it as a
-        // duplicate of the still-registered opted-out subscription.
+        // Same id, still active and opted out. The delegate's answers miss it, so this call gets past the check up
+        // front, resolves managed, and the delegate refuses it as a duplicate of the opted-out subscription
         assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), event -> {
-        })).isInstanceOf(RuntimeException.class);
+        })).isInstanceOf(DuplicateSubscriptionIdException.class);
 
         storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
         model.resumeSubscription(SUBSCRIPTION_ID);
@@ -232,8 +232,10 @@ class DurableSubscriptionModelResumeRepositioningTest {
         model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
         }).waitUntilStarted();
 
+        // The delegate's answers miss the id, so this call gets past the check up front, opts out again, and the
+        // delegate refuses it as a duplicate
         assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
-        })).isInstanceOf(RuntimeException.class);
+        })).isInstanceOf(DuplicateSubscriptionIdException.class);
 
         storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
         model.resumeSubscription(SUBSCRIPTION_ID);
@@ -255,8 +257,10 @@ class DurableSubscriptionModelResumeRepositioningTest {
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), event -> {
         });
 
+        // The delegate's answers miss the id, so this call gets past the check up front, opts out, and the delegate
+        // refuses it as a duplicate
         assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
-        })).isInstanceOf(RuntimeException.class);
+        })).isInstanceOf(DuplicateSubscriptionIdException.class);
 
         storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
         model.resumeSubscription(SUBSCRIPTION_ID);
@@ -595,8 +599,10 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     /**
-     * The same repositionable fake, but a second {@code subscribe} call for an id it already has throws, standing
-     * in for a delegate refusing a duplicate subscription id such as {@code DuplicateSubscriptionIdException}.
+     * The same repositionable fake, but a second {@code subscribe} call for an id it already has throws
+     * {@link DuplicateSubscriptionIdException}, and {@code isRunning(id)} and {@code isPaused(id)} answer
+     * {@code false} for every id. It stands in for a delegate whose answers lag behind its refusal, which the
+     * durable model's check up front cannot catch, so the refusal comes from the delegate.
      */
     private static class DuplicateRejectingRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
         private final Set<String> subscribed = ConcurrentHashMap.newKeySet();
@@ -604,9 +610,19 @@ class DurableSubscriptionModelResumeRepositioningTest {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             if (!subscribed.add(subscriptionId)) {
-                throw new RuntimeException("duplicate subscription id " + subscriptionId);
+                throw new DuplicateSubscriptionIdException(subscriptionId);
             }
             return super.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return false;
         }
     }
 
