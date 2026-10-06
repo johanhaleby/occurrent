@@ -1891,10 +1891,14 @@ wait never ended when the durable model drove the subscription itself. A subscri
 default, on a durable model that wraps a model that manages named subscriptions, no longer reads where to start on the
 caller's thread. 0.33.0 read there, so a `subscribe(..)` on a thread where Reactor refuses to block threw, and one on a
 Netty event loop thread of the MongoDB driver could wait for good for a read that needed that thread. Now the call
-returns at once, and the subscription is handed to the wrapped model once the read answers. The read of where the feed
-is starts at the call, so with nothing stored the subscription starts from where the feed was then and skips nothing
-the caller writes after the return. A refusal on the way fails `waitUntilStarted()` and is logged as an error, since the
-call has returned by then. A duplicate id is still refused at the call, before anything is read or stored.
+doesn't wait for storage, and the subscription is handed to the wrapped model once the read answers. The read of where
+the feed is starts at the call, so with nothing stored the subscription starts from where the feed was then and skips
+nothing the caller writes after the return. That read is subscribed to on the caller's thread, so the call returns at
+once only where the wrapped model's `globalCheckpointAsOfNow()` doesn't block when subscribed to, which holds for
+`ReactorMongoSubscriptionModel`. The start position is stored only once the wrapped model has taken the subscribe, so a
+subscribe it refuses, as a duplicate or over a filter it doesn't support, stores nothing for the id. Such a refusal fails
+`waitUntilStarted()` and is logged as an error, since the call has returned by then. A duplicate that the wrapped model
+reports as running or paused at the call is still refused there.
 
 When the durable model drives the subscription itself, no lifecycle call holds its monitor while it calls the storage,
 the wrapped model or a function the caller supplies, or while it cancels the feed of a subscription. Each call decides

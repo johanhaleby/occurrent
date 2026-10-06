@@ -2007,11 +2007,12 @@ checkpoint, or where the feed was when none is stored. On a thread where Reactor
 thread for example, it threw `IllegalStateException`. On a Netty event loop thread of the MongoDB driver that Reactor
 doesn't mark as non-blocking, it could wait for good, since that thread has to deliver the answer of the read.
 
-Now `subscribe(..)` returns at once, on any thread. The durable model reads where to start on a thread of its own and
-hands the subscription to the wrapped model once the read answers. It asks the wrapped model's
-`globalCheckpointAsOfNow()` at the call, whether a checkpoint is stored or not, so a subscription with nothing stored
-starts from where the feed was at the call, however late the read answers. While the read hasn't answered, a warning is
-logged every 10 seconds.
+Now `subscribe(..)` doesn't wait for storage. The durable model reads where to start on a thread of its own and hands
+the subscription to the wrapped model once the read answers. It asks the wrapped model's `globalCheckpointAsOfNow()` at
+the call, whether a checkpoint is stored or not, so a subscription with nothing stored starts from where the feed was
+at the call, however late the read answers. The call subscribes to that read before it returns, so with
+`ReactorMongoSubscriptionModel`, whose read doesn't block when subscribed to, `subscribe(..)` returns at once on any
+thread. While the read hasn't answered, a warning is logged every 10 seconds.
 
 What 0.33.0 threw from `subscribe(..)` once it had read where to start now fails `waitUntilStarted()` of the
 subscription that `subscribe(..)` returned, and is logged as an error saying the subscription could not be started.
@@ -2025,9 +2026,12 @@ That covers:
 `Subscribable` and the TCK's `SubscriptionModelConformance` now let a model report an unsupported filter through
 `waitUntilStarted()` instead of from `subscribe(..)`.
 
-A `subscribe(..)` still throws `DuplicateSubscriptionIdException` at the call, before anything is read or stored for the
-id, while the wrapped model has a subscription of the id running or paused, and while another `subscribe(..)` of the id
-waits to be handed over or is being handed over. It throws there too in the cases section 21 describes, while the
+The durable model stores the start position only once the wrapped model has taken the subscribe, so a `subscribe(..)`
+that the wrapped model refuses stores nothing for the id.
+
+A `subscribe(..)` still throws `DuplicateSubscriptionIdException` at the call while the wrapped model reports a
+subscription of the id as running or paused, and while another `subscribe(..)` of the id waits to be handed over or is
+being handed over. It throws there too in the cases section 21 describes, while the
 durable model starts a subscription of the id there again or a cancel, a pause or a resume it sent the wrapped model for
 the id is under way. What a `StartAt.dynamic(..)` function throws comes out of the call as well, since the function runs
 on the calling thread. The durable model checks for a duplicate again at the hand-over, and a refusal there fails

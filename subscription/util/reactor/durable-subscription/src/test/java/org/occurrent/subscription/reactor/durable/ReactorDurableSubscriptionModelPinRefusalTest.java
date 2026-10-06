@@ -43,6 +43,7 @@ import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 /**
  * What happens when the first position recorded for a subscription id is not the one this registration read.
@@ -247,9 +248,9 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
     }
 
     @Test
-    void the_refusal_fails_the_start_when_the_wrapped_model_manages_named_subscriptions() {
-        // This path reads the position once subscribe has returned and hands the wrapped model what it read, so the
-        // refusal is reported where any start it could not make is, unwrapped.
+    void the_refusal_fails_the_start_and_cancels_the_subscription_when_the_wrapped_model_manages_named_subscriptions() {
+        // This path records the position only once the wrapped model has taken the subscribe, so a refusal to record it
+        // is reported where any start it could not make is, unwrapped, and ends the subscription the wrapped model took.
         RaceSimulatingCheckpointStorage storage = new RaceSimulatingCheckpointStorage();
         storage.whenTheFirstReadFindsNothing = () -> storage.writeWithoutScripting("landed-during-registration");
         NamedRecordingSubscriptionModel delegate = new NamedRecordingSubscriptionModel("this-nodes-own-position");
@@ -259,9 +260,10 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
 
         assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(StartPositionAlreadyPinnedException.class);
-        assertThat(delegate.subscribedIds)
-                .as("a registration that was refused is not handed to the wrapped model, so nothing runs from a position nobody read")
-                .isEmpty();
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delegate.cancelledIds)
+                .as("the subscription the wrapped model took is cancelled there, so nothing runs from a position nobody recorded")
+                .containsExactly(SUBSCRIPTION_ID));
+        assertThat(delegate.isRunning(SUBSCRIPTION_ID) || delegate.isPaused(SUBSCRIPTION_ID)).as("the wrapped model still holds the id").isFalse();
     }
 
     @Test
