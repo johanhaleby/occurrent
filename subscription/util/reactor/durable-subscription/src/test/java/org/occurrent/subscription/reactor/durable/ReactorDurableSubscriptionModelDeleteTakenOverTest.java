@@ -82,6 +82,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     private static final String SAVE_FAILED = "The storage cannot save right now";
     private static final String READ_FAILED = "The storage cannot read right now";
     private static final String DELETE_FAILED = "The storage lost the answer to the delete";
+    private static final String START_FAILED = "The wrapped model could not start the subscription";
 
     /**
      * The subscription from the model default starts where it would with no delete running, and the subscribe returns
@@ -848,6 +849,47 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     }
 
     /**
+     * A subscribe of the id whose start position would wait for the checkpoint a cancel deleted to be written back is
+     * refused as a duplicate at the call while the model still records a subscription of the id that it handed to a
+     * wrapped model. That includes a subscription whose start the wrapped model failed and of which it kept nothing, as
+     * ReactorMongoSubscriptionModel does after an error it can't recover from. The start position is never asked.
+     */
+    @Test
+    void a_subscribe_that_would_wait_is_refused_while_the_model_records_a_subscription_of_the_id_whose_start_failed_in_the_wrapped_model() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        NamedFeed feed = new NamedFeed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            Held heldCall = cancelWhileHeld(model, storage, feed, "stored", release);
+            assertThat(heldCall.entered().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete held").isTrue();
+            feed.startFails = true;
+            Subscription handedOver = model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), action(new CopyOnWriteArrayList<>()));
+            Throwable startFailed = catchThrowable(() -> handedOver.waitUntilStarted(TIMEOUT).block());
+            feed.startFails = false;
+            AtomicInteger startPositionAsked = new AtomicInteger();
+
+            // When
+            Throwable refused = catchThrowable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(() -> {
+                startPositionAsked.incrementAndGet();
+                return StartAt.now();
+            }), action(new CopyOnWriteArrayList<>())));
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(startFailed).as("how waiting for the start of the subscription handed over ended").hasMessage(START_FAILED);
+                softly.assertThat(feed.isRunning(SUBSCRIPTION_ID)).as("whether the wrapped model has a subscription of the id").isFalse();
+                softly.assertThat(refused).as("how the subscribe that would wait ended").isInstanceOf(DuplicateSubscriptionIdException.class);
+                softly.assertThat(startPositionAsked).as("times the start position was asked").hasValue(0);
+            });
+        } finally {
+            release.countDown();
+            model.shutdown();
+        }
+    }
+
+    /**
      * A subscription handed to a wrapped model is paused right as the model, having started it again there from an
      * earlier first position, has found no state kept meanwhile left to put in place. It delivers nothing until it is
      * resumed, and then delivers every event after the earlier position, the one under way at the pause again.
@@ -1566,12 +1608,28 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     }
 
     // A feed for subscriptions it manages by name, each reading the events written after where it starts on a thread
-    // of its own, so a write does not wait for an action
+    // of its own, so a write does not wait for an action. While startFails is set, a subscribe keeps nothing of the
+    // id and fails its start with START_FAILED, as ReactorMongoSubscriptionModel does after an error it can't
+    // recover from.
     private static final class NamedFeed extends Feed implements SubscriptionModel {
         private final Map<String, Disposable> subscriptions = new ConcurrentHashMap<>();
+        private volatile boolean startFails;
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            if (startFails) {
+                return new Subscription() {
+                    @Override
+                    public String id() {
+                        return subscriptionId;
+                    }
+
+                    @Override
+                    public Mono<Void> waitUntilStarted() {
+                        return Mono.error(new IllegalStateException(START_FAILED));
+                    }
+                };
+            }
             Disposable reading = subscribe(filter, startAt).publishOn(Schedulers.boundedElastic()).concatMap(action).subscribe();
             if (subscriptions.putIfAbsent(subscriptionId, reading) != null) {
                 reading.dispose();

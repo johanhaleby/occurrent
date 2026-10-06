@@ -1787,10 +1787,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         return !writer.retired && !writer.overtakenByCancel;
     }
 
-    // Called under positionLock, for a subscription that would wait to be handed over. Another subscription of the id
-    // that the wrapped model has, or is taking, or that waits to be handed over itself, would make the wrapped model
-    // refuse the waiting subscription only once it is handed over, long after the call. A subscription of the id that
-    // still reads where to start is refused at its own hand-over instead, see keepsForAnotherWriter.
+    // Called under positionLock, for a subscription that would wait to be handed over. Whether this model still records
+    // another subscription of the id that it handed over, that it is handing over or that waits to be handed over
+    // itself, also one the wrapped model has dropped since. Checked here since the wrapped model would refuse a
+    // duplicate only at the hand-over, long after the call. A subscription of the id that still reads where to start
+    // is refused at its own hand-over instead, see keepsForAnotherWriter.
     private boolean holdsAnotherWriter(String subscriptionId, PositionWriter writer) {
         @Nullable PositionWriter registered = positionWriters.get(subscriptionId);
         if (registered != null && registered != writer && !registered.retired) {
@@ -2240,9 +2241,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * drives the subscription itself. A write back that fails is tried again, see below, and the function is asked
      * once one succeeds. When this model hands the subscription to a wrapped model that manages named subscriptions,
      * a {@code subscribe(..)} of the id throws {@link DuplicateSubscriptionIdException} at the call from the moment
-     * the subscription starts to wait until that model has it and the state kept for it, see below. That includes the
-     * time the function runs, and for a function that answers {@link StartAt#now()}, the read of where the feed was,
-     * which has no time limit.
+     * the subscription starts to wait until that model has it and the state kept for it, or until the subscription
+     * ends before then, see below. That includes the time the function runs, and for a function that answers
+     * {@link StartAt#now()}, the read of where the feed was, which has no time limit.
      * <p>
      * When a subscribe, a resume or a start of the id fails once it has taken the delete over, as a subscribe that
      * Reactor refuses on a thread that may not block does, no subscription needs the checkpoint any more. The same goes
@@ -2261,12 +2262,14 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * <li>for a subscribe that doesn't wait for a write back, while that model has a subscription of the id or is
      * taking one, which that model refuses itself,</li>
      * <li>for a subscribe that would wait for a write back, while this model still records a subscription of the id
-     * that it handed over or is handing over. The record ends when this model cancels that subscription, when its
-     * start, its hand-over or a start again of it fails, when a later subscription of the id replaces it, and at
-     * {@link #shutdown()}. It stays when that model drops the subscription by itself, as it does after an error there,</li>
+     * that it handed over or is handing over. The record ends when this model cancels that subscription, when it
+     * can't record where that subscription starts, when its hand-over or a start again of it fails, when a later
+     * subscription of the id replaces it, and at {@link #shutdown()}. It stays when that model fails or drops the
+     * subscription by itself, as it does after an error there, also when that error fails
+     * {@link Subscription#waitUntilStarted()},</li>
      * <li>while a subscription of the id waits for a write back, from the moment it starts to wait until that model
-     * has it and the state kept for it, since a pause or a resume kept for it would not reach a second subscription
-     * of the id,</li>
+     * has it and the state kept for it, or until it ends before then, since a pause or a resume kept for it would not
+     * reach a second subscription of the id,</li>
      * <li>while this model starts a subscription of the id again in that model from an earlier position, see below,
      * until that model has it again with the state asked for meanwhile,</li>
      * <li>while a cancel, a pause or a resume that this model sent that model for the id has not ended, see below.</li>
@@ -3257,9 +3260,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // Its takeover of the deletes of the id that a cancel started, see takeOverPositionDelete. Set before the
         // generation reads or writes anything.
         private volatile TakeOver takeOver = TakeOver.NONE;
-        // Set once the generation is retired, by a cancel, a pause, a stop or a shutdown, or by a writer registered
-        // in its place, after which none of its writes and none of its steps toward starting begin, and the wrapped
-        // model no longer runs the action of one handed to it
+        // Set once the generation is retired, after which none of its writes and none of its steps toward starting
+        // begin, and the wrapped model no longer runs the action of one handed to it. A cancel, a pause, a stop, a
+        // shutdown or a writer registered in its place retires it. So do a failure to record where it starts, a
+        // start again of it that fails, and a failed start that took a delete of the id over.
         private boolean retired;
         // Set by a cancel of the id while the subscribe was still reading where to start or handing the subscription
         // over, after which none of its writes start, its action does not run and the subscribe ends

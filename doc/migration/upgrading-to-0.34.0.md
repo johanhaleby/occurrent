@@ -1658,18 +1658,19 @@ paused once that model has it, where in 0.33.0 it ran. Resume it to start it. Wi
 `start(false)` meanwhile, it runs once that model has it.
 
 A `subscribe(..)` of the id throws `DuplicateSubscriptionIdException` at the call from the moment the subscription
-starts to wait until the wrapped model has it and the state kept for it. That includes the time your function runs, and
-when it answers `StartAt.now()`, the read of where the feed was, however long that read takes. The durable model keeps a
-pause, a resume, a `stop()` or a `start(..)` for the waiting subscription, and such a call would not reach a second
-subscription of the id.
+starts to wait until the wrapped model has it and the state kept for it, or until the subscription ends before then.
+That includes the time your function runs, and when it answers `StartAt.now()`, the read of where the feed was, however
+long that read takes. The durable model keeps a pause, a resume, a `stop()` or a `start(..)` for the waiting
+subscription, and such a call would not reach a second subscription of the id.
 
 A `subscribe(..)` of the id that doesn't wait also throws at the call while the wrapped model has a subscription of the
 id or is taking one, as in 0.33.0. One that waits throws at the call while the durable model still records a
 subscription of the id that it handed over or is handing over. The record ends when the durable model cancels that
-subscription, when its start, its hand-over or a start again of it fails, when a later subscription of the id replaces
-it, and at `shutdown()`. It stays when the wrapped model drops the subscription by itself, as it does after an error
-there. A `subscribe(..)` of the id throws while the durable model starts a subscription of the id there again, and while
-a cancel, a pause or a resume that the durable model sent the wrapped model for the id is still under way.
+subscription, when it can't record where that subscription starts, when its hand-over or a start again of it fails,
+when a later subscription of the id replaces it, and at `shutdown()`. It stays when the wrapped model fails or drops the
+subscription by itself, as it does after an error there, also when that error fails `waitUntilStarted()`. A
+`subscribe(..)` of the id throws while the durable model starts a subscription of the id there again, and while a
+cancel, a pause or a resume that the durable model sent the wrapped model for the id is still under way.
 [Section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted) describes
 the last two.
 

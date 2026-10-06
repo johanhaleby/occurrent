@@ -1838,8 +1838,9 @@ the wrapped model throws for a subscription it has, since a call kept for the wa
 second one. In 0.33.0 the wrapped model got the subscription at the call, so such a `subscribe(..)` threw there too. The
 durable model checks that no other subscription of the id is registered, being taken by the wrapped model or waiting
 itself, checks that no cancel or shutdown ended the subscription, and starts keeping the calls for the id in one step
-under one lock. It keeps them until the wrapped model has the subscription and the state kept for it, so the refusal
-also lasts while the function runs and while a read of where the feed was retries, which has no time limit. A
+under one lock. It keeps them until the wrapped model has the subscription and the state kept for it, or until the
+subscription ends before then, so the refusal also lasts while the function runs and while a read of where the feed
+was retries, which has no time limit. A
 `subscribe(..)` of the id that is still under way at that step, and doesn't wait itself, is refused at the next of its
 two checks, the one before it reads its start position or the one after, so the wrapped model never gets it, since a
 pause kept for the waiting subscription would not reach it. A call for the id therefore comes before that step or after
@@ -1852,9 +1853,10 @@ describes. After it, the call is kept.
 A `subscribe(..)` of the id is refused at the call in four more cases. The wrapped model refuses one that doesn't wait
 while it has a subscription of the id or is taking one. The durable model refuses one that would wait while it still
 records a subscription of the id that it handed over or is handing over. The record ends when the durable model cancels
-that subscription, when its start, its hand-over or a start again of it fails, when a later subscription of the id
-replaces it, and at shutdown. It stays when the wrapped model drops the subscription by itself, as it does after an
-error there. The durable model refuses it while it starts a subscription of the id again in the wrapped model, and while
+that subscription, when it can't record where that subscription starts, when its hand-over or a start again of it
+fails, when a later subscription of the id replaces it, and at shutdown. It stays when the wrapped model fails or drops
+the subscription by itself, as it does after an error there, also when that error fails `waitUntilStarted()`. The
+durable model refuses it while it starts a subscription of the id again in the wrapped model, and while
 a cancel, a pause or a resume it sent the wrapped model for the id is under way, as described above. A `subscribe(..)`
 that waits is checked again before the hand-over, and the wrapped model checks it at the hand-over. A refusal there
 fails `waitUntilStarted()` and is logged as an error, since the call has returned. A wrapped model that has a
