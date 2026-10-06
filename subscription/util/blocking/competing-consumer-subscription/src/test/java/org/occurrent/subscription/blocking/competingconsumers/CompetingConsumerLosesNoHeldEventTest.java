@@ -47,6 +47,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -149,7 +150,8 @@ class CompetingConsumerLosesNoHeldEventTest {
     }
 
     // Seven failed looks take e2 past its second warning, and the warning of a look is logged before the next look.
-    // Delivering e2 ends the wait too, so a hasLock that throws and lets e2 through fails on what s1 received.
+    // Delivering e2 ends the wait too, so a hasLock that throws and lets e2 through fails on what s1 received. One whose
+    // failure ends the wait, and the thread with it, fails on the looks counted.
     private void theLeaseStrategyKeepsThrowingWhileAnEventWaits(Throwable failure) throws Exception {
         InMemorySubscriptionModel inMemory = new InMemorySubscriptionModel(RetryStrategy.none());
         model = new CompetingConsumerSubscriptionModel(inMemory, strategy);
@@ -157,9 +159,10 @@ class CompetingConsumerLosesNoHeldEventTest {
 
         strategy.failureOnTheDeliveringThread = failure;
         releaseE1.countDown();
-        await().atMost(EVENTUALLY).dontCatchUncaughtExceptions().until(() -> strategy.failedLooks.get() >= 7 || received.size() > 1);
-        assertThat(warnings()).as("[warnings logged while hasLock throws %s for e2]", failure).isNotEmpty();
+        waitAtMostEventuallyUntil(() -> strategy.failedLooks.get() >= 7 || received.size() > 1);
         assertThat(received).as("[events s1 received while hasLock throws %s for e2]", failure).containsExactly("e1");
+        assertThat(strategy.failedLooks.get()).as("[looks hasLock threw %s for while e2 waited]", failure).isGreaterThanOrEqualTo(7);
+        assertThat(warnings()).as("[warnings logged while hasLock throws %s for e2]", failure).isNotEmpty();
         strategy.failureOnTheDeliveringThread = null;
         inMemory.accept(List.of(event("e3")));
 
@@ -339,11 +342,16 @@ class CompetingConsumerLosesNoHeldEventTest {
     // An event lost on a thread of the wrapped model that dies of an Error shows in the events received, so this waits
     // for them without failing, and the assertion on what it returns fails instead
     private List<String> receivedEventually(int count) throws InterruptedException {
+        waitAtMostEventuallyUntil(() -> received.size() >= count);
+        return received;
+    }
+
+    // Returns once the condition holds or EVENTUALLY has passed, without failing, so the assertion after it fails instead
+    private static void waitAtMostEventuallyUntil(BooleanSupplier condition) throws InterruptedException {
         long deadline = System.nanoTime() + EVENTUALLY.toNanos();
-        while (received.size() < count && System.nanoTime() < deadline) {
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
             Thread.sleep(10);
         }
-        return received;
     }
 
     // A resume of a running competing subscription first asks the wrapped model whether it runs it, which lets s1's
