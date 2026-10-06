@@ -42,6 +42,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -145,7 +146,7 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
                 .failsWithin(Duration.ofSeconds(5))
                 .withThrowableThat()
                 .havingCause()
-                .withMessageContaining("was refused before its start position was recorded");
+                .withMessageContaining("failed before this evaluation got its start position");
         assertThat(wrapped.subscriptions).as("the subscriptions the wrapped model holds").isEmpty();
         assertThat(storage.exists(SUBSCRIPTION_ID)).isFalse();
     }
@@ -294,6 +295,168 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
         })).isInstanceOf(DuplicateSubscriptionIdException.class);
 
         assertThat(feed.subscriptions).as("the subscriptions the wrapped model holds").containsOnlyKeys(SUBSCRIPTION_ID);
+    }
+
+    /**
+     * The wrapped model here holds the subscription, then evaluates the start position inside its subscribe and passes
+     * on what the evaluation throws.
+     */
+    @Test
+    void a_wrapped_model_that_passes_on_what_its_evaluation_threw_holds_no_subscription_so_subscribing_again_works_once_it_can_answer() {
+        HoldsTheStartPositionUnevaluated wrapped = new EvaluatesOnceItHoldsTheSubscription();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+        assertThatThrownBy(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        })).hasMessageContaining("answered nothing");
+        assertThat(wrapped.actions).as("the subscriptions the wrapped model holds after the refusal").isEmpty();
+
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("present");
+        Throwable subscribingAgain = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }));
+
+        assertThat(subscribingAgain).as("subscribing again once the model can answer").isNull();
+    }
+
+    @Test
+    void a_failed_cancel_after_a_wrapped_model_passed_on_what_its_evaluation_threw_is_tried_again_by_cancel_subscription() {
+        HoldsTheStartPositionUnevaluated wrapped = new EvaluatesOnceItHoldsTheSubscription();
+        wrapped.cancelsThatFail.set(1);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+
+        Throwable refusal = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }));
+
+        assertThat(refusal.getSuppressed()).as("what the refusal says about the failed cancel").singleElement()
+                .satisfies(suppressed -> assertThat(suppressed).hasMessageContaining("may still hold it"));
+        assertThat(wrapped.actions).as("the subscriptions the wrapped model holds after the failed cancel").containsOnlyKeys(SUBSCRIPTION_ID);
+        durable.cancelSubscription(SUBSCRIPTION_ID);
+        assertThat(wrapped.actions).as("the subscriptions the wrapped model holds after cancelSubscription").isEmpty();
+    }
+
+    /**
+     * The wrapped model here evaluates the start position before it refuses an id it already holds, and refuses it
+     * with something other than {@link DuplicateSubscriptionIdException}.
+     */
+    @Test
+    void a_refusal_other_than_a_duplicate_after_the_wrapped_model_got_the_start_position_leaves_the_running_subscription_alone() {
+        HoldsTheStartPositionUnevaluated wrapped = new HoldsTheStartPositionUnevaluated() {
+            @Override
+            public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+                evaluate(startAt);
+                if (actions.containsKey(subscriptionId)) {
+                    throw new IllegalArgumentException("Subscription " + subscriptionId + " is already registered");
+                }
+                return super.subscribe(subscriptionId, filter, startAt, action);
+            }
+        };
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("present");
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+        durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        });
+
+        assertThatThrownBy(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        })).hasMessageContaining("already registered");
+
+        assertThat(wrapped.actions).as("the subscriptions the wrapped model holds").containsOnlyKeys(SUBSCRIPTION_ID);
+    }
+
+    /**
+     * The wrapped model here evaluates the start position before it refuses a filter it can't apply, and only then
+     * would refuse an id it already holds.
+     */
+    @Test
+    void a_filter_the_wrapped_model_refuses_after_it_got_the_start_position_leaves_the_running_subscription_alone() {
+        HoldsTheStartPositionUnevaluated wrapped = new HoldsTheStartPositionUnevaluated() {
+            @Override
+            public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+                evaluate(startAt);
+                if (filter != null) {
+                    throw new IllegalArgumentException("unsupported filter");
+                }
+                return super.subscribe(subscriptionId, filter, startAt, action);
+            }
+        };
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("present");
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+        durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        });
+
+        assertThatThrownBy(() -> durable.subscribe(SUBSCRIPTION_ID, new SubscriptionFilter() {
+        }, StartAt.subscriptionModelDefault(), __ -> {
+        })).hasMessage("unsupported filter");
+
+        assertThat(wrapped.actions).as("the subscriptions the wrapped model holds").containsOnlyKeys(SUBSCRIPTION_ID);
+    }
+
+    /**
+     * The wrapped model here evaluates the start position on a thread of its own before its subscribe returns, the
+     * way the MongoDB models can, and evaluates it again later when that evaluation throws.
+     */
+    @Test
+    void an_evaluation_that_throws_before_the_wrapped_subscribe_returns_leaves_the_subscribe_to_record_the_position() {
+        HoldsTheStartPositionUnevaluated wrapped = new HoldsTheStartPositionUnevaluated() {
+            @Override
+            public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+                Subscription subscription = super.subscribe(subscriptionId, filter, startAt, action);
+                Thread evaluation = Thread.ofPlatform().start(() -> catchThrowable(() -> evaluate(startAt)));
+                try {
+                    evaluation.join();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                globalCheckpoint = new StringBasedCheckpoint("present");
+                return subscription;
+            }
+        };
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+        durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        });
+
+        CompletableFuture<StartAt> evaluatedAgain = CompletableFuture.supplyAsync(() -> wrapped.evaluateStartPosition(SUBSCRIPTION_ID), Runnable::run);
+
+        assertThat(evaluatedAgain).as("where the subscription starts").succeedsWithin(Duration.ofSeconds(5))
+                .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class, startAt -> assertThat(startAt.checkpoint.asString()).isEqualTo("present"));
+    }
+
+    /**
+     * The wrapped model here drops the subscription when the cancel after the refusal throws, so it accepts the id
+     * again while the refused subscribe's run can still deliver.
+     */
+    @Test
+    void a_run_a_failed_cancel_left_behind_stores_no_checkpoint_once_a_later_subscribe_replaced_it() {
+        CancelDropsTheSubscriptionAndThrowsOnce wrapped = new CancelDropsTheSubscriptionAndThrowsOnce();
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        Throwable refusal = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }));
+        assertThat(refusal.getSuppressed()).as("what the refusal says about the failed cancel").hasSize(1);
+        Consumer<CloudEvent> leftBehind = wrapped.cancelledActions.getFirst();
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("present");
+        durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        });
+        durable.cancelSubscription(SUBSCRIPTION_ID);
+
+        leftBehind.accept(new CheckpointAwareCloudEvent(cloudEvent("event-1"), new StringBasedCheckpoint("1")));
+
+        assertThat(storage.exists(SUBSCRIPTION_ID)).as("whether a checkpoint is stored after the run left behind delivered").isFalse();
+    }
+
+    @Test
+    void a_run_a_failed_cancel_left_behind_stores_no_checkpoint_once_a_subscribe_that_opts_out_replaced_it() {
+        CancelDropsTheSubscriptionAndThrowsOnce wrapped = new CancelDropsTheSubscriptionAndThrowsOnce();
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        Throwable refusal = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }));
+        assertThat(refusal.getSuppressed()).as("what the refusal says about the failed cancel").hasSize(1);
+        Consumer<CloudEvent> leftBehind = wrapped.cancelledActions.getFirst();
+        StartAt optOut = StartAt.dynamic(context -> context.hasSubscriptionModelType(DurableSubscriptionModel.class)
+                ? null : StartAt.now());
+        durable.subscribe(SUBSCRIPTION_ID, null, optOut, __ -> {
+        });
+
+        leftBehind.accept(new CheckpointAwareCloudEvent(cloudEvent("event-1"), new StringBasedCheckpoint("1")));
+
+        assertThat(storage.exists(SUBSCRIPTION_ID)).as("whether a checkpoint is stored after the run left behind delivered").isFalse();
     }
 
     @Test
@@ -657,9 +820,10 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
 
     /**
      * Holds the action and the start position of each subscription without evaluating it, so a test delivers events
-     * and evaluates the start position itself. The first {@code cancelsThatFail} cancels throw.
+     * and evaluates the start position itself. The first {@code cancelsThatFail} cancels throw. A test overrides
+     * {@code subscribe} or {@code cancelSubscription} for a model that does more.
      */
-    private static final class HoldsTheStartPositionUnevaluated implements CheckpointAwareSubscriptionModel {
+    private static class HoldsTheStartPositionUnevaluated implements CheckpointAwareSubscriptionModel {
         final Map<String, Consumer<CloudEvent>> actions = new ConcurrentHashMap<>();
         final Map<String, StartAt> startAts = new ConcurrentHashMap<>();
         final AtomicInteger cancelsThatFail = new AtomicInteger();
@@ -670,7 +834,11 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
         }
 
         StartAt evaluateStartPosition(String subscriptionId) {
-            return startAts.get(subscriptionId).get(new SubscriptionModelContext(HoldsTheStartPositionUnevaluated.class));
+            return evaluate(startAts.get(subscriptionId));
+        }
+
+        StartAt evaluate(StartAt startAt) {
+            return startAt.get(new SubscriptionModelContext(HoldsTheStartPositionUnevaluated.class));
         }
 
         @Override
@@ -732,6 +900,40 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
 
         @Override
         public void pauseSubscription(String subscriptionId) {
+        }
+    }
+
+    /**
+     * Holds the subscription, then evaluates its start position inside {@code subscribe} and passes on what the
+     * evaluation throws, still holding the subscription.
+     */
+    private static final class EvaluatesOnceItHoldsTheSubscription extends HoldsTheStartPositionUnevaluated {
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            Subscription subscription = super.subscribe(subscriptionId, filter, startAt, action);
+            evaluate(startAt);
+            return subscription;
+        }
+    }
+
+    /**
+     * Drops the subscription on every cancel and keeps its action in {@code cancelledActions}. The first cancel throws
+     * once it has dropped the subscription.
+     */
+    private static final class CancelDropsTheSubscriptionAndThrowsOnce extends HoldsTheStartPositionUnevaluated {
+        final List<Consumer<CloudEvent>> cancelledActions = new CopyOnWriteArrayList<>();
+        private final AtomicInteger cancelsThatFailAfterDropping = new AtomicInteger(1);
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            Consumer<CloudEvent> action = actions.get(subscriptionId);
+            if (action != null) {
+                cancelledActions.add(action);
+            }
+            super.cancelSubscription(subscriptionId);
+            if (cancelsThatFailAfterDropping.getAndDecrement() > 0) {
+                throw new IllegalStateException("the cancel fails after dropping the subscription");
+            }
         }
     }
 }
