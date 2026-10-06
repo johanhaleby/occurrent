@@ -52,6 +52,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Verifies {@code @Projection(recordAppliedAppends = true)} end to end against a real MongoDB-backed
@@ -100,7 +101,8 @@ class ProjectionAnnotationRecordAppliedAppendsMongoTest {
 
         ctx.close();
 
-        assertThat(countThreadsWithNamePrefix("occurrent-applied-append-poll")).isZero();
+        // The poll's executor can count as terminated while its thread is still finishing, so a single check can see it alive
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(countThreadsWithNamePrefix("occurrent-applied-append-poll")).isZero());
     }
 
     private static int countThreadsWithNamePrefix(String prefix) {
