@@ -3260,10 +3260,15 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // Its takeover of the deletes of the id that a cancel started, see takeOverPositionDelete. Set before the
         // generation reads or writes anything.
         private volatile TakeOver takeOver = TakeOver.NONE;
-        // Set once the generation is retired, after which none of its writes and none of its steps toward starting
-        // begin, and the wrapped model no longer runs the action of one handed to it. A cancel, a pause, a stop, a
-        // shutdown or a writer registered in its place retires it. So do a failure to record where it starts, a
-        // start again of it that fails, and a failed start that took a delete of the id over.
+        // Set once this model retires the generation, wherever it does, and never cleared. From then on no position
+        // write of the generation starts and a delivery from the wrapped model skips the caller's action. A generation
+        // this model drives no longer starts, asks the function of a dynamic start position or subscribes to the feed.
+        // A start again in the wrapped model fails, cancelling there again a subscription it already made, and the
+        // state kept for it is no longer put in place. A cancel of the id no longer waits for its hand-over, a pause or
+        // a resume of the id is no longer kept for it while it waits to be handed over, and holdsAnotherWriter and
+        // keepsForAnotherWriter no longer refuse a subscribe of the id because of it. A step past its check, or with no
+        // check of its own, goes on. refusedRegistration has none, so registerDelegated still registers a writer
+        // retired because its start position couldn't be recorded, and endUnsettled removes it right after.
         private boolean retired;
         // Set by a cancel of the id while the subscribe was still reading where to start or handing the subscription
         // over, after which none of its writes start, its action does not run and the subscribe ends
