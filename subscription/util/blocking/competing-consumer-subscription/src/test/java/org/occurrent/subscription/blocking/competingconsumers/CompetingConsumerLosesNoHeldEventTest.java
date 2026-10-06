@@ -16,10 +16,15 @@
 
 package org.occurrent.subscription.blocking.competingconsumers;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -32,11 +37,13 @@ import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -45,7 +52,7 @@ import static org.awaitility.Awaitility.await;
 /**
  * An event that waits for the lease is delivered once the lease is back, or once this model pauses, stops or starts
  * the subscription, and is never lost, also over an {@code InMemorySubscriptionModel} that does not retry an action
- * that throws, and also when the lease strategy throws an {@link Error} while the event waits.
+ * that throws, and also when the lease strategy throws while the event waits, which logs a warning.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -60,6 +67,14 @@ class CompetingConsumerLosesNoHeldEventTest {
     private final CountDownLatch releaseE1 = new CountDownLatch(1);
     private final List<String> received = new CopyOnWriteArrayList<>();
     private @Nullable CompetingConsumerSubscriptionModel model;
+    private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
+    private final Logger modelLog = (Logger) LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class);
+
+    @BeforeEach
+    void captureTheLog() {
+        logged.start();
+        modelLog.addAppender(logged);
+    }
 
     @AfterEach
     void shutdown() {
@@ -67,6 +82,7 @@ class CompetingConsumerLosesNoHeldEventTest {
         if (model != null) {
             model.shutdown();
         }
+        modelLog.detachAppender(logged);
     }
 
     @Test
@@ -101,15 +117,57 @@ class CompetingConsumerLosesNoHeldEventTest {
         model = new CompetingConsumerSubscriptionModel(inMemory, strategy);
         subscribeAndBlockInE1(inMemory);
 
-        strategy.errorOnTheDeliveringThread = new Error("hasLock failed");
+        strategy.failureOnTheDeliveringThread = new Error("hasLock failed");
         releaseE1.countDown();
-        assertThat(strategy.threwAnError.await(5, SECONDS)).as("hasLock throws an Error for e2").isTrue();
+        assertThat(strategy.threw.await(5, SECONDS)).as("hasLock throws an Error for e2").isTrue();
         // Long enough for e2 to ask more than once
         await().pollDelay(AWAY_FOR).atMost(AWAY_FOR.multipliedBy(2)).dontCatchUncaughtExceptions().until(() -> true);
-        strategy.errorOnTheDeliveringThread = null;
+        assertThat(received).as("[events s1 received while hasLock throws an Error for e2]").containsExactly("e1");
+        strategy.failureOnTheDeliveringThread = null;
         inMemory.accept(List.of(event("e3")));
 
         await().atMost(EVENTUALLY).dontCatchUncaughtExceptions().untilAsserted(() -> assertThat(received).as("[events s1 received after hasLock threw an Error for e2]").containsExactly("e1", "e2", "e3"));
+    }
+
+    @Test
+    void an_event_for_which_the_lease_strategy_keeps_throwing_a_runtime_exception_logs_a_warning_while_it_waits_and_is_delivered_once() throws Exception {
+        theLeaseStrategyKeepsThrowingWhileAnEventWaits(new IllegalStateException("hasLock failed"));
+    }
+
+    @Test
+    void an_event_for_which_the_lease_strategy_keeps_throwing_an_error_logs_a_warning_while_it_waits_and_is_delivered_once() throws Exception {
+        theLeaseStrategyKeepsThrowingWhileAnEventWaits(new Error("hasLock failed"));
+    }
+
+    // Seven failed looks take e2 past its second warning, and the warning of a look is logged before the next look.
+    // Delivering e2 ends the wait too, so a hasLock that throws and lets e2 through fails on what s1 received.
+    private void theLeaseStrategyKeepsThrowingWhileAnEventWaits(Throwable failure) throws Exception {
+        InMemorySubscriptionModel inMemory = new InMemorySubscriptionModel(RetryStrategy.none());
+        model = new CompetingConsumerSubscriptionModel(inMemory, strategy);
+        subscribeAndBlockInE1(inMemory);
+
+        strategy.failureOnTheDeliveringThread = failure;
+        releaseE1.countDown();
+        await().atMost(EVENTUALLY).dontCatchUncaughtExceptions().until(() -> strategy.failedLooks.get() >= 7 || received.size() > 1);
+        assertThat(warnings()).as("[warnings logged while hasLock throws %s for e2]", failure).isNotEmpty();
+        assertThat(received).as("[events s1 received while hasLock throws %s for e2]", failure).containsExactly("e1");
+        strategy.failureOnTheDeliveringThread = null;
+        inMemory.accept(List.of(event("e3")));
+
+        await().atMost(EVENTUALLY).dontCatchUncaughtExceptions().untilAsserted(() -> assertThat(received).as("[events s1 received after hasLock threw %s for e2]", failure).containsExactly("e1", "e2", "e3"));
+        int failedLooks = strategy.failedLooks.get();
+        assertThat(warnings()).as("[warnings for %s failed looks, one for the first and one for every fifth after it]", failedLooks).hasSize((failedLooks + 4) / 5)
+                .allSatisfy(warning -> {
+                    assertThat(warning.getFormattedMessage()).as("[what the warning names]").contains("subscriberId=node", "subscriptionId=s1");
+                    assertThat(warning.getThrowableProxy()).as("[the failure logged with the warning]").isNotNull();
+                    assertThat(warning.getThrowableProxy().getClassName()).isEqualTo(failure.getClass().getName());
+                });
+    }
+
+    private List<ILoggingEvent> warnings() {
+        synchronized (logged) {
+            return new ArrayList<>(logged.list).stream().filter(e -> e.getLevel() == Level.WARN).toList();
+        }
     }
 
     // e1 runs while the lease closes without anyone being told, as the MongoDB lease strategies close it, so e2 waits for
@@ -156,14 +214,15 @@ class CompetingConsumerLosesNoHeldEventTest {
 
     // Reports the lease of a subscription held by the node it went to, unless fenced, which closes it without telling
     // anyone. A transfer tells this node, on the calling thread, of the loss and then of the grant. Records when the
-    // thread that delivered e1 asks without the lease, which is e2 waiting for it. Throws errorOnTheDeliveringThread, when
-    // set, to the thread that delivered e1.
+    // thread that delivered e1 asks without the lease, which is e2 waiting for it. Throws failureOnTheDeliveringThread,
+    // when set, to the thread that delivered e1, and counts each time it does.
     static final class FenceStrategy implements CompetingConsumerStrategy {
         private final Map<String, String> holders = new ConcurrentHashMap<>();
         private final List<CompetingConsumerListener> listeners = new CopyOnWriteArrayList<>();
         final CountDownLatch askedWithoutTheLease = new CountDownLatch(1);
-        final CountDownLatch threwAnError = new CountDownLatch(1);
-        volatile @Nullable Error errorOnTheDeliveringThread;
+        final CountDownLatch threw = new CountDownLatch(1);
+        final AtomicInteger failedLooks = new AtomicInteger();
+        volatile @Nullable Throwable failureOnTheDeliveringThread;
         volatile boolean fenced;
         volatile @Nullable Thread deliveringThread;
 
@@ -185,10 +244,14 @@ class CompetingConsumerLosesNoHeldEventTest {
 
         @Override
         public boolean hasLock(String subscriptionId, String subscriberId) {
-            Error error = errorOnTheDeliveringThread;
-            if (error != null && Thread.currentThread() == deliveringThread) {
-                threwAnError.countDown();
-                throw error;
+            Throwable failure = failureOnTheDeliveringThread;
+            if (failure != null && Thread.currentThread() == deliveringThread) {
+                failedLooks.incrementAndGet();
+                threw.countDown();
+                if (failure instanceof Error error) {
+                    throw error;
+                }
+                throw (RuntimeException) failure;
             }
             boolean held = !fenced && subscriberId.equals(holders.get(subscriptionId));
             if (!held && Thread.currentThread() == deliveringThread) {
