@@ -27,7 +27,8 @@ import org.occurrent.subscription.UnknownSubscriptionException;
  * named subscriptions are running, paused, or gone) without waiting for the asynchronous I/O that starting or
  * stopping a subscription can trigger in the background, which is why they return {@code void} rather than a
  * {@code Mono}/{@code Flux}. Cancellation lives in {@link CancellableSubscriptions}, which this extends, because a
- * register-only model can cancel a subscription without having anything to start, stop, or pause.
+ * register-only model can cancel a subscription without having anything to start, stop, or pause. It takes effect
+ * synchronously too, and returns a {@code Mono} that completes once the stored state for the cancelled id is deleted.
  */
 @NullMarked
 public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {

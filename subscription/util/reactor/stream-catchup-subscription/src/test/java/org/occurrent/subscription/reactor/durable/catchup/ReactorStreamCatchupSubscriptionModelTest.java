@@ -65,6 +65,9 @@ class ReactorStreamCatchupSubscriptionModelTest {
         assertThat(wrapped.subscribeCalls)
                 .as("the id never reached the wrapped model, so cancelling here must not either")
                 .isEmpty();
+        assertThat(wrapped.cancelCalls)
+                .as("cancels the wrapped model received, which can hold what an earlier process stored for this id")
+                .containsExactly("sub");
     }
 
     @Test
@@ -430,8 +433,9 @@ class ReactorStreamCatchupSubscriptionModelTest {
         }
 
         @Override
-        public void cancelSubscription(String subscriptionId) {
+        public Mono<Void> cancelSubscription(String subscriptionId) {
             cancelCalls.add(subscriptionId);
+            return Mono.empty();
         }
 
         @Override
@@ -533,7 +537,8 @@ class ReactorStreamCatchupSubscriptionModelTest {
         }
 
         @Override
-        public void cancelSubscription(String subscriptionId) {
+        public Mono<Void> cancelSubscription(String subscriptionId) {
+            return Mono.empty();
         }
 
         @Override

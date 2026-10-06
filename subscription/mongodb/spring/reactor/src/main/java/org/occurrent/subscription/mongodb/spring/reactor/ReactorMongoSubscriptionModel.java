@@ -500,12 +500,13 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     }
 
     @Override
-    public synchronized void cancelSubscription(String subscriptionId) {
+    public synchronized Mono<Void> cancelSubscription(String subscriptionId) {
         InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
         if (internalSubscription != null) {
             internalSubscription.disposable.dispose();
         }
         pausedSubscriptions.remove(subscriptionId);
+        return Mono.empty();
     }
 
     @PreDestroy

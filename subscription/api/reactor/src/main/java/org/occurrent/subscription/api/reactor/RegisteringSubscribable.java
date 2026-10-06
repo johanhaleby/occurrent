@@ -251,7 +251,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     }
 
     @Override
-    public final void cancelSubscription(String subscriptionId) {
+    public final Mono<Void> cancelSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         synchronized (registrationLock) {
             // Drop the registration before releasing the id, so the id is never free while its handler can still be routed to.
@@ -260,6 +260,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
             pausedSubscriptions.remove(subscriptionId);
             soleSubscriptionId.compareAndSet(subscriptionId, null);
         }
+        return Mono.empty();
     }
 
     @Override

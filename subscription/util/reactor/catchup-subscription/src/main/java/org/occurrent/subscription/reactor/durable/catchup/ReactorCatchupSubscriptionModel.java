@@ -320,10 +320,10 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     }
 
     @Override
-    public void cancelSubscription(String subscriptionId) {
+    public Mono<Void> cancelSubscription(String subscriptionId) {
         SubscriptionModel owner = ownerOf(subscriptionId);
         subscriptionOwners.remove(subscriptionId);
-        owner.cancelSubscription(subscriptionId);
+        return owner.cancelSubscription(subscriptionId);
     }
 
     @Override

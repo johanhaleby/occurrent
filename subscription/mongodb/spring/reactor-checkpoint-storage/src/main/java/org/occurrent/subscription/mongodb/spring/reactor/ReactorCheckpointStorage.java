@@ -23,6 +23,7 @@ import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
@@ -108,6 +109,43 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
     @Override
     public Mono<Void> delete(String subscriptionId) {
         return mongo.remove(query(where(ID).is(subscriptionId)), checkpointCollection).retryWhen(retry).then();
+    }
+
+    /**
+     * Deletes with a single remove filtered on the {@code _id} and on {@code notOlderThan}, so a checkpoint written at
+     * a higher version first is never deleted. The {@code _id} matches at most one document, and MongoDB
+     * applies a write to one document atomically. When nothing was deleted, a read tells a refusal apart from nothing
+     * being stored.
+     */
+    @Override
+    public Mono<Void> delete(String subscriptionId, CheckpointWriteCondition condition) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(condition, CheckpointWriteCondition.class.getSimpleName() + " cannot be null");
+        return switch (condition) {
+            case CheckpointWriteCondition.Any ignored -> delete(subscriptionId);
+            case CheckpointWriteCondition.IfAbsent ignored -> refusedOrNothingStored(subscriptionId, condition);
+            case CheckpointWriteCondition.NotOlderThan notOlderThan -> mongo.remove(query(where(ID).is(subscriptionId).orOperator(
+                                    where(MongoCommons.WRITE_VERSION).exists(false),
+                                    where(MongoCommons.WRITE_VERSION).lte(notOlderThan.writeVersion()))), checkpointCollection)
+                    .retryWhen(retry)
+                    .flatMap(result -> result.getDeletedCount() > 0 ? Mono.empty() : refusedOrNothingStored(subscriptionId, condition));
+        };
+    }
+
+    @Override
+    public boolean evaluatesDeleteConditions() {
+        return true;
+    }
+
+    private Mono<Void> refusedOrNothingStored(String subscriptionId, CheckpointWriteCondition condition) {
+        return mongo.findOne(query(where(ID).is(subscriptionId)), Document.class, checkpointCollection)
+                .retryWhen(retry)
+                .flatMap(document -> {
+                    OptionalLong storedVersion = MongoCommons.extractWriteVersion(document);
+                    boolean refused = !(condition instanceof CheckpointWriteCondition.NotOlderThan notOlderThan)
+                            || storedVersion.isPresent() && storedVersion.getAsLong() > notOlderThan.writeVersion();
+                    return refused ? Mono.<Void>error(new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, condition)) : Mono.<Void>empty();
+                });
     }
 
     /**

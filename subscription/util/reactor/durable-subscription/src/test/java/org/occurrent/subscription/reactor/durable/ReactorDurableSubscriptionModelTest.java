@@ -90,17 +90,21 @@ public class ReactorDurableSubscriptionModelTest {
     OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
     private MongoClient mongoClient;
     private ReactorMongoSubscriptionModel springReactorSubscriptionForMongoDB;
+    // A collection of its own for every test, since a new subscription can also receive what was written shortly
+    // before it, which would otherwise include the previous test's events
+    private String eventCollection;
 
     @BeforeEach
     void create_mongo_event_store() {
+        eventCollection = "events-" + UUID.randomUUID();
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
         mongoClient = MongoClients.create(connectionString);
         reactiveMongoTemplate = new ReactiveMongoTemplate(MongoClients.create(connectionString), Objects.requireNonNull(connectionString.getDatabase()));
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(eventCollection).transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
-        springReactorSubscriptionForMongoDB = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events", timeRepresentation);
+        springReactorSubscriptionForMongoDB = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollection, timeRepresentation);
         storage = new ReactorCheckpointStorage(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
         subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
@@ -250,7 +254,7 @@ public class ReactorDurableSubscriptionModelTest {
         mongoEventStore.write("1", 1, serialize(nameWasChanged1)).block();
         // Shutting the durable model down also shuts down the model it wraps, because the subscriptions live there
         // now, so a restart builds a new one of those too. That is what a restarted application does anyway.
-        springReactorSubscriptionForMongoDB = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        springReactorSubscriptionForMongoDB = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollection, TimeRepresentation.RFC_3339_STRING);
         subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, storage);
         subscription.subscribe(subscriberId, cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)));
 
