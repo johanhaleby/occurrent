@@ -619,7 +619,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         } else if (refused != null) {
             return null;
         }
-        // Never runs once a cancel or a shutdown has reached the writer, so a subscription the wrapped model keeps
+        // Never runs once the writer is retired or a cancel overtook it, so a subscription the wrapped model keeps
         // after the cancel below failed delivers nothing to the caller's action
         Function<CloudEvent, Mono<Void>> liveAction = actionWhileLive(writer, action);
         Function<CloudEvent, Mono<Void>> delivering = kept == null ? liveAction : heldWhilePaused(kept, liveAction);
@@ -1082,7 +1082,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
     }
 
-    // The caller's action, skipped for an event delivered once a cancel or a shutdown has reached the writer
+    // The caller's action, skipped for an event delivered once the writer is retired or a cancel overtook it
     private Function<CloudEvent, Mono<Void>> actionWhileLive(PositionWriter writer, Function<CloudEvent, Mono<Void>> action) {
         return cloudEvent -> retiredOrOvertaken(writer) ? Mono.empty() : action.apply(cloudEvent);
     }
@@ -1789,9 +1789,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     // Called under positionLock, for a subscription that would wait to be handed over. Whether this model still records
     // another subscription of the id that it handed over, that it is handing over or that waits to be handed over
-    // itself, also one the wrapped model has dropped since. Checked here since the wrapped model would refuse a
-    // duplicate only at the hand-over, long after the call. A subscription of the id that still reads where to start
-    // is refused at its own hand-over instead, see keepsForAnotherWriter.
+    // itself, also one the wrapped model has dropped since. A retired writer doesn't count, nor does one still starting
+    // that a cancel overtook. Checked here since the wrapped model would refuse a duplicate only at the hand-over, long
+    // after the call. A subscription of the id that still reads where to start is refused at its own hand-over instead,
+    // see keepsForAnotherWriter.
     private boolean holdsAnotherWriter(String subscriptionId, PositionWriter writer) {
         @Nullable PositionWriter registered = positionWriters.get(subscriptionId);
         if (registered != null && registered != writer && !registered.retired) {
@@ -3255,25 +3256,20 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // What one generation of a subscription writes its positions through, and what tells whether that generation is
-    // still the live one for its id. The two flags and handingOver are read and changed under positionLock only.
+    // still the live one for its id. retired, overtakenByCancel, retiredByShutdown and handingOver are read and changed
+    // under positionLock only.
     private static final class PositionWriter {
         // Its takeover of the deletes of the id that a cancel started, see takeOverPositionDelete. Set before the
         // generation reads or writes anything.
         private volatile TakeOver takeOver = TakeOver.NONE;
-        // Set once this model retires the generation, wherever it does, and never cleared. From then on no position
-        // write of the generation starts and a delivery from the wrapped model skips the caller's action. A generation
-        // this model drives no longer starts, asks the function of a dynamic start position or subscribes to the feed.
-        // A start again in the wrapped model fails, cancelling there again a subscription it already made, and the
-        // state kept for it is no longer put in place. A cancel of the id no longer waits for its hand-over, a pause or
-        // a resume of the id is no longer kept for it while it waits to be handed over, and holdsAnotherWriter and
-        // keepsForAnotherWriter no longer refuse a subscribe of the id because of it. A step past its check, or with no
-        // check of its own, goes on. refusedRegistration has none, so registerDelegated still registers a writer
-        // retired because its start position couldn't be recorded, and endUnsettled removes it right after.
+        // Set under positionLock once this model retires the writer, and never cleared. Each reader treats the writer
+        // as ended at its own check, and the flag stops nothing already past a check.
         private boolean retired;
         // Set by a cancel of the id while the subscribe was still reading where to start or handing the subscription
         // over, after which none of its writes start, its action does not run and the subscribe ends
         private boolean overtakenByCancel;
-        // Set when a shutdown retires the writer, so a start again in the wrapped model that it ends fails with
+        // Set with retired, for a writer not retired already, by a shutdown of a model that hands its subscriptions to
+        // a wrapped model, so a start again in the wrapped model that the shutdown ends fails with
         // SubscriptionModelShutdownException
         private boolean retiredByShutdown;
         // Set once a position write of the writer succeeded, after which a delete it took over no longer removes that
