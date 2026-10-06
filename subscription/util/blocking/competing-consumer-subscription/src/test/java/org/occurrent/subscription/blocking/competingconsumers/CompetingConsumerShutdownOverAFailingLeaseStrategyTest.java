@@ -45,11 +45,12 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 
 /**
- * {@code shutdown()} shuts the wrapped model down before the lease strategy, so an event the wrapped model hands over
- * while the lease strategy shuts down goes to the action only with the lease. When the lease strategy throws from its
- * own {@code shutdown()} or {@code removeListener(..)}, {@code shutdown()} still has the wrapped model shut down and
- * throws what the lease strategy threw. When the wrapped model throws from its own {@code shutdown()}, that failure is
- * thrown as it is and the lease strategy is left running, so a model that may still deliver does so only with the lease.
+ * {@code shutdown()} shuts the lease strategy down before the wrapped model, and an event the wrapped model hands over
+ * while the lease strategy shuts down waits for the lease until the wrapped model is shut down. When the lease strategy
+ * throws from its own {@code shutdown()} or {@code removeListener(..)}, {@code shutdown()} still has the wrapped model
+ * shut down and throws what the lease strategy threw. When the wrapped model throws from its own {@code shutdown()},
+ * that failure is thrown ahead of what the lease strategy threw, no lease is given up, and a model that may still
+ * deliver does so only with the lease.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -72,9 +73,9 @@ class CompetingConsumerShutdownOverAFailingLeaseStrategyTest {
     }
 
     // The lease strategy's shutdown() blocks, so an event handed over while it does can reach the action only if
-    // shutdown() lets it through. The wrapped model is already shut down by then, so it hands over nothing.
+    // shutdown() lets it through. It goes once shutdown() shuts the wrapped model down, which delivers what it holds.
     @Test
-    void an_event_the_wrapped_model_is_handed_while_the_lease_strategy_shuts_down_does_not_reach_the_action_without_the_lease() throws Exception {
+    void an_event_the_wrapped_model_hands_over_while_the_lease_strategy_shuts_down_waits_for_the_lease_until_the_wrapped_model_shuts_down() throws Exception {
         InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel(RetryStrategy.none()) {
             @Override
             public void shutdown() {
@@ -94,13 +95,15 @@ class CompetingConsumerShutdownOverAFailingLeaseStrategyTest {
         Thread.sleep(AFTERWARDS.toMillis());
 
         assertThat(received).as("[events s1 received while hasLock is false and the lease strategy shuts down]").containsExactly("e1");
-        assertThat(shutdownCalls).as("[what shutdown() shut down, in order]").containsExactly("wrapped model", "lease strategy");
+        assertThat(shutdownCalls).as("[what shutdown() shut down while the lease strategy shuts down]").containsExactly("lease strategy");
         strategy.releaseShutdown.countDown();
         shutdown.join(EVENTUALLY.toMillis());
+        assertThat(shutdownCalls).as("[what shutdown() shut down, in order]").containsExactly("lease strategy", "wrapped model");
+        assertThat(received).as("[events s1 received once shutdown() has returned]").containsExactly("e1", "e2");
     }
 
     @Test
-    void a_wrapped_model_that_throws_from_its_own_shutdown_still_delivers_only_with_the_lease_and_leaves_the_lease_strategy_running() throws Exception {
+    void a_wrapped_model_that_throws_from_its_own_shutdown_still_delivers_only_with_the_lease_and_has_the_lease_strategy_shut_down_without_giving_up_the_lease() throws Exception {
         IllegalStateException failure = new IllegalStateException("wrapped model shutdown failed");
         boolean[] failing = {true};
         InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel(RetryStrategy.none()) {
@@ -122,8 +125,8 @@ class CompetingConsumerShutdownOverAFailingLeaseStrategyTest {
 
         try {
             assertThat(received).as("[events s1 received after shutdown() threw, with hasLock false]").containsExactly("e1");
-            assertThat(strategy.shutdownCalls.get()).as("calls to the lease strategy's own shutdown()").isZero();
-            assertThat(strategy.removeListenerCalls.get()).as("calls to removeListener(..)").isZero();
+            assertThat(strategy.shutdownCalls.get()).as("calls to the lease strategy's own shutdown()").isEqualTo(1);
+            assertThat(strategy.removeListenerCalls.get()).as("calls to removeListener(..)").isEqualTo(1);
             assertThat(strategy.unregisterAttempts.get()).as("attempts to give up the lease of s1").isZero();
             assertThat(thrown).as("[what shutdown() threw]").isSameAs(failure);
         } finally {
@@ -180,7 +183,7 @@ class CompetingConsumerShutdownOverAFailingLeaseStrategyTest {
     }
 
     @Test
-    void a_wrapped_model_that_throws_from_its_own_shutdown_has_it_thrown_as_it_is_also_when_the_lease_strategy_would_throw_the_same_instance() throws Exception {
+    void a_lease_strategy_and_a_wrapped_model_that_throw_the_same_instance_from_their_own_shutdown_have_it_thrown_as_it_is() throws Exception {
         IllegalStateException closed = new IllegalStateException("shared resource closed");
         strategy.shutdownFailure = closed;
         InMemorySubscriptionModel wrapped = shutDownThenThrowing(closed);
@@ -195,22 +198,22 @@ class CompetingConsumerShutdownOverAFailingLeaseStrategyTest {
         assertThat(thrown).as("[what shutdown() threw]").isSameAs(closed);
         assertThat(thrown.getSuppressed()).as("[what shutdown() threw has suppressed]").isEmpty();
         assertThat(received).as("[events s1 received once shutdown() has thrown]").containsExactly("e1");
-        assertThat(strategy.shutdownCalls.get()).as("calls to the lease strategy's own shutdown()").isZero();
     }
 
     @Test
-    void an_error_from_the_wrapped_models_own_shutdown_is_thrown_as_it_is_and_the_lease_strategy_is_left_alone() {
-        theFailureOfTheWrappedModelIsThrownAloneAndTheLeaseStrategyLeftAlone(new IllegalStateException("lease strategy shutdown failed"), new Error("wrapped model shutdown failed"));
+    void the_failure_of_the_wrapped_models_own_shutdown_is_thrown_ahead_of_a_runtime_exception_from_the_lease_strategy() {
+        theFailureOfTheWrappedModelIsThrownFirst(new IllegalStateException("lease strategy shutdown failed"), new Error("wrapped model shutdown failed"));
     }
 
     @Test
-    void a_runtime_exception_from_the_wrapped_models_own_shutdown_is_thrown_as_it_is_and_the_lease_strategy_is_left_alone() {
-        theFailureOfTheWrappedModelIsThrownAloneAndTheLeaseStrategyLeftAlone(new Error("lease strategy shutdown failed"), new IllegalStateException("wrapped model shutdown failed"));
+    void the_failure_of_the_wrapped_models_own_shutdown_is_thrown_ahead_of_an_error_from_the_lease_strategy() {
+        theFailureOfTheWrappedModelIsThrownFirst(new Error("lease strategy shutdown failed"), new IllegalStateException("wrapped model shutdown failed"));
     }
 
-    private void theFailureOfTheWrappedModelIsThrownAloneAndTheLeaseStrategyLeftAlone(Throwable leaseStrategyFailure, Throwable wrappedModelFailure) {
+    private void theFailureOfTheWrappedModelIsThrownFirst(Throwable leaseStrategyFailure, Throwable wrappedModelFailure) {
+        IllegalStateException removeListenerFailure = new IllegalStateException("removeListener failed");
         strategy.shutdownFailure = leaseStrategyFailure;
-        strategy.removeListenerFailure = new IllegalStateException("removeListener failed");
+        strategy.removeListenerFailure = removeListenerFailure;
         InMemorySubscriptionModel wrapped = shutDownThenThrowing(wrappedModelFailure);
         CompetingConsumerSubscriptionModel model = new CompetingConsumerSubscriptionModel(wrapped, strategy);
         subscribeAndDeliverE1(model, wrapped);
@@ -218,9 +221,7 @@ class CompetingConsumerShutdownOverAFailingLeaseStrategyTest {
         Throwable thrown = catchThrowable(model::shutdown);
 
         assertThat(thrown).as("[what shutdown() threw]").isSameAs(wrappedModelFailure);
-        assertThat(thrown.getSuppressed()).as("[what shutdown() threw has suppressed]").isEmpty();
-        assertThat(strategy.shutdownCalls.get()).as("calls to the lease strategy's own shutdown()").isZero();
-        assertThat(strategy.removeListenerCalls.get()).as("calls to removeListener(..)").isZero();
+        assertThat(thrown.getSuppressed()).as("[what shutdown() threw has suppressed]").containsExactly(leaseStrategyFailure, removeListenerFailure);
         assertThat(strategy.unregisterAttempts.get()).as("attempts to give up the lease of s1").isZero();
     }
 

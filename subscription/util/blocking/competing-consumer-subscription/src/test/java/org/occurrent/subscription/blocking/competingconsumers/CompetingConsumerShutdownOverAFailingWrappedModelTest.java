@@ -43,13 +43,15 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 
 /**
- * A node whose wrapped model throws from its own {@code shutdown()} may go on delivering, so {@code shutdown()} doesn't
- * shut its lease strategy down. The node keeps its lease, and delivers while it holds it. Once the lease has expired
- * and gone to another node, the node delivers nothing, however many events its wrapped model hands over.
+ * A node whose wrapped model throws from its own {@code shutdown()} may go on delivering, so {@code shutdown()} gives
+ * up none of its leases. It has shut the node's lease strategy down, though, so no lease of the node is refreshed, and
+ * each one expires and goes to another node. The node delivers while it still holds the lease, and nothing once the
+ * lease has gone to another node, however many events its wrapped model hands over.
  * <p>
- * The two nodes share leases that expire three ticks after their holder last refreshed them. A tick refreshes the
- * leases of each node whose lease strategy still runs and is not stalled, and then expires the rest, which go to a node
- * that waits for them. A stalled node is told nothing of the loss, as a node cut off from the lease store is not.
+ * The nodes share leases that expire three ticks after their holder last refreshed them. A tick refreshes the leases of
+ * each node whose lease strategy still runs and is not stalled, and then expires the rest, which go to the node that
+ * has waited for them longest, whether or not its lease strategy runs. A stalled node is told nothing of the loss, as a
+ * node cut off from the lease store is not.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -65,10 +67,13 @@ class CompetingConsumerShutdownOverAFailingWrappedModelTest {
     private final IllegalStateException wrappedModelFailure = new IllegalStateException("wrapped model shutdown failed");
     private final StopsDeliveringOnlyWhenTold wrapped1 = new StopsDeliveringOnlyWhenTold(wrappedModelFailure);
     private final InMemorySubscriptionModel wrapped2 = new InMemorySubscriptionModel(RetryStrategy.none());
+    private final InMemorySubscriptionModel wrapped3 = new InMemorySubscriptionModel(RetryStrategy.none());
     private final CompetingConsumerSubscriptionModel node1 = new CompetingConsumerSubscriptionModel(wrapped1, leases.strategyOf("node-1"));
     private final CompetingConsumerSubscriptionModel node2 = new CompetingConsumerSubscriptionModel(wrapped2, leases.strategyOf("node-2"));
+    private final CompetingConsumerSubscriptionModel node3 = new CompetingConsumerSubscriptionModel(wrapped3, leases.strategyOf("node-3"));
     private final List<String> receivedByNode1 = new CopyOnWriteArrayList<>();
     private final List<String> receivedByNode2 = new CopyOnWriteArrayList<>();
+    private final List<String> receivedByNode3 = new CopyOnWriteArrayList<>();
 
     @AfterEach
     void shutdown() {
@@ -77,20 +82,62 @@ class CompetingConsumerShutdownOverAFailingWrappedModelTest {
         leases.give("s1", "node-1");
         node1.shutdown();
         node2.shutdown();
+        node3.shutdown();
     }
 
     @Test
-    void a_node_whose_wrapped_model_throws_from_its_own_shutdown_keeps_its_lease_and_delivers_under_it() throws Exception {
+    void a_node_whose_wrapped_model_throws_from_its_own_shutdown_delivers_under_its_lease_until_it_expires_and_goes_to_another_node() throws Exception {
+        node1WinsTheLeaseAndReceivesE1();
+
+        Throwable thrown = catchThrowable(node1::shutdown);
+        wrapped1.accept(List.of(event("e2")));
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(receivedByNode1).as("[events node 1 received while it still held the lease]").containsExactly("e1", "e2"));
+        leases.tick(PAST_EXPIRY);
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(leases.holderOf("s1")).as("[the node holding the lease of s1 well past the lease time]").isEqualTo("node-2"));
+        await().atMost(EVENTUALLY).until(() -> node2.isRunning("s1"));
+        wrapped1.accept(List.of(event("e3")));
+        wrapped2.accept(List.of(event("e3")));
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(receivedByNode2).as("[events node 2 received]").containsExactly("e3"));
+        Thread.sleep(AFTERWARDS.toMillis());
+
+        assertThat(receivedByNode1).as("[events node 1 received after its lease went to node 2]").containsExactly("e1", "e2");
+        assertThat(thrown).as("[what shutdown() threw]").isSameAs(wrappedModelFailure);
+    }
+
+    // Node 1 waits for the lease when its shutdown() fails. The lease goes to node 1 once node 2 is cut off, and node 1,
+    // which runs nothing, must not keep it.
+    @Test
+    void a_node_whose_wrapped_model_threw_from_its_own_shutdown_while_it_waited_for_the_lease_doesnt_keep_a_lease_it_is_given_afterwards() {
+        node2.subscribe("node-2", "s1", null, StartAt.subscriptionModelDefault(), e -> receivedByNode2.add(e.getId())).waitUntilStarted();
+        node1.subscribe("node-1", "s1", null, StartAt.subscriptionModelDefault(), e -> receivedByNode1.add(e.getId()));
+        node3.subscribe("node-3", "s1", null, StartAt.subscriptionModelDefault(), e -> receivedByNode3.add(e.getId()));
+        assertThat(leases.holderOf("s1")).as("[the node holding the lease of s1 before shutdown()]").isEqualTo("node-2");
+
+        Throwable thrown = catchThrowable(node1::shutdown);
+        leases.stall("node-2");
+        leases.tick(PAST_EXPIRY);
+        leases.tick(PAST_EXPIRY);
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(leases.holderOf("s1")).as("[the node holding the lease of s1 once node 2 and the lease after it have expired]").isEqualTo("node-3"));
+        await().atMost(EVENTUALLY).until(() -> node3.isRunning("s1"));
+        wrapped3.accept(List.of(event("e2")));
+
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(receivedByNode3).as("[events node 3 received]").containsExactly("e2"));
+        assertThat(thrown).as("[what shutdown() threw]").isSameAs(wrappedModelFailure);
+    }
+
+    @Test
+    void a_node_whose_wrapped_model_stopped_every_subscription_and_then_threw_from_its_own_shutdown_lets_its_lease_go_to_another_node() {
+        wrapped1.shutsDownBeforeItThrows = true;
         node1WinsTheLeaseAndReceivesE1();
 
         Throwable thrown = catchThrowable(node1::shutdown);
         leases.tick(PAST_EXPIRY);
-        wrapped1.accept(List.of(event("e2")));
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(leases.holderOf("s1")).as("[the node holding the lease of s1 well past the lease time]").isEqualTo("node-2"));
+        await().atMost(EVENTUALLY).until(() -> node2.isRunning("s1"));
+        wrapped2.accept(List.of(event("e2")));
 
+        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(receivedByNode2).as("[events node 2 received]").containsExactly("e2"));
         assertThat(thrown).as("[what shutdown() threw]").isSameAs(wrappedModelFailure);
-        assertThat(leases.holderOf("s1")).as("[the node holding the lease of s1 well past the lease time]").isEqualTo("node-1");
-        assertThat(node2.isRunning("s1")).as("node 2 runs s1").isFalse();
-        await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(receivedByNode1).as("[events node 1 received]").containsExactly("e1", "e2"));
     }
 
     @Test
@@ -122,10 +169,12 @@ class CompetingConsumerShutdownOverAFailingWrappedModelTest {
         return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("Tested").build();
     }
 
-    // Throws from its own shutdown() without stopping, so it goes on delivering, until told not to
+    // Throws from its own shutdown() without stopping, so it goes on delivering, until told not to. Told to shut down
+    // before it throws, it stops every subscription first.
     private static final class StopsDeliveringOnlyWhenTold extends InMemorySubscriptionModel {
         private final IllegalStateException failure;
         private volatile boolean failing = true;
+        private volatile boolean shutsDownBeforeItThrows;
 
         private StopsDeliveringOnlyWhenTold(IllegalStateException failure) {
             super(RetryStrategy.none());
@@ -134,6 +183,9 @@ class CompetingConsumerShutdownOverAFailingWrappedModelTest {
 
         @Override
         public void shutdown() {
+            if (shutsDownBeforeItThrows) {
+                super.shutdown();
+            }
             if (failing) {
                 throw failure;
             }
