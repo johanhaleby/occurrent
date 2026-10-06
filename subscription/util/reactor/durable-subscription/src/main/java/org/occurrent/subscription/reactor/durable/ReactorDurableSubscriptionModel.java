@@ -472,10 +472,13 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         return handOver(delegate, subscriptionId, filter, startAt, resolvedStartAt, action, writer);
     }
 
-    // Answers false when a cancel of the id came first, and throws for a shutdown that came first, a subscription of
-    // the id that this model starts again in the wrapped model, a cancel, a pause or a resume it sent there for the id
-    // that hasn't ended, or a subscription of the id that waits to be handed over. Checked before the function of a
-    // dynamic start position runs, so neither of the first two runs it, and again under positionLock in handOver.
+    // Answers false when a cancel of the id came first, and throws for a shutdown that came first. Also throws for a
+    // registered subscription of the id that still keeps a state, as one this model starts again in the wrapped model
+    // does and one that waited does until that state is in place there, for a cancel, a pause or a resume this model
+    // sent there for the id that hasn't ended, and for another subscription of the id that waits to be handed over. A
+    // subscribe that doesn't wait calls it before the function of a dynamic start position, so a cancel or a shutdown
+    // that came first keeps the function from running. One that waits calls it once the function has answered, before
+    // the hand-over. handOver checks the same again under positionLock.
     private boolean mayStartDelegated(String subscriptionId, PositionWriter writer) {
         @Nullable Registration refusedFirst = refusedRegistrationNow(writer);
         if (refusedFirst == Registration.SHUT_DOWN) {
@@ -2258,10 +2261,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * <li>for a subscribe that doesn't wait for a write back, while that model has a subscription of the id or is
      * taking one, which that model refuses itself,</li>
      * <li>for a subscribe that would wait for a write back, while this model still records a subscription of the id
-     * that it handed over or is handing over. The record ends with a cancel of the id through this model, when this
-     * model can't record where that subscription starts or can't start it again from the position recorded, when a
-     * later subscription of the id takes its place in that model, and at {@link #shutdown()}. It stays when that model
-     * drops the subscription by itself, as it does after an error there,</li>
+     * that it handed over or is handing over. The record ends when this model cancels that subscription, when its
+     * start, its hand-over or a start again of it fails, when a later subscription of the id replaces it, and at
+     * {@link #shutdown()}. It stays when that model drops the subscription by itself, as it does after an error there,</li>
      * <li>while a subscription of the id waits for a write back, from the moment it starts to wait until that model
      * has it and the state kept for it, since a pause or a resume kept for it would not reach a second subscription
      * of the id,</li>

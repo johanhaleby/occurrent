@@ -1665,12 +1665,11 @@ subscription of the id.
 
 A `subscribe(..)` of the id that doesn't wait also throws at the call while the wrapped model has a subscription of the
 id or is taking one, as in 0.33.0. One that waits throws at the call while the durable model still records a
-subscription of the id that it handed over or is handing over. The record ends with a cancel of the id through the
-durable model, when the durable model can't record where that subscription starts or can't start it again from the
-position recorded, when a later subscription of the id takes its place in the wrapped model, and at `shutdown()`. It
-stays when the wrapped model drops the subscription by itself, as it does after an error there. A `subscribe(..)` of the
-id throws while the durable model starts a subscription of the id there again, and while a cancel, a pause or a resume
-that the durable model sent the wrapped model for the id is still under way.
+subscription of the id that it handed over or is handing over. The record ends when the durable model cancels that
+subscription, when its start, its hand-over or a start again of it fails, when a later subscription of the id replaces
+it, and at `shutdown()`. It stays when the wrapped model drops the subscription by itself, as it does after an error
+there. A `subscribe(..)` of the id throws while the durable model starts a subscription of the id there again, and while
+a cancel, a pause or a resume that the durable model sent the wrapped model for the id is still under way.
 [Section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted) describes
 the last two.
 

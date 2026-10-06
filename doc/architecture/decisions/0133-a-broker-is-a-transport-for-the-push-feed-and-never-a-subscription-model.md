@@ -1851,15 +1851,14 @@ describes. After it, the call is kept.
 
 A `subscribe(..)` of the id is refused at the call in four more cases. The wrapped model refuses one that doesn't wait
 while it has a subscription of the id or is taking one. The durable model refuses one that would wait while it still
-records a subscription of the id that it handed over or is handing over. The record ends with a cancel of the id through
-the durable model, when the durable model can't record where that subscription starts or can't start it again from the
-position recorded, when a later subscription of the id takes its place in the wrapped model, and at shutdown. It stays
-when the wrapped model drops the subscription by itself, as it does after an error there. The durable model refuses it
-while it starts a subscription of the id again in the wrapped model, and while a cancel, a pause or a resume it sent the
-wrapped model for the id is under way, as described above. A `subscribe(..)` that waits is checked again before the
-hand-over, and the wrapped model checks it at the hand-over. A refusal there fails `waitUntilStarted()` and is logged as
-an error, since the call has returned. A wrapped model that has a subscription of the id that the durable model doesn't
-record refuses it there, as after a cancel that failed there.
+records a subscription of the id that it handed over or is handing over. The record ends when the durable model cancels
+that subscription, when its start, its hand-over or a start again of it fails, when a later subscription of the id
+replaces it, and at shutdown. It stays when the wrapped model drops the subscription by itself, as it does after an
+error there. The durable model refuses it while it starts a subscription of the id again in the wrapped model, and while
+a cancel, a pause or a resume it sent the wrapped model for the id is under way, as described above. A `subscribe(..)`
+that waits is checked again before the hand-over, and the wrapped model checks it at the hand-over. A refusal there
+fails `waitUntilStarted()` and is logged as an error, since the call has returned. A wrapped model that has a
+subscription of the id that the durable model doesn't record refuses it there, as after a cancel that failed there.
 
 In every other case the durable model accepts a `subscribe(..)` of the id, also while another `subscribe(..)` of it still
 reads where to start, and hands both to the wrapped model. Over `ReactorMongoSubscriptionModel` only one of them starts
