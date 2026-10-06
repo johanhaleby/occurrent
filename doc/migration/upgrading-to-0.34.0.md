@@ -666,7 +666,12 @@ delivery failed just before the crash was never seen again.
 The refusal replaces that quiet loss with an error at `subscribe(..)`, which for a Spring Boot application means
 at startup. The subscription the wrapped model accepted is cancelled, so subscribing again once the model can
 answer works. When that cancel throws as well, the exception has a suppressed exception saying the wrapped model may
-still hold the id, and `cancelSubscription(..)` tries the cancel again.
+still hold the id, and `cancelSubscription(..)` tries the cancel again and keeps the checkpoint stored for the id.
+
+A wrapped model of your own that evaluates the start position inside its `subscribe(..)`, and waits and evaluates it
+again when that evaluation throws, started such a subscription in 0.33.0. Its `subscribe(..)` now waits instead, until
+`globalCheckpoint()` answers. A model that passes the evaluation's exception on throws that exception from
+`subscribe(..)`.
 
 Three ways forward, and the first needs no code change:
 
