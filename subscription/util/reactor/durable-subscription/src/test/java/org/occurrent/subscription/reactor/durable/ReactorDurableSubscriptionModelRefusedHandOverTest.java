@@ -261,6 +261,89 @@ class ReactorDurableSubscriptionModelRefusedHandOverTest {
         assertThat(stillWaiting()).as("warnings in the 10.5 seconds after the shutdown").hasSize(warnedBeforeTheShutdown);
     }
 
+    @Test
+    void a_resume_kept_for_a_duplicate_refused_at_the_hand_over_reaches_the_subscription_the_wrapped_model_holds() throws Exception {
+        // Given
+        feed.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), cloudEvent -> Mono.empty());
+        CompletableFuture<Subscription> duplicate = subscribeFromTheModelDefaultWhileTheWrappedModelPausesTheSubscription();
+
+        // When
+        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+        Throwable duplicateRefused = handOver(duplicate);
+
+        // Then
+        assertThat(duplicateRefused).as("why the duplicate did not start").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(feed.isRunning(SUBSCRIPTION_ID)).as("the subscription the wrapped model holds running after the resume").isTrue();
+        assertThat(catchThrowable(() -> resumed.waitUntilStarted().block(TIMEOUT))).as("how waiting for what the resume returned ended").isNull();
+        assertThat(model.isPaused(SUBSCRIPTION_ID)).as("isPaused once the duplicate is refused").isFalse();
+    }
+
+    @Test
+    void a_pause_kept_for_a_duplicate_refused_at_the_hand_over_reaches_the_subscription_the_wrapped_model_holds() throws Exception {
+        // Given
+        feed.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), cloudEvent -> Mono.empty());
+        CompletableFuture<Subscription> duplicate = subscribeFromTheModelDefaultWhileTheWrappedModelPausesTheSubscription();
+        feed.resumeSubscription(SUBSCRIPTION_ID);
+
+        // When
+        model.pauseSubscription(SUBSCRIPTION_ID);
+        Throwable duplicateRefused = handOver(duplicate);
+
+        // Then
+        assertThat(duplicateRefused).as("why the duplicate did not start").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(feed.isPaused(SUBSCRIPTION_ID)).as("the subscription the wrapped model holds paused after the pause").isTrue();
+        assertThat(model.isPaused(SUBSCRIPTION_ID)).as("isPaused once the duplicate is refused").isTrue();
+    }
+
+    // A stop asks the duplicate's state as well as reaching the wrapped model, and the resume after the start passes to
+    // the wrapped model for the subscription this model registered
+    @Test
+    void a_stop_kept_for_a_duplicate_refused_at_the_hand_over_does_not_undo_a_resume_made_after_it() throws Exception {
+        // Given
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), cloudEvent -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
+        CompletableFuture<Subscription> duplicate = subscribeFromTheModelDefaultWhileTheWrappedModelPausesTheSubscription();
+        feed.resumeSubscription(SUBSCRIPTION_ID);
+
+        // When
+        model.stop();
+        model.start(false);
+        model.resumeSubscription(SUBSCRIPTION_ID);
+        Throwable duplicateRefused = handOver(duplicate);
+
+        // Then
+        assertThat(duplicateRefused).as("why the duplicate did not start").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(feed.isRunning(SUBSCRIPTION_ID)).as("the registered subscription running after the resume").isTrue();
+    }
+
+    // The wrapped model pauses the subscription itself, and between its two steps, where it answers neither running nor
+    // paused for the id, a subscribe of the id from the model default passes the check at the call. Its read of the
+    // start position is held, so it waits to be handed over.
+    private CompletableFuture<Subscription> subscribeFromTheModelDefaultWhileTheWrappedModelPausesTheSubscription() throws Exception {
+        storage.holdNextRead();
+        AtomicReference<CompletableFuture<Subscription>> duplicate = new AtomicReference<>();
+        feed.moving = __ -> {
+            duplicate.set(CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty()), caller));
+            try {
+                storage.heldReadEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        feed.pauseSubscription(SUBSCRIPTION_ID);
+        feed.moving = __ -> {
+        };
+        assertThat(storage.heldReadEntered.getCount()).as("reads of the duplicate's start position held").isZero();
+        assertThat(duplicate.get().get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the duplicate returned by the call").isNotNull();
+        return duplicate.get();
+    }
+
+    // Lets the read of the start position go on, and answers what the hand-over failed the duplicate with
+    private Throwable handOver(CompletableFuture<Subscription> duplicate) throws Exception {
+        storage.releaseRead.complete(null);
+        Subscription subscription = duplicate.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        return catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
+    }
+
     private List<String> stillWaiting() {
         return logged.at(Level.WARN).stream().filter(message -> message.contains("is still waiting for its start position")).collect(Collectors.toList());
     }
