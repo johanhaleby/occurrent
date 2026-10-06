@@ -129,25 +129,6 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
         executeWithRetry(delete, __ -> !shutdown, retryStrategy).run();
     }
 
-    /**
-     * One {@code deleteOne} whose filter holds the subscription id, the checkpoint and the version, so MongoDB compares
-     * and deletes in one atomic step. A checkpoint stored as another type with the same value is not deleted.
-     */
-    @Override
-    public void deleteIfUnchanged(String subscriptionId, Checkpoint checkpoint, OptionalLong writeVersion) {
-        requireNonNull(subscriptionId, "Subscription id cannot be null");
-        requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
-        requireNonNull(writeVersion, "Write version cannot be null");
-        Document filter = MongoCommons.buildDeleteIfUnchangedFilter(subscriptionId, checkpoint, writeVersion);
-        Runnable delete = () -> mongoOperations.getCollection(checkpointCollection).deleteOne(filter);
-        executeWithRetry(delete, __ -> !shutdown, retryStrategy).run();
-    }
-
-    @Override
-    public boolean deletesIfUnchanged() {
-        return true;
-    }
-
     @Override
     public boolean exists(String subscriptionId) {
         Supplier<Boolean> exists = () -> mongoOperations.exists(query(where(ID).is(subscriptionId)), checkpointCollection);

@@ -25,7 +25,6 @@ import org.junit.platform.engine.TestExecutionResult;
 import org.junit.platform.testkit.engine.EngineTestKit;
 import org.junit.platform.testkit.engine.Events;
 import org.occurrent.subscription.Checkpoint;
-import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
@@ -33,7 +32,6 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.OptionalLong;
 import java.util.SortedMap;
 import java.util.stream.Collectors;
 
@@ -72,16 +70,6 @@ class SuiteNeverSkipsTest {
     @Test
     void passes_every_test_and_skips_none_of_them_against_a_storage_that_honours_everything() {
         assertEveryTestPasses(HonoursEverythingCheckpointStorageConformance.class, "storage");
-    }
-
-    @Test
-    void passes_every_test_and_skips_none_of_them_against_a_storage_that_says_it_cannot_delete_only_if_unchanged() {
-        assertEveryTestPasses(CannotDeleteOnlyIfUnchangedCheckpointStorageConformance.class, "storage");
-    }
-
-    @Test
-    void passes_every_test_and_skips_none_of_them_against_a_storage_that_evaluates_no_write_conditions() {
-        assertEveryTestPasses(EvaluatesNoWriteConditionsCheckpointStorageConformance.class, "storage");
     }
 
     @Test
@@ -262,15 +250,10 @@ class SuiteNeverSkipsTest {
                     return true;
                 }
 
-                // Claims the capabilities the storage honours nothing of, which is what keeps every test running and
+                // Claims the capability the storage honours nothing of, which is what keeps all 20 tests running and
                 // failing. Delegating to the storage would let it answer false and pass the refusal tests honestly.
                 @Override
                 public boolean evaluatesWriteConditions() {
-                    return true;
-                }
-
-                @Override
-                public boolean deletesIfUnchanged() {
                     return true;
                 }
             };
@@ -293,73 +276,6 @@ class SuiteNeverSkipsTest {
                 /**
                  * A map hands back the checkpoint it was given, so every type survives.
                  */
-                @Override
-                public boolean preservesCheckpointType(Checkpoint checkpoint) {
-                    return true;
-                }
-            };
-        }
-    }
-
-    static class CannotDeleteOnlyIfUnchangedCheckpointStorageConformance extends CheckpointStorageConformance {
-
-        @Override
-        protected CheckpointStorageFixture createFixture() {
-            return new CheckpointStorageFixture() {
-
-                // Back to what CheckpointStorage does by default, so the suite holds it to the refusal instead
-                private final CheckpointStorage storage = new WorkingCheckpointStorage() {
-                    @Override
-                    public void deleteIfUnchanged(String subscriptionId, Checkpoint checkpoint, OptionalLong writeVersion) {
-                        throw new UnsupportedOperationException();
-                    }
-
-                    @Override
-                    public boolean deletesIfUnchanged() {
-                        return false;
-                    }
-                };
-
-                @Override
-                public CheckpointStorage checkpointStorage() {
-                    return storage;
-                }
-
-                @Override
-                public boolean preservesCheckpointType(Checkpoint checkpoint) {
-                    return true;
-                }
-            };
-        }
-    }
-
-    static class EvaluatesNoWriteConditionsCheckpointStorageConformance extends CheckpointStorageConformance {
-
-        @Override
-        protected CheckpointStorageFixture createFixture() {
-            return new CheckpointStorageFixture() {
-
-                // Refuses every condition but any(), so it never stores a version, and still deletes only if unchanged
-                private final CheckpointStorage storage = new WorkingCheckpointStorage() {
-                    @Override
-                    public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                        if (!(condition instanceof CheckpointWriteCondition.Any)) {
-                            throw new UnsupportedOperationException();
-                        }
-                        return super.save(subscriptionId, checkpoint, condition);
-                    }
-
-                    @Override
-                    public boolean evaluatesWriteConditions() {
-                        return false;
-                    }
-                };
-
-                @Override
-                public CheckpointStorage checkpointStorage() {
-                    return storage;
-                }
-
                 @Override
                 public boolean preservesCheckpointType(Checkpoint checkpoint) {
                     return true;

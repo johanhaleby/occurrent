@@ -239,24 +239,6 @@ public class MongoCommons {
     }
 
     /**
-     * The filter a checkpoint storage's {@code deleteIfUnchanged} deletes with, in a single {@code deleteOne}. It
-     * matches the document of {@code subscriptionId} only when it holds the field and value
-     * {@link #generateCheckpointDocument(String, Checkpoint)} builds for {@code checkpoint}, and {@link #WRITE_VERSION}
-     * is {@code writeVersion}, or missing when {@code writeVersion} is empty. Every write replaces the whole document,
-     * so a document that matches holds nothing else.
-     *
-     * @param subscriptionId The id of the subscription whose checkpoint to delete
-     * @param checkpoint     The checkpoint that has to be stored
-     * @param writeVersion   The version that has to be stored, or empty when none may be
-     * @return The filter to pass to {@code deleteOne}
-     */
-    public static Document buildDeleteIfUnchangedFilter(String subscriptionId, Checkpoint checkpoint, OptionalLong writeVersion) {
-        Document filter = new Document(generateCheckpointDocument(subscriptionId, checkpoint));
-        filter.put(WRITE_VERSION, writeVersion.isPresent() ? writeVersion.getAsLong() : new Document("$exists", false));
-        return filter;
-    }
-
-    /**
      * Reads the version {@link #buildConditionalCheckpointWrite(Document, CheckpointWriteCondition)} recorded, or
      * empty if the document has none.
      */

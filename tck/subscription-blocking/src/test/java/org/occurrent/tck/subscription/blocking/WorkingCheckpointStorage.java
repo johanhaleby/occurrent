@@ -85,19 +85,6 @@ class WorkingCheckpointStorage implements CheckpointStorage {
     }
 
     @Override
-    public void deleteIfUnchanged(String subscriptionId, Checkpoint checkpoint, OptionalLong writeVersion) {
-        Checkpoint stored = checkpoints.get(subscriptionId);
-        if (stored != null && stored.asString().equals(checkpoint.asString()) && writeVersion(subscriptionId).equals(writeVersion)) {
-            delete(subscriptionId);
-        }
-    }
-
-    @Override
-    public boolean deletesIfUnchanged() {
-        return true;
-    }
-
-    @Override
     public boolean exists(String subscriptionId) {
         return checkpoints.containsKey(subscriptionId);
     }

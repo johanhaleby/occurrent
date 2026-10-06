@@ -37,8 +37,6 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * {@link CheckpointWriteCondition} is evaluated for real, not refused. The checkpoint and its version are two
  * separate maps, since {@link CheckpointWriteCondition#any()} writes the former and leaves the latter untouched.
- * {@link #deleteIfUnchanged(String, Checkpoint, OptionalLong)} compares and deletes under the same lock every write
- * takes.
  */
 @NullMarked
 public class InMemoryCheckpointStorage implements CheckpointStorage {
@@ -107,29 +105,6 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
         } finally {
             lock.unlock();
         }
-    }
-
-    @Override
-    public void deleteIfUnchanged(String subscriptionId, Checkpoint checkpoint, OptionalLong writeVersion) {
-        requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
-        requireNonNull(writeVersion, "writeVersion cannot be null");
-        lock.lock();
-        try {
-            Checkpoint stored = checkpoints.get(subscriptionId);
-            if (stored == null || !stored.asString().equals(checkpoint.asString()) || !writeVersion(subscriptionId).equals(writeVersion)) {
-                return;
-            }
-            checkpoints.remove(subscriptionId);
-            versions.remove(subscriptionId);
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    @Override
-    public boolean deletesIfUnchanged() {
-        return true;
     }
 
     @Override
