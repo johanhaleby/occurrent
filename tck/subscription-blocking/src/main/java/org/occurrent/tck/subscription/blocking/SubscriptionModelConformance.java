@@ -35,6 +35,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.ConformanceEvents;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -113,6 +114,34 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
         }
         requireNonNull(fixture.aCheckpointToStartFrom(),
                 fixture.getClass().getName() + " returned null from aCheckpointToStartFrom()");
+        Duration howFarBack = requireNonNull(fixture.howFarBackANewSubscriptionMayStart(),
+                fixture.getClass().getName() + " returned null from howFarBackANewSubscriptionMayStart()");
+        if (howFarBack.isNegative()) {
+            throw new IllegalArgumentException(fixture.getClass().getName() + " declared a "
+                    + "howFarBackANewSubscriptionMayStart() of " + howFarBack + ". A subscription can't start later "
+                    + "than it was made, so use Duration.ZERO for one that receives nothing published before it.");
+        }
+    }
+
+    // Half a second more than the fixture declares, see SubscriptionModelFixture.howFarBackANewSubscriptionMayStart()
+    private static final Duration MARGIN_PAST_HOW_FAR_BACK = Duration.ofMillis(500);
+
+    /**
+     * Waits until what was published so far is older than a new subscription may reach back to, so a test asserting
+     * that it never arrives isn't asking about events the model is allowed to deliver. Returns at once for a model
+     * that declares zero, and for one that replays its history to a new subscription, which owes every earlier event.
+     */
+    private void waitUntilWhatWasPublishedIsOutOfReachOfANewSubscription() {
+        Duration howFarBack = fixture().howFarBackANewSubscriptionMayStart();
+        if (howFarBack.isZero() || fixture().replaysHistoryToANewSubscription()) {
+            return;
+        }
+        try {
+            Thread.sleep(howFarBack.plus(MARGIN_PAST_HOW_FAR_BACK));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting past howFarBackANewSubscriptionMayStart()", e);
+        }
     }
 
     private static String subscriptionId() {
@@ -296,6 +325,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
         void replays_history_to_a_new_subscription_or_starts_where_it_was_told_as_the_fixture_declares() {
             CloudEvent beforeAnythingSubscribed = ConformanceEvents.event("1", "NameDefined");
             publish(beforeAnythingSubscribed);
+            waitUntilWhatWasPublishedIsOutOfReachOfANewSubscription();
 
             RecordedEvents recorded = subscribeAndWait(subscriptionId());
 
@@ -482,10 +512,10 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
         }
 
         @Test
-        void resuming_one_subscription_after_stop_reopens_the_model_but_leaves_the_others_paused() {
+        void resuming_one_subscription_after_stop_leaves_the_others_paused() {
             if (!fixture().acceptsSeveralSubscriptions()) {
-                // Only one subscription can ever exist, so there is no sibling to leave paused, but the model-wide
-                // gate reopening on resume is still this model's claim and stays asserted rather than going unchecked.
+                // Only one subscription can ever exist, so there is no sibling to leave paused, but what the resume
+                // does to the model-wide gate is still this model's claim and stays asserted rather than going unchecked.
                 String only = subscriptionId();
                 subscribeAndWait(only);
 
@@ -493,9 +523,9 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                 subscriptionModel().resumeSubscription(only).waitUntilStarted(deliveryTimeout());
 
                 assertThat(subscriptionModel().isRunning())
-                        .as("resumeSubscription(String) reopens the model-wide gate even for a model that only ever "
-                                + "has one subscription")
-                        .isTrue();
+                        .as("isRunning() after resumeSubscription(String) on a stopped model that only ever has one "
+                                + "subscription, see aResumeAfterStopReopensTheModel()")
+                        .isEqualTo(fixture().aResumeAfterStopReopensTheModel());
                 return;
             }
             String resumed = subscriptionId();
@@ -508,28 +538,29 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             subscriptionModel().resumeSubscription(resumed).waitUntilStarted(deliveryTimeout());
 
             assertThat(subscriptionModel().isRunning())
-                    .as("resumeSubscription(String) reopens the model-wide gate rather than scoping to the one "
-                            + "subscription it resumed, so a caller must not read isRunning() as \"every subscription "
-                            + "is going again\"")
-                    .isTrue();
+                    .as("isRunning() after resumeSubscription(String) on a stopped model, see "
+                            + "aResumeAfterStopReopensTheModel(). A model that reopens does so model-wide rather than "
+                            + "for the one subscription it resumed, so a caller must not read isRunning() as \"every "
+                            + "subscription is going again\"")
+                    .isEqualTo(fixture().aResumeAfterStopReopensTheModel());
             assertThat(subscriptionModel().isPaused(stillPaused))
                     .as("a sibling that stop() paused is untouched by resuming the other one")
                     .isTrue();
             assertThat(subscriptionModel().isRunning(stillPaused))
-                    .as("per-subscription reporting still says so, even though the model itself now reports running")
+                    .as("per-subscription reporting still says so, also on a model that reports itself running again")
                     .isFalse();
 
             CloudEvent afterResume = ConformanceEvents.event("1", "NameDefined");
             publish(afterResume);
 
             assertThat(idsOf(resumedRecorded.awaitAtLeast(1, deliveryTimeout())))
-                    .as("the resumed subscription actually delivers again, not just isRunning() reporting so")
+                    .as("the resumed subscription actually delivers again")
                     .containsExactly(afterResume.getId());
             // Unconditional, unlike the deliversEventsPublishedWhilePaused()-guarded checks elsewhere in this class:
             // stillPaused is never resumed in this test, so even a model that holds events for later delivery has
             // nothing to hold them in yet. It is still paused, not merely dropping.
             assertThat(stillPausedRecorded.soFar())
-                    .as("the still-paused sibling received nothing, even though the model itself now reports running")
+                    .as("the still-paused sibling received nothing, also on a model that reports itself running again")
                     .isEmpty();
         }
 
@@ -728,6 +759,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
 
             // A second subscription is what proves the model is still delivering, so the first one's silence means
             // cancelled rather than broken. Where a model feeds only one subscription, cancelling freed the slot.
+            waitUntilWhatWasPublishedIsOutOfReachOfANewSubscription();
             RecordedEvents afterCancel = subscribeAndWait(subscriptionId());
             CloudEvent afterCancelEvent = ConformanceEvents.event("2", "NameWasChanged");
             publish(afterCancelEvent);

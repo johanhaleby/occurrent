@@ -400,7 +400,7 @@ final class NamedCatchupSupport {
         return named.resumeSubscription(subscriptionId);
     }
 
-    void cancelSubscription(String subscriptionId) {
+    Mono<Void> cancelSubscription(String subscriptionId) {
         CatchupState state = catchingUp.remove(subscriptionId);
         if (state != null) {
             synchronized (state) {
@@ -410,19 +410,19 @@ final class NamedCatchupSupport {
                     replaying.dispose();
                 }
                 if (!state.handedOver.get()) {
-                    // The id never reached the wrapped model, so there is nothing to cancel there. Waiters are failed
-                    // rather than completed, since completing would claim the subscription started and doing nothing
-                    // would hang them. The blocking twin answers false, which a Mono<Void> has no room for.
+                    // Waiters are failed rather than completed, since completing would claim the subscription started
+                    // and doing nothing would hang them. The blocking twin answers false, which a Mono<Void> has no
+                    // room for. The wrapped model is still asked to cancel below, since it can hold what an earlier
+                    // process stored for this id even though this process never handed the id over.
                     state.started.tryEmitError(new IllegalStateException("Subscription " + subscriptionId + " was cancelled before it started."));
-                    return;
                 }
             }
         }
-        // Cancelling an id a cold-only composition never knew is an idempotent no-op, like cancelling any unknown id.
+        // A cold-only composition runs nothing by name and stores nothing by id, so there is nothing to stop or delete
         if (!managesNamedSubscriptions()) {
-            return;
+            return Mono.empty();
         }
-        named.cancelSubscription(subscriptionId);
+        return named.cancelSubscription(subscriptionId);
     }
 
     void shutdown() {

@@ -62,7 +62,8 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Fills the reactive DCB start-position gap: {@code ReactiveDcbSubscriptionAnnotationMongoTest} only exercises
- * {@code startAt = BEGINNING}. This proves {@code DEFAULT} and {@code NOW} never replay, and that
+ * {@code startAt = BEGINNING}. This proves {@code DEFAULT} and {@code NOW} never replay history written more than a
+ * second before they subscribe, and that
  * {@code startAtDcbPosition} correctly resumes strictly after the given position, mirroring the blocking
  * {@code DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest} and
  * {@code DcbSubscriptionStartAtPositionAnnotationMongoTest}.
@@ -100,8 +101,8 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
     private ExplicitPositionSubscriber explicitPositionSubscriber;
 
     @Test
-    void default_and_now_never_replay_while_an_explicit_position_resumes_strictly_after_it() {
-        // Neither DEFAULT nor NOW ever sees the pre-existing history.
+    void default_and_now_never_replay_history_older_than_a_second_while_an_explicit_position_resumes_strictly_after_it() {
+        // Neither DEFAULT nor NOW ever sees the history, written more than a second before they subscribed.
         await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
             assertThat(defaultPositionSubscriber.invocationCount()).isZero();
             assertThat(defaultPositionSubscriber.received()).isEmpty();
@@ -164,7 +165,8 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
         }
 
         // Appends three distinguishable events before any subscriber starts. DCB positions are assigned
-        // sequentially from 1 on a fresh store, so they get 1, 2, 3.
+        // sequentially from 1 on a fresh store, so they get 1, 2, 3. Every subscriber subscribes more than a second
+        // after them, see HistoryAppender.
         @Bean
         HistoryAppender historyAppender(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> cloudEventConverter) {
             return new HistoryAppender(dcbEventStore, cloudEventConverter);
@@ -198,14 +200,17 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
             this.cloudEventConverter = cloudEventConverter;
         }
 
+        // Waits a second and a half once the history is written, since a subscription started at the present can
+        // also receive what the same MongoClient wrote up to a second before it, which the at-least-once contract allows
         @PostConstruct
-        void appendHistory() {
+        void appendHistory() throws InterruptedException {
             List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(
                             new TestEvent("event-1"), new TestEvent("event-2"), new TestEvent("event-3")))
                     .stream()
                     .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                     .toList();
             dcbEventStore.append(cloudEvents).block();
+            Thread.sleep(1500);
         }
     }
 

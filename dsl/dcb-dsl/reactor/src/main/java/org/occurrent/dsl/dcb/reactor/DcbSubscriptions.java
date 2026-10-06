@@ -171,11 +171,16 @@ public final class DcbSubscriptions<E> {
 
     /**
      * Cancels and removes the subscription with the given id, stopping further delivery to its callback. Cancelling an
-     * unknown or already cancelled subscription id is a no-op. This is the natural teardown for a per-connection
+     * unknown or already cancelled subscription id stops nothing, and still deletes what the subscription model stores
+     * for that id. This is the natural teardown for a per-connection
      * subscription, such as an SSE activity feed that subscribes when a client connects and cancels when it disconnects.
+     * <p>
+     * The cancel takes effect when this method is called, whether or not anything subscribes to the returned
+     * {@code Mono}, which completes once the subscription model has deleted what it stored for this id. See
+     * {@link DcbSubscriptionModel#cancelSubscription(String)}.
      */
-    public void cancel(String subscriptionId) {
+    public Mono<Void> cancel(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        subscriptionModel.cancelSubscription(subscriptionId);
+        return subscriptionModel.cancelSubscription(subscriptionId);
     }
 }

@@ -65,7 +65,7 @@ class SubscriptionModelCapabilitiesTest {
         override fun subscribe(subscriptionId: String, filter: SubscriptionFilter?, startAt: StartAt, action: Function<CloudEvent, Mono<Void>>): Subscription =
             throw UnsupportedOperationException()
 
-        override fun cancelSubscription(subscriptionId: String) {}
+        override fun cancelSubscription(subscriptionId: String): Mono<Void> = Mono.empty()
         override fun stop() {}
         override fun start(resumeSubscriptionsAutomatically: Boolean) {}
         override fun isRunning(): Boolean = false

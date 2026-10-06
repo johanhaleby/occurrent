@@ -27,6 +27,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -83,7 +84,10 @@ class ReactorMongoSubscriptionModelLegacyTimeFormatFilterTest {
     private MongoClient mongoClient;
     private ReactiveMongoTemplate mongoTemplate;
     private ReactorMongoEventStore mongoEventStore;
+    private ReactorMongoEventStore preparationEventStore;
     private ReactorMongoSubscriptionModel subscriptionModel;
+    private String eventCollectionName;
+    private String preparationCollectionName;
     private CopyOnWriteArrayList<Disposable> disposables;
 
     @BeforeEach
@@ -92,14 +96,14 @@ class ReactorMongoSubscriptionModelLegacyTimeFormatFilterTest {
         mongoClient = MongoClients.create(connectionString);
         String database = Objects.requireNonNull(connectionString.getDatabase());
         mongoTemplate = new ReactiveMongoTemplate(mongoClient, database);
-        subscriptionModel = new ReactorMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        // A collection of its own for every test, since a subscription started at the present can also receive what
+        // was written shortly before it, which would otherwise include the previous test's events
+        eventCollectionName = "events-" + UUID.randomUUID();
+        preparationCollectionName = eventCollectionName + "-preparation";
+        subscriptionModel = new ReactorMongoSubscriptionModel(mongoTemplate, eventCollectionName, TimeRepresentation.RFC_3339_STRING);
         ReactiveMongoTransactionManager transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, database));
-        EventStoreConfig config = new EventStoreConfig.Builder()
-                .eventStoreCollectionName("events")
-                .transactionConfig(transactionManager)
-                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
-                .build();
-        mongoEventStore = new ReactorMongoEventStore(mongoTemplate, config);
+        mongoEventStore = new ReactorMongoEventStore(mongoTemplate, eventStoreConfig(eventCollectionName, transactionManager));
+        preparationEventStore = new ReactorMongoEventStore(mongoTemplate, eventStoreConfig(preparationCollectionName, transactionManager));
         disposables = new CopyOnWriteArrayList<>();
     }
 
@@ -170,24 +174,39 @@ class ReactorMongoSubscriptionModelLegacyTimeFormatFilterTest {
     }
 
     /**
-     * Writes a normal event, which stores the canonical shape, then removes it from the collection and hands back
-     * the same document with its {@code time} field rewritten to the legacy {@code OffsetDateTime.toString()}
+     * Writes a normal event, which stores the canonical shape, to a collection no subscription watches, and hands
+     * back the same document with its {@code time} field rewritten to the legacy {@code OffsetDateTime.toString()}
      * rendering of the same instant, ready to be inserted once a subscription is listening. Simulates a document
-     * written before the upgrade to a canonical shape (ADR 79), without a subscription seeing the intermediate,
-     * correctly-shaped write.
+     * written before the upgrade to a canonical shape (ADR 79). The canonical write goes to that other collection
+     * because a subscription started at the present can also receive what was written shortly before it, and
+     * would then see the canonical write as well. The position that collection gave it is removed, since the event
+     * collection hands out its own and would give a later write the same one. An event with no position is what a
+     * store holds until positions are backfilled.
      */
     private Document prepareLegacyTimeShapedEvent(OffsetDateTime instant) {
         CloudEvent event = newEvent(instant);
-        mongoEventStore.write(UUID.randomUUID().toString(), Flux.just(event)).block();
+        preparationEventStore.write(UUID.randomUUID().toString(), Flux.just(event)).block();
 
-        Document document = Mono.from(eventCollection().find(Filters.eq("id", event.getId())).first()).block();
-        Mono.from(eventCollection().deleteOne(Filters.eq("id", event.getId()))).block();
+        Document document = Mono.from(collection(preparationCollectionName).find(Filters.eq("id", event.getId())).first()).block();
         Objects.requireNonNull(document).put("time", instant.toString());
+        document.remove(OccurrentCloudEventExtension.POSITION);
         return document;
     }
 
     private com.mongodb.reactivestreams.client.MongoCollection<Document> eventCollection() {
-        return mongoTemplate.getCollection("events").block();
+        return collection(eventCollectionName);
+    }
+
+    private com.mongodb.reactivestreams.client.MongoCollection<Document> collection(String name) {
+        return mongoTemplate.getCollection(name).block();
+    }
+
+    private static EventStoreConfig eventStoreConfig(String collectionName, ReactiveMongoTransactionManager transactionManager) {
+        return new EventStoreConfig.Builder()
+                .eventStoreCollectionName(collectionName)
+                .transactionConfig(transactionManager)
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .build();
     }
 
     private CloudEvent newEvent(OffsetDateTime instant) {

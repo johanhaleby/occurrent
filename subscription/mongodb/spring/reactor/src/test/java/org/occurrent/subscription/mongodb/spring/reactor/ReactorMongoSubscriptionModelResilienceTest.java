@@ -57,6 +57,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -147,10 +148,10 @@ public class ReactorMongoSubscriptionModelResilienceTest {
         return throwingOperations;
     }
 
-    // Answers the operation time read before a change stream opens without a round trip, so a change stream that
-    // throws while it is built still throws inside subscribe().
-    private static Mono<Document> operationTimeReply() {
-        return Mono.just(new Document("ok", 1.0).append("operationTime", new BsonTimestamp(1, 1)));
+    // Answers the server clock read before a change stream opens without a round trip, so a change stream that
+    // throws while it is built still throws inside subscribe()
+    private static Mono<Document> serverClockReply() {
+        return Mono.just(new Document("ok", 1.0).append("localTime", new Date()));
     }
 
     // Wrapped in UncategorizedMongoDbException since that's how Spring Data actually translates driver exceptions,
@@ -330,7 +331,7 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             // terminal instead of retried forever, matching the only way a real failure here can actually terminate.
             UncategorizedMongoDbException historyLost = changeStreamHistoryLostException();
             ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
-            when(throwingOperations.executeCommand(any(Document.class))).thenReturn(operationTimeReply());
+            when(throwingOperations.executeCommand(any(Document.class))).thenReturn(serverClockReply());
             when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class))).thenThrow(historyLost);
             // A subscription with an id opens its change stream from the collection while the model reads the driver's cursor
             when(throwingOperations.getCollection("events")).thenThrow(historyLost);
@@ -352,7 +353,7 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             // could otherwise remove an entry that was never put in yet, leaving the real, dead one behind.
             UncategorizedMongoDbException historyLost = changeStreamHistoryLostException();
             ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
-            when(throwingOperations.executeCommand(any(Document.class))).thenReturn(operationTimeReply());
+            when(throwingOperations.executeCommand(any(Document.class))).thenReturn(serverClockReply());
             when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class))).thenThrow(historyLost);
             // A subscription with an id opens its change stream from the collection while the model reads the driver's cursor
             when(throwingOperations.getCollection("events")).thenThrow(historyLost);

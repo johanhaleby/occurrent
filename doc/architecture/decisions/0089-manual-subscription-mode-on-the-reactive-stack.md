@@ -7,6 +7,12 @@ Date: 2026-08-02
 Accepted. This is the last slice of #481, after ADR 86. Only the OpenRewrite recipe for the renamed
 property is still outstanding.
 
+Amended in part on 2026-09-30 by the amendment of that date to
+[ADR 133](0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md#amendment-2026-09-30-a-cancel-deletes-the-catch-up-marker).
+Where the reactive durable model drives the subscription itself, it now reads where the feed was at the `subscribe(..)`
+for a registration from `StartAt.now()`, so the sentence below saying such a registration is not read for is no longer
+true there.
+
 ## Context
 
 ADR 86 shipped `occurrent.subscription.mode` for the blocking stack and said the reactive stack "already

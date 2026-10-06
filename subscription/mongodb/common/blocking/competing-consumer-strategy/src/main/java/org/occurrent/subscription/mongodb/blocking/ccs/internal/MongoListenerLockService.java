@@ -35,6 +35,8 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 
 import static com.mongodb.ErrorCategory.DUPLICATE_KEY;
@@ -63,11 +65,14 @@ class MongoListenerLockService {
      * redelivered events are processed again (see ADR 115).
      *
      * @param subscriptionId The subscriptionId to lock.
+     * @param clock          Read before each attempt, so the lock returned has the reading taken before the attempt
+     *                       that set its lease, see {@link ListenerLock#sentAt()}.
      * @return {@code Optional} with a {@link ListenerLock} if the lock is held by this subscriber,
      * otherwise an empty optional if the lock is held by a different subscriber.
      */
-    static Optional<ListenerLock> acquireOrRefreshFor(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, Predicate<Throwable> shutdownPredicate, Duration leaseTime, String subscriptionId, String subscriberId) {
+    static Optional<ListenerLock> acquireOrRefreshFor(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, Predicate<Throwable> shutdownPredicate, Duration leaseTime, String subscriptionId, String subscriberId, LongSupplier clock) {
         return retryStrategy.execute(() -> {
+            long sentAt = clock.getAsLong();
             try {
                 logDebug("acquireOrRefreshFor (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
                 // Matches on _id alone, upsert-safe, since MongoDB refuses $expr (needed to judge expiry against
@@ -97,7 +102,7 @@ class MongoListenerLockService {
                     return Optional.empty();
                 }
 
-                final ListenerLock lock = new ListenerLock(found.getNumber("version"));
+                final ListenerLock lock = new ListenerLock(found.getNumber("version"), sentAt);
 
                 logDebug("Found lock: {} (subscriberId={}, subscriptionId={})", lock.version(), subscriberId, subscriptionId);
 
@@ -168,8 +173,13 @@ class MongoListenerLockService {
         }, shutdownPredicate);
     }
 
-    static boolean commit(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, Predicate<Throwable> shutdownPredicate, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {
+    /**
+     * Extends the lease {@code subscriberId} holds. Answers the reading of {@code clock} taken before the attempt that
+     * extended it, the way {@link ListenerLock#sentAt()} does, or empty when the lease is no longer this subscriber's.
+     */
+    static OptionalLong commit(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, Predicate<Throwable> shutdownPredicate, Duration leaseTime, String subscriptionId, String subscriberId, LongSupplier clock) throws LostLockException {
         return retryStrategy.execute(() -> {
+            long sentAt = clock.getAsLong();
             logDebug("Before commit (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             UpdateResult result = collection
                     .withWriteConcern(WriteConcern.MAJORITY)
@@ -181,7 +191,7 @@ class MongoListenerLockService {
 
             boolean gotLock = result.getMatchedCount() != 0;
             logDebug("After commit gotLock={} (subscriberId={}, subscriptionId={})", gotLock, subscriberId, subscriptionId);
-            return gotLock;
+            return gotLock ? OptionalLong.of(sentAt) : OptionalLong.empty();
         }, shutdownPredicate);
     }
 

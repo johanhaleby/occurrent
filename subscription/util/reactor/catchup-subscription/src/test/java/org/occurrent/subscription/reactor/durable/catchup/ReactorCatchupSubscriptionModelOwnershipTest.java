@@ -87,7 +87,7 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
 
         // The dispatcher answers from the wrapped model rather than throwing on the grounds that it has no routing
         // record for the id. Whether a given call is legal for an unknown id is the wrapped model's contract, not this
-        // model's, and cancelling one is explicitly an idempotent no-op.
+        // model's, and cancelling one is explicitly allowed and stops nothing.
         assertThatCode(() -> {
             catchup.isRunning(NEVER_CREATED_HERE);
             catchup.isPaused(NEVER_CREATED_HERE);
@@ -174,8 +174,9 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         }
 
         @Override
-        public void cancelSubscription(String subscriptionId) {
+        public Mono<Void> cancelSubscription(String subscriptionId) {
             calls.add("cancelSubscription:" + subscriptionId);
+            return Mono.empty();
         }
     }
 

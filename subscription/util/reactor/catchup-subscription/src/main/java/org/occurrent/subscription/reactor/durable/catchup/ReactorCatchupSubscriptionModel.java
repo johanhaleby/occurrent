@@ -168,6 +168,13 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
                 : requireNonNull(streamCatchupSubscriptionModel).globalCheckpoint();
     }
 
+    @Override
+    public Mono<Checkpoint> globalCheckpointAsOfNow() {
+        return dcbCatchupSubscriptionModel != null
+                ? dcbCatchupSubscriptionModel.globalCheckpointAsOfNow()
+                : requireNonNull(streamCatchupSubscriptionModel).globalCheckpointAsOfNow();
+    }
+
     /**
      * The named subscription entry point (issues #547 and #550): routes exactly like the cold
      * {@link #subscribe(SubscriptionFilter, StartAt)} and hands the subscription to the routed inner model, which
@@ -313,10 +320,10 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     }
 
     @Override
-    public void cancelSubscription(String subscriptionId) {
+    public Mono<Void> cancelSubscription(String subscriptionId) {
         SubscriptionModel owner = ownerOf(subscriptionId);
         subscriptionOwners.remove(subscriptionId);
-        owner.cancelSubscription(subscriptionId);
+        return owner.cancelSubscription(subscriptionId);
     }
 
     @Override
