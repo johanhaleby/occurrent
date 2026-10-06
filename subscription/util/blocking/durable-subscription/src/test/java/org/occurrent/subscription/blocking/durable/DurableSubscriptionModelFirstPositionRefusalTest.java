@@ -42,6 +42,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -145,6 +146,54 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
                 .withMessageContaining("was refused before its start position was recorded");
         assertThat(wrapped.subscriptions).as("the subscriptions the wrapped model holds").isEmpty();
         assertThat(storage.exists(SUBSCRIPTION_ID)).isFalse();
+    }
+
+    /**
+     * The wrapped model here waits on cancel for the thread that evaluates the start position, the way a model with a
+     * thread per subscription can, and that evaluation waits while the first position is recorded.
+     */
+    @Test
+    void a_refused_subscribe_returns_when_the_wrapped_models_cancel_waits_for_the_thread_evaluating_the_start_position() {
+        EvaluatesWhileAskedForTheGlobalCheckpoint wrapped = new EvaluatesWhileAskedForTheGlobalCheckpoint();
+        wrapped.cancelWaitsForTheEvaluation = true;
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+
+        CompletableFuture<Subscription> subscribing = CompletableFuture.supplyAsync(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }), runnable -> Thread.ofPlatform().daemon().start(runnable));
+
+        try {
+            assertThat(subscribing).as("the refused subscribe")
+                    .failsWithin(Duration.ofSeconds(10))
+                    .withThrowableThat()
+                    .havingCause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .withMessageContaining("answered nothing");
+        } finally {
+            wrapped.interruptTheEvaluation();
+        }
+        assertThat(wrapped.subscriptions).as("the subscriptions the wrapped model holds").isEmpty();
+    }
+
+    @Test
+    void a_subscription_the_wrapped_model_failed_to_cancel_after_a_refused_subscribe_is_cancelled_by_cancel_subscription() {
+        EvaluatesWhileAskedForTheGlobalCheckpoint wrapped = new EvaluatesWhileAskedForTheGlobalCheckpoint();
+        wrapped.cancelsThatFail.set(1);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+
+        Throwable refusal = catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }));
+
+        assertThat(refusal).isInstanceOf(IllegalStateException.class).hasMessageContaining("answered nothing");
+        assertThat(refusal.getSuppressed()).as("what the refusal says about the failed cancel").singleElement().satisfies(suppressed -> {
+            assertThat(suppressed).hasMessageContaining("may still hold it")
+                    .hasMessageContaining("cancelSubscription(\"" + SUBSCRIPTION_ID + "\")");
+            assertThat(suppressed.getCause()).hasMessage("the cancel fails");
+        });
+        assertThat(wrapped.subscriptions).as("the subscriptions the wrapped model holds after the failed cancel").containsExactly(SUBSCRIPTION_ID);
+
+        durable.cancelSubscription(SUBSCRIPTION_ID);
+
+        assertThat(wrapped.subscriptions).as("the subscriptions the wrapped model holds after cancelSubscription").isEmpty();
     }
 
     @Test
@@ -391,11 +440,14 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
     /**
      * Evaluates the start position of a subscription on a thread of its own once it is asked for the global
      * checkpoint, and answers {@code null} only once that evaluation waits or has finished, so the evaluation always
-     * comes while the first position is recorded.
+     * comes while the first position is recorded. The first {@code cancelsThatFail} cancels throw, and with
+     * {@code cancelWaitsForTheEvaluation} set a cancel waits for the evaluating thread to end.
      */
     private static final class EvaluatesWhileAskedForTheGlobalCheckpoint implements CheckpointAwareSubscriptionModel {
         final Set<String> subscriptions = ConcurrentHashMap.newKeySet();
         final CompletableFuture<@Nullable StartAt> evaluated = new CompletableFuture<>();
+        final AtomicInteger cancelsThatFail = new AtomicInteger();
+        volatile boolean cancelWaitsForTheEvaluation;
         private final CountDownLatch askedForTheGlobalCheckpoint = new CountDownLatch(1);
         private volatile boolean evaluating;
         private volatile @Nullable Thread evaluator;
@@ -473,7 +525,25 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
 
         @Override
         public void cancelSubscription(String subscriptionId) {
+            if (cancelsThatFail.getAndDecrement() > 0) {
+                throw new IllegalStateException("the cancel fails");
+            }
             subscriptions.remove(subscriptionId);
+            Thread thread = evaluator;
+            if (cancelWaitsForTheEvaluation && thread != null) {
+                try {
+                    thread.join();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+
+        void interruptTheEvaluation() {
+            Thread thread = evaluator;
+            if (thread != null) {
+                thread.interrupt();
+            }
         }
     }
 }
