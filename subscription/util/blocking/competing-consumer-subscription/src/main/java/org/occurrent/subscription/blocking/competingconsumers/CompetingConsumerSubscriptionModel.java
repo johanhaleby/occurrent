@@ -130,7 +130,8 @@ import static java.util.Objects.requireNonNull;
  * the lease, a cancel, or asking whether the wrapped model runs it or holds it paused.</li>
  * <li>This model calls the wrapped model as a whole, to start, stop or shut it down or to ask whether it runs, which
  * lets the waiting events of every competing subscription through. {@code start(..)} and {@code shutdown()} do that,
- * and so does {@code stop()} before it stops the wrapped model. A grant, resume or subscribe that runs another competing
+ * and so does every {@code stop()} that a {@code start(..)} waiting behind it doesn't take back, whether or not the
+ * wrapped model runs. A grant, resume or subscribe that runs another competing
  * subscription in the wrapped model does it too, since this model asks whether the wrapped model runs before it runs a
  * competing subscription there. So does a subscribe of a subscription that doesn't compete when it resumes the
  * subscription for a {@code start(true)} that came while the wrapped model made it. Two calls don't. A subscribe while
@@ -237,12 +238,13 @@ import static java.util.Objects.requireNonNull;
  * subscribe of a competing subscription in the wrapped model, see below. It makes one attempt to give up each lease,
  * all at once, and waits at most five seconds for them. It does not wait for a registration with the lease strategy
  * under way, and one that returns once {@code shutdown()} has begun makes one attempt to give up the lease it took. A
- * lease not given up expires after the lease time. When the wrapped model throws from its own {@code shutdown()}, no
- * lease is given up, since that model may still deliver. When the lease strategy throws from its own
- * {@code shutdown()} or from {@code removeListener(..)}, {@code shutdown()} still shuts the wrapped model down and
- * makes its attempt to give up each lease. Once that is done, {@code shutdown()} throws what failed. The failure of the
- * wrapped model comes first, ahead of the lease strategy's, and every other failure is added to it as suppressed. The
- * first failure is thrown as it is, a checked one too, without being wrapped.
+ * lease not given up expires after the lease time. The wrapped model is shut down before the lease strategy. When the
+ * wrapped model throws from its own {@code shutdown()}, {@code shutdown()} throws that failure and does nothing more,
+ * since that model may still deliver. The lease strategy keeps running with this model as its listener, no lease is
+ * given up, and each event the wrapped model delivers after that waits for the lease again. When the lease strategy
+ * throws from its own {@code shutdown()} or from {@code removeListener(..)}, {@code shutdown()} still makes its attempt
+ * to give up each lease, and then throws the first failure, with every later one added to it as suppressed. Either
+ * way the failure is thrown as it is, a checked one too, without being wrapped.
  * <br>
  * <br>
  * A competing subscription made while this model is stopped goes to the wrapped model straight away, through
@@ -372,8 +374,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     // Ids a subscribe is making right now, read and written under the monitor only. A second subscribe for one of them
     // is refused before the first records it.
     private final Map<String, BeingMade> subscriptionsBeingMade = new HashMap<>();
-    // Set before the lease strategy is shut down, which happens outside the monitor
+    // Set once shutdown() has begun, and never cleared
     private volatile boolean shutDown;
+    // Set while shutdown() waits for the calls let into the wrapped model, and once the wrapped model is shut down. Every
+    // event waiting in awaitTheLease then goes without the lease.
+    private volatile boolean everyEventGoes;
     // What the strategy knows of each consumer, as far as this model can tell. TRUE once a register has returned, FALSE
     // while a register or an unregister is under way or after one threw, and no entry once an unregister has returned.
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, Boolean> registrations = new ConcurrentHashMap<>();
@@ -712,7 +717,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private boolean heldByTheWrappedModel(String subscriptionId, Throwable failure) {
         try {
             return isRunningInTheWrappedModel(subscriptionId) || isPausedInTheWrappedModel(subscriptionId);
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
+            // An Error too, since the cancel's own failure must still be thrown and the lease reconciled
             addSuppressed(failure, e);
             return true;
         }
@@ -2684,7 +2690,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * flag set as such a wait begins. A lease strategy whose {@code hasLock} clears the interrupt flag can take an
      * interrupt, one that comes while it is asked or one already set when the event came, and the event then goes on
      * waiting.</li>
-     * <li>{@code shutdown()}, once it has begun.</li>
+     * <li>{@code shutdown()}, while it waits for the calls let into the wrapped model before it began, and once the
+     * wrapped model is shut down. When the wrapped model throws from its own {@code shutdown()}, the event waits for
+     * the lease again.</li>
      * </ul>
      * Nothing else ends the wait, so an event a wrapped model delivers while this model is stopped waits for the lease
      * or for one of these causes.
@@ -2700,7 +2708,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         long waitMillis = DELIVERY_FIRST_WAIT_MILLIS;
         boolean waited = false;
         FailedLooks failedLooks = new FailedLooks();
-        while (!shutDown && !mayDeliver(key, delivery, failedLooks)) {
+        while (!everyEventGoes && !mayDeliver(key, delivery, failedLooks)) {
             if (!waited) {
                 logWhileWaiting(() -> logDebug("Holding an event until this node may deliver it (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId()));
                 // A wrapped model started directly delivers here, and nothing registers the subscription for its lease
@@ -2756,7 +2764,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private void logTheFailedLook(SubscriptionIdAndSubscriberId key, FailedLooks failedLooks) {
         Throwable failure = failedLooks.lastFailure;
         failedLooks.lastFailure = null;
-        if (failure == null || shutDown) {
+        if (failure == null || everyEventGoes) {
             return;
         }
         if (failedLooks.count++ % LEASE_LOOKS_BETWEEN_WARNINGS == 0) {
@@ -3606,8 +3614,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         synchronized (this) {
             tries.values().forEach(Try::wake);
         }
-        // What fails is thrown only once the wrapped model is shut down, as every event it delivers from now on goes
-        // to the action without the lease. Each instance is kept once, since a Throwable can't suppress itself.
+        // From here only the call that shuts the wrapped model down lets a waiting event through
+        everyEventGoes = false;
+        // A wrapped model that throws may still deliver, so the lease strategy keeps running and each later event waits
+        // for the lease again
+        shutDownTheWrappedModel();
+        everyEventGoes = true;
+        nonCompetingConsumersSubscriptions.clear();
+        // Each instance is kept once, since a Throwable can't suppress itself
         List<Throwable> failures = new ArrayList<>();
         // Without the subscription locks, which a call waiting for the lease strategy through an outage can hold.
         // Shutting the strategy down first ends a registration waiting between two attempts, and makes each later
@@ -3624,21 +3638,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
         Set<SubscriptionIdAndSubscriberId> leased = new HashSet<>(registrations.keySet());
         leased.addAll(competingConsumers.keySet());
-        nonCompetingConsumersSubscriptions.clear();
-        boolean wrappedModelShutDown = false;
         try {
-            shutDownTheWrappedModel();
-            wrappedModelShutDown = true;
-        } catch (Throwable e) {
-            // First, since it is the one that says the wrapped model may still deliver
-            failures.removeIf(failure -> failure == e);
-            failures.addFirst(e);
-        }
-        try {
-            // A wrapped model that throws may still deliver, so its leases are left to expire rather than given up
-            if (wrappedModelShutDown) {
-                giveUpEveryLeaseOnce(leased);
-            }
+            giveUpEveryLeaseOnce(leased);
         } catch (Throwable e) {
             addOnce(failures, e);
         } finally {
@@ -3663,6 +3664,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         boolean interrupted = false;
         synchronized (wrappedModelStart) {
             shutDown = true;
+            // A call waited for here can itself wait for a thread that delivers an event held for the lease
+            everyEventGoes = true;
             wrappedModelStart.notifyAll();
             while (runsInTheWrappedModel > runsOnThisThread) {
                 try {

@@ -74,7 +74,6 @@ class CompetingConsumerLosesNoHeldEventTest {
     private final FenceStrategy strategy = new FenceStrategy();
     private final CountDownLatch inE1 = new CountDownLatch(1);
     private final CountDownLatch releaseE1 = new CountDownLatch(1);
-    private final CountDownLatch releaseTheStrategysShutdown = new CountDownLatch(1);
     private final List<String> received = new CopyOnWriteArrayList<>();
     private @Nullable CompetingConsumerSubscriptionModel model;
     private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
@@ -90,7 +89,6 @@ class CompetingConsumerLosesNoHeldEventTest {
     @AfterEach
     void shutdown() {
         releaseE1.countDown();
-        releaseTheStrategysShutdown.countDown();
         if (model != null) {
             model.shutdown();
         }
@@ -256,12 +254,28 @@ class CompetingConsumerLosesNoHeldEventTest {
     }
 
     // shutdown() begins while hasLock is asked for e2, and that hasLock throws. shutdown() lets e2 through once the wait
-    // after the look ends, which it does only after the lease strategy has shut down.
+    // after the look ends, which it does only after the wrapped model has shut down. The wrapped model here returns from
+    // its own shutdown() once that look has failed, without waiting for the thread that delivers e2.
     @Test
     void an_event_that_shutdown_lets_through_after_a_look_the_lease_strategy_throws_for_logs_no_warning_that_it_waits() throws Exception {
-        CountDownLatch inTheStrategysShutdown = new CountDownLatch(1);
+        CountDownLatch inTheWrappedModelsShutdown = new CountDownLatch(1);
         AtomicBoolean shutdownBegun = new AtomicBoolean();
-        InMemorySubscriptionModel inMemory = new InMemorySubscriptionModel(RetryStrategy.none());
+        AtomicBoolean wrappedShutdownCalled = new AtomicBoolean();
+        InMemorySubscriptionModel inMemory = new InMemorySubscriptionModel(RetryStrategy.none()) {
+            @Override
+            public void shutdown() {
+                if (!wrappedShutdownCalled.getAndSet(true)) {
+                    inTheWrappedModelsShutdown.countDown();
+                    try {
+                        strategy.threw.await(5, SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                } else {
+                    super.shutdown();
+                }
+            }
+        };
         CompetingConsumerStrategy shuttingDown = new CompetingConsumerStrategy() {
             @Override
             public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
@@ -283,7 +297,7 @@ class CompetingConsumerLosesNoHeldEventTest {
                 if (strategy.failureOnTheDeliveringThread != null && Thread.currentThread() == strategy.deliveringThread && shutdownBegun.compareAndSet(false, true)) {
                     Thread.ofPlatform().start(() -> model.shutdown());
                     try {
-                        inTheStrategysShutdown.await(5, SECONDS);
+                        inTheWrappedModelsShutdown.await(5, SECONDS);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
@@ -300,16 +314,6 @@ class CompetingConsumerLosesNoHeldEventTest {
             public void removeListener(CompetingConsumerListener listener) {
                 strategy.removeListener(listener);
             }
-
-            @Override
-            public void shutdown() {
-                inTheStrategysShutdown.countDown();
-                try {
-                    releaseTheStrategysShutdown.await(5, SECONDS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
         };
         model = new CompetingConsumerSubscriptionModel(inMemory, shuttingDown);
         subscribeAndBlockInE1(inMemory);
@@ -318,7 +322,6 @@ class CompetingConsumerLosesNoHeldEventTest {
         releaseE1.countDown();
         await().atMost(EVENTUALLY).until(() -> received.size() == 2);
         List<ILoggingEvent> warnings = warnings();
-        releaseTheStrategysShutdown.countDown();
 
         assertThat(strategy.failedLooks.get()).as("hasLock throws for e2 once").isEqualTo(1);
         assertThat(warnings).filteredOn(warning -> warning.getFormattedMessage().contains("whether this node holds the lease")).as("[lease warnings for e2, which shutdown() let through after the look]").isEmpty();
