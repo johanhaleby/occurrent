@@ -38,6 +38,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -117,6 +121,30 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
         feed.publish(cloudEvent("event-1"));
 
         assertThat(delivered).containsExactly("event-1");
+    }
+
+    /**
+     * The wrapped model here accepts the id and evaluates the start position on a thread of its own while the
+     * subscribe asks it for the global checkpoint, the way the MongoDB models do once their subscribe has returned.
+     * The evaluation has to wait, and once the subscribe is refused it has to fail rather than start at the present
+     * with nothing stored.
+     */
+    @Test
+    void a_start_position_evaluated_while_the_first_position_is_recorded_starts_nothing_once_the_subscribe_is_refused() {
+        EvaluatesWhileAskedForTheGlobalCheckpoint wrapped = new EvaluatesWhileAskedForTheGlobalCheckpoint();
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+
+        assertThatThrownBy(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        })).isInstanceOf(IllegalStateException.class).hasMessageContaining("answered nothing");
+
+        assertThat(wrapped.evaluated).as("the start position the wrapped model evaluated")
+                .failsWithin(Duration.ofSeconds(5))
+                .withThrowableThat()
+                .havingCause()
+                .withMessageContaining("was refused before its start position was recorded");
+        assertThat(wrapped.subscriptions).as("the subscriptions the wrapped model holds").isEmpty();
+        assertThat(storage.exists(SUBSCRIPTION_ID)).isFalse();
     }
 
     @Test
@@ -357,6 +385,95 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
                 this.position = position;
                 this.action = action;
             }
+        }
+    }
+
+    /**
+     * Evaluates the start position of a subscription on a thread of its own once it is asked for the global
+     * checkpoint, and answers {@code null} only once that evaluation waits or has finished, so the evaluation always
+     * comes while the first position is recorded.
+     */
+    private static final class EvaluatesWhileAskedForTheGlobalCheckpoint implements CheckpointAwareSubscriptionModel {
+        final Set<String> subscriptions = ConcurrentHashMap.newKeySet();
+        final CompletableFuture<@Nullable StartAt> evaluated = new CompletableFuture<>();
+        private final CountDownLatch askedForTheGlobalCheckpoint = new CountDownLatch(1);
+        private volatile boolean evaluating;
+        private volatile @Nullable Thread evaluator;
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            subscriptions.add(subscriptionId);
+            evaluator = Thread.ofPlatform().start(() -> {
+                try {
+                    askedForTheGlobalCheckpoint.await();
+                    evaluating = true;
+                    evaluated.complete(startAt.get(new SubscriptionModelContext(EvaluatesWhileAskedForTheGlobalCheckpoint.class)));
+                } catch (Throwable t) {
+                    evaluated.completeExceptionally(t);
+                }
+            });
+            return InMemoryFeed.dummySubscription(subscriptionId);
+        }
+
+        @Override
+        public @Nullable Checkpoint globalCheckpoint() {
+            askedForTheGlobalCheckpoint.countDown();
+            long until = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (!evaluationWaitsOrIsDone() && System.nanoTime() < until) {
+                Thread.onSpinWait();
+            }
+            return null;
+        }
+
+        private boolean evaluationWaitsOrIsDone() {
+            Thread thread = evaluator;
+            if (thread == null || !evaluating) {
+                return false;
+            }
+            Thread.State state = thread.getState();
+            return state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING || state == Thread.State.TERMINATED;
+        }
+
+        @Override
+        public void shutdown() {
+            subscriptions.clear();
+        }
+
+        @Override
+        public void stop() {
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+        }
+
+        @Override
+        public boolean isRunning() {
+            return true;
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return subscriptions.contains(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return InMemoryFeed.dummySubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            subscriptions.remove(subscriptionId);
         }
     }
 }

@@ -37,6 +37,7 @@ import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -55,6 +56,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
@@ -69,10 +71,9 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 /**
  * A subscribe with the model default for an id that is already running or paused is refused with the
- * {@link DuplicateSubscriptionIdException} the wrapped model throws, and leaves no start position stored for the id,
- * whether the model refuses it before storing anything or deletes what it stored once the wrapped model refused it.
- * The wrapped model is {@link NativeMongoSubscriptionModel} rather than a test double, so the exception is the one a
- * caller gets from it.
+ * {@link DuplicateSubscriptionIdException} the wrapped model throws, and stores no start position for the id. The
+ * wrapped model is {@link NativeMongoSubscriptionModel} rather than a test double, so the exception is the one a
+ * caller gets from it, and the storage can't delete anything, so a test passes only if nothing was stored.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -93,6 +94,7 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
 
     private ExecutorService executor;
     private MongoCollection<Document> events;
+    private MongoEventStore eventStore;
     private NativeMongoSubscriptionModel wrapped;
     private CheckpointStorage storage;
     private DurableSubscriptionModel durable;
@@ -113,8 +115,9 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
         executor = Executors.newCachedThreadPool();
         RetryStrategy retryStrategy = RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofMillis(500), 2.0f);
         events = database.getCollection("events-" + UUID.randomUUID());
+        eventStore = new MongoEventStore(mongoClient, database, events, new EventStoreConfig(TimeRepresentation.RFC_3339_STRING));
         wrapped = new NativeMongoSubscriptionModel(database, events, TimeRepresentation.RFC_3339_STRING, executor, retryStrategy);
-        storage = new InMemoryCheckpointStorage();
+        storage = new NeverDeletes();
         durable = new DurableSubscriptionModel(wrapped, storage);
     }
 
@@ -153,27 +156,26 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
     }
 
     /**
-     * The wrapped model here answers neither {@code subscriptionIds()} nor, for a moment, {@code isRunning(id)} and
-     * {@code isPaused(id)} for the paused id, so the subscribe gets past the check, stores a first position, and is
-     * refused by the native model. Left behind, that position is where the resume below starts, after {@code e1}.
+     * The wrapped model here answers {@code false} from {@code isRunning(id)} and {@code isPaused(id)} for the paused
+     * id, so only its subscribe refuses the duplicate. A position stored before that refusal is where the resume below
+     * starts, after {@code e1}.
      */
     @Test
-    void a_paused_subscription_resumes_from_where_it_was_paused_after_a_subscribe_that_got_past_the_check_is_refused() throws Exception {
-        AnswersMissTheId missingWrapped = new AnswersMissTheId(wrapped);
-        DurableSubscriptionModel missingDurable = new DurableSubscriptionModel(missingWrapped, storage);
-        MongoEventStore eventStore = new MongoEventStore(mongoClient, database, events, new EventStoreConfig(TimeRepresentation.RFC_3339_STRING));
+    void a_paused_subscription_resumes_from_where_it_was_paused_after_a_subscribe_of_its_id_is_refused() throws Exception {
+        ForwardsToTheNativeModel forwarding = new ForwardsToTheNativeModel(wrapped);
+        DurableSubscriptionModel durableOverForwarding = new DurableSubscriptionModel(forwarding, storage);
         List<String> received = new CopyOnWriteArrayList<>();
         String id = UUID.randomUUID().toString();
-        assertThat(missingDurable.subscribe(id, null, StartAt.now(), e -> received.add(e.getId())).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
-        missingDurable.pauseSubscription(id);
+        assertThat(durableOverForwarding.subscribe(id, null, StartAt.now(), e -> received.add(e.getId())).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
+        durableOverForwarding.pauseSubscription(id);
         eventStore.write("stream", 0L, List.of(event("e1")));
-        missingWrapped.missTheId = true;
-        assertThatThrownBy(() -> missingDurable.subscribe(id, action)).isInstanceOf(DuplicateSubscriptionIdException.class);
-        missingWrapped.missTheId = false;
+        forwarding.missTheId = true;
+        assertThatThrownBy(() -> durableOverForwarding.subscribe(id, action)).isInstanceOf(DuplicateSubscriptionIdException.class);
+        forwarding.missTheId = false;
         assertThat(storage.read(id)).as("the first position the refused subscribe stored").isNull();
         assertThat(received).as("what the paused subscription received before the resume").isEmpty();
 
-        assertThat(missingDurable.resumeSubscription(id).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
+        assertThat(durableOverForwarding.resumeSubscription(id).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
         eventStore.write("stream", 1L, List.of(event("e2")));
 
         awaitReceived(received, "e2");
@@ -184,22 +186,24 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
 
     /**
      * A pause or a resume moves the id between running and paused, and a stop and a start move every id. A subscribe
-     * of the id is tried again and again meanwhile, and must leave nothing stored, since the running subscription
-     * started from {@code StartAt.now()} and handles no event that would store one.
+     * of the id is tried again and again meanwhile, through a wrapped model that does not list its subscriptions, and
+     * must leave nothing stored, since the running subscription started from {@code StartAt.now()} and handles no
+     * event that would store one.
      */
     @Test
     @Timeout(60)
     void a_refused_duplicate_racing_pauses_resumes_stops_and_starts_never_leaves_a_start_position_behind() throws Exception {
+        DurableSubscriptionModel durableOverForwarding = new DurableSubscriptionModel(new ForwardsToTheNativeModel(wrapped), storage);
         String id = UUID.randomUUID().toString();
-        assertThat(durable.subscribe(id, null, StartAt.now(), action).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
+        assertThat(durableOverForwarding.subscribe(id, null, StartAt.now(), action).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
         AtomicBoolean racing = new AtomicBoolean(true);
         AtomicInteger moves = new AtomicInteger();
         Thread mover = Thread.ofPlatform().start(() -> {
             for (int round = 0; racing.get(); round++) {
                 try {
                     if (round % 10 == 9) {
-                        durable.stop();
-                        durable.start(true);
+                        durableOverForwarding.stop();
+                        durableOverForwarding.start(true);
                     } else {
                         wrapped.pauseSubscription(id);
                         wrapped.resumeSubscription(id);
@@ -214,7 +218,7 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
         try {
             long until = System.nanoTime() + Duration.ofSeconds(4).toNanos();
             while (System.nanoTime() < until) {
-                assertThatThrownBy(() -> durable.subscribe(id, action)).isInstanceOf(DuplicateSubscriptionIdException.class);
+                assertThatThrownBy(() -> durableOverForwarding.subscribe(id, action)).isInstanceOf(DuplicateSubscriptionIdException.class);
                 refused.incrementAndGet();
                 assertThat(storage.read(id))
                         .as("the position a refused subscribe stored, after %s refusals", refused.get())
@@ -226,6 +230,45 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
         }
         assertThat(mover.isAlive()).as("the thread pausing, resuming, stopping and starting the id").isFalse();
         assertThat(moves.get()).as("the pauses and resumes, and the stops and starts, that completed").isPositive();
+    }
+
+    @Test
+    void a_pause_while_the_first_position_is_recorded_holds_the_subscription_paused_at_that_position() throws Exception {
+        ForwardsToTheNativeModel forwarding = new ForwardsToTheNativeModel(wrapped);
+        DurableSubscriptionModel durableOverForwarding = new DurableSubscriptionModel(forwarding, storage);
+        List<String> received = new CopyOnWriteArrayList<>();
+        String id = UUID.randomUUID().toString();
+        forwarding.whileAskedForTheGlobalCheckpoint = () -> durableOverForwarding.pauseSubscription(id);
+
+        durableOverForwarding.subscribe(id, e -> received.add(e.getId()));
+        eventStore.write("stream", 0L, List.of(event("e1")));
+        Thread.sleep(500);
+
+        assertThat(durableOverForwarding.isPaused(id)).as("the subscription paused while its first position was recorded").isTrue();
+        assertThat(received).as("what the paused subscription received").isEmpty();
+        assertThat(storage.read(id)).as("the first position").isNotNull();
+        assertThat(durableOverForwarding.resumeSubscription(id).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
+        awaitReceived(received, "e1");
+        assertThat(received).as("the events from the first position on").containsExactly("e1");
+    }
+
+    @Test
+    void a_stop_while_the_first_position_is_recorded_delivers_nothing_until_the_model_starts() throws Exception {
+        ForwardsToTheNativeModel forwarding = new ForwardsToTheNativeModel(wrapped);
+        DurableSubscriptionModel durableOverForwarding = new DurableSubscriptionModel(forwarding, storage);
+        List<String> received = new CopyOnWriteArrayList<>();
+        String id = UUID.randomUUID().toString();
+        forwarding.whileAskedForTheGlobalCheckpoint = durableOverForwarding::stop;
+
+        durableOverForwarding.subscribe(id, e -> received.add(e.getId()));
+        eventStore.write("stream", 0L, List.of(event("e1")));
+        Thread.sleep(500);
+
+        assertThat(durableOverForwarding.isRunning()).as("the model stopped while the first position was recorded").isFalse();
+        assertThat(received).as("what the subscription received while the model was stopped").isEmpty();
+        durableOverForwarding.start(true);
+        awaitReceived(received, "e1");
+        assertThat(received).as("the events from the first position on").containsExactly("e1");
     }
 
     private static void awaitReceived(List<String> received, String eventId) throws InterruptedException {
@@ -242,15 +285,54 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
     }
 
     /**
-     * Forwards to the native model, but answers {@code false} from {@code isRunning(id)} and {@code isPaused(id)}
-     * while {@code missTheId} is set, standing in for the moment a pause or a resume hides the id from both. It does
-     * not implement {@code IntrospectableSubscriptions}, so the durable model has only those two answers to go by.
+     * Stores and reads like {@link InMemoryCheckpointStorage}, but throws from {@code delete}, so nothing a subscribe
+     * stored can be taken back.
      */
-    private static final class AnswersMissTheId implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions {
+    private static final class NeverDeletes implements CheckpointStorage {
+        private final InMemoryCheckpointStorage stored = new InMemoryCheckpointStorage();
+
+        @Override
+        public @Nullable Checkpoint read(String subscriptionId) {
+            return stored.read(subscriptionId);
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            return stored.save(subscriptionId, checkpoint, condition);
+        }
+
+        @Override
+        public boolean evaluatesWriteConditions() {
+            return true;
+        }
+
+        @Override
+        public OptionalLong writeVersion(String subscriptionId) {
+            return stored.writeVersion(subscriptionId);
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            throw new UnsupportedOperationException("This storage never deletes");
+        }
+
+        @Override
+        public boolean exists(String subscriptionId) {
+            return stored.exists(subscriptionId);
+        }
+    }
+
+    /**
+     * Forwards to the native model, without listing its subscriptions. It answers {@code false} from
+     * {@code isRunning(id)} and {@code isPaused(id)} while {@code missTheId} is set, and runs
+     * {@code whileAskedForTheGlobalCheckpoint} once, when it is next asked for the global checkpoint.
+     */
+    private static final class ForwardsToTheNativeModel implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions {
         private final NativeMongoSubscriptionModel delegate;
         volatile boolean missTheId;
+        volatile @Nullable Runnable whileAskedForTheGlobalCheckpoint;
 
-        AnswersMissTheId(NativeMongoSubscriptionModel delegate) {
+        ForwardsToTheNativeModel(NativeMongoSubscriptionModel delegate) {
             this.delegate = delegate;
         }
 
@@ -261,6 +343,11 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
 
         @Override
         public @Nullable Checkpoint globalCheckpoint() {
+            Runnable hook = whileAskedForTheGlobalCheckpoint;
+            whileAskedForTheGlobalCheckpoint = null;
+            if (hook != null) {
+                hook.run();
+            }
             return delegate.globalCheckpoint();
         }
 

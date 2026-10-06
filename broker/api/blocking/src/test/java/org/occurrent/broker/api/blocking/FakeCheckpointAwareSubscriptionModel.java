@@ -101,7 +101,7 @@ class FakeCheckpointAwareSubscriptionModel implements CheckpointAwareSubscriptio
 
     @Override
     public boolean isRunning(String subscriptionId) {
-        return action != null && subscriptionId.equals(this.subscriptionId);
+        return true;
     }
 
     @Override

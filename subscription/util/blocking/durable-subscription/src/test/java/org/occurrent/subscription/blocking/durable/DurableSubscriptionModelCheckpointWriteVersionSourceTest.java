@@ -34,8 +34,6 @@ import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import java.net.URI;
 import java.time.Duration;
 import java.util.OptionalLong;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -94,11 +92,8 @@ class DurableSubscriptionModelCheckpointWriteVersionSourceTest {
      */
     private static CheckpointAwareSubscriptionModel oneEventSubscriptionModel() {
         return new CheckpointAwareSubscriptionModel() {
-            private final Set<String> subscriptionIds = ConcurrentHashMap.newKeySet();
-
             @Override
             public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-                subscriptionIds.add(subscriptionId);
                 action.accept(checkpointAwareCloudEvent());
                 return new Subscription() {
                     @Override
@@ -133,7 +128,7 @@ class DurableSubscriptionModelCheckpointWriteVersionSourceTest {
 
             @Override
             public boolean isRunning(String subscriptionId) {
-                return subscriptionIds.contains(subscriptionId);
+                return true;
             }
 
             @Override
@@ -153,7 +148,6 @@ class DurableSubscriptionModelCheckpointWriteVersionSourceTest {
 
             @Override
             public void cancelSubscription(String subscriptionId) {
-                subscriptionIds.remove(subscriptionId);
             }
         };
     }
