@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-The guide has twenty-two sections, four of them about compile-time breaks. At compile time, if you use the flow saga's
+The guide has twenty-three sections, four of them about compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -81,9 +81,12 @@ Then a `ReactorMongoSubscriptionModel` subscription started at the present now s
 `subscribe(..)` is called. It can receive events written up to 16 seconds before the call, and one whose change stream
 first opens after its history is gone stops, unless you configure the model to restart it. Read
 [section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call).
-Finally, a new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running runs a competing
+Then a new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running runs a competing
 subscription only once you call its own `start(..)`, and calling `start()` on the wrapped model instead never gets one
 running. Read [section 22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start).
+Finally, a `CompetingConsumerSubscriptionModel` whose wrapped model throws from its own `shutdown()` no longer keeps its
+leases, and stops delivering once they may have expired. Read
+[section 23](#23-a-competing-consumer-whose-wrapped-model-fails-to-shut-down-lets-its-leases-expire).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1645,3 +1648,24 @@ the default configuration, nothing changes.
 
 There is no recipe for this change. Which model your code starts, and whether it was running as the competing consumer
 model was built, is runtime behavior that a rewrite of the source cannot see.
+
+## 23. A competing consumer whose wrapped model fails to shut down lets its leases expire
+
+`CompetingConsumerSubscriptionModel.shutdown()` shuts the lease strategy down before it shuts the wrapped model down.
+The MongoDB lease strategies stop refreshing their leases once they are shut down. When the wrapped model then throws
+from its own `shutdown()`, `shutdown()` throws that failure and gives up no lease, since the wrapped model may still
+deliver. Each lease expires after the lease time, 20 seconds by default, and another node can take the subscription
+over then.
+
+Each event the wrapped model hands over after the failed `shutdown()` waits for the lease. The MongoDB lease strategies
+report a lease held for at most three quarters of the lease time after the request that last set it was sent, so such
+an event goes to the handler until then at the latest. A later one waits on this node, and is never skipped, until you
+pause or cancel its subscription through the competing consumer model, its thread is interrupted, or a later
+`shutdown()` lets it through.
+
+In 0.33.0 such a node kept its leases, since its lease strategy went on refreshing them, and went on delivering every
+event the wrapped model handed over. No other node took those subscriptions over.
+
+Call `shutdown()` again once the wrapped model can shut down. That call shuts the wrapped model down and then makes one
+attempt to give up each lease the failed `shutdown()` kept. A lease strategy of your own whose `shutdown()` doesn't stop
+it refreshing its leases keeps them until then.
