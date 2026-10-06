@@ -19,6 +19,7 @@ package org.occurrent.subscription.blocking.competingconsumers;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import ch.qos.logback.core.read.ListAppender;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -40,9 +41,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -52,7 +55,8 @@ import static org.awaitility.Awaitility.await;
 /**
  * An event that waits for the lease is delivered once the lease is back, or once this model pauses, stops or starts
  * the subscription, and is never lost, also over an {@code InMemorySubscriptionModel} that does not retry an action
- * that throws, and also when the lease strategy throws while the event waits, which logs a warning.
+ * that throws, and also when the lease strategy throws while the event waits, which logs a warning, or logging that
+ * warning throws.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -69,6 +73,7 @@ class CompetingConsumerLosesNoHeldEventTest {
     private @Nullable CompetingConsumerSubscriptionModel model;
     private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
     private final Logger modelLog = (Logger) LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class);
+    private final List<AppenderBase<ILoggingEvent>> addedAppenders = new ArrayList<>();
 
     @BeforeEach
     void captureTheLog() {
@@ -83,6 +88,7 @@ class CompetingConsumerLosesNoHeldEventTest {
             model.shutdown();
         }
         modelLog.detachAppender(logged);
+        addedAppenders.forEach(modelLog::detachAppender);
     }
 
     @Test
@@ -162,6 +168,79 @@ class CompetingConsumerLosesNoHeldEventTest {
                     assertThat(warning.getThrowableProxy()).as("[the failure logged with the warning]").isNotNull();
                     assertThat(warning.getThrowableProxy().getClassName()).isEqualTo(failure.getClass().getName());
                 });
+    }
+
+    // A logging backend that runs out of memory writing the warning, as it can once hasLock threw an OutOfMemoryError.
+    // Logback lets an Error from an appender through to the caller.
+    @Test
+    void an_event_whose_lease_warning_throws_an_error_while_logged_waits_and_is_delivered_once_the_lease_strategy_answers() throws Exception {
+        CountDownLatch warningThrew = new CountDownLatch(1);
+        AppenderBase<ILoggingEvent> outOfMemory = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getLevel() == Level.WARN && event.getFormattedMessage().contains("holds its lease") && warningThrew.getCount() > 0) {
+                    warningThrew.countDown();
+                    throw new OutOfMemoryError("logging the warning");
+                }
+            }
+        };
+        outOfMemory.start();
+        modelLog.addAppender(outOfMemory);
+        addedAppenders.add(outOfMemory);
+        InMemorySubscriptionModel inMemory = new InMemorySubscriptionModel(RetryStrategy.none());
+        model = new CompetingConsumerSubscriptionModel(inMemory, strategy);
+        subscribeAndBlockInE1(inMemory);
+
+        strategy.failureOnTheDeliveringThread = new OutOfMemoryError("hasLock failed");
+        releaseE1.countDown();
+        assertThat(warningThrew.await(5, SECONDS)).as("logging the warning for e2 throws").isTrue();
+        strategy.failureOnTheDeliveringThread = null;
+        inMemory.accept(List.of(event("e3")));
+
+        // An event lost on a thread of the wrapped model that dies of the Error shows in the events received
+        long deadline = System.nanoTime() + EVENTUALLY.toNanos();
+        while (received.size() < 3 && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(received).as("[events s1 received after logging the warning for e2 threw]").containsExactly("e1", "e2", "e3");
+    }
+
+    // A resume of a running competing subscription first asks the wrapped model whether it runs it, which lets s1's
+    // events through. While that call is under way, e2 goes on the look where hasLock throws.
+    @Test
+    void an_event_let_through_on_the_look_the_lease_strategy_throws_for_logs_no_warning_that_it_waits() throws Exception {
+        CountDownLatch inIsRunning = new CountDownLatch(1);
+        CountDownLatch releaseIsRunning = new CountDownLatch(1);
+        AtomicBoolean blockIsRunning = new AtomicBoolean();
+        InMemorySubscriptionModel inMemory = new InMemorySubscriptionModel(RetryStrategy.none()) {
+            @Override
+            public boolean isRunning(String subscriptionId) {
+                if (blockIsRunning.compareAndSet(true, false)) {
+                    inIsRunning.countDown();
+                    try {
+                        releaseIsRunning.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                return super.isRunning(subscriptionId);
+            }
+        };
+        model = new CompetingConsumerSubscriptionModel(inMemory, strategy);
+        subscribeAndBlockInE1(inMemory);
+
+        blockIsRunning.set(true);
+        CompletableFuture<Void> resume = CompletableFuture.runAsync(() -> model.resumeSubscription("s1"));
+        assertThat(inIsRunning.await(5, SECONDS)).as("the resume asks whether the wrapped model runs s1").isTrue();
+        strategy.failureOnTheDeliveringThread = new IllegalStateException("hasLock failed");
+        releaseE1.countDown();
+        await().atMost(EVENTUALLY).until(() -> received.size() == 2);
+        List<ILoggingEvent> warnings = warnings();
+        releaseIsRunning.countDown();
+        resume.handle((ignored, failure) -> null).get(5, SECONDS);
+
+        assertThat(strategy.failedLooks.get()).as("hasLock throws for e2").isPositive();
+        assertThat(warnings).filteredOn(warning -> warning.getFormattedMessage().contains("holds its lease")).as("[lease warnings for e2, let through on the look hasLock threw for]").isEmpty();
     }
 
     private List<ILoggingEvent> warnings() {

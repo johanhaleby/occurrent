@@ -114,9 +114,11 @@ import static java.util.Objects.requireNonNull;
  * an event. The action runs once that reports the lease held and no {@code stop()} has begun since a resume or
  * subscribe of the subscription that it does not wait for, see below. Until then the event waits on the thread the
  * wrapped model delivers it on. A lease strategy whose {@code hasLock} throws, also an {@link Error}, counts as
- * reporting the lease not held, and the event goes on waiting. A warning with the failure, naming the subscriber and
- * the subscription, is logged for the first {@code hasLock} that throws while the event waits and for every fifth one
- * after it, which is at most about once a second once the event has waited for a second.
+ * reporting the lease not held. A warning with the failure, naming the subscriber and the subscription, is logged for
+ * the first {@code hasLock} that throws while the event waits and for every fifth one after it, which is at most about
+ * once a second once the event has waited for a second. A {@code hasLock} that throws on the look where one of the
+ * causes below lets the event through logs no warning, and an {@link Error} thrown while logging the warning is
+ * ignored, so the event still waits.
  * <br>
  * <br>
  * A waiting event also runs without {@code hasLock} reporting the lease held, as it would without the lease strategy.
@@ -2635,7 +2637,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * lease held and no {@code stop()} has begun since a resume or subscribe of the subscription that it does not wait
      * for. Until then the event waits here, on the thread the wrapped model delivers it on, and is neither run nor
      * skipped. A lease strategy that throws, also an {@link Error}, counts as reporting the lease not held, and a
-     * warning with the failure is logged for the first look that throws and for every fifth one after it.
+     * warning with the failure is logged for the first look that throws and for every fifth one after it, once the event
+     * has waited after that look without being let through.
      * <p>
      * It also returns without the lease strategy reporting the lease held, and the event is then delivered as it would
      * be without the lease strategy. It is never dropped, but the node that holds the lease can deliver it too, so it
@@ -2685,7 +2688,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         long callsSeen = delivery.callsBegun();
         long waitMillis = DELIVERY_FIRST_WAIT_MILLIS;
         boolean waited = false;
-        int[] failedLooks = new int[1];
+        FailedLooks failedLooks = new FailedLooks();
         while (!shutDown && !mayDeliver(key, delivery, failedLooks)) {
             if (!waited) {
                 logDebug("Holding an event until this node may deliver it (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
@@ -2711,13 +2714,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 logDebug("Delivering an event without the lease, since this model calls the wrapped model for the subscription or has forgotten it (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
                 return false;
             }
+            logTheFailedLook(key, failedLooks);
             waitMillis = Math.min(waitMillis * 2, DELIVERY_MAX_WAIT_MILLIS);
         }
         return false;
     }
 
-    // failedLooks counts the looks of this wait that the lease strategy threw for
-    private boolean mayDeliver(SubscriptionIdAndSubscriberId key, Delivery delivery, int[] failedLooks) {
+    private boolean mayDeliver(SubscriptionIdAndSubscriberId key, Delivery delivery, FailedLooks failedLooks) {
         long letIn = delivery.callLetInAfterStop;
         if (letIn != NO_CALL_LET_IN) {
             synchronized (wrappedModelStart) {
@@ -2731,14 +2734,36 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         } catch (Throwable e) {
             // An Error too, as the threads that try a consumer again keep trying after one. Thrown from here it would
             // skip the action, and a wrapped model that doesn't deliver the event again would lose it.
-            if (failedLooks[0]++ % LEASE_LOOKS_BETWEEN_WARNINGS == 0) {
-                log.warn("Could not find out whether CompetingConsumer holds its lease, so the event goes on waiting and the lease strategy is asked again (subscriberId={}, subscriptionId={}, failedLooks={})",
-                        key.subscriberId(), key.subscriptionId(), failedLooks[0], e);
-            } else {
-                logDebug("Could not find out whether this node holds the lease, so the event waits (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId(), e);
-            }
+            failedLooks.lastFailure = e;
             return false;
         }
+    }
+
+    // Called once the event has waited after the look with no call letting it through, so no warning is logged for a
+    // look whose event a call lets through at once. A shutdown() that begins right after still lets it through.
+    private static void logTheFailedLook(SubscriptionIdAndSubscriberId key, FailedLooks failedLooks) {
+        Throwable failure = failedLooks.lastFailure;
+        if (failure == null) {
+            return;
+        }
+        failedLooks.lastFailure = null;
+        try {
+            if (failedLooks.count++ % LEASE_LOOKS_BETWEEN_WARNINGS == 0) {
+                log.warn("Could not find out whether CompetingConsumer holds its lease, so the event goes on waiting and the lease strategy is asked again (subscriberId={}, subscriptionId={}, failedLooks={})",
+                        key.subscriberId(), key.subscriptionId(), failedLooks.count, failure);
+            } else {
+                logDebug("Could not find out whether this node holds the lease, so the event waits (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId(), failure);
+            }
+        } catch (Throwable ignored) {
+            // Logging can throw an Error, such as an OutOfMemoryError, past the appender. Thrown from here it would skip
+            // the action and lose the event.
+        }
+    }
+
+    // The looks of one wait that the lease strategy threw for, and what it threw on the last look not yet logged
+    private static final class FailedLooks {
+        private int count;
+        private @Nullable Throwable lastFailure;
     }
 
     private static final long NO_CALL_LET_IN = -1;
