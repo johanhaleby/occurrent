@@ -47,7 +47,8 @@ public class DurableSubscriptionModelConfig {
      *                                           subscription from a {@code StartAt} of your own then has no position stored for a quiet read
      *                                           either. The position it restarts from is still stored when the wrapped model reports that its
      *                                           checkpoint is no longer in the model's history, as the blocking MongoDB models do once the
-     *                                           oplog has dropped it. One that starts from a stored position still has its quiet position saved
+     *                                           oplog has dropped it when {@code restartSubscriptionsOnChangeStreamHistoryLost}
+     *                                           is turned on. One that starts from a stored position still has its quiet position saved
      *                                           until its first event, since an event the predicate declines turns the save off, see
      *                                           {@link #saveQuietPositionEvery(Duration)}.
      */
@@ -125,7 +126,9 @@ public class DurableSubscriptionModelConfig {
      * {@link #saveQuietPositionEvery(Duration)}. A subscription that then receives no events for longer than the wrapped
      * model keeps its history gets that model's handling of lost history when it next starts from its stored
      * checkpoint. The position it restarts from is still stored when the wrapped model reports that its checkpoint is
-     * no longer in the model's history, as the blocking MongoDB models do once the oplog has dropped it.
+     * no longer in the model's history. The blocking MongoDB models do that once the oplog has dropped it, when
+     * {@code restartSubscriptionsOnChangeStreamHistoryLost} is turned on. It is off by default, and on by default in
+     * the Spring Boot starter. With it off they don't restart the subscription.
      *
      * @return A new instance of {@code DurableSubscriptionModelConfig}
      * @see #saveQuietPositionEvery(Duration)

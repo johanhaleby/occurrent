@@ -1466,7 +1466,8 @@ Before the first event after a subscribe, the position is saved whatever the pre
 that starts from a stored position, the one in the checkpoint store or the one recorded for it when it subscribes from
 the subscription-model default. A subscription from a `StartAt` of your own gets none saved until the predicate stores
 the position of an event, so with a predicate that always returns `false` it gets no position stored for an event or a
-quiet read. The position it restarts from when its checkpoint is no longer in the oplog is still stored.
+quiet read. The position it restarts from when its checkpoint is no longer in the oplog, with
+`restartSubscriptionsOnChangeStreamHistoryLost` turned on, is still stored.
 
 So with a predicate that declines some events, such as `EveryN` with `n` above 1, a subscription that goes quiet right
 after a declined event gets no position saved until the predicate stores one. If it stays quiet for longer than the
@@ -1479,9 +1480,9 @@ subscribe once with a `StartAt` for the position to start from.
 
 Change the interval with `saveQuietPositionEvery(Duration)` on `DurableSubscriptionModelConfig`, and keep it well
 below the oplog window. `neverSaveQuietPosition()` turns the save off. A subscription that then matches nothing for
-longer than the oplog window ends in lost history when it next starts from its stored checkpoint, and the position it
-restarts from is still stored. The Spring
-Boot starter has no property for the interval, so define your own `SubscriptionModel` bean to change it there.
+longer than the oplog window ends in lost history when it next starts from its stored checkpoint. With
+`restartSubscriptionsOnChangeStreamHistoryLost` turned on the model restarts it, and the position it restarts from is
+still stored. The Spring Boot starter has no property for the interval, so define your own `SubscriptionModel` bean to change it there.
 
 ### `ReactorMongoSubscriptionModel` reads the driver's change stream cursor
 
@@ -1511,8 +1512,8 @@ filter applies to it too, except the position it restarts from after the oplog d
 model doesn't store. When you subscribe a subscription from a `StartAt` of your own while a delete that a cancel of
 the same id started is still running, the model writes back any checkpoint that delete read, whatever your persist
 predicate is. Where `ReactorDurableSubscriptionModel` drives the subscription itself and is stopped at the subscribe,
-the `start(..)` or `resumeSubscription(..)` that runs the subscription writes it back instead, if that delete is still
-running then.
+or a pause of the subscription or a `stop()` comes before the subscribe has taken that delete over, the `start(..)` or
+`resumeSubscription(..)` that runs the subscription writes it back instead, if that delete is still running then.
 
 Nothing is saved while an event is being delivered either, but a pause cancels the delivery that is under way, so the
 save doesn't wait for it after a resume. The save then stays off until an event is stored again, which is normally the
@@ -1866,7 +1867,10 @@ see.
 subscription had already started has ended, and a write it had not started by then never runs.
 
 A subscribe of the id in the same process that comes before the delete is taken out, which happens before the cancel's
-`Mono` completes, takes the delete over. The delete makes no further try, and the subscribe writes back the checkpoint
+`Mono` completes, takes the delete over. Where `ReactorDurableSubscriptionModel` drives the subscription itself and is
+stopped at the subscribe, or a pause of the subscription or a `stop()` comes before the subscribe has taken the delete
+over, the `start(..)` or `resumeSubscription(..)` that runs the subscription takes it over instead, if the delete has
+not been taken out by then. The delete makes no further try, and the call that took it over writes back the checkpoint
 that a try of the delete read. That includes a try that already deleted it, and a try that failed after the store
 applied it, so the store holds what it held before the cancel. The cancel's `Mono` then completes. A subscription from
 the subscription-model default resumes from the cancelled subscription's checkpoint.

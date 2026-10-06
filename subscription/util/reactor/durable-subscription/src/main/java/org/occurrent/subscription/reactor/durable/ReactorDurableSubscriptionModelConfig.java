@@ -49,7 +49,8 @@ public class ReactorDurableSubscriptionModelConfig {
      *                                           writes back any checkpoint that delete read, see
      *                                           {@link ReactorDurableSubscriptionModel#cancelSubscription(String)}. Where
      *                                           {@code ReactorDurableSubscriptionModel} drives the subscription itself and is stopped at the
-     *                                           subscribe, the {@link ReactorDurableSubscriptionModel#start(boolean)} or
+     *                                           subscribe, or a pause of the subscription or a {@code stop()} comes before the subscribe has
+     *                                           taken that delete over, the {@link ReactorDurableSubscriptionModel#start(boolean)} or
      *                                           {@link ReactorDurableSubscriptionModel#resumeSubscription(String)} that runs the subscription
      *                                           writes it back instead, if that delete is still running then. One that starts from a stored
      *                                           position still has its quiet position saved until its first event, since an event the predicate
@@ -105,7 +106,8 @@ public class ReactorDurableSubscriptionModelConfig {
      * always returns {@code false} it has no position stored for an event or a quiet read. Subscribing it while a delete
      * that a cancel of the same id started is still running writes back any checkpoint that delete read, see
      * {@link ReactorDurableSubscriptionModel#cancelSubscription(String)}. Where {@code ReactorDurableSubscriptionModel}
-     * drives the subscription itself and is stopped at the subscribe, the
+     * drives the subscription itself and is stopped at the subscribe, or a pause of the subscription or a
+     * {@code stop()} comes before the subscribe has taken that delete over, the
      * {@link ReactorDurableSubscriptionModel#start(boolean)} or
      * {@link ReactorDurableSubscriptionModel#resumeSubscription(String)} that runs the subscription writes it back
      * instead, if that delete is still running then.
@@ -138,7 +140,8 @@ public class ReactorDurableSubscriptionModelConfig {
      * model keeps its history gets that model's handling of lost history when it next starts from its stored
      * checkpoint. A subscribe made while a delete that a cancel of the same id started is still running writes back any
      * checkpoint that delete read, see {@link ReactorDurableSubscriptionModel#cancelSubscription(String)}.
-     * Where {@code ReactorDurableSubscriptionModel} drives the subscription itself and is stopped at the subscribe, the
+     * Where {@code ReactorDurableSubscriptionModel} drives the subscription itself and is stopped at the subscribe, or a
+     * pause of the subscription or a {@code stop()} comes before the subscribe has taken that delete over, the
      * {@link ReactorDurableSubscriptionModel#start(boolean)} or
      * {@link ReactorDurableSubscriptionModel#resumeSubscription(String)} that runs the subscription writes it back
      * instead, if that delete is still running then.

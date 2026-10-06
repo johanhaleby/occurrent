@@ -1504,8 +1504,10 @@ not started by then never runs, even when the wrapped model runs an event throug
 
 A caller that wants the id to start clean waits for that `Mono` before subscribing the id again. A `subscribe(..)` of
 the id in the same process that comes before the delete is taken out, which happens before that `Mono` completes, takes
-the delete over. The delete makes no further try, and the `subscribe(..)` writes back the position that a try of the
-delete read, also once that try has deleted it or failed after the store applied it, so the store holds what it held
+the delete over. Where the durable model drives the subscription itself and is stopped at the `subscribe(..)`, or a
+pause of the subscription or a `stop()` comes before the `subscribe(..)` has taken the delete over, the `start(..)` or
+`resumeSubscription(..)` that runs the subscription takes it over instead, if the delete has not been taken out by then.
+The delete makes no further try, and the call that took it over writes back the position that a try of the delete read, also once that try has deleted it or failed after the store applied it, so the store holds what it held
 before the cancel. A subscription from the subscription-model default then resumes from the position of the cancelled
 subscription. A dynamic `StartAt` is asked on a thread of the durable model's own once the store holds that position
 again, so `ResumeStartPositions.replayThenResume(..)` and the Spring Boot starter's `BEGINNING` start with the default
