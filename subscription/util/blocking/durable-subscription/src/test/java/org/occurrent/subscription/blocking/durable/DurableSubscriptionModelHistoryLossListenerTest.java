@@ -17,11 +17,13 @@
 package org.occurrent.subscription.blocking.durable;
 
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -30,9 +32,11 @@ import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -58,13 +62,20 @@ class DurableSubscriptionModelHistoryLossListenerTest {
     }
 
     @Test
-    void a_subscription_from_a_start_position_of_its_own_whose_predicate_stores_nothing_still_has_where_it_restarts_stored_after_its_history_was_lost() {
+    void a_subscription_from_a_start_position_of_its_own_whose_predicate_declined_its_event_still_has_where_it_restarts_stored_after_its_history_was_lost() {
         // Given
         HistoryLossReportingModel wrapped = new HistoryLossReportingModel();
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
-        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(__ -> false));
+        AtomicInteger eventsOffered = new AtomicInteger();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(__ -> {
+            eventsOffered.incrementAndGet();
+            return false;
+        }));
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(new StringBasedCheckpoint("own")), __ -> {
         });
+        wrapped.actions.getFirst().accept(checkpointAwareCloudEvent("declined"));
+        assertThat(eventsOffered).as("events offered to the predicate").hasValue(1);
+        assertThat(storage.read(SUBSCRIPTION_ID)).as("checkpoint stored for the declined event").isNull();
 
         // When
         wrapped.listeners.getFirst().restartingAfterHistoryLoss(SUBSCRIPTION_ID, new StringBasedCheckpoint("restarted-from"), () -> true);
@@ -73,8 +84,18 @@ class DurableSubscriptionModelHistoryLossListenerTest {
         assertThat(storage.read(SUBSCRIPTION_ID)).as("checkpoint stored").extracting(Checkpoint::asString).isEqualTo("restarted-from");
     }
 
+    private static CloudEvent checkpointAwareCloudEvent(String checkpoint) {
+        CloudEvent cloudEvent = CloudEventBuilder.v1()
+                .withId("1")
+                .withSource(URI.create("urn:occurrent:test"))
+                .withType("Created")
+                .build();
+        return new CheckpointAwareCloudEvent(cloudEvent, new StringBasedCheckpoint(checkpoint));
+    }
+
     private static final class HistoryLossReportingModel implements CheckpointAwareSubscriptionModel, HistoryLossReportingSubscriptions {
         final List<HistoryLossListener> listeners = new ArrayList<>();
+        final List<Consumer<CloudEvent>> actions = new ArrayList<>();
 
         @Override
         public void addHistoryLossListener(HistoryLossListener listener) {
@@ -88,6 +109,7 @@ class DurableSubscriptionModelHistoryLossListenerTest {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            actions.add(action);
             return new Subscription() {
                 @Override
                 public String id() {
