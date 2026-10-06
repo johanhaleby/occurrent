@@ -48,7 +48,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.net.URI;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -61,7 +60,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 
 /**
  * The pair invariant behind <a href="https://github.com/johanhaleby/occurrent/issues/988">issue 988</a>: every poller
@@ -117,8 +115,11 @@ class RegistrationRacingCloseTest {
             pushSources.startAll();
 
             // The poller's executor can count as terminated while its thread is still finishing, so a single check can see it alive
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
-                    assertThat(liveTimerPollerThreads()).describedAs("timer poller threads outliving the context").isEmpty());
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!liveTimerPollerThreads().isEmpty() && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+            }
+            assertThat(liveTimerPollerThreads()).describedAs("timer poller threads outliving the context").isEmpty();
         });
     }
 
