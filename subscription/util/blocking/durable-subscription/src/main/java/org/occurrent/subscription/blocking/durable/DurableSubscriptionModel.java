@@ -204,7 +204,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // Answers nothing until the interval has passed since the last checkpoint write, so a subscription that stores a
     // checkpoint for an event at least once per interval gets no extra write. It also answers nothing while an event
     // is being delivered, or when the current delivery that started last is of an event the persist predicate declined
-    // to store, since the quiet position would move the checkpoint past it. The save checks that again. The read is
+    // to store, since the quiet position would move the checkpoint past it, and before the first event while no
+    // position of the subscription is stored. The save checks that again. The read is
     // numbered first, whatever the answer, so the next delivery on this thread is known to come from it. The write
     // condition is read here, before the wrapped model reads, so the save uses the token of the lease the read was
     // made under, like the write for an event. A source that cannot answer is asked again after the interval rather
@@ -303,7 +304,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // they open a change stream, outside this lock, so a cancelSubscription can run while it reads the
         // checkpoint or writes the first position.
         return underLockFor(subscriptionId, () -> {
-            StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
+            CheckpointRegistration registration = new CheckpointRegistration();
+            StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt, registration::startPositionStored);
             if (startAtToUse == null) {
                 // Not allowed to start, delegate to the wrapped subscription instead. Whether it was already
                 // marked is captured before marking it, so a duplicate attempt against an already-active,
@@ -327,7 +329,6 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
             // One per subscription, so an EveryN configured for the whole model counts this subscription's events only
             Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
-            CheckpointRegistration registration = new CheckpointRegistration();
             Consumer<CloudEvent> checkpointingAction = cloudEvent -> {
                 // Taken before anything the delivery waits on, so no quiet position is saved until it has finished
                 long delivery = registration.delivering();
@@ -375,10 +376,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // the caller. Thrown from inside the dynamic supplier it would surface on the wrapped model's own evaluation
     // path instead, which NativeMongoSubscriptionModel runs under a retry wrapper that would re-evaluate forever
     // and tell nobody. Answers the checkpoint it recorded, for the supplier's first evaluation, and null when
-    // something was stored already or the override let an unanswerable source through.
-    private @Nullable Checkpoint recordFirstPositionOrRefuse(String subscriptionId) {
+    // something was stored already or the override let an unanswerable source through. Runs positionStored when a
+    // position is stored, the one read or the one recorded.
+    private @Nullable Checkpoint recordFirstPositionOrRefuse(String subscriptionId, Runnable positionStored) {
         Checkpoint checkpoint = storage.read(subscriptionId);
         if (checkpoint != null) {
+            positionStored.run();
             return null;
         }
         Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
@@ -402,7 +405,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                             "starts from that checkpoint and is never refused this way. Subscribing with a " +
                                             "StartAt of your own records no position and makes no such promise.");
         }
-        return saveFirstPosition(subscriptionId, globalCheckpoint);
+        Checkpoint recorded = saveFirstPosition(subscriptionId, globalCheckpoint);
+        positionStored.run();
+        return recorded;
     }
 
     // Pinned with ifAbsent(), the same protocol ManualStartSubscriptionModel and ReactorDurableSubscriptionModel
@@ -469,13 +474,15 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         throw new StartPositionAlreadyPinnedException(subscriptionId, positionRead, stored);
     }
 
+    // positionStored runs once a position is stored for a subscription from the model default, the one read or the one
+    // recorded, and never for a StartAt of the caller's own
     @Nullable
-    private StartAt generateStartAtPositionFrom(String subscriptionId, StartAt originalStartAt) {
+    private StartAt generateStartAtPositionFrom(String subscriptionId, StartAt originalStartAt, Runnable positionStored) {
         final StartAt startAtToUse;
         if (originalStartAt.isDefault()) {
             // Consumed by the supplier's first evaluation, so the position recorded just now is not read back or,
             // on a storage that answers reads from somewhere the write has not reached, saved a second time.
-            AtomicReference<@Nullable Checkpoint> recordedFirstPosition = new AtomicReference<>(recordFirstPositionOrRefuse(subscriptionId));
+            AtomicReference<@Nullable Checkpoint> recordedFirstPosition = new AtomicReference<>(recordFirstPositionOrRefuse(subscriptionId, positionStored));
             StartAt startAtIfNoSubscriptionFound = StartAt.subscriptionModelDefault();
             startAtToUse = StartAt.dynamic(() -> {
                 Checkpoint recorded = recordedFirstPosition.getAndSet(null);
@@ -490,14 +497,17 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                         checkpoint = saveFirstPositionOrAdoptWhatWon(subscriptionId, globalCheckpoint);
                     }
                 }
-
-                return checkpoint == null ? startAtIfNoSubscriptionFound : StartAt.checkpoint(checkpoint);
+                if (checkpoint == null) {
+                    return startAtIfNoSubscriptionFound;
+                }
+                positionStored.run();
+                return StartAt.checkpoint(checkpoint);
             });
         } else if (originalStartAt.isDynamic()) {
             var subscriptionModelContext = new SubscriptionModelContext(DurableSubscriptionModel.class);
             var nextStartAt = originalStartAt.get(subscriptionModelContext);
             if (nextStartAt != null) {
-                return generateStartAtPositionFrom(subscriptionId, nextStartAt);
+                return generateStartAtPositionFrom(subscriptionId, nextStartAt, positionStored);
             }
             return null;
         } else {
@@ -633,9 +643,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // while a delivery of any run of this subscribe is under way
         private final ReentrantLock deliveryLock = new ReentrantLock();
         // True only while no delivery is under way and the current delivery that started last stored the checkpoint
-        // of its event. True before the first event, since no event can then come before the quiet position without a
-        // checkpoint of its own
-        private volatile boolean quietSaveAllowed = true;
+        // of its event. Before the first event, true once a position of the subscription is stored, see
+        // startPositionStored
+        private volatile boolean quietSaveAllowed;
         private int deliveriesUnderWay;
         // Counts the deliveries of every run of this subscribe
         private long deliveries;
@@ -650,13 +660,27 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // Whether the current delivery that started last stored its checkpoint, once it has finished. An action a
         // pause stopped waiting for can still return, or still be called, after a resume has delivered later events,
         // and what it stored says nothing about them
-        private boolean latestStored = true;
+        private boolean latestStored;
         // Held while the checkpoint for an event is written, and by a cancel while it deletes the checkpoint
         private final ReentrantLock saveLock = new ReentrantLock();
         private boolean cancelled;
 
         void reading() {
             lastReadOnThisThread.set(reads.incrementAndGet());
+        }
+
+        // A position of the subscription is stored, so before the first event a quiet save moves that position on and
+        // never stores the first one for a subscription that stores no position of its own
+        void startPositionStored() {
+            deliveryLock.lock();
+            try {
+                if (deliveries == 0) {
+                    latestStored = true;
+                    quietSaveAllowed = true;
+                }
+            } finally {
+                deliveryLock.unlock();
+            }
         }
 
         long delivering() {
