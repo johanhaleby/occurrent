@@ -51,6 +51,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * The reactive twin of {@code ProjectionAnnotationRecordAppliedAppendsMongoTest}: verifies
@@ -101,7 +102,8 @@ class ReactiveProjectionAnnotationRecordAppliedAppendsMongoTest {
 
         ctx.close();
 
-        assertThat(countThreadsWithNamePrefix("occurrent-applied-append-poll")).isZero();
+        // The poll's scheduler can count as disposed while its thread is still finishing, so a single check can see it alive
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(countThreadsWithNamePrefix("occurrent-applied-append-poll")).isZero());
     }
 
     private static int countThreadsWithNamePrefix(String prefix) {

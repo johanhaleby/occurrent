@@ -114,6 +114,11 @@ class RegistrationRacingCloseTest {
             ((ConfigurableApplicationContext) context).close();
             pushSources.startAll();
 
+            // The poller's executor can count as terminated while its thread is still finishing, so a single check can see it alive
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!liveTimerPollerThreads().isEmpty() && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+            }
             assertThat(liveTimerPollerThreads()).describedAs("timer poller threads outliving the context").isEmpty();
         });
     }
