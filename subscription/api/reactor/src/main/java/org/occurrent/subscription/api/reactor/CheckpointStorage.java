@@ -153,6 +153,64 @@ public interface CheckpointStorage {
     Mono<Void> delete(String subscriptionId);
 
     /**
+     * Delete the {@link Checkpoint} for the supplied {@code subscriptionId}, and the version stored with it, if
+     * {@code condition} is fulfilled.
+     * <p>
+     * The condition is evaluated against the stored version exactly as
+     * {@link #save(String, Checkpoint, CheckpointWriteCondition)} evaluates it, atomically with the delete:
+     * <ul>
+     *     <li>{@link CheckpointWriteCondition#notOlderThan(long) notOlderThan(v)} deletes the checkpoint unless the
+     *     stored version is above {@code v}. A checkpoint stored without a version is deleted.</li>
+     *     <li>{@link CheckpointWriteCondition#ifAbsent()} deletes nothing, and is refused if a checkpoint is stored.</li>
+     *     <li>{@link CheckpointWriteCondition#any()} is the same as {@link #delete(String)}.</li>
+     * </ul>
+     * Nothing stored for {@code subscriptionId} fulfils {@code notOlderThan} and {@code ifAbsent}, so the Mono
+     * completes without deleting anything.
+     * <p>
+     * {@code ReactorDurableSubscriptionModel} uses {@code notOlderThan} when a subscription is cancelled, with the
+     * version it read just before. A subscription started with the same id before that delete has finished writes the
+     * checkpoint it read back at a higher version, so the delete is refused, or what it removed is stored again,
+     * before the new subscription reads its start position. The new subscription writes its own checkpoints at a
+     * version above that write, so neither the delete nor that write removes or replaces them.
+     * <p>
+     * The default deletes for {@code any()} and signals {@link UnsupportedOperationException} for every other
+     * condition, the same answer {@link #save(String, Checkpoint, CheckpointWriteCondition)} gives for a condition a
+     * storage cannot evaluate. A storage that overrides this also overrides {@link #evaluatesDeleteConditions()}.
+     *
+     * @param subscriptionId The id of the subscription to delete the {@link Checkpoint} for
+     * @param condition      What must be true of the stored version for the delete to be allowed
+     * @return A Mono that completes once the checkpoint is deleted or nothing was stored, or a Mono signalling
+     * {@link CheckpointWriteConditionNotFulfilledException} if {@code condition} was not fulfilled, in which case
+     * nothing was deleted, or {@link UnsupportedOperationException} if this storage cannot evaluate {@code condition}
+     */
+    default Mono<Void> delete(String subscriptionId, CheckpointWriteCondition condition) {
+        requireNonNull(subscriptionId, "Subscription id cannot be null");
+        requireNonNull(condition, CheckpointWriteCondition.class.getSimpleName() + " cannot be null");
+        if (condition instanceof CheckpointWriteCondition.Any) {
+            return delete(subscriptionId);
+        }
+        return Mono.error(new UnsupportedOperationException(getClass().getName() + " cannot evaluate " + condition + " on a delete"));
+    }
+
+    /**
+     * Whether this storage evaluates {@link CheckpointWriteCondition#notOlderThan(long)} and
+     * {@link CheckpointWriteCondition#ifAbsent()} for real in {@link #delete(String, CheckpointWriteCondition)},
+     * rather than refusing them with {@link UnsupportedOperationException}.
+     * <p>
+     * The default is {@code false}, also for a storage that answers {@code true} from
+     * {@link #evaluatesWriteConditions()}. {@code ReactorDurableSubscriptionModel} then deletes a cancelled
+     * subscription's checkpoint unconditionally, and a subscription started with the same id while a try of that
+     * delete runs waits for the try to end, and writes back what it deleted, before reading its start position or
+     * writing a checkpoint.
+     *
+     * @return {@code true} if both {@code notOlderThan} and {@code ifAbsent} are evaluated on a delete, {@code false}
+     * if either of them is refused
+     */
+    default boolean evaluatesDeleteConditions() {
+        return false;
+    }
+
+    /**
      * Resolves who a subscription's very first checkpoint should be, between {@code candidate} and whatever
      * {@code subscriptionId} holds now, by which position is earlier rather than by which write reaches storage
      * first or which read happens to run first. A caller reaches for this once a plain

@@ -90,9 +90,14 @@ public interface DcbSubscriptionModel {
 
     /**
      * Cancel a named DCB subscription started with {@link #subscribe(String, DcbCriteria, DcbStartAt, Function)} and
-     * forget it. Cancelling a subscription id that is unknown or already cancelled is a no-op.
+     * forget it. Cancelling a subscription id that is unknown or already cancelled stops nothing, and still deletes
+     * what a store holds for that id.
+     * <p>
+     * Behaves as {@link CancellableSubscriptions#cancelSubscription(String)} does. The cancel takes effect when this
+     * method is called, and the returned {@code Mono} completes once the underlying model has deleted what it stored
+     * for this id.
      */
-    void cancelSubscription(String subscriptionId);
+    Mono<Void> cancelSubscription(String subscriptionId);
 
     /**
      * Create a DCB view over an existing reactive {@link FluxSubscriptionModel}. The named

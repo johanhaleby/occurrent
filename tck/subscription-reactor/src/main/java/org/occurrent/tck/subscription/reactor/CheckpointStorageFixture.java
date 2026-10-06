@@ -72,6 +72,19 @@ public interface CheckpointStorageFixture {
     }
 
     /**
+     * Whether this storage evaluates a {@link org.occurrent.subscription.CheckpointWriteCondition} for real on
+     * {@link CheckpointStorage#delete(String, org.occurrent.subscription.CheckpointWriteCondition)}.
+     * <p>
+     * {@code true} means {@code notOlderThan} and {@code ifAbsent} are both accepted and refused as documented on a
+     * delete. {@code false} means a delete with either of them signals {@link UnsupportedOperationException}. Answered
+     * by the storage itself, through {@link CheckpointStorage#evaluatesDeleteConditions()}, for the same reason
+     * {@link #evaluatesWriteConditions()} is. Override only to test a storage against the opposite of what it claims.
+     */
+    default boolean evaluatesDeleteConditions() {
+        return checkpointStorage().evaluatesDeleteConditions();
+    }
+
+    /**
      * Checkpoint types of the implementation's own, round-tripped in addition to the two the suite always covers.
      * <p>
      * The suite covers {@code StringBasedCheckpoint} and {@code GlobalCheckpoint} for every storage, because both live

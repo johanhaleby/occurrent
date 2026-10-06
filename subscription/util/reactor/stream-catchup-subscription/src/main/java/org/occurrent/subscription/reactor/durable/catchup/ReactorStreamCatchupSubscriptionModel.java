@@ -287,8 +287,8 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
     }
 
     @Override
-    public void cancelSubscription(String subscriptionId) {
-        namedSubscriptions.cancelSubscription(subscriptionId);
+    public Mono<Void> cancelSubscription(String subscriptionId) {
+        return namedSubscriptions.cancelSubscription(subscriptionId);
     }
 
     // Whether a replay for this id is in flight here, so this model is the only one that can answer for it. Lets a

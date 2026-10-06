@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
@@ -29,6 +30,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -40,12 +42,35 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
 
     final List<String> subscribedIds = new CopyOnWriteArrayList<>();
     final List<StartAt> startedAt = new CopyOnWriteArrayList<>();
+    /**
+     * The actions it was handed, so a test can run an event through one the way the wrapped model would.
+     */
+    final List<Function<CloudEvent, Mono<Void>>> actions = new CopyOnWriteArrayList<>();
     final RecordingSubscriptionModel feed;
     /**
      * A stopped named model parks a registration and opens its feed when it is started, which is what makes a start
      * position of {@code now} mean "wherever the feed has reached by then" rather than "where this registered".
      */
     boolean running = true;
+    /**
+     * What {@link #cancelSubscription(String)} answers, so a test can hold the wrapped model's cancel open.
+     */
+    Mono<Void> cancelled = Mono.empty();
+    final List<String> cancelledIds = new CopyOnWriteArrayList<>();
+    /**
+     * Runs first in every named subscribe, so a test can hold the wrapped model while it takes one.
+     */
+    volatile Consumer<String> beforeSubscribe = __ -> {
+    };
+    /**
+     * Every subscribe, cancel and shutdown in the order they reached this model, a subscribe both as it begins and as
+     * it returns, so a test can tell whether a cancel or a shutdown arrived while a subscribe was still being taken.
+     */
+    final List<String> calls = new CopyOnWriteArrayList<>();
+    /**
+     * Calls a dynamic start position it is handed while it takes the subscribe, as the catch-up models do.
+     */
+    volatile boolean resolvesDynamicStartPositions = false;
 
     NamedRecordingSubscriptionModel(String globalCheckpoint) {
         this.feed = new RecordingSubscriptionModel(globalCheckpoint);
@@ -62,12 +87,24 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
     }
 
     @Override
+    public Mono<Checkpoint> globalCheckpointAsOfNow() {
+        return feed.globalCheckpointAsOfNow();
+    }
+
+    @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
                                   Function<CloudEvent, Mono<Void>> action) {
+        calls.add("subscribe " + subscriptionId + " began");
+        beforeSubscribe.accept(subscriptionId);
+        if (resolvesDynamicStartPositions && startAt.isDynamic()) {
+            startAt.get(new SubscriptionModelContext(NamedRecordingSubscriptionModel.class));
+        }
         subscribedIds.add(subscriptionId);
+        actions.add(action);
         // What the durable model hands a named model is the whole of what decides where the subscription begins on
         // this path, since this model resolves nothing further.
         startedAt.add(startAt);
+        calls.add("subscribe " + subscriptionId + " returned");
         return new Subscription() {
             @Override
             public String id() {
@@ -82,11 +119,19 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
     }
 
     @Override
-    public void cancelSubscription(String subscriptionId) {
+    public Mono<Void> cancelSubscription(String subscriptionId) {
+        calls.add("cancel " + subscriptionId);
+        cancelledIds.add(subscriptionId);
+        return cancelled;
     }
 
     @Override
     public void stop() {
+    }
+
+    @Override
+    public void shutdown() {
+        calls.add("shutdown");
     }
 
     @Override

@@ -25,9 +25,13 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.api.reactor.ResumeStartPositions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
@@ -292,6 +296,37 @@ class NamedCatchupPathTest {
         durableOverColdOnly.shutdown();
     }
 
+    /**
+     * The storage deletes the position of the cancelled subscription only some time after it is asked to. The rebuild
+     * waits for the Mono the cancel returned, as a caller that wants a clean start does, and is then subscribed with a
+     * start position that reads the stored position itself and replays the history when none is stored.
+     */
+    @Test
+    void a_rebuild_subscribed_once_the_cancel_has_completed_replays_the_history_when_its_start_position_reads_the_stored_position_itself() {
+        // Given
+        CheckpointStorage storage = new SlowDeleteCheckpointStorage(new ReactorCheckpointStorage(reactiveMongoTemplate, checkpointCollectionName));
+        // Replaces the composition this class builds, which has subscribed nothing yet, so the shutdown after the test shuts
+        // down the composition built here
+        durableModel = new ReactorDurableSubscriptionModel(new ReactorCatchupSubscriptionModel(mongoModel, eventStore, Filter.all()), storage);
+        publish("e1", "e2", "e3");
+        List<String> handledBeforeTheCancel = new CopyOnWriteArrayList<>();
+        durableModel.subscribe(streamId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)), event -> Mono.fromRunnable(() -> handledBeforeTheCancel.add(event.getId())))
+                .waitUntilStarted().block(TIMEOUT);
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(handledBeforeTheCancel).containsExactly("e1", "e2", "e3"));
+        await().atMost(TIMEOUT).until(() -> storage.read(streamId).blockOptional().isPresent());
+
+        // When
+        durableModel.cancelSubscription(streamId).block(TIMEOUT);
+        List<String> handledByTheRebuild = new CopyOnWriteArrayList<>();
+        durableModel.subscribe(streamId, null, ResumeStartPositions.replayThenResume(streamId, storage, StartAt.checkpoint(GlobalCheckpoint.of(0))),
+                        event -> Mono.fromRunnable(() -> handledByTheRebuild.add(event.getId())))
+                .waitUntilStarted().block(TIMEOUT);
+
+        // Then
+        // The cancel deleted the only stored position, and with none stored this start position replays the whole history
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(handledByTheRebuild).as("events the rebuild subscribed once the cancel had completed handled").containsExactly("e1", "e2", "e3"));
+    }
+
     private void publish(String... eventIds) {
         List<CloudEvent> events = java.util.Arrays.stream(eventIds)
                 .map(id -> CloudEventBuilder.v1()
@@ -312,6 +347,50 @@ class NamedCatchupPathTest {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new AssertionError("Interrupted while waiting on a gate latch", e);
+        }
+    }
+
+    // Deletes only some time after it is asked to, the way a store under load does
+    private static final class SlowDeleteCheckpointStorage implements CheckpointStorage {
+        private final CheckpointStorage storage;
+
+        private SlowDeleteCheckpointStorage(CheckpointStorage storage) {
+            this.storage = storage;
+        }
+
+        @Override
+        public Mono<Checkpoint> read(String subscriptionId) {
+            return storage.read(subscriptionId);
+        }
+
+        @Override
+        public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            return storage.save(subscriptionId, checkpoint, condition);
+        }
+
+        @Override
+        public boolean evaluatesWriteConditions() {
+            return storage.evaluatesWriteConditions();
+        }
+
+        @Override
+        public boolean evaluatesWriteConditionsFor(String subscriptionId) {
+            return storage.evaluatesWriteConditionsFor(subscriptionId);
+        }
+
+        @Override
+        public Mono<Long> writeVersion(String subscriptionId) {
+            return storage.writeVersion(subscriptionId);
+        }
+
+        @Override
+        public Mono<Void> delete(String subscriptionId) {
+            return Mono.delay(Duration.ofMillis(300)).then(storage.delete(subscriptionId));
+        }
+
+        @Override
+        public Mono<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+            return storage.resolveFirstCheckpointRace(subscriptionId, candidate);
         }
     }
 
