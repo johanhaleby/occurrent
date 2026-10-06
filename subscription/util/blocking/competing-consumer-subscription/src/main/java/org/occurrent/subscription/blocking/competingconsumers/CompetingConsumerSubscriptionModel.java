@@ -241,9 +241,8 @@ import static java.util.Objects.requireNonNull;
  * lease is given up, since that model may still deliver. When the lease strategy throws from its own
  * {@code shutdown()} or from {@code removeListener(..)}, {@code shutdown()} still shuts the wrapped model down and
  * makes its attempt to give up each lease. Once that is done, {@code shutdown()} throws what failed. The failure of the
- * wrapped model comes first, ahead of the lease strategy's, and every other failure is added to it as suppressed. A
- * checked failure is thrown wrapped in an {@link IllegalStateException}, with the other failures added to that
- * exception.
+ * wrapped model comes first, ahead of the lease strategy's, and every other failure is added to it as suppressed. The
+ * first failure is thrown as it is, a checked one too, without being wrapped.
  * <br>
  * <br>
  * A competing subscription made while this model is stopped goes to the wrapped model straight away, through
@@ -3647,7 +3646,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             registrations.clear();
         }
         if (!failures.isEmpty()) {
-            throw thrownWithTheRestSuppressed(failures);
+            Throwable first = failures.getFirst();
+            failures.subList(1, failures.size()).forEach(later -> addSuppressed(first, later));
+            sneakyThrow(first);
         }
     }
 
@@ -3984,13 +3985,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         throw new IllegalStateException(failure);
     }
 
-    // The first failure thrown as it is, with every other one added as suppressed to what is thrown, so to the
-    // IllegalStateException that wraps a checked one
-    private static RuntimeException thrownWithTheRestSuppressed(List<Throwable> failures) {
-        Throwable first = failures.getFirst();
-        Throwable thrown = first instanceof RuntimeException || first instanceof Error ? first : new IllegalStateException(first);
-        failures.subList(1, failures.size()).forEach(later -> addSuppressed(thrown, later));
-        throw thrownAsItIs(thrown);
+    // Throws a checked failure too, unwrapped, so a caller can catch it by its own type
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     private static void addOnce(List<Throwable> failures, Throwable failure) {

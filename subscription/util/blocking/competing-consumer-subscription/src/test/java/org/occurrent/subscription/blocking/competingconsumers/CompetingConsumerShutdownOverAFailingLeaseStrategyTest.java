@@ -156,7 +156,7 @@ class CompetingConsumerShutdownOverAFailingLeaseStrategyTest {
     }
 
     @Test
-    void a_checked_failure_of_the_lease_strategys_own_shutdown_is_thrown_wrapped_with_what_failed_after_it_suppressed_on_the_wrapper() {
+    void a_checked_failure_of_the_lease_strategys_own_shutdown_is_thrown_as_it_is_with_what_failed_after_it_suppressed() {
         IOException shutdownFailure = new IOException("lease strategy shutdown failed");
         IllegalStateException removeListenerFailure = new IllegalStateException("removeListener failed");
         strategy.shutdownFailure = shutdownFailure;
@@ -165,9 +165,8 @@ class CompetingConsumerShutdownOverAFailingLeaseStrategyTest {
 
         Throwable thrown = catchThrowable(model::shutdown);
 
-        assertThat(thrown).as("[what shutdown() threw]").isExactlyInstanceOf(IllegalStateException.class).hasCause(shutdownFailure);
+        assertThat(thrown).as("[what shutdown() threw]").isSameAs(shutdownFailure);
         assertThat(thrown.getSuppressed()).as("[what shutdown() threw has suppressed]").containsExactly(removeListenerFailure);
-        assertThat(shutdownFailure.getSuppressed()).as("[what the lease strategy's own shutdown threw has suppressed]").isEmpty();
     }
 
     // Shut down before it throws, so it delivers nothing more
