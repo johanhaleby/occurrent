@@ -1467,7 +1467,7 @@ that starts from a stored position, the one in the checkpoint store or the one r
 the subscription-model default. A subscription from a `StartAt` of your own gets none saved until the predicate stores
 the position of an event, so with a predicate that always returns `false` it gets no position stored for an event or a
 quiet read. The position it restarts from when its checkpoint is no longer in the oplog, with
-`restartSubscriptionsOnChangeStreamHistoryLost` turned on, is still stored.
+`restartSubscriptionsOnChangeStreamHistoryLost` turned on, is still stored, as described below.
 
 So with a predicate that declines some events, such as `EveryN` with `n` above 1, a subscription that goes quiet right
 after a declined event gets no position saved until the predicate stores one. If it stays quiet for longer than the
@@ -1482,7 +1482,12 @@ Change the interval with `saveQuietPositionEvery(Duration)` on `DurableSubscript
 below the oplog window. `neverSaveQuietPosition()` turns the save off. A subscription that then matches nothing for
 longer than the oplog window ends in lost history when it next starts from its stored checkpoint. With
 `restartSubscriptionsOnChangeStreamHistoryLost` turned on the model restarts it, and the position it restarts from is
-still stored. The Spring Boot starter has no property for the interval, so define your own `SubscriptionModel` bean to change it there.
+still stored, unless another node has written the subscription's checkpoint with a newer lease by then. The model asks
+MongoDB for that position with `ping`. While the reply has no operation time, it doesn't restart the subscription,
+since there is no position to store. It opens the change stream at the lost position again, with a `WARN` each
+attempt, for as long as its `RetryStrategy` retries, and logs an `ERROR` once the strategy gives up.
+The Spring Boot starter has no property for the interval, so define your own `SubscriptionModel` bean to change it
+there.
 
 ### `ReactorMongoSubscriptionModel` reads the driver's change stream cursor
 
@@ -1812,9 +1817,12 @@ cancelled subscription's position, or skipped its history.
 
 Now it returns `Mono<Void>`. The cancel still takes effect when you call the method, whether or not anything subscribes
 to the `Mono`. The `Mono` completes once the state stored for that id is deleted, in the model you called and in every
-model it wraps, and it fails when a delete fails. Neither the method nor the `Mono` has to wait for a call of the
-subscription's action that is already running, so that call may still be running after the `Mono` completes. Waiting
-for it would let one action that never ends hold up the cancel.
+model it wraps. What it does when a delete fails depends on the model that deletes. `CatchupThenPushSubscriptionModel`
+tries the delete of its catch-up marker once, and its `Mono` fails with that error. `ReactorDurableSubscriptionModel`
+tries a failed delete of the checkpoint again until one succeeds, a subscribe of the id takes it over, or the model is
+shut down, and its `Mono` neither completes nor fails until then, as described further down. Neither the method nor
+the `Mono` has to wait for a call of the subscription's action that is already running, so that call may still be
+running after the `Mono` completes. Waiting for it would let one action that never ends hold up the cancel.
 
 What to do:
 

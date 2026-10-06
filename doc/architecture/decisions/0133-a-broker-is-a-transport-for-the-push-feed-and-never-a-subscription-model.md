@@ -1480,10 +1480,11 @@ A process that ends between a reactor `cancelSubscription(..)` returning and its
 and after a restart a subscription made with that id goes straight to live delivery. So the reactor
 `CancellableSubscriptions.cancelSubscription(String)` now returns a `Mono<Void>` where it returned `void`. The cancel
 still takes effect when the method is called, whether or not anything subscribes to the `Mono`, so a caller that ignores
-it gets the same cancel as before. The `Mono` completes once the delete has succeeded and fails when the delete fails.
-A caller that waits for it knows the marker is gone, which is what the blocking `cancelSubscription(..)` returning tells
-its caller. A process that ends before the `Mono` completes never told its caller the cancel was done, and calling the
-method again after the restart deletes the marker, also for an id the new process has never subscribed.
+it gets the same cancel as before. The `Mono` of `CatchupThenPushSubscriptionModel` completes once the delete of the
+marker has succeeded and fails when that delete fails. A caller that waits for it knows the marker is gone, which is
+what the blocking `cancelSubscription(..)` returning tells its caller. A process that ends before the `Mono` completes
+never told its caller the cancel was done, and calling the method again after the restart deletes the marker, also for
+an id the new process has never subscribed.
 
 The reactor model cancels before it deletes, the other way round from the blocking model. When the delete fails, the
 reactor subscription stays cancelled with its marker stored, and calling the method again deletes the marker. Deleting
@@ -1498,8 +1499,11 @@ Every reactor model that wraps another now returns a `Mono` that completes once 
 cancel have both completed.
 
 The durable model's `Mono` completes once the stored position is deleted, or once a `subscribe(..)` of the id has
-taken the delete over, as described below. A position save that the cancelled subscription sent just before the
-cancel can reach the store after a delete sent just after it, and put the position back. So the delete runs after every position write the cancelled subscription had already started, and a write it had
+taken the delete over, as described below. Unlike the catch-up model's, it doesn't fail at the first failed delete.
+The model tries the delete again until it succeeds, a `subscribe(..)` of the id takes it over or the model is shut
+down, and the `Mono` neither completes nor fails until then, as described below. A position save that the cancelled
+subscription sent just before the cancel can reach the store after a delete sent just after it, and put the position
+back. So the delete runs after every position write the cancelled subscription had already started, and a write it had
 not started by then never runs, even when the wrapped model runs an event through the action after the cancel.
 
 A caller that wants the id to start clean waits for that `Mono` before subscribing the id again. A `subscribe(..)` of
@@ -1507,8 +1511,9 @@ the id in the same process that comes before the delete is taken out, which happ
 the delete over. Where the durable model drives the subscription itself and is stopped at the `subscribe(..)`, or a
 pause of the subscription or a `stop()` comes before the `subscribe(..)` has taken the delete over, the `start(..)` or
 `resumeSubscription(..)` that runs the subscription takes it over instead, if the delete has not been taken out by then.
-The delete makes no further try, and the call that took it over writes back the position that a try of the delete read, also once that try has deleted it or failed after the store applied it, so the store holds what it held
-before the cancel. A subscription from the subscription-model default then resumes from the position of the cancelled
+The delete makes no further try, and the call that took it over writes back the position that a try of the delete
+read, also once that try has deleted it or failed after the store applied it, so the store holds what it held before
+the cancel. A subscription from the subscription-model default then resumes from the position of the cancelled
 subscription. A dynamic `StartAt` is asked on a thread of the durable model's own once the store holds that position
 again, so `ResumeStartPositions.replayThenResume(..)` and the Spring Boot starter's `BEGINNING` start with the default
 resume behaviour, which read the stored position themselves to choose between replaying and resuming, resume from it

@@ -79,6 +79,14 @@ public class SpringMongoSubscriptionModelConfig {
      * <pre>
      * var subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, SpringSubscriptionModelConfig.withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(true));
      * </pre>
+     * <p>
+     * The model asks MongoDB for the current time with {@code ping}, and tells it to every listener added through
+     * {@code HistoryLossReportingSubscriptions} before the restart. A {@code DurableSubscriptionModel} that wraps this
+     * model adds one, and stores that time as the subscription's checkpoint unless another node has written it with a
+     * newer lease, so a process restart in between doesn't open the change stream at the lost position again. While
+     * the reply to {@code ping} has no operation time and a listener is added, the model doesn't restart the
+     * subscription, and tries the restart again as its {@code RetryStrategy} says. With no listener added, it restarts
+     * the subscription from the current time all the same.
      *
      * @param restartSubscriptionsOnChangeStreamHistoryLost Whether or not to automatically restart a subscription, whose change stream history is lost.
      * @return A new instance of {@code SpringSubscriptionModelConfig}
