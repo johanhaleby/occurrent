@@ -240,8 +240,10 @@ import static java.util.Objects.requireNonNull;
  * lease not given up expires after the lease time. When the wrapped model throws from its own {@code shutdown()}, no
  * lease is given up, since that model may still deliver. When the lease strategy throws from its own
  * {@code shutdown()} or from {@code removeListener(..)}, {@code shutdown()} still shuts the wrapped model down and
- * makes its attempt to give up each lease, and then throws the first failure, with every later one added to it as
- * suppressed.
+ * makes its attempt to give up each lease. Once that is done, {@code shutdown()} throws what failed. The failure of the
+ * wrapped model comes first, ahead of the lease strategy's, and every other failure is added to it as suppressed. A
+ * checked failure is thrown wrapped in an {@link IllegalStateException}, with the other failures added to that
+ * exception.
  * <br>
  * <br>
  * A competing subscription made while this model is stopped goes to the wrapped model straight away, through
@@ -700,7 +702,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 try {
                     forgetCancelled(subscriptionId, beingMade);
                 } catch (RuntimeException forgetFailure) {
-                    e.addSuppressed(forgetFailure);
+                    addSuppressed(e, forgetFailure);
                 }
             }
             throw e;
@@ -712,7 +714,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         try {
             return isRunningInTheWrappedModel(subscriptionId) || isPausedInTheWrappedModel(subscriptionId);
         } catch (RuntimeException e) {
-            failure.addSuppressed(e);
+            addSuppressed(failure, e);
             return true;
         }
     }
@@ -811,14 +813,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     : "subscriptions " + paused + " are paused in the wrapped model and gave up their lease. start(true) resumes them, while start(false) keeps them paused until each one is resumed.";
             IllegalStateException failure = new IllegalStateException("Stopping the wrapped subscription model failed. This model is stopped anyway, and " + outcome, e);
             if (consumerFailure != null) {
-                failure.addSuppressed(consumerFailure);
+                addSuppressed(failure, consumerFailure);
             }
             throw failure;
         } catch (Throwable e) {
             notTakenBack();
             RuntimeException consumerFailure = applyToEverySubscription(stop, subscriptionIds, new ArrayList<>(), null);
             if (consumerFailure != null) {
-                e.addSuppressed(consumerFailure);
+                addSuppressed(e, consumerFailure);
             }
             throw e;
         }
@@ -1707,8 +1709,16 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         if (firstFailure == null) {
             return failure;
         }
-        firstFailure.addSuppressed(failure);
+        addSuppressed(firstFailure, failure);
         return firstFailure;
+    }
+
+    // Adds nothing for the same instance, which a model or lease strategy that throws one instance for every failure
+    // gives, since Throwable throws an IllegalArgumentException instead of suppressing itself
+    private static void addSuppressed(Throwable failure, Throwable later) {
+        if (later != failure) {
+            failure.addSuppressed(later);
+        }
     }
 
     /**
@@ -1938,7 +1948,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             try {
                 return isPausedInTheWrappedModel(subscriptionId);
             } catch (Throwable e) {
-                failure.addSuppressed(e);
+                addSuppressed(failure, e);
                 return false;
             }
         }
@@ -2020,9 +2030,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             } catch (Throwable e) {
                 if (givenUpError != null) {
                     // A model that throws one Error instance for every failure throws the one given up here too
-                    if (e != givenUpError) {
-                        givenUpError.addSuppressed(e);
-                    }
+                    addSuppressed(givenUpError, e);
                     throw givenUpError;
                 }
                 throw e;
@@ -2109,7 +2117,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 return;
             } catch (Throwable e) {
                 if (failed != null) {
-                    e.addSuppressed(failed);
+                    addSuppressed(e, failed);
                 }
                 failed = e;
             }
@@ -3410,7 +3418,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         try {
             runs = isRunningInTheWrappedModel(key.subscriptionId());
         } catch (RuntimeException e) {
-            failure.addSuppressed(e);
+            addSuppressed(failure, e);
         }
         beingMade.triedAgainOnceMade = true;
         return runs ? recordRunning(key) : recordWaiting(beingMade);
@@ -3457,13 +3465,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     pauseInTheWrappedModel(subscriptionId);
                 }
             } catch (Throwable e) {
-                failure.addSuppressed(e);
+                addSuppressed(failure, e);
             }
         }
         try {
             giveUpTheRegistration(beingMade);
         } catch (Throwable e) {
-            failure.addSuppressed(e);
+            addSuppressed(failure, e);
         }
     }
 
@@ -3600,36 +3608,46 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             tries.values().forEach(Try::wake);
         }
         // What fails is thrown only once the wrapped model is shut down, as every event it delivers from now on goes
-        // to the action without the lease
-        Throwable failure = null;
+        // to the action without the lease. Each instance is kept once, since a Throwable can't suppress itself.
+        List<Throwable> failures = new ArrayList<>();
         // Without the subscription locks, which a call waiting for the lease strategy through an outage can hold.
         // Shutting the strategy down first ends a registration waiting between two attempts, and makes each later
         // unregister one attempt.
         try {
             competingConsumerStrategy.shutdown();
         } catch (Throwable e) {
-            failure = e;
+            addOnce(failures, e);
         }
         try {
             competingConsumerStrategy.removeListener(this);
         } catch (Throwable e) {
-            failure = withSuppressed(failure, e);
+            addOnce(failures, e);
         }
         Set<SubscriptionIdAndSubscriberId> leased = new HashSet<>(registrations.keySet());
         leased.addAll(competingConsumers.keySet());
         nonCompetingConsumersSubscriptions.clear();
+        boolean wrappedModelShutDown = false;
+        try {
+            shutDownTheWrappedModel();
+            wrappedModelShutDown = true;
+        } catch (Throwable e) {
+            // First, since it is the one that says the wrapped model may still deliver
+            failures.removeIf(failure -> failure == e);
+            failures.addFirst(e);
+        }
         try {
             // A wrapped model that throws may still deliver, so its leases are left to expire rather than given up
-            shutDownTheWrappedModel();
-            giveUpEveryLeaseOnce(leased);
+            if (wrappedModelShutDown) {
+                giveUpEveryLeaseOnce(leased);
+            }
         } catch (Throwable e) {
-            failure = withSuppressed(failure, e);
+            addOnce(failures, e);
         } finally {
             competingConsumers.clear();
             registrations.clear();
         }
-        if (failure != null) {
-            throw thrownAsItIs(failure);
+        if (!failures.isEmpty()) {
+            throw thrownWithTheRestSuppressed(failures);
         }
     }
 
@@ -3931,7 +3949,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         try {
             return isRunningInTheWrappedModel(key.subscriptionId());
         } catch (Throwable e) {
-            failure.addSuppressed(e);
+            addSuppressed(failure, e);
             return false;
         }
     }
@@ -3951,7 +3969,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         try {
             return isRunningInTheWrappedModel(key.subscriptionId());
         } catch (Throwable e) {
-            failure.addSuppressed(e);
+            addSuppressed(failure, e);
             return true;
         }
     }
@@ -3964,6 +3982,21 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             throw e;
         }
         throw new IllegalStateException(failure);
+    }
+
+    // The first failure thrown as it is, with every other one added as suppressed to what is thrown, so to the
+    // IllegalStateException that wraps a checked one
+    private static RuntimeException thrownWithTheRestSuppressed(List<Throwable> failures) {
+        Throwable first = failures.getFirst();
+        Throwable thrown = first instanceof RuntimeException || first instanceof Error ? first : new IllegalStateException(first);
+        failures.subList(1, failures.size()).forEach(later -> addSuppressed(thrown, later));
+        throw thrownAsItIs(thrown);
+    }
+
+    private static void addOnce(List<Throwable> failures, Throwable failure) {
+        if (failures.stream().noneMatch(added -> added == failure)) {
+            failures.add(failure);
+        }
     }
 
     // Logs the failure as a warning, and brings the consumer to where it belongs on a thread of its own
@@ -4392,7 +4425,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                     competingConsumerStrategy.releaseCompetingConsumer(key.subscriptionId(), key.subscriberId());
                 }
             } catch (Throwable releaseFailure) {
-                e.addSuppressed(releaseFailure);
+                addSuppressed(e, releaseFailure);
             }
             throw e;
         }
@@ -4471,7 +4504,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 competingConsumerStrategy.releaseCompetingConsumer(key.subscriptionId(), key.subscriberId());
                 givenBack = true;
             } catch (Throwable givingBackFailed) {
-                e.addSuppressed(givingBackFailed);
+                addSuppressed(e, givingBackFailed);
                 // A lease still held would never be granted again, so the consumer is tried again from here
                 reconcileLater(key);
             }
@@ -4516,7 +4549,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             logDebug("Wrapped model cannot hold the subscription paused, so it stays waiting (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
             return false;
         } catch (Throwable e) {
-            refused.addSuppressed(e);
+            addSuppressed(refused, e);
             return false;
         }
     }
