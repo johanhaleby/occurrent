@@ -43,7 +43,9 @@ public class ReactorDurableSubscriptionModelConfig {
 
     /**
      * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
-     *                                           Supply a predicate that always returns {@code false} to never store the position.
+     *                                           Supply a predicate that always returns {@code false} to store no position for an event. A
+     *                                           subscription from a {@code StartAt} of your own then stores no position at all. One that starts
+     *                                           from a stored position still has its quiet position saved, see {@link #saveQuietPositionEvery(Duration)}.
      */
     public ReactorDurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
         this(persistCloudEventPositionPredicate, false, DEFAULT_QUIET_POSITION_SAVE_INTERVAL);
@@ -88,12 +90,18 @@ public class ReactorDurableSubscriptionModelConfig {
      * again, so a subscription that stores a checkpoint for an event at least once per {@code interval} gets no extra
      * write.
      * <p>
-     * The position is saved from the subscribe on, whatever the {@link #persistCloudEventPositionPredicate} is, but not
-     * while the event the running subscription most recently gave the action is one the predicate declined to store,
-     * and not while an event is being delivered. So with a predicate that declines some events, such as {@link EveryN}
-     * with {@code n} above 1, a subscription that goes quiet right after a declined event gets no position saved until
-     * the predicate stores one. A save that fails fails the wrapped model's read the way a failed save after an event
-     * fails its action, so the wrapped model reads again from the subscription's position and reports it again.
+     * A subscription that starts from a stored position, the one the store held for it or the one recorded for it when
+     * it subscribes from the subscription-model default, has its quiet position saved before its first event whatever
+     * the {@link #persistCloudEventPositionPredicate} is. Any other subscription, such as one from a {@code StartAt} of
+     * your own, has none saved until the predicate has stored the position of an event, so with a predicate that
+     * always returns {@code false} it stores no position at all.
+     * <p>
+     * The position is not saved while the event the running subscription most recently gave the action is one the
+     * predicate declined to store, and not while an event is being delivered. So with a predicate that declines some
+     * events, such as {@link EveryN} with {@code n} above 1, a subscription that goes quiet right after a declined event
+     * gets no position saved until the predicate stores one. A save that fails makes the wrapped model read again from
+     * the subscription's position after a backoff. It then reports the position of the next read that returns no event,
+     * and that position is saved without waiting for the interval.
      * <p>
      * The default is one minute. Keep it well below the time the wrapped model keeps its history, which for MongoDB
      * is the oplog window.

@@ -1460,8 +1460,12 @@ gets no extra write.
 The save follows your persist predicate. Nothing is saved while the event the running subscription most recently gave
 your action is one the predicate declined to store, since the saved position would come after that event. Nothing is
 saved while an event is being delivered either. After a pause and a resume, an action of the paused run that is still
-running keeps the save off until it returns, for as long as that takes. Before the first event after a subscribe, the
-position is saved whatever the predicate is.
+running keeps the save off until it returns, for as long as that takes.
+
+Before the first event after a subscribe, the position is saved whatever the predicate is, but only for a subscription
+that starts from a stored position, the one in the checkpoint store or the one recorded for it when it subscribes from
+the subscription-model default. A subscription from a `StartAt` of your own gets none saved until the predicate stores
+the position of an event, so a predicate that always returns `false` stores no position for it at all, as in 0.33.0.
 
 So with a predicate that declines some events, such as `EveryN` with `n` above 1, a subscription that goes quiet right
 after a declined event gets no position saved until the predicate stores one. If it stays quiet for longer than the
@@ -1500,13 +1504,14 @@ reaches a subscription with an id. Stub `getCollection(..)` as well.
 
 A `ReactorDurableSubscriptionModel` that wraps `ReactorMongoSubscriptionModel` now saves the quiet position that model
 reports, at most once a minute, with the same `CheckpointStorage` and write condition as for an event. What the
-blocking subsection above says about your persist predicate, an event being delivered and widening a filter holds for
-it too. A cancel waits for a quiet save that is under way before it deletes the checkpoint, so the checkpoint isn't
+blocking subsection above says about your persist predicate, a subscription from a `StartAt` of your own and widening a
+filter applies to it too. Nothing is saved while an event is being delivered either, but a pause cancels the delivery
+that is under way, so the save doesn't wait for it after a resume. A cancel waits for a quiet save that is under way before it deletes the checkpoint, so the checkpoint isn't
 written back after the cancel.
 
-When a quiet save fails, the `Mono` that `ReactorMongoSubscriptionModel` waits for fails, as your action does when the
-save after an event fails. The model reads again from the subscription's position after its backoff, and the save is
-tried again at the next quiet position without waiting for the interval.
+When a quiet save fails, the `Mono` that `ReactorMongoSubscriptionModel` waits for fails, and the model reads again
+from the subscription's position after its backoff. The save is tried again at the next quiet position without waiting
+for the interval.
 
 Change the interval with `saveQuietPositionEvery(Duration)` on `ReactorDurableSubscriptionModelConfig`, and turn the
 save off with `neverSaveQuietPosition()`.

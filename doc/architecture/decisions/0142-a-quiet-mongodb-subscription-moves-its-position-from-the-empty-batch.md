@@ -139,10 +139,15 @@ writes the position under a condition reads that condition when it is asked, whi
   any run, so an action a pause stopped waiting for keeps the save off until it returns. A predicate can decline
   events until a batch the action keeps in memory is written, and a restart from a position after those events would
   lose the batch.
-- Before the first event after a subscribe it saves whatever the predicate is. A read that returns nothing then comes
-  after no event the subscription hasn't been given. After a restart, the events the predicate declined come after the
-  stored checkpoint, so the change stream returns them before any empty read, and the first one the predicate declines
-  stops the save again.
+- Before the first event after a subscribe it saves only when a position of the subscription is stored, the one it
+  read from the checkpoint store or the one it recorded for a subscription from the model default. A read that returns
+  nothing then comes after no event the subscription hasn't been given, and the save moves that position on. After a
+  restart, the events the predicate declined come after the stored checkpoint, so the change stream returns them before
+  any empty read, and the first one the predicate declines stops the save again.
+- A subscription from a `StartAt` of your own gets no quiet save before the predicate stores the position of its first
+  event. With a predicate that declines every event, a quiet save would store a position that no later event moves, and
+  a restart would resume from it until the oplog drops it. The model doesn't read the checkpoint store for such a
+  subscription, so the same goes for one whose id has a position that an earlier run stored.
 - It writes with the same `CheckpointWriteCondition` as a checkpoint for an event, read before the read that
   returned the position.
 - The save holds the lock per subscription id that `subscribe(..)`, `resumeSubscription(..)`, `cancelSubscription(..)`
@@ -174,7 +179,8 @@ A quiet position is saved when all of these hold, and only then:
 3. The interval has passed since the subscribe, the last checkpoint written for an event, the last quiet position
    save that went ahead, or the last failed read of the write condition for one.
 4. No delivery of the subscription is under way in any run, and the current delivery that started last since the
-   subscribe stored the checkpoint of its event, or none has started. A delivery is current unless a current delivery
+   subscribe stored the checkpoint of its event, or none has started and a position of the subscription is stored, as
+   described above. A delivery is current unless a current delivery
    that started before it came from a later read. A delivery stores it when the persist predicate accepts the event,
    no cancel has come and the write succeeds. This must hold when the model asks before the read, and again when the
    position is written.
@@ -250,6 +256,10 @@ outlasts the pause. A checkpoint store
 that hangs would then block a pause of that subscription, and a pause is what takes a subscription away from a node
 that lost its lease.
 
+Reading the checkpoint store for a subscription from a `StartAt` of your own, to find out whether an earlier run
+stored a position for its id, would let its quiet save start before its first event. It would add a read of the store
+to every such subscribe, and the save would move on a position that the subscription didn't start from.
+
 Taking the last thread that read as the open run, and treating a delivery on any other thread as late, would need no
 numbers. A closed run's thread that reads once more after the resume would then make the open run's next delivery
 late, and if the delivery before that was of an event the predicate declined, a quiet subscription would get no quiet
@@ -323,11 +333,14 @@ comes after every event an earlier run's action completed for.
 blocking capability, with a `Mono` in place of a blocking call. Before each look the model asks each listener for a
 function, calls it when the look finds a new quiet position, and hands the subscription nothing more until the `Mono`
 it returns has completed. An error from that `Mono`, a `CheckpointWriteConditionNotFulfilledException` included, is
-retried forever like an error from an action, by reading again from the subscription's position after the backoff
-rather than calling the function again in place. That loses no event, since the position only moves to a token a later
+retried forever with the backoff an error from an action is retried with. An action is called again for the same
+event, while the model reads again from the subscription's position instead of calling the function again. That loses
+no event, since the position only moves to a token a later
 look found replaced, and such a token never comes after an event whose action hasn't completed. The blocking models end
 delivery on that exception, since there the quiet save is conditional on the version of the lease and fails once a
-node with a newer lease has written. The reactor stack has no lease, so only a listener of your own can raise it.
+node with a newer lease has written. The reactor stack has no lease, but a subscribe that took over a delete of the
+id writes its positions on a condition, and `ReactorDurableSubscriptionModel` saves a quiet position on that condition
+too. So its own listener raises the exception when the store refuses that write.
 
 The `Flux` that `subscribe(filter, startAt)` returns reads through `ReactiveMongoTemplate.changeStream(..)` as before.
 Nothing listens for its quiet position.
@@ -347,21 +360,26 @@ the action hasn't had. The driver stores the reply of a `getMore` before it hand
 ### `ReactorDurableSubscriptionModel`
 
 **`ReactorDurableSubscriptionModel` saves the quiet position the wrapped model reports, by the rule for the blocking
-model with these differences.** It adds its listener when it is made, if the model it wraps implements the reactor
-`QuietPositionReportingSubscriptions` and the interval isn't turned off, and removes it at `shutdown()`. The interval
-is a minute by default, as on the blocking config.
+model with these differences.** It adds its listener when it is made, if the interval isn't turned off and
+`QuietPositionReportingSubscriptions.findIn(..)` finds the reactor capability on the model it wraps, and removes it at
+`shutdown()`. `ReactorMongoSubscriptionModel` asks the listener before every look, once a second while a subscription
+waits for a batch. The interval is a minute by default, as on the blocking config.
 
 1. The position comes from the listener. `ReactorMongoSubscriptionModel` reports it only once the action's `Mono` has
    completed for every event before it.
 2. The save uses the write condition of a save after an event, which is `any()` unless the subscribe took over a delete
    of the id. The reactor stack has no lease that could move to another node during the read.
-3. The interval counts from the subscribe, the last checkpoint written for an event, or the last quiet save that
-   succeeded. A failed quiet save fails the `Mono` the wrapped model waits for, as a failed save after an event fails
-   the action. The wrapped model reads again from the subscription's position after its backoff, and the next quiet
-   position is saved without waiting for the interval. The blocking model logs the failure and tries again after the
-   interval.
+3. The interval counts from when the subscription is handed to the wrapped model, and again from when it is started
+   again there, as described below. After that it counts from the last checkpoint written for an event, or the last
+   quiet save that succeeded. A failed quiet save fails the `Mono` the wrapped model waits for, as a failed save after
+   an event fails the action. The wrapped model reads again from the subscription's position after its backoff, and
+   the next quiet position is saved without waiting for the interval. The blocking model logs the failure and tries
+   again after the interval.
 4. No delivery of the subscription is under way, and the delivery that ended last stored the checkpoint of its event,
-   or none has ended. A delivery that ends with an error or a cancel stored nothing. The reactor model hands a
+   or none has ended and the subscription started from the checkpoint the store held for it or the one this model
+   recorded for it. A subscription from a `StartAt` of your own gets no quiet save before the predicate stores the
+   position of its first event, as on the blocking model. A delivery that ends with an error or a cancel stored
+   nothing. The reactor model hands a
    subscription one piece of work at a time, and a new run reads nothing until the work of every earlier run has
    completed or been cancelled, so a late delivery of a closed run can't come after the open run's, and the reads are
    not numbered. This is checked before the read and again when the save starts.
@@ -375,8 +393,8 @@ the first subscription reports comes after those events. So the quiet save of th
 recorded position is known, and saves nothing when the subscription is started again. The subscription started again
 saves its quiet positions as any other.
 
-`ReactorDurableSubscriptionModel` finds the listener capability with `QuietPositionReportingSubscriptions.findIn(..)`
-on the model it wraps. `ReactorCatchupSubscriptionModel` and `ReactorStreamCatchupSubscriptionModel` answer it with the
+`QuietPositionReportingSubscriptions.findIn(..)` asks the model it is given for the capability through
+`capability(..)`. `ReactorCatchupSubscriptionModel` and `ReactorStreamCatchupSubscriptionModel` answer it with the
 capability of the model they wrap, and no other capability. So the durable model adds its listener to
 `ReactorMongoSubscriptionModel` also when one of them sits between the two, as in the reactive Spring Boot starter when
 the event store supports catch-up. In dual mode the stream and the DCB catch-up hand their subscriptions to the same
@@ -393,7 +411,8 @@ over, and a cancel during the replay ends it for good.
 A quiet subscription behind a `DurableSubscriptionModel` costs one checkpoint write per interval. Keep the interval
 well below the oplog window. A subscription whose persist predicate declines some events, such as an `EveryN` with
 `n` above 1, gets no quiet position saved after a declined event until the predicate stores one. If it stays quiet
-for longer than the oplog window after that, a restart still ends in lost history.
+for longer than the oplog window after that, a restart still ends in lost history. A subscription from a `StartAt` of
+your own gets no quiet position saved before the predicate stores its first one, on both stacks.
 
 A subscription that matches nothing resumes and restarts from a position the oplog still has, as long as the process
 is down, or the subscription paused, for less than the oplog window. Longer than that still ends in lost history.
@@ -440,7 +459,9 @@ implements `QuietPositionReportingSubscriptions`.
 
 A quiet subscription behind a `ReactorDurableSubscriptionModel` that wraps `ReactorMongoSubscriptionModel` costs one
 checkpoint write per interval too. A storage that keeps failing makes the wrapped model read the subscription again
-after each backoff, as a failed save after an event does. A subscription model of your own between the two gets no
+after each backoff. A failed save after an event fails the action instead, which the wrapped model calls again for the
+same event after the backoff without reading the change stream again. A subscription model of your own between the
+two gets no
 quiet position saved unless it answers the capability with the one of the model it wraps. That is only safe when it
 hands a subscription to the wrapped model after every event it delivers by itself has reached the action.
 
