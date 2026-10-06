@@ -1540,7 +1540,10 @@ for a model with a subscription that doesn't compete, since only then did its `s
 it happens for any model whose wrapped model is not running when `start(..)` is called.
 
 If you called `isRunning()` to find out whether this node delivers events, call `isRunning(id)` for each subscription
-instead. It asks the wrapped model, which runs a competing subscription only on the node that holds its lease.
+instead. It asks the wrapped model, which runs a competing subscription only on the node that holds its lease. A node
+can still hand an event that waits for the lease to the handler without it, for instance when the node resumes another
+competing subscription in the wrapped model, so the same event can reach the handler on two nodes. No event is lost
+that way.
 
 There is no recipe for this change. The call compiles as before, and what it returns is runtime behavior that a rewrite
 of the source cannot see.
@@ -1630,11 +1633,12 @@ on the wrapped model, which 0.33.0 never did. When that call throws, the constru
 
 Call `start()` on the `CompetingConsumerSubscriptionModel`. Code that also calls `start()` on the wrapped model, before
 or after, keeps working, and a competing subscription runs once this node holds its lease. Calling `start()` on the
-wrapped model instead runs the subscriptions that don't compete, but no competing subscription competes for its lease, so every
-event the wrapped model hands one waits. A warning that names the subscription and this step is logged the first time
-that happens for each such subscription. A `stop()` or `shutdown()` on the competing consumer model hands the events
-that wait to the handler. Code that started neither model now delivers nothing and logs nothing, since the wrapped model
-hands no event over.
+wrapped model instead runs the subscriptions that don't compete, but no competing subscription competes for its lease,
+so every event the wrapped model hands one waits. A warning that names the subscription and this step is logged the
+first time that happens for each such subscription. An event that waits goes to the handler without the lease once the
+competing consumer model calls the wrapped model for that subscription, or for every subscription as `stop()` and
+`shutdown()` do, and once its thread is interrupted. No event is lost. Code that started neither model now delivers
+nothing and logs nothing, since the wrapped model hands no event over.
 
 Over a wrapped model that runs as the competing consumer model is built, such as a `SpringMongoSubscriptionModel` with
 the default configuration, nothing changes.
