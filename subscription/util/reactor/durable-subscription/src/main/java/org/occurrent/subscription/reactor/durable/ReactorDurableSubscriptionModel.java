@@ -130,25 +130,38 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * registration.
  * <p>
  * Where this model hands the subscription to a wrapped model that manages named subscriptions, a subscribe from the
- * subscription-model default, or from a dynamic start position that answers it, does not wait for storage. It reads
- * the stored checkpoint, and where none is stored, where the feed was at the call, and hands the subscription to the
+ * subscription-model default, or from a dynamic start position that answers it, does not wait for storage. It reads the
+ * stored checkpoint, and where none is stored, where the feed was at the call, and hands the subscription to the
  * wrapped model once that read answers, on a thread of this model's own. The call subscribes to {@link
- * CheckpointAwareSubscriptionModel#globalCheckpointAsOfNow()} of the wrapped model before it returns, so it returns at
- * once where that read does not block when subscribed to, as the read of {@code ReactorMongoSubscriptionModel} does
- * not. Then a subscribe made on a thread that must not wait, such as the Netty event loop thread that delivers the
- * answer of that read, returns at once too. Where nothing is stored, the subscription starts from where the feed was
- * at the call, however late the read answers.
+ * CheckpointAwareSubscriptionModel#globalCheckpointAsOfNow()} of the wrapped model before it returns, so it doesn't
+ * wait for storage where that read does not block when subscribed to, as the read of {@code
+ * ReactorMongoSubscriptionModel} does not. The call still takes a monitor of this model and asks the wrapped model
+ * which ids it holds, which {@code ReactorMongoSubscriptionModel} answers under its own monitor, so the call can wait
+ * while another call holds one of them. A dynamic start position is asked on the calling thread before that read is
+ * subscribed to, unless a checkpoint that a cancel of the id deleted is still being written back, and the call waits
+ * for whatever its function waits for. So a subscribe from the subscription-model default made on a thread that must
+ * not wait for storage, such as the Netty event loop thread that delivers the answer of that read, doesn't wait for it.
+ * Where nothing is stored, the subscription starts from where the feed was at the call, however late the read answers.
  * <p>
  * Until the hand-over, this model answers {@link #pauseSubscription(String)}, {@link #resumeSubscription(String)},
  * {@link #isRunning(String)}, {@link #isPaused(String)} and {@link #subscriptionIds()} for that subscription itself,
- * and the wrapped model gets the state asked for once it has the subscription. A refusal of the wrapped model, an
- * unsupported filter or a duplicate id for example, a read that fails and a start position that cannot be recorded
+ * and the wrapped model gets the state asked for once it has the subscription. When the subscribe is refused at the
+ * hand-over because the wrapped model holds a subscription of the id already, a pause or a resume made meanwhile goes
+ * to that subscription instead, and a stop or a start reached the wrapped model anyway. A refusal of the wrapped model,
+ * an unsupported filter or a duplicate id for example, a read that fails and a start position that cannot be recorded
  * each fail {@link Subscription#waitUntilStarted()} of the subscription {@code subscribe(..)} returned, with an {@code
  * ERROR} logged. The start position is recorded only once the wrapped model has taken the subscribe, so a subscribe it
- * refuses stores nothing for the id. A cancel of the id or a {@link #shutdown()} ends the wait, and a read for
- * one id does not hold up another id. While the read has not answered, a {@code WARN} is logged every 10 seconds. A
- * subscribe of an id that this model, or the wrapped model as far as it answers at the call, already holds throws
- * {@link DuplicateSubscriptionIdException} at the call.
+ * refuses stores nothing for the id. A cancel of the id or a {@link #shutdown()} ends the wait, and a read for one id
+ * does not hold up another id. While the read has not answered, a {@code WARN} is logged every 10 seconds.
+ * <p>
+ * A subscribe from the subscription-model default throws {@link DuplicateSubscriptionIdException} at the call when the
+ * wrapped model reports the id, from {@link IntrospectableSubscriptions#subscriptionIds()} where it lists its ids and
+ * from {@code isRunning(..)} or {@code isPaused(..)} where it doesn't. It throws there too while another subscribe of
+ * the id waits to be handed over or is being handed over, while this model starts a subscription of the id in the
+ * wrapped model again, and while a call this model sent the wrapped model for the id is under way. A duplicate the
+ * check at the call misses fails {@link Subscription#waitUntilStarted()} instead, once it is refused at the hand-over.
+ * A wrapped model that doesn't list its ids can answer {@code false} from both for a subscription it moves between
+ * running and paused, and then the check misses a subscription that this model handed over to it earlier.
  * <p>
  * Where this model drives the subscription itself, no call waits for that read, on any thread. The read asks
  * {@link CheckpointAwareSubscriptionModel#globalCheckpointAsOfNow()} of the wrapped model, which answers with where the
