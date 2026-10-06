@@ -116,9 +116,10 @@ import static java.util.Objects.requireNonNull;
  * wrapped model delivers it on. A lease strategy whose {@code hasLock} throws, also an {@link Error}, counts as
  * reporting the lease not held. A warning with the failure, naming the subscriber and the subscription, is logged for
  * the first {@code hasLock} that throws while the event waits and for every fifth one after it, which is at most about
- * once a second once the event has waited for a second. A {@code hasLock} that throws on the look where one of the
- * causes below lets the event through logs no warning, and an {@link Error} thrown while logging the warning is
- * ignored, so the event still waits.
+ * once a second once the event has waited for a second. A {@code hasLock} that throws on a look where one of the
+ * causes below lets the event through logs no warning, though a {@code shutdown()} that begins just as the warning is
+ * logged still lets the event through after it. An {@link Error} thrown while logging anything for a waiting event is
+ * ignored, so the event is neither skipped nor lost.
  * <br>
  * <br>
  * A waiting event also runs without {@code hasLock} reporting the lease held, as it would without the lease strategy.
@@ -2691,11 +2692,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         FailedLooks failedLooks = new FailedLooks();
         while (!shutDown && !mayDeliver(key, delivery, failedLooks)) {
             if (!waited) {
-                logDebug("Holding an event until this node may deliver it (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
+                logWhileWaiting(() -> logDebug("Holding an event until this node may deliver it (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId()));
                 // A wrapped model started directly delivers here, and nothing registers the subscription for its lease
                 if (notStartedSinceBuilt && delivery.warnedOfNoStart.compareAndSet(false, true)) {
-                    log.warn("Holding the events of subscription {} until this node holds its lease, which it doesn't compete for until start() is called on the {}. Call start() on the {}, not on the subscription model it wraps (subscriberId={}, subscriptionId={})",
-                            key.subscriptionId(), CompetingConsumerSubscriptionModel.class.getSimpleName(), CompetingConsumerSubscriptionModel.class.getSimpleName(), key.subscriberId(), key.subscriptionId());
+                    logWhileWaiting(() -> log.warn("Holding the events of subscription {} until this node holds its lease, which it doesn't compete for until start() is called on the {}. Call start() on the {}, not on the subscription model it wraps (subscriberId={}, subscriptionId={})",
+                            key.subscriptionId(), CompetingConsumerSubscriptionModel.class.getSimpleName(), CompetingConsumerSubscriptionModel.class.getSimpleName(), key.subscriberId(), key.subscriptionId()));
                 }
                 waited = true;
             }
@@ -2703,15 +2704,15 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             try {
                 called = callsIntoTheWrappedModelOnThisThread.get()[0] > 0 || delivery.calledSince(callsSeen, waitMillis);
             } catch (InterruptedException e) {
-                logDebug("Delivering an event without the lease, since the thread was interrupted (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
+                // The flag is set again before logging, which can throw
                 if (interruptedBefore) {
                     Thread.currentThread().interrupt();
-                    return false;
                 }
-                return true;
+                logWhileWaiting(() -> logDebug("Delivering an event without the lease, since the thread was interrupted (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId()));
+                return !interruptedBefore;
             }
             if (called) {
-                logDebug("Delivering an event without the lease, since this model calls the wrapped model for the subscription or has forgotten it (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId());
+                logWhileWaiting(() -> logDebug("Delivering an event without the lease, since this model calls the wrapped model for the subscription or has forgotten it (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId()));
                 return false;
             }
             logTheFailedLook(key, failedLooks);
@@ -2740,23 +2741,30 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     // Called once the event has waited after the look with no call letting it through, so no warning is logged for a
-    // look whose event a call lets through at once. A shutdown() that begins right after still lets it through.
-    private static void logTheFailedLook(SubscriptionIdAndSubscriberId key, FailedLooks failedLooks) {
+    // look whose event a call or shutdown() lets through at once. A shutdown() that begins after this check still lets
+    // it through.
+    private void logTheFailedLook(SubscriptionIdAndSubscriberId key, FailedLooks failedLooks) {
         Throwable failure = failedLooks.lastFailure;
-        if (failure == null) {
+        failedLooks.lastFailure = null;
+        if (failure == null || shutDown) {
             return;
         }
-        failedLooks.lastFailure = null;
+        if (failedLooks.count++ % LEASE_LOOKS_BETWEEN_WARNINGS == 0) {
+            int failedLooksSoFar = failedLooks.count;
+            logWhileWaiting(() -> log.warn("Could not find out whether this node holds the lease, so the event goes on waiting (subscriberId={}, subscriptionId={}, failedLooks={})",
+                    key.subscriberId(), key.subscriptionId(), failedLooksSoFar, failure));
+        } else {
+            logWhileWaiting(() -> logDebug("Could not find out whether this node holds the lease, so the event goes on waiting (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId(), failure));
+        }
+    }
+
+    // Every log call made while an event waits in awaitTheLease goes through here. Logging can throw an Error, such as
+    // an OutOfMemoryError, past the appender, and thrown from the wait it would skip the action and lose the event.
+    private static void logWhileWaiting(Runnable logCall) {
         try {
-            if (failedLooks.count++ % LEASE_LOOKS_BETWEEN_WARNINGS == 0) {
-                log.warn("Could not find out whether CompetingConsumer holds its lease, so the event goes on waiting and the lease strategy is asked again (subscriberId={}, subscriptionId={}, failedLooks={})",
-                        key.subscriberId(), key.subscriptionId(), failedLooks.count, failure);
-            } else {
-                logDebug("Could not find out whether this node holds the lease, so the event waits (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId(), failure);
-            }
+            logCall.run();
         } catch (Throwable ignored) {
-            // Logging can throw an Error, such as an OutOfMemoryError, past the appender. Thrown from here it would skip
-            // the action and lose the event.
+            // The event goes on as if nothing was logged
         }
     }
 
