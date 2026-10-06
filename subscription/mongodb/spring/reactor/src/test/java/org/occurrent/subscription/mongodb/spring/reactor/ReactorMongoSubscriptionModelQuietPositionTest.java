@@ -113,6 +113,7 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
     // The client the subscription model reads with, and the only one the fail points break
     private MongoClient subscriberClient;
     private String databaseName;
+    private String eventCollection;
     private CommandLog commands;
     private ReactorMongoEventStore mongoEventStore;
     private ReactorMongoSubscriptionModel subscriptionModel;
@@ -122,13 +123,16 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reactivequiet");
         databaseName = requireNonNull(connectionString.getDatabase());
         mongoClient = MongoClients.create(connectionString);
+        // A collection of its own for every test, since a subscription started at the present can also receive what
+        // was written up to 16 seconds before it, which would otherwise include the previous test's events
+        eventCollection = "events-" + UUID.randomUUID();
         commands = new CommandLog();
         subscriberClient = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString)
                 .applicationName(SUBSCRIBER_APPLICATION_NAME).addCommandListener(commands).build());
-        subscriptionModel = new ReactorMongoSubscriptionModel(new ReactiveMongoTemplate(subscriberClient, databaseName), "events", TimeRepresentation.RFC_3339_STRING,
+        subscriptionModel = new ReactorMongoSubscriptionModel(new ReactiveMongoTemplate(subscriberClient, databaseName), eventCollection, TimeRepresentation.RFC_3339_STRING,
                 ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)));
         ReactiveTransactionManager transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, databaseName));
-        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(eventCollection).transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new ReactorMongoEventStore(new ReactiveMongoTemplate(mongoClient, databaseName), eventStoreConfig);
     }
 
@@ -167,8 +171,9 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
         waitUntilStarted(subscriptionModel.subscribe("every-event", StartAt.now(), event -> Mono.fromRunnable(() -> everyEvent.add(event))));
         NameWasChanged notMatched = nameWasChanged();
         write(notMatched);
-        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(everyEvent).extracting(CloudEvent::getId).containsExactly(notMatched.eventId()));
-        Checkpoint positionOfNotMatched = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(everyEvent.getFirst());
+        // It can also receive the matched event, written less than 16 seconds before it started
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(everyEvent).extracting(CloudEvent::getId).contains(notMatched.eventId()));
+        Checkpoint positionOfNotMatched = everyEvent.stream().filter(event -> event.getId().equals(notMatched.eventId())).findFirst().map(CheckpointAwareCloudEvent::getCheckpointOrThrowIAE).orElseThrow();
         await().atMost(30, SECONDS).untilAsserted(() -> assertThat(quietPositions).as("positions reported at or after the event that did not match").anyMatch(position -> isAtOrAfter(position, positionOfNotMatched)));
         Checkpoint quietPosition = quietPositions.stream().filter(position -> isAtOrAfter(position, positionOfNotMatched)).findFirst().orElseThrow();
 
@@ -480,7 +485,8 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
         waitUntilStarted(third);
         NameDefined matched = nameDefined();
         write(matched);
-        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(deliveredToTheThird).containsExactly(matched.eventId()));
+        // It can also receive the event the first run read, written less than 16 seconds before it started
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(deliveredToTheThird).contains(matched.eventId()));
     }
 
     @Test
@@ -505,7 +511,7 @@ class ReactorMongoSubscriptionModelQuietPositionTest {
         // Given: 20 slow reads on the same client, each holding a session of its own
         write(nameDefined());
         MongoDatabase database = subscriberClient.getDatabase(databaseName);
-        Document slowRead = new Document("find", "events").append("filter", new Document("$where", "sleep(100) || true"));
+        Document slowRead = new Document("find", eventCollection).append("filter", new Document("$where", "sleep(100) || true"));
         disposables.add(Flux.range(0, 20)
                 .flatMap(__ -> Mono.defer(() -> Mono.from(database.runCommand(slowRead))).repeat(60), 20)
                 .subscribe(__ -> {

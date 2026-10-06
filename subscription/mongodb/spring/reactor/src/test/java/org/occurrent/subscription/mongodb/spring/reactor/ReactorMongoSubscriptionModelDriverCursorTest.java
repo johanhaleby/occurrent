@@ -121,6 +121,7 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
     // The client the subscription model reads with, and the only one the fail points break
     private MongoClient subscriberClient;
     private String databaseName;
+    private String eventCollection;
     private CommandLog commands;
     private ReactorMongoEventStore mongoEventStore;
     private ReactorMongoSubscriptionModel subscriptionModel;
@@ -140,11 +141,14 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reactivedrivercursor");
         databaseName = requireNonNull(connectionString.getDatabase());
         mongoClient = MongoClients.create(connectionString);
+        // A collection of its own for every test, since a subscription started at the present can also receive what
+        // was written up to 16 seconds before it, which would otherwise include the previous test's events
+        eventCollection = "events-" + UUID.randomUUID();
         commands = new CommandLog();
         subscriberClient = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString)
                 .applicationName(SUBSCRIBER_APPLICATION_NAME).addCommandListener(commands).build());
         ReactiveTransactionManager transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, databaseName));
-        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(eventCollection).transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new ReactorMongoEventStore(new ReactiveMongoTemplate(mongoClient, databaseName), eventStoreConfig);
         subscriptionModel = modelOver(new ReactiveMongoTemplate(subscriberClient, databaseName), configuration());
         Logger logger = (Logger) LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
@@ -401,8 +405,8 @@ class ReactorMongoSubscriptionModelDriverCursorTest {
         return ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS));
     }
 
-    private static ReactorMongoSubscriptionModel modelOver(ReactiveMongoTemplate template, ReactorMongoSubscriptionModelConfig config) {
-        return new ReactorMongoSubscriptionModel(template, "events", TimeRepresentation.RFC_3339_STRING, config);
+    private ReactorMongoSubscriptionModel modelOver(ReactiveMongoTemplate template, ReactorMongoSubscriptionModelConfig config) {
+        return new ReactorMongoSubscriptionModel(template, eventCollection, TimeRepresentation.RFC_3339_STRING, config);
     }
 
     // The model opens its change stream on the collection this template hands out, and a publisher that
