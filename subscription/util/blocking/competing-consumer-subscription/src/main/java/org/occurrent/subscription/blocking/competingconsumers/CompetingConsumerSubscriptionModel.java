@@ -152,10 +152,10 @@ import static java.util.Objects.requireNonNull;
  * <li>An interrupt of its thread ends a wait between two looks at the lease, or the interrupt flag is already set as
  * such a wait begins.</li>
  * <li>{@code shutdown()} while it waits for the calls already let into the wrapped model, from the start of that wait
- * until a {@code shutdown()} gets past it. When another {@code shutdown()} is under way past that wait as the wait
- * starts, the wait lets nothing through. {@code shutdown()} also lets the waiting events through from when it shuts the
- * wrapped model down. When the wrapped model throws from its own {@code shutdown()}, each event after that waits for
- * the lease again, see below.</li>
+ * until it gets past it. A {@code shutdown()} that finds another one under way makes no such wait and lets nothing
+ * through. {@code shutdown()} also lets the waiting events through from when it shuts the wrapped model down. When the
+ * wrapped model throws from its own {@code shutdown()}, each event after that waits for the lease again, see
+ * below.</li>
  * </ul>
  * So a wrapped model that waits in such a call for the thread that delivers the event, as one does that waits for a
  * running action in {@code pauseSubscription} or that delivers while holding a lock the call takes, never holds the
@@ -265,12 +265,12 @@ import static java.util.Objects.requireNonNull;
  * {@code shutdown()} still shuts the wrapped model down and, when that returns, makes its attempt to give up each
  * lease. A lease strategy whose own {@code shutdown()} threw may go on refreshing a lease that isn't given up.
  * {@code shutdown()} throws the first failure, the wrapped model's ahead of the lease strategy's, with every later one
- * added to it as suppressed. The failure is thrown as it is, a checked one too, without being wrapped. Once a
- * {@code shutdown()} has waited for the calls let into the wrapped model, it waits for any other {@code shutdown()}
- * still under way past that wait, and then returns or throws the same failure as that one does. With none under way,
- * it makes an attempt of its own, also after a {@code shutdown()} that threw. A {@code shutdown()} called from the
- * action of a subscription of this model while another one is under way returns without waiting for it, see
- * {@link #shutdown()}.
+ * added to it as suppressed. The failure is thrown as it is, a checked one too, without being wrapped. A
+ * {@code shutdown()} that finds another one under way waits for it, and then returns or throws the same failure as that
+ * one does. With none under way, it makes an attempt of its own, also after a {@code shutdown()} that threw. A
+ * {@code shutdown()} called while another one is under way, on a thread that the other one can wait for, returns at
+ * once without waiting for it. {@link #shutdown()} lists those threads, among them each thread running the action of a
+ * subscription of this model.
  * <br>
  * <br>
  * A competing subscription made while this model is stopped goes to the wrapped model straight away, through
@@ -402,12 +402,12 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     private final Map<String, BeingMade> subscriptionsBeingMade = new HashMap<>();
     // Set once shutdown() has begun, and never cleared
     private volatile boolean shutDown;
-    // Set as a shutdown() begins to wait for the calls let into the wrapped model, unless another one is under way past
-    // that wait, until a shutdown() gets past it. Set again from when that one shuts the wrapped model down until that
-    // throws, if it does. Every event waiting in awaitTheLease then goes without the lease.
+    // Set as the shutdown() under way begins to wait for the calls let into the wrapped model, until it gets past that
+    // wait. Set again from when it shuts the wrapped model down until that throws, if it does. Every event waiting in
+    // awaitTheLease then goes without the lease.
     private volatile boolean everyEventGoes;
-    // The shutdown() under way past its wait for the calls let into the wrapped model, read and written under
-    // shutdownAttempts only. Only that call writes everyEventGoes while it is set.
+    // The shutdown() under way, from before its wait for the calls let into the wrapped model until it ends, read and
+    // written under shutdownAttempts only. Only that call writes everyEventGoes.
     private final Object shutdownAttempts = new Object();
     private @Nullable ShutdownAttempt shutdownUnderWay;
     // What the strategy knows of each consumer, as far as this model can tell. TRUE once a register has returned, FALSE
@@ -2739,10 +2739,10 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * interrupt, one that comes while it is asked or one already set when the event came, and the event then goes on
      * waiting.</li>
      * <li>{@code shutdown()} while it waits for the calls let into the wrapped model before it began, from the start of
-     * that wait until a {@code shutdown()} gets past it. When another {@code shutdown()} is under way past that wait as
-     * the wait starts, the wait lets nothing through. {@code shutdown()} also lets the event through from when it has
-     * shut the lease strategy down and goes on to shut the wrapped model down. When the wrapped model throws from its
-     * own {@code shutdown()}, the event waits for the lease again.</li>
+     * that wait until it gets past it. A {@code shutdown()} that finds another one under way makes no such wait and lets
+     * nothing through. {@code shutdown()} also lets the event through from when it has shut the lease strategy down and
+     * goes on to shut the wrapped model down. When the wrapped model throws from its own {@code shutdown()}, the event
+     * waits for the lease again.</li>
      * </ul>
      * Nothing else ends the wait, so an event a wrapped model delivers while this model is stopped waits for the lease
      * or for one of these causes.
@@ -3654,15 +3654,35 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * Waits while a {@code start(..)} starts the wrapped model, for as long as the wrapped model takes to start. It does
      * not wait for a resume of a competing subscription that a {@code start(..)} handed to a try.
      * <p>
-     * A {@code shutdown()} that finds another one under way, once it has waited for the calls let into the wrapped
-     * model, waits for that one, as the class documentation describes. When it is called from the action of a
-     * subscription of this model, it returns at that point instead, without waiting for the other one and without
-     * throwing what that one throws. The wrapped model's own {@code shutdown()} can wait for that action to return.
-     * {@code InMemorySubscriptionModel} waits up to five seconds for it, and a wrapped model of your own can wait with no
-     * time limit. A {@code shutdown()} called from any other thread that the wrapped model's own {@code shutdown()} waits
-     * for, such as a thread of your own that the action waits for, still waits for the one under way. The two calls then
-     * wait for each other until the wrapped model's own {@code shutdown()} stops waiting, which with no time limit never
-     * happens.
+     * A {@code shutdown()} that finds another one under way waits for it, as the class documentation describes, unless
+     * it is called on a thread that the one under way can wait for. It then returns at once, without waiting for the
+     * other one and without throwing what that one throws. These are the threads it returns at once on:
+     * <ul>
+     * <li>A thread running the action of a subscription of this model.</li>
+     * <li>The thread running the other {@code shutdown()}, which a wrapped model or a lease strategy of your own calls
+     * {@code shutdown()} back on from its own {@code shutdown()}.</li>
+     * <li>A thread inside a call this model makes to start the wrapped model, or to resume there a subscription that
+     * doesn't compete.</li>
+     * </ul>
+     * The {@code shutdown()} under way waits for these:
+     * <ul>
+     * <li>Each call this model makes on another thread to start the wrapped model, or to resume there a subscription that
+     * doesn't compete, that began before the {@code shutdown()}, for as long as the call takes. Such a call can itself
+     * wait for an action, which the wrapped model runs on the thread of the call or on a thread of its own.</li>
+     * <li>The lease strategy's own {@code shutdown()} and {@code removeListener(..)}, which can wait for the threads of
+     * the lease strategy. One of them can be acting on a loss of the lease, which pauses the subscription in the wrapped
+     * model, and that pause can wait for an action.</li>
+     * <li>The wrapped model's own {@code shutdown()}, which can wait for the actions under way.
+     * {@code InMemorySubscriptionModel} waits up to five seconds for them, and a wrapped model of your own can wait with
+     * no time limit.</li>
+     * <li>The threads that give up the leases, for at most five seconds.</li>
+     * </ul>
+     * A {@code shutdown()} called on any other thread that one of these waits for still waits for the one under way. Such
+     * a thread is a thread of your own that a call or an action waits for, or a thread of the wrapped model or of the
+     * lease strategy that runs no action, such as one that calls a listener of your own. The two calls then wait for each
+     * other until the one under way stops waiting, which with no time limit never happens. A {@code shutdown()} that the
+     * lease strategy's {@code unregisterCompetingConsumer} calls while the one under way gives up the leases waits for
+     * at most five seconds.
      *
      * @see SubscriptionModelLifeCycle#shutdown()
      */
@@ -3670,24 +3690,28 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     @Override
     public void shutdown() {
         logDebug("Trying to shutdown CompetingConsumer subscription model");
-        waitForEveryCallLetIntoTheWrappedModel();
         ShutdownAttempt attempt;
         boolean runsIt;
-        synchronized (shutdownAttempts) {
-            ShutdownAttempt underWay = shutdownUnderWay;
-            if (underWay != null && actionsRunningOnThisThread.get()[0] > 0) {
-                // The attempt under way can wait in the wrapped model's shutdown() for this action to return, so waiting
-                // for it here could wait forever
-                logDebug("Not waiting for the shutdown under way, since this is the thread of an action it may wait for");
-                return;
+        synchronized (wrappedModelStart) {
+            // Lets no further call into the wrapped model, also when this call returns at once below
+            shutDown = true;
+            wrappedModelStart.notifyAll();
+            synchronized (shutdownAttempts) {
+                ShutdownAttempt underWay = shutdownUnderWay;
+                if (underWay != null && mayBeWaitedForBy(underWay)) {
+                    // The attempt under way can wait for this thread, so waiting for it could never end
+                    logDebug("Not waiting for the shutdown under way, since it may wait for this thread");
+                    return;
+                }
+                runsIt = underWay == null;
+                attempt = underWay == null ? new ShutdownAttempt() : underWay;
+                shutdownUnderWay = attempt;
             }
-            runsIt = underWay == null;
-            attempt = underWay == null ? new ShutdownAttempt() : underWay;
-            shutdownUnderWay = attempt;
         }
         if (runsIt) {
             @Nullable Throwable failure;
             try {
+                waitForEveryCallLetIntoTheWrappedModel();
                 failure = shutDownOnce();
             } catch (Throwable e) {
                 failure = e;
@@ -3762,8 +3786,15 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         return first;
     }
 
+    // True on the thread running the attempt, and on a thread running an action or a call let into the wrapped model,
+    // each of which the attempt can wait for
+    private boolean mayBeWaitedForBy(ShutdownAttempt attempt) {
+        return attempt.runner == Thread.currentThread() || actionsRunningOnThisThread.get()[0] > 0 || runsInTheWrappedModelOnThisThread.get()[0] > 0;
+    }
+
     // What a shutdown() ended with, which every shutdown() that waits for it returns or throws too
     private static final class ShutdownAttempt {
+        private final Thread runner = Thread.currentThread();
         private final CountDownLatch ended = new CountDownLatch(1);
         private volatile @Nullable Throwable failure;
 
@@ -3791,24 +3822,17 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     /**
-     * Lets no further call start the wrapped model or run a subscription there, and waits for each one let through
-     * before that to return, so none of them starts the wrapped model or runs a subscription there once it is shut
-     * down. A lease callback or a try already under way is refused at its next such call. Like {@code stop()}, this
+     * Waits for each call let into the wrapped model before {@code shutdown()} began to return, apart from the ones on
+     * this thread, so none of them starts the wrapped model or runs a subscription there once it is
+     * shut down. A lease callback or a try already under way is refused at its next such call. Like {@code stop()}, this
      * waits for as long as such a call waits inside the wrapped model.
      */
     private void waitForEveryCallLetIntoTheWrappedModel() {
         int runsOnThisThread = runsInTheWrappedModelOnThisThread.get()[0];
         boolean interrupted = false;
         synchronized (wrappedModelStart) {
-            shutDown = true;
-            // A call waited for here can itself wait for a thread that delivers an event held for the lease. While
-            // another shutdown() is under way past this wait, only that one sets the flag.
-            synchronized (shutdownAttempts) {
-                if (shutdownUnderWay == null) {
-                    everyEventGoes = true;
-                }
-            }
-            wrappedModelStart.notifyAll();
+            // A call waited for here can itself wait for a thread that delivers an event held for the lease
+            everyEventGoes = true;
             while (runsInTheWrappedModel > runsOnThisThread) {
                 try {
                     wrappedModelStart.wait();
