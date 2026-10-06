@@ -1807,7 +1807,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // Called under positionLock. A writer still registered under the id belongs to a generation the new writer
-    // replaces, so it is retired here and writes nothing after this.
+    // replaces, so it is retired here and starts no position write after this.
     private void registerWriter(String subscriptionId, PositionWriter writer) {
         PositionWriter replaced = positionWriters.put(subscriptionId, writer);
         if (replaced != null && replaced != writer) {
@@ -3263,7 +3263,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // generation reads or writes anything.
         private volatile TakeOver takeOver = TakeOver.NONE;
         // Set under positionLock once this model retires the writer, and never cleared. Each reader treats the writer
-        // as ended at its own check, and the flag stops nothing already past a check.
+        // as ended at its own check. The flag itself stops no step already past a check, or one with no check of its
+        // own.
         private boolean retired;
         // Set by a cancel of the id while the subscribe was still reading where to start or handing the subscription
         // over, after which none of its writes start, its action does not run and the subscribe ends
