@@ -32,7 +32,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.slf4j.LoggerFactory;
 
@@ -48,6 +50,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -57,7 +60,8 @@ import static org.awaitility.Awaitility.await;
  * An event that waits for the lease is delivered once the lease is back, or once this model pauses, stops or starts
  * the subscription, and is never lost, also over an {@code InMemorySubscriptionModel} that does not retry an action
  * that throws, and also when the lease strategy throws while the event waits, which logs a warning, or logging anything
- * for a waiting event throws.
+ * for a waiting event throws. Logging for a waiting event that clears the interrupt flag doesn't take an interrupt set
+ * as the event came.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -318,6 +322,95 @@ class CompetingConsumerLosesNoHeldEventTest {
 
         assertThat(strategy.failedLooks.get()).as("hasLock throws for e2 once").isEqualTo(1);
         assertThat(warnings).filteredOn(warning -> warning.getFormattedMessage().contains("whether this node holds the lease")).as("[lease warnings for e2, which shutdown() let through after the look]").isEmpty();
+    }
+
+    @Test
+    void an_interrupt_set_as_an_event_that_waits_comes_is_set_in_the_action_and_after_it_when_logging_that_the_event_goes_clears_the_flag() throws Exception {
+        modelLog.setLevel(Level.DEBUG);
+        clearTheInterruptFlagWhenLogging("since the thread was interrupted");
+
+        InterruptFlags flags = anInterruptedThreadHandsOverAnEventWithoutTheLease();
+
+        assertThat(received).as("[events s1 received]").containsExactly("e2");
+        assertThat(flags.inTheAction()).as("[the interrupt flag in the action, set as e2 came]").containsExactly(true);
+        assertThat(flags.afterTheAction()).as("[the interrupt flag once the action has returned]").isTrue();
+    }
+
+    @Test
+    void an_interrupt_set_as_an_event_that_waits_comes_lets_it_through_when_logging_that_it_waits_clears_the_flag() throws Exception {
+        modelLog.setLevel(Level.DEBUG);
+        clearTheInterruptFlagWhenLogging("Holding an event");
+
+        InterruptFlags flags = anInterruptedThreadHandsOverAnEventWithoutTheLease();
+
+        assertThat(received).as("[events s1 received]").containsExactly("e2");
+        assertThat(flags.inTheAction()).as("[the interrupt flag in the action, set as e2 came]").containsExactly(true);
+        assertThat(flags.afterTheAction()).as("[the interrupt flag once the action has returned]").isTrue();
+    }
+
+    // As code that catches an InterruptedException without setting the flag again does
+    private void clearTheInterruptFlagWhenLogging(String text) {
+        AppenderBase<ILoggingEvent> clearing = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getFormattedMessage().contains(text)) {
+                    Thread.interrupted();
+                }
+            }
+        };
+        clearing.start();
+        modelLog.addAppender(clearing);
+        addedAppenders.add(clearing);
+    }
+
+    private record InterruptFlags(List<Boolean> inTheAction, boolean afterTheAction) {
+    }
+
+    // A thread whose interrupt flag is set hands e2 to s1 while this node doesn't hold the lease, so the interrupt lets
+    // e2 through. The lease comes back after AWAY_FOR, so an e2 that went on waiting reaches the action all the same,
+    // with the flag clear.
+    private InterruptFlags anInterruptedThreadHandsOverAnEventWithoutTheLease() throws Exception {
+        HandingOutItsActions inMemory = new HandingOutItsActions();
+        model = new CompetingConsumerSubscriptionModel(inMemory, strategy);
+        List<Boolean> inTheAction = new CopyOnWriteArrayList<>();
+        model.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), e -> {
+            inTheAction.add(Thread.currentThread().isInterrupted());
+            received.add(e.getId());
+        }).waitUntilStarted();
+        strategy.fenced = true;
+
+        Consumer<CloudEvent> action = inMemory.actions.get("s1");
+        CompletableFuture<Boolean> afterTheAction = new CompletableFuture<>();
+        Thread handingOver = Thread.ofPlatform().start(() -> {
+            Thread.currentThread().interrupt();
+            action.accept(event("e2"));
+            afterTheAction.complete(Thread.currentThread().isInterrupted());
+        });
+        handingOver.join(AWAY_FOR);
+        strategy.fenced = false;
+        return new InterruptFlags(inTheAction, afterTheAction.get(5, SECONDS));
+    }
+
+    // Keeps the action this model hands the wrapped model for each subscription, so a test can hand an event over on a
+    // thread of its own
+    private static final class HandingOutItsActions extends InMemorySubscriptionModel {
+        private final Map<String, Consumer<CloudEvent>> actions = new ConcurrentHashMap<>();
+
+        HandingOutItsActions() {
+            super(RetryStrategy.none());
+        }
+
+        @Override
+        public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            actions.put(subscriptionId, action);
+            return super.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public synchronized Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            actions.put(subscriptionId, action);
+            return super.subscribePaused(subscriptionId, filter, startAt, action);
+        }
     }
 
     // Throws an OutOfMemoryError from the appender for the first message at the level that contains the text, and

@@ -2707,11 +2707,11 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             try {
                 called = callsIntoTheWrappedModelOnThisThread.get()[0] > 0 || delivery.calledSince(callsSeen, waitMillis);
             } catch (InterruptedException e) {
-                // The flag is set again before logging, which can throw
+                // Logged with the flag clear, before it is set again, so an appender neither clears it nor fails on it
+                logWhileWaiting(() -> logDebug("Delivering an event without the lease, since the thread was interrupted (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId()));
                 if (interruptedBefore) {
                     Thread.currentThread().interrupt();
                 }
-                logWhileWaiting(() -> logDebug("Delivering an event without the lease, since the thread was interrupted (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId()));
                 return !interruptedBefore;
             }
             if (called) {
@@ -2762,12 +2762,18 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     // Every log call made while an event waits in awaitTheLease goes through here. Logging can throw an Error, such as
-    // an OutOfMemoryError, past the appender, and thrown from the wait it would skip the action and lose the event.
+    // an OutOfMemoryError, past the appender, and thrown from the wait it would skip the action and lose the event. An
+    // appender can also clear the interrupt flag, so a flag that was set as the call began is set again here.
     private static void logWhileWaiting(Runnable logCall) {
+        boolean interrupted = Thread.currentThread().isInterrupted();
         try {
             logCall.run();
         } catch (Throwable ignored) {
             // The event goes on as if nothing was logged
+        } finally {
+            if (interrupted && !Thread.currentThread().isInterrupted()) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
