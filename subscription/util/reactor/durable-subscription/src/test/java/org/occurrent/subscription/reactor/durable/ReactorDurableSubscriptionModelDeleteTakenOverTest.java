@@ -38,6 +38,7 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.api.reactor.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
@@ -79,6 +80,8 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
     private static final String SUBSCRIPTION_ID = "sub";
+    // A position after every event a test writes, so no event stores it
+    private static final String QUIET_POSITION = "1000";
     private static final String SAVE_FAILED = "The storage cannot save right now";
     private static final String READ_FAILED = "The storage cannot read right now";
     private static final String DELETE_FAILED = "The storage lost the answer to the delete";
@@ -621,6 +624,55 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             String stored = untilStored(storage, writtenAfter);
             assertThat(writtenWhileHeld).containsExactly(handedOver + 1, handedOver + 2);
             SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(thrown).as("how waiting for the start of the subscription ended").isNull();
+                softly.assertThat(delivered).as("events delivered to the subscription").containsExactlyElementsOf(positionsAfter(storedElsewhere, writtenAfter));
+                softly.assertThat(stored).as("checkpoint stored").isEqualTo(String.valueOf(writtenAfter));
+            });
+        } finally {
+            release.countDown();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * The first run of a subscription that is started again from an earlier position reports quiet positions that come
+     * after events its action skipped, so none of them may be saved.
+     */
+    @Test
+    void a_quiet_position_reported_before_the_subscription_is_started_again_from_an_earlier_position_is_not_saved() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        NamedFeed feed = new NamedFeed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage, new ReactorDurableSubscriptionModelConfig(1).saveQuietPositionEvery(Duration.ofNanos(1)));
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            Held heldCall = cancelWhileHeld(model, storage, feed, "nothing-stored", release);
+            assertThat(heldCall.entered().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("storage call held").isTrue();
+            long storedElsewhere = feed.write();
+            feed.write();
+            storage.storedElsewhereBeforeIfAbsent = new StringBasedCheckpoint(String.valueOf(storedElsewhere));
+            storage.resolvesRaceByPosition = true;
+            Subscription subscription = subscribeOn(caller, model, delivered);
+            feed.write();
+            feed.write();
+            Function<Checkpoint, Mono<Void>> saveQuietPosition = feed.quietPositionSaverFor(SUBSCRIPTION_ID);
+            assertThat(saveQuietPosition).as("save offered to the first run of the subscription").isNotNull();
+
+            // When
+            CompletableFuture<String> storedOnceTheSaveEnded = saveQuietPosition.apply(new StringBasedCheckpoint(QUIET_POSITION)).then(Mono.fromSupplier(storage::stored)).toFuture();
+            release.countDown();
+            long writtenAfter = feed.write();
+
+            // Then
+            String storedWhenTheSaveEnded = storedOnceTheSaveEnded.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            Throwable thrown = catchThrowable(() -> subscription.waitUntilStarted(TIMEOUT).block());
+            untilDelivered(delivered, writtenAfter);
+            String stored = untilStored(storage, writtenAfter);
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(storedWhenTheSaveEnded).as("checkpoint stored once the save of the quiet position ended").isNotEqualTo(QUIET_POSITION);
                 softly.assertThat(thrown).as("how waiting for the start of the subscription ended").isNull();
                 softly.assertThat(delivered).as("events delivered to the subscription").containsExactlyElementsOf(positionsAfter(storedElsewhere, writtenAfter));
                 softly.assertThat(stored).as("checkpoint stored").isEqualTo(String.valueOf(writtenAfter));
@@ -1611,8 +1663,9 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     // of its own, so a write does not wait for an action. While startFails is set, a subscribe keeps nothing of the
     // id and fails its start with START_FAILED, as ReactorMongoSubscriptionModel does after an error it can't
     // recover from.
-    private static final class NamedFeed extends Feed implements SubscriptionModel {
+    private static final class NamedFeed extends Feed implements SubscriptionModel, QuietPositionReportingSubscriptions {
         private final Map<String, Disposable> subscriptions = new ConcurrentHashMap<>();
+        private final List<QuietPositionListener> quietPositionListeners = new CopyOnWriteArrayList<>();
         private volatile boolean startFails;
 
         @Override
@@ -1646,6 +1699,21 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
                     return Mono.empty();
                 }
             };
+        }
+
+        @Override
+        public void addQuietPositionListener(QuietPositionListener listener) {
+            quietPositionListeners.add(listener);
+        }
+
+        @Override
+        public void removeQuietPositionListener(QuietPositionListener listener) {
+            quietPositionListeners.remove(listener);
+        }
+
+        // The function that saves a quiet position, as offered for the next read of the id, or null when none is
+        private @Nullable Function<Checkpoint, Mono<Void>> quietPositionSaverFor(String subscriptionId) {
+            return quietPositionListeners.getFirst().beforeReading(subscriptionId).block(TIMEOUT);
         }
 
         @Override
