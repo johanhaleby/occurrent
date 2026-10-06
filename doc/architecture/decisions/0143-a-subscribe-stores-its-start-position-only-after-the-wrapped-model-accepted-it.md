@@ -32,27 +32,34 @@ position for its own and deleted it, and a crash of the running subscription the
 
 `subscribe(..)` calls the wrapped model's `subscribe(..)`, or `subscribePaused(..)` when the subscription is held
 paused, exactly as before. The first position is recorded on the caller's thread once that call has returned. A
-subscribe the wrapped model refuses never gets that far, so it stores nothing, and there is nothing to delete.
+subscribe the wrapped model refuses never gets that far, so there is nothing to delete.
 
-The wrapped model gets a dynamic `StartAt`, and its first evaluation returns the recorded position:
+The wrapped model gets a dynamic `StartAt`, and the first evaluation that finds the position recorded returns it:
 
 | When the wrapped model evaluates it | What happens |
 |---|---|
+| Before the wrapped model's `subscribe(..)` returned | The evaluation records the position itself and returns it. When recording fails, the evaluation throws, and `subscribe(..)` records again once the wrapped model's `subscribe(..)` has returned |
 | While `subscribe(..)` records the position | The evaluation waits until the position is stored, then returns it |
-| After `subscribe(..)` failed to record it | `subscribe(..)` cancels the wrapped subscription and the evaluation throws `IllegalStateException`, so nothing starts |
-| Before the wrapped model's `subscribe(..)` returned | The evaluation records the position itself, which is where 0.33.0 recorded it |
+| After `subscribe(..)` failed to record it | `subscribe(..)` cancels the wrapped subscription and the evaluation throws `IllegalStateException`, so the wrapped model gets no start position |
 
-The last row exists because a wrapped model may wait for its own evaluation inside `subscribe(..)`, and that model
-would wait forever for a position the caller records only after `subscribe(..)` returns. Such a wrapped model has to
-refuse an id it already holds before it evaluates the start position. The native and Spring MongoDB models refuse a
-known id before they evaluate anything, and they evaluate the start position on their executor when the change
-stream opens.
+The first row exists because a wrapped model may wait for its own evaluation inside `subscribe(..)`, and that model
+would wait forever for a position the caller records only after `subscribe(..)` returns. That gives a wrapped model
+of your own two requirements, which `DurableSubscriptionModel` doesn't check:
 
-With that order, two things are true:
+- It refuses an id it already holds before it evaluates the start position. A model that evaluates first can store a
+  position for a subscribe it then refuses, as in 0.33.0.
+- When its evaluation inside `subscribe(..)` throws, its `subscribe(..)` throws as well. A model that waits and
+  evaluates again doesn't return from `subscribe(..)` until the position can be recorded.
+
+The native and Spring MongoDB models meet both. They refuse a known id before they evaluate anything, and they
+evaluate the start position on their executor when the change stream opens, without waiting for it in `subscribe(..)`.
+
+With that order, two things are true for those two models:
 
 - A subscribe that the wrapped model refuses writes no checkpoint.
-- No subscription delivers anything before its first position is stored, because the wrapped model can't open it
-  without the first evaluation, and that evaluation returns only once the position is stored.
+- Without `startWhenNoStartPositionCanBeRecorded(true)`, no subscription delivers anything before its first position
+  is stored. The model can't open it without the first evaluation, and that evaluation returns a position only once
+  it is stored.
 
 `DurableSubscriptionModel` doesn't change the run state between the wrapped `subscribe(..)` and the recording. A
 pause, resume, stop, start or shutdown in that window acts on the wrapped subscription the same way it does on any
@@ -62,7 +69,9 @@ The per-id lock in `DurableSubscriptionModel` orders `subscribe(..)`, `resumeSub
 `cancelSubscription(..)` of one id on one durable model. `pauseSubscription(..)`, `stop()`, `start(..)` and
 `shutdown()` don't take it. Two durable models over one wrapped model are ordered by the wrapped model, which accepts
 the id once and refuses the other subscribe, and the refused one records nothing. Two nodes each have a wrapped model
-that accepts, so both record, and the `ifAbsent()` write and ADR 130 decide which position is kept.
+that accepts, so both record. On a storage that evaluates write conditions, the `ifAbsent()` write and ADR 130 decide
+which position is kept. On one that doesn't, both positions are written unconditionally and the later write is kept,
+as before this decision, and `DurableSubscriptionModel` logs a warning.
 
 `CheckpointStorage` is unchanged, and so is the conformance suite in `occurrent-tck-subscription-blocking`.
 
@@ -82,11 +91,15 @@ that accepts, so both record, and the `ifAbsent()` write and ADR 130 decide whic
 
 ## Consequences
 
-A wrapped model of your own has to refuse an id it already holds before it evaluates the start position. A model that
-evaluates first can store a position for a subscribe it then refuses, as in 0.33.0.
+A wrapped model of your own has the two requirements listed under the decision, and nothing enforces them.
 
-The wrapped model's first evaluation can wait for one `globalCheckpoint()` call and one checkpoint write on the
-caller's thread.
+The wrapped model's first evaluation can wait while the caller's thread records the position. That reads the stored
+checkpoint, calls `globalCheckpoint()` and writes the position. When another node wrote a position first, it also
+settles which one is kept, as ADR 130 describes.
 
 When the position can't be recorded, the wrapped model held the subscription for a moment before `subscribe(..)`
-cancelled it. It delivered nothing in that moment.
+cancelled it. The MongoDB models delivered nothing in that moment, since their evaluation throws.
+
+When that cancel throws as well, the wrapped model may still hold the subscription. `subscribe(..)` throws the
+recording failure with a suppressed exception that says so, and keeps the subscription registered.
+`cancelSubscription(..)` tries the cancel again.
