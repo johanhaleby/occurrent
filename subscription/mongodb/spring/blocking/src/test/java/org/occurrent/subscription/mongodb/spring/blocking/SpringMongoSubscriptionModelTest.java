@@ -44,6 +44,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -1294,6 +1295,42 @@ public class SpringMongoSubscriptionModelTest {
             await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
         }
 
+        @Timeout(value = 30, unit = SECONDS)
+        @Test
+        void restarts_subscription_from_current_time_when_change_stream_history_is_lost_and_the_reply_to_ping_has_no_operation_time() {
+            // Given
+            BsonTimestamp lost = new BsonTimestamp(1, 0);
+            AtomicInteger pingsWithoutOperationTime = new AtomicInteger();
+            MongoTemplate template = new MongoTemplate(mongoTemplate.getMongoDatabaseFactory()) {
+                @Override
+                public Document executeCommand(Document command) {
+                    Document reply = super.executeCommand(command);
+                    if (command.containsKey("ping")) {
+                        reply.remove("operationTime");
+                        pingsWithoutOperationTime.incrementAndGet();
+                    }
+                    return reply;
+                }
+
+                @Override
+                public MongoDatabase getDb() {
+                    return historyLostAt(lost, super.getDb());
+                }
+            };
+            subscriptionModel = new SpringMongoSubscriptionModel(template, withConfig("events", TimeRepresentation.RFC_3339_STRING)
+                    .restartSubscriptionsOnChangeStreamHistoryLost(true).retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100))));
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+
+            // When
+            Subscription subscription = subscriptionModel.subscribe(UUID.randomUUID().toString(), null, StartAt.checkpoint(new MongoOperationTimeCheckpoint(lost)), state::add);
+
+            // Then
+            assertThat(subscription.waitUntilStarted(Duration.ofSeconds(10))).as("restarted after lost history although no reply to ping has an operation time").isTrue();
+            assertThat(pingsWithoutOperationTime).as("replies to ping without an operation time").hasPositiveValue();
+            mongoEventStore.write("1", serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+            await().atMost(10, SECONDS).untilAsserted(() -> assertThat(state).hasSize(1));
+        }
+
         @SuppressWarnings("unchecked")
         @Timeout(value = 20, unit = SECONDS)
         @Test
@@ -1600,5 +1637,43 @@ public class SpringMongoSubscriptionModelTest {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    // A change stream told to open at lostAt fails with history lost, as MongoDB answers once the oplog has dropped that
+    // position, which never happens on a fresh replica set
+    private static MongoDatabase historyLostAt(BsonTimestamp lostAt, MongoDatabase database) {
+        return proxy(MongoDatabase.class, database, (method, args, result) -> method.getName().equals("getCollection")
+                ? proxy(MongoCollection.class, result, (m, a, r) -> m.getName().equals("watch") ? changeStreamLostAt(lostAt, r, false) : r)
+                : result);
+    }
+
+    private static Object changeStreamLostAt(BsonTimestamp lostAt, Object changeStream, boolean opensAtLostAt) {
+        return proxy(ChangeStreamIterable.class, changeStream, (method, args, result) -> {
+            if (method.getName().equals("startAtOperationTime")) {
+                return changeStreamLostAt(lostAt, result, lostAt.equals(args[0]));
+            } else if (opensAtLostAt && (method.getName().equals("cursor") || method.getName().equals("iterator"))) {
+                throw new MongoCommandException(new BsonDocument("ok", new BsonInt32(0)).append("code", new BsonInt32(286))
+                        .append("codeName", new BsonString("ChangeStreamHistoryLost")), new ServerAddress());
+            }
+            return result instanceof ChangeStreamIterable ? changeStreamLostAt(lostAt, result, opensAtLostAt) : result;
+        });
+    }
+
+    @FunctionalInterface
+    private interface AfterCall {
+        Object apply(java.lang.reflect.Method method, Object[] args, Object result);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T proxy(Class<T> type, Object target, AfterCall afterCall) {
+        return (T) java.lang.reflect.Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (proxy, method, args) -> {
+            Object result;
+            try {
+                result = method.invoke(target, args);
+            } catch (java.lang.reflect.InvocationTargetException e) {
+                throw e.getCause();
+            }
+            return afterCall.apply(method, args, result);
+        });
     }
 }
