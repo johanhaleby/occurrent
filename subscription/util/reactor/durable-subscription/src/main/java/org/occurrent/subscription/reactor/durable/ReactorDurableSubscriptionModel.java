@@ -263,6 +263,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // is retired. Exists so a test can take the delete over at that point, which nothing outside this model can reach.
     private volatile Runnable beforeADeleteIsRetired = () -> {
     };
+    private final QuietPositionReportingSubscriptions.QuietPositionListener quietPositionListener = this::quietPositionSaverFor;
 
     /**
      * Create a durable subscription model that stores the checkpoint after each successful call to the action.
@@ -288,6 +289,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         this.storage = requireNonNull(storage, CheckpointStorage.class.getSimpleName() + " cannot be null");
         this.config = requireNonNull(config, ReactorDurableSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
         this.delegate = subscription instanceof SubscriptionModel subscriptionModel ? subscriptionModel : null;
+        if (delegate != null && config.quietPositionSaveInterval != null) {
+            QuietPositionReportingSubscriptions.findIn(delegate).ifPresent(model -> model.addQuietPositionListener(quietPositionListener));
+        }
     }
 
     // Package-private for the test that makes a call at the point the field describes. Not public, and not part of
@@ -1133,14 +1137,55 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private Function<CloudEvent, Mono<Void>> persistingAction(String subscriptionId, PositionWriter writer, Function<CloudEvent, Mono<Void>> action) {
         // One per subscription, so an EveryN configured for the whole model counts this subscription's events only
         Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
-        return cloudEvent -> action.apply(cloudEvent)
-                .then(Mono.defer(() -> {
-                    if (!persistCheckpoint.test(cloudEvent)) {
-                        return Mono.empty();
-                    }
-                    Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
-                    return writePosition(subscriptionId, writer, checkpoint, () -> savePosition(subscriptionId, writer, checkpoint), Mono.empty()).then();
-                }));
+        // A start again hands the wrapped model a second action for the writer, whose events don't wait for settled
+        QuietSaves quietSaves = new QuietSaves(writer.quietSaves == null ? writer.settled : null);
+        writer.quietSaves = quietSaves;
+        return cloudEvent -> {
+            AtomicBoolean stored = new AtomicBoolean();
+            Mono<Void> delivered = action.apply(cloudEvent)
+                    .then(Mono.defer(() -> {
+                        if (!persistCheckpoint.test(cloudEvent)) {
+                            return Mono.empty();
+                        }
+                        Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
+                        return writePosition(subscriptionId, writer, checkpoint, () -> savePosition(subscriptionId, writer, checkpoint)
+                                .doOnSuccess(__ -> {
+                                    stored.set(true);
+                                    quietSaves.wrote();
+                                }), Mono.empty()).then();
+                    }));
+            return Mono.defer(() -> {
+                quietSaves.deliveryStarted();
+                return delivered;
+            }).doFinally(__ -> quietSaves.deliveryEnded(stored.get()));
+        };
+    }
+
+    // Asked by a wrapped model that reports quiet positions. Answers a save of the quiet position once the interval has
+    // passed since the subscription's last save, and only while no event is being delivered and the latest one was
+    // stored, since the quiet position would otherwise move the checkpoint past an event that isn't.
+    private Mono<Function<Checkpoint, Mono<Void>>> quietPositionSaverFor(String subscriptionId) {
+        @Nullable Duration interval = config.quietPositionSaveInterval;
+        final @Nullable PositionWriter writer;
+        synchronized (positionLock) {
+            writer = positionWriters.get(subscriptionId);
+        }
+        @Nullable QuietSaves quietSaves = writer == null ? null : writer.quietSaves;
+        if (interval == null || writer == null || quietSaves == null || !quietSaves.allowed() || System.nanoTime() - quietSaves.lastWrite < interval.toNanos()) {
+            return Mono.empty();
+        }
+        return Mono.just(quietPosition -> saveQuietPosition(subscriptionId, writer, quietSaves, quietPosition));
+    }
+
+    // Through writePosition, as the position after an event, so a cancel that retired the writer waits for the save or
+    // keeps it from starting. A failure fails the Mono the wrapped model waits for, which reads again from the position
+    // it had and reports the quiet position again.
+    private Mono<Void> saveQuietPosition(String subscriptionId, PositionWriter writer, QuietSaves quietSaves, Checkpoint quietPosition) {
+        // A quiet position the wrapped model reports before the subscription is started again from an earlier position
+        // comes after events its action skipped, see settledThen
+        Mono<Boolean> goesOn = quietSaves.settled == null ? Mono.just(true) : quietSaves.settled.map(Optional::isEmpty).onErrorReturn(false);
+        return goesOn.flatMap(go -> !go || !quietSaves.allowed() ? Mono.<Void>empty()
+                : writePosition(subscriptionId, writer, quietPosition, () -> savePosition(subscriptionId, writer, quietPosition).doOnSuccess(__ -> quietSaves.wrote()), Mono.empty()).then());
     }
 
     // On the condition that the takeover of a delete of the id set for the generation, see takeOverPositionDelete, and
@@ -2923,6 +2968,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 positionWritersStarting.values().forEach(writers -> writers.forEach(ReactorDurableSubscriptionModel::retireAtShutdown));
                 delegatedSubscriptionIds.clear();
             }
+            QuietPositionReportingSubscriptions.findIn(delegate).ifPresent(model -> model.removeQuietPositionListener(quietPositionListener));
             delegate.shutdown();
             return;
         }
@@ -3294,6 +3340,43 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // handed over, see startDelegatedOnceRestored. Taken away once settled has ended without a start again, or once
         // the state kept is in place in the wrapped model. Read and changed under positionLock only.
         private @Nullable KeptLifecycle kept;
+        // Set by each action this model hands the wrapped model for the writer, see persistingAction
+        private volatile @Nullable QuietSaves quietSaves;
+    }
+
+    // Whether the quiet position of a subscription in the wrapped model may be saved, for one action handed to it
+    private static final class QuietSaves {
+        // Set for the first action of a writer with settled, see startAtTheCall, and null otherwise
+        private final @Nullable Mono<Optional<Checkpoint>> settled;
+        // When a position was last saved, as System.nanoTime(). Starts when the action is made, so the first quiet
+        // position is saved one interval later.
+        private volatile long lastWrite = System.nanoTime();
+        // Both read and changed while holding this object's monitor
+        private int deliveriesUnderWay;
+        // True before the first event, since no event then comes before the quiet position
+        private boolean latestStored = true;
+
+        private QuietSaves(@Nullable Mono<Optional<Checkpoint>> settled) {
+            this.settled = settled;
+        }
+
+        private synchronized void deliveryStarted() {
+            deliveriesUnderWay++;
+            latestStored = false;
+        }
+
+        private synchronized void deliveryEnded(boolean stored) {
+            deliveriesUnderWay--;
+            latestStored = stored;
+        }
+
+        private synchronized boolean allowed() {
+            return deliveriesUnderWay == 0 && latestStored;
+        }
+
+        private void wrote() {
+            lastWrite = System.nanoTime();
+        }
     }
 
     // The calls of one id counted by wrappedCallDecided, and what is emitted once none is in flight. Read and changed
