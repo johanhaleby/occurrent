@@ -1849,13 +1849,15 @@ throws `DuplicateSubscriptionIdException`, as point 1 of
 [section 23 of the 0.34.0 upgrade guide](../../migration/upgrading-to-0.34.0.md#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted)
 describes. After it, the call is kept.
 
-A `subscribe(..)` of the id is refused at the call in three more cases. The wrapped model refuses it while it has a
-subscription of the id or is taking one, and the durable model refuses one that would wait in that case itself. The
-durable model refuses it while it starts a subscription of the id again in the wrapped model, and while a cancel, a pause
-or a resume it sent the wrapped model for the id is under way, as described above. A `subscribe(..)` that waits is
-checked again before the hand-over, and the wrapped model checks it at the hand-over. A refusal there fails
-`waitUntilStarted()` and is logged as an error, since the call has returned. A wrapped model that still has a
-subscription of the id after its cancel failed refuses it there, for one.
+A `subscribe(..)` of the id is refused at the call in four more cases. The wrapped model refuses one that doesn't wait
+while it has a subscription of the id or is taking one. The durable model refuses one that would wait while a
+subscription of the id that it handed over, or is handing over, hasn't been cancelled or failed to start. The durable
+model refuses it while it starts a subscription of the id again in the wrapped model, and while a cancel, a pause or a
+resume it sent the wrapped model for the id is under way, as described above. A `subscribe(..)` that waits is checked
+again before the hand-over, and the wrapped model checks it at the hand-over. A refusal there fails `waitUntilStarted()`
+and is logged as an error, since the call has returned. A wrapped model that has a subscription of the id that the
+durable model didn't hand over, or one that was cancelled or failed to start, refuses it there, as after a cancel that
+failed there.
 
 In every other case the durable model accepts a `subscribe(..)` of the id, also while another `subscribe(..)` of it still
 reads where to start, and hands both to the wrapped model. Over `ReactorMongoSubscriptionModel` only one of them starts

@@ -721,6 +721,7 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
             softly.assertThat(subscribeFailed).as("how the subscribe while the other ran its start position ended").isNull();
             softly.assertThat(otherFailed).as("how the other subscribe ended, in its start position or refused by the Mongo model")
                     .isInstanceOf(theStartPositionThrows ? IllegalStateException.class : DuplicateSubscriptionIdException.class);
+            softly.assertThat(mongoModel.subscribes.get()).as("subscribes of the id that reached the Mongo model").isEqualTo(theStartPositionThrows ? 1 : 2);
             softly.assertThat(notDelivered).as("how waiting for the event written once it started ended").isNull();
             softly.assertThat(lastNotDelivered).as("how waiting for the event written after it ended").isNull();
             softly.assertThat(Stream.of(delivered, deliveredToTheOther).filter(events -> !events.isEmpty()).count())
