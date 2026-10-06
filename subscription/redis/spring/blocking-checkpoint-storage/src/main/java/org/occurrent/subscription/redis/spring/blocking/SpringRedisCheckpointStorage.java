@@ -54,7 +54,8 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * Because the checkpoint key is a caller-chosen subscription id with no prefix of its own, a subscription could in
  * principle choose an id equal to the exact text of some other subscription's version key, and land its own
  * checkpoint on that other subscription's stored version. {@link #read(String)}, {@link #save(String, Checkpoint,
- * CheckpointWriteCondition)}, {@link #delete(String)}, and {@link #exists(String)} all refuse a subscription id
+ * CheckpointWriteCondition)}, {@link #delete(String)}, {@link #deleteIfUnchanged(String, Checkpoint, OptionalLong)}
+ * and {@link #exists(String)} all refuse a subscription id
  * that starts with the version key's own prefix, which every version key does and no id a real caller would pick
  * does by accident, closing that off entirely rather than leaving it as a documented risk.
  * <p>
@@ -182,7 +183,26 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
             return -2
             """, Long.class);
 
-    // The three scripts above only ever return a Long, and this is never asked to deserialize one, since a Long
+    // KEYS[1] = checkpoint key, KEYS[2] = version key. ARGV[1] = checkpoint value, ARGV[2] = the version as plain
+    // decimal digits, or empty when no version may be stored. Deletes both keys only when the checkpoint and the
+    // version are the ones given, and returns 1 when it deleted and 0 otherwise.
+    private static final RedisScript<Long> DELETE_IF_UNCHANGED_SCRIPT = RedisScript.of("""
+            if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+                return 0
+            end
+            local storedVersionRaw = redis.call('GET', KEYS[2])
+            if ARGV[2] == '' then
+                if storedVersionRaw then
+                    return 0
+                end
+            elseif not storedVersionRaw or tonumber(storedVersionRaw) ~= tonumber(ARGV[2]) then
+                return 0
+            end
+            redis.call('DEL', KEYS[1], KEYS[2])
+            return 1
+            """, Long.class);
+
+    // The scripts above only ever return a Long, and this is never asked to deserialize one, since a Long
     // reply comes back from the driver as a Long already. It exists because the execute overload that takes
     // explicit serializers demands one of the right type.
     private static final RedisSerializer<Long> RESULT_SERIALIZER = new RedisSerializer<Long>() {
@@ -461,6 +481,39 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
                 List.of(versionKey(subscriptionId)));
         Long storedVersion = executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
         return storedVersion == null || storedVersion == NO_VERSION_STORED ? OptionalLong.empty() : OptionalLong.of(storedVersion);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * A Lua script compares the checkpoint and the version and deletes both keys in one round trip, so no other
+     * write can run in between. The version key has the same hash tag the conditional writes rely on, so on Cluster
+     * both keys are in one slot.
+     *
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
+     *                                  its own version keys, or, in the Cluster-safe mode, if it is one of the
+     *                                  shapes the class javadoc names Redis Cluster cannot align a slot for. Both
+     *                                  are specific to this implementation, not part of the
+     *                                  {@link CheckpointStorage} contract.
+     */
+    @Override
+    public void deleteIfUnchanged(String subscriptionId, Checkpoint checkpoint, OptionalLong writeVersion) {
+        requireNonNull(subscriptionId, "Subscription id cannot be null");
+        requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
+        requireNonNull(writeVersion, "Write version cannot be null");
+        requireOutsideVersionKeyNamespace(subscriptionId);
+        if (!standalone) {
+            requireClusterSlotAlignable(subscriptionId);
+        }
+        byte[] version = writeVersion.isPresent() ? Long.toString(writeVersion.getAsLong()).getBytes(StandardCharsets.UTF_8) : new byte[0];
+        Supplier<@Nullable Long> delete = () -> redis.execute(DELETE_IF_UNCHANGED_SCRIPT, conditionArgsSerializer, RESULT_SERIALIZER,
+                List.of(subscriptionId, versionKey(subscriptionId)), checkpoint.asString(), version);
+        executeWithRetry(delete, e -> !shutdown && !isClusterSlotMismatch(e), retryStrategy).get();
+    }
+
+    @Override
+    public boolean deletesIfUnchanged() {
+        return true;
     }
 
     /**

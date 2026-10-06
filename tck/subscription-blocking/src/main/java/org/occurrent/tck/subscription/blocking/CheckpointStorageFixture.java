@@ -82,6 +82,21 @@ public interface CheckpointStorageFixture {
     }
 
     /**
+     * Whether this storage deletes a checkpoint only if it is unchanged, through
+     * {@link CheckpointStorage#deleteIfUnchanged(String, Checkpoint, java.util.OptionalLong)}.
+     * <p>
+     * {@code true} means the suite holds the storage to that contract. {@code false} means the storage refuses every
+     * such call with {@link UnsupportedOperationException} and deletes nothing, which is what the default of that
+     * method does, and the suite asserts exactly that instead.
+     * <p>
+     * Answered by the storage itself, through {@link CheckpointStorage#deletesIfUnchanged()}, the same way
+     * {@link #evaluatesWriteConditions()} is. Override only to test a storage against the opposite of what it claims.
+     */
+    default boolean deletesIfUnchanged() {
+        return checkpointStorage().deletesIfUnchanged();
+    }
+
+    /**
      * Checkpoint types of the implementation's own, round-tripped in addition to the two the suite always covers.
      * <p>
      * The suite covers {@code StringBasedCheckpoint} and {@code GlobalCheckpoint} for every storage, because both live

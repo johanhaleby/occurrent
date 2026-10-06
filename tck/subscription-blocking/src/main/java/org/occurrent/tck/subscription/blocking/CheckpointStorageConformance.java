@@ -364,6 +364,182 @@ public abstract class CheckpointStorageConformance {
     }
 
     @Nested
+    @DisplayName("deleting only if unchanged")
+    class DeletingOnlyIfUnchanged {
+
+        @Test
+        void deletes_the_checkpoint_when_it_is_still_the_one_given() {
+            String id = subscriptionId();
+            Checkpoint stored = new StringBasedCheckpoint("stored");
+            checkpointStorage().save(id, stored);
+
+            if (refusesDeleteIfUnchanged(id, stored, OptionalLong.empty())) {
+                return;
+            }
+            checkpointStorage().deleteIfUnchanged(id, new StringBasedCheckpoint("stored"), OptionalLong.empty());
+
+            assertThat(checkpointStorage().read(id))
+                    .as("the same checkpoint with no version stored is unchanged, so it must be deleted")
+                    .isNull();
+            assertThat(checkpointStorage().exists(id)).isFalse();
+        }
+
+        @Test
+        void deletes_the_checkpoint_when_it_is_still_stored_with_the_version_given() {
+            String id = subscriptionId();
+            Checkpoint stored = new StringBasedCheckpoint("fenced");
+            if (!fixture().evaluatesWriteConditions()) {
+                checkpointStorage().save(id, stored);
+                refusesDeleteIfUnchanged(id, stored, OptionalLong.empty());
+                return;
+            }
+            checkpointStorage().save(id, stored, CheckpointWriteCondition.notOlderThan(3));
+
+            if (refusesDeleteIfUnchanged(id, stored, OptionalLong.of(3))) {
+                return;
+            }
+            checkpointStorage().deleteIfUnchanged(id, stored, OptionalLong.of(3));
+
+            assertThat(checkpointStorage().exists(id))
+                    .as("the checkpoint and the version are the ones given, so the checkpoint must be deleted")
+                    .isFalse();
+            assertThat(checkpointStorage().writeVersion(id))
+                    .as("the version goes with the checkpoint it was stored with")
+                    .isEqualTo(OptionalLong.empty());
+        }
+
+        @Test
+        void deletes_nothing_when_another_write_replaced_the_checkpoint() {
+            String id = subscriptionId();
+            Checkpoint first = new StringBasedCheckpoint("first");
+            checkpointStorage().save(id, first);
+            checkpointStorage().save(id, new StringBasedCheckpoint("second"), CheckpointWriteCondition.any());
+
+            if (refusesDeleteIfUnchanged(id, first, OptionalLong.empty())) {
+                return;
+            }
+            checkpointStorage().deleteIfUnchanged(id, first, OptionalLong.empty());
+
+            assertThat(storedValue(id))
+                    .as("an any() write replaced the checkpoint given, so the delete must leave the one written since")
+                    .isEqualTo("second");
+        }
+
+        @Test
+        void deletes_nothing_when_the_same_checkpoint_was_written_again_with_a_version() {
+            String id = subscriptionId();
+            Checkpoint pinned = new StringBasedCheckpoint("pinned");
+            checkpointStorage().save(id, pinned);
+            if (!fixture().evaluatesWriteConditions()) {
+                refusesDeleteIfUnchanged(id, pinned, OptionalLong.empty());
+                return;
+            }
+            checkpointStorage().save(id, pinned, CheckpointWriteCondition.notOlderThan(4));
+
+            if (refusesDeleteIfUnchanged(id, pinned, OptionalLong.empty())) {
+                return;
+            }
+            checkpointStorage().deleteIfUnchanged(id, pinned, OptionalLong.empty());
+
+            assertThat(storedValue(id))
+                    .as("a write of the same checkpoint with a version replaced the one given, which had none, so the "
+                            + "delete must leave it")
+                    .isEqualTo("pinned");
+            assertThat(checkpointStorage().writeVersion(id)).isEqualTo(OptionalLong.of(4));
+        }
+
+        @Test
+        void deletes_nothing_when_another_version_is_stored() {
+            String id = subscriptionId();
+            Checkpoint fenced = new StringBasedCheckpoint("fenced");
+            if (!fixture().evaluatesWriteConditions()) {
+                checkpointStorage().save(id, fenced);
+                if (refusesDeleteIfUnchanged(id, fenced, OptionalLong.of(2))) {
+                    return;
+                }
+                checkpointStorage().deleteIfUnchanged(id, fenced, OptionalLong.of(2));
+
+                assertThat(storedValue(id))
+                        .as("a storage that evaluates no write conditions stores no version, so a delete given one "
+                                + "must leave the checkpoint")
+                        .isEqualTo("fenced");
+                return;
+            }
+            checkpointStorage().save(id, fenced, CheckpointWriteCondition.notOlderThan(5));
+
+            if (refusesDeleteIfUnchanged(id, fenced, OptionalLong.of(2))) {
+                return;
+            }
+            checkpointStorage().deleteIfUnchanged(id, fenced, OptionalLong.of(2));
+            checkpointStorage().deleteIfUnchanged(id, fenced, OptionalLong.empty());
+
+            assertThat(storedValue(id))
+                    .as("the stored version is neither of the ones given, so neither delete may remove the checkpoint")
+                    .isEqualTo("fenced");
+            assertThat(checkpointStorage().writeVersion(id)).isEqualTo(OptionalLong.of(5));
+        }
+
+        @Test
+        void deletes_nothing_when_nothing_is_stored() {
+            String id = subscriptionId();
+            Checkpoint never = new StringBasedCheckpoint("never-stored");
+
+            if (refusesDeleteIfUnchanged(id, never, OptionalLong.empty())) {
+                return;
+            }
+            checkpointStorage().deleteIfUnchanged(id, never, OptionalLong.empty());
+
+            assertThat(checkpointStorage().exists(id)).isFalse();
+            checkpointStorage().save(id, new StringBasedCheckpoint("later"));
+            assertThat(storedValue(id))
+                    .as("a delete that found nothing must leave nothing behind that refuses a later save")
+                    .isEqualTo("later");
+        }
+
+        @Test
+        void deletes_nothing_for_another_subscription() {
+            String deleted = subscriptionId();
+            String kept = subscriptionId();
+            Checkpoint same = new StringBasedCheckpoint("same-value");
+            // Stored first, so a delete that matches on the checkpoint alone finds the other subscription's first
+            checkpointStorage().save(kept, same);
+            checkpointStorage().save(deleted, same);
+
+            if (refusesDeleteIfUnchanged(deleted, same, OptionalLong.empty())) {
+                return;
+            }
+            checkpointStorage().deleteIfUnchanged(deleted, same, OptionalLong.empty());
+
+            assertThat(storedValue(kept))
+                    .as("the subscription id is part of what has to match, so the same checkpoint under another id stays")
+                    .isEqualTo("same-value");
+            assertThat(checkpointStorage().exists(deleted)).isFalse();
+        }
+
+        // Null when nothing is stored, so a checkpoint deleted by mistake fails the assertion on it
+        private @Nullable String storedValue(String id) {
+            Checkpoint stored = checkpointStorage().read(id);
+            return stored == null ? null : stored.asString();
+        }
+
+        // A storage that declares it can't delete only if unchanged must refuse, and leave what is stored alone. The
+        // caller then returns, since there is nothing more to check
+        private boolean refusesDeleteIfUnchanged(String id, Checkpoint checkpoint, OptionalLong writeVersion) {
+            if (fixture().deletesIfUnchanged()) {
+                return false;
+            }
+            boolean storedBefore = checkpointStorage().exists(id);
+            assertThatThrownBy(() -> checkpointStorage().deleteIfUnchanged(id, checkpoint, writeVersion))
+                    .as("a storage that declares it can't delete only if unchanged refuses the call")
+                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThat(checkpointStorage().exists(id))
+                    .as("a refused delete deletes nothing")
+                    .isEqualTo(storedBefore);
+            return true;
+        }
+    }
+
+    @Nested
     @DisplayName("write conditions")
     class WriteConditions {
 

@@ -155,6 +155,58 @@ public interface CheckpointStorage {
     void delete(String subscriptionId);
 
     /**
+     * Delete the {@link Checkpoint} for the supplied {@code subscriptionId}, and the version stored with it, only if
+     * what is stored is still {@code checkpoint} with {@code writeVersion}. Anything else stored, or nothing stored,
+     * is left as it is.
+     * <p>
+     * "Still" means both of these hold when the delete runs:
+     * <ul>
+     *     <li>The stored checkpoint has the same {@link Checkpoint#asString()} as {@code checkpoint}. A storage that
+     *     also keeps the type of a checkpoint may require the same type too.</li>
+     *     <li>The stored version is {@code writeVersion}. An empty {@code writeVersion} means no version is stored,
+     *     so a write since with {@link CheckpointWriteCondition#notOlderThan(long)} keeps the checkpoint, even one of
+     *     the same position.</li>
+     * </ul>
+     * The comparison and the delete are one atomic step. No write for {@code subscriptionId} can run between them,
+     * so a write that replaced {@code checkpoint} is never deleted. A storage that can't promise that keeps the
+     * default, which refuses the call.
+     * <p>
+     * A caller uses this to take back a checkpoint it wrote itself, without removing one that someone else has
+     * written since. {@code DurableSubscriptionModel} does it when it has stored a first position for a subscribe
+     * that the wrapped model then refuses as a duplicate, since that position would otherwise be where a paused
+     * subscription with the same id resumes from. A write that stores the same checkpoint with the same version
+     * can't be told apart from the one it replaced, and is deleted too.
+     * <p>
+     * The default throws {@link UnsupportedOperationException} and deletes nothing. A storage that overrides this
+     * also overrides {@link #deletesIfUnchanged()}.
+     *
+     * @param subscriptionId The id of the subscription to delete the {@link Checkpoint} for
+     * @param checkpoint     The checkpoint that has to be stored for the delete to happen
+     * @param writeVersion   The version that has to be stored with it, or empty when no version may be stored
+     * @throws UnsupportedOperationException if this storage can't compare and delete in one atomic step
+     */
+    @NullMarked
+    default void deleteIfUnchanged(String subscriptionId, Checkpoint checkpoint, OptionalLong writeVersion) {
+        requireNonNull(subscriptionId, "Subscription id cannot be null");
+        requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
+        requireNonNull(writeVersion, "Write version cannot be null");
+        throw new UnsupportedOperationException(getClass().getName() + " cannot delete a checkpoint only if it is unchanged");
+    }
+
+    /**
+     * Whether {@link #deleteIfUnchanged(String, Checkpoint, OptionalLong)} works on this storage, rather than
+     * throwing {@link UnsupportedOperationException}.
+     * <p>
+     * The default is {@code false}. Answer {@code true} only when the comparison and the delete are one atomic step.
+     *
+     * @return {@code true} if this storage deletes a checkpoint only if it is unchanged, {@code false} if it refuses to
+     */
+    @NullMarked
+    default boolean deletesIfUnchanged() {
+        return false;
+    }
+
+    /**
      * Check if the subscription id has a stored checkpoint in this storage.
      *
      * @param subscriptionId The id of the subscription to check.
