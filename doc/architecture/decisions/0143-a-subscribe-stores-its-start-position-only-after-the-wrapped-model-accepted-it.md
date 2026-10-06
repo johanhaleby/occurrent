@@ -42,6 +42,7 @@ The wrapped model gets a dynamic `StartAt`, and the first evaluation that finds 
 | Before `subscribe(..)` starts recording the position, for example before the wrapped model's `subscribe(..)` has returned | The evaluation records the position itself and returns it. When recording fails, the evaluation throws, and `subscribe(..)` records again once the wrapped model's `subscribe(..)` has returned |
 | While `subscribe(..)` records the position | The evaluation waits until the position is stored, then returns it |
 | After `subscribe(..)` failed to record it | `subscribe(..)` cancels the wrapped subscription and the evaluation throws `IllegalStateException`, so the wrapped model gets no start position |
+| Before the wrapped model's `subscribe(..)` throws | When the evaluation recorded the position or threw, `subscribe(..)` cancels the wrapped subscription, unless the exception is `DuplicateSubscriptionIdException` or an earlier `subscribe(..)` on the same durable model left the id registered, including one that opted out of checkpoint management. An evaluation still recording the position when the wrapped `subscribe(..)` threw throws `IllegalStateException`, its subscription isn't cancelled, and `cancelSubscription(..)` frees the id |
 
 The first row exists because a wrapped model may wait for its own evaluation inside `subscribe(..)`, and that model
 would wait forever for a position the caller records only after `subscribe(..)` returns. That gives a wrapped model
@@ -112,11 +113,21 @@ cancelled it. The MongoDB models delivered nothing in that moment, since their e
 
 When that cancel throws as well, the wrapped model may still hold the subscription. `subscribe(..)` throws the
 recording failure with a suppressed exception that says so, and keeps the subscription registered, so the subscription
-stores no checkpoint once a later `cancelSubscription(..)` has cancelled it. That `cancelSubscription(..)` tries the
-cancel again and keeps the checkpoint stored for the id, since an earlier run or another node may have written it.
+stores no checkpoint once a later `cancelSubscription(..)` has cancelled it, or a later `subscribe(..)` of the id has
+replaced it. That `cancelSubscription(..)` tries the cancel again and keeps the checkpoint stored for the id, since the
+held subscription itself, an earlier run or another node may have written it.
 
 A wrapped model of your own can evaluate the start position inside its `subscribe(..)`, hold the subscription, and
 then throw. Any position the evaluation stored stays stored, as in 0.33.0. Deleting it again would repeat the first
-fix described under context, which deleted a position the running subscription relied on. `subscribe(..)`
-cancels the subscription the wrapped model may hold, the same way as after a failed recording, unless the exception is
-`DuplicateSubscriptionIdException`, since then the subscription the wrapped model holds belongs to another subscribe.
+fix described under context, which deleted a position the running subscription relied on.
+
+`subscribe(..)` cancels the subscription the wrapped model may hold, the same way as after a failed recording, when the
+evaluation recorded the position or threw before the wrapped `subscribe(..)` threw. It doesn't when the exception is
+`DuplicateSubscriptionIdException`, or when an earlier `subscribe(..)` on the same durable model left the id registered,
+including one that opted out of checkpoint management, since the subscription the wrapped model holds may then belong
+to that earlier subscribe. A subscription made with the
+same id straight on the wrapped model isn't registered in the durable model, so it is cancelled as well.
+
+A subscription whose evaluation hadn't finished recording the position when the wrapped `subscribe(..)` threw isn't
+cancelled, and `cancelSubscription(..)` frees the id. Cancelling it too would mean waiting inside `subscribe(..)` for
+the evaluation to finish, and that wait wouldn't keep any event from being skipped.
