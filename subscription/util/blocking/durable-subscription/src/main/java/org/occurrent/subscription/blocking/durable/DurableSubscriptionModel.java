@@ -93,12 +93,21 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * <p>
  * When a wrapped model's {@code subscribe(..)} throws, this model cancels nothing on the wrapped model, as in 0.33.0,
  * since a subscription the wrapped model holds for the id may belong to another subscribe. A wrapped model of your own
- * that held the id before it threw keeps that subscription, and any position an evaluation of the start position
- * stored stays stored. When the wrapped model evaluated the start position before it threw, the exception has a
- * suppressed exception saying the wrapped model may still hold a subscription for the id, unless the exception is
- * {@link DuplicateSubscriptionIdException}, whose id belongs to another subscribe. When nothing else subscribed the
- * id, {@code getWrappedSubscriptionModel().cancelSubscription(id)} frees that subscription and keeps the checkpoint
- * stored for the id, while {@link #cancelSubscription(String)} deletes that checkpoint as well.
+ * that held the id before it threw still holds that subscription, and any position an evaluation of the start position
+ * stored stays stored.
+ * <p>
+ * For a subscribe with {@link StartAt#subscriptionModelDefault()}, an evaluation of the start position that starts
+ * after the wrapped model's {@code subscribe(..)} threw fails with {@link IllegalStateException}, so the subscription
+ * the wrapped model holds gets no start position. In 0.33.0 that evaluation returned a start position, and the held
+ * subscription could deliver events. A later evaluation reads the stored checkpoint instead when an evaluation before
+ * the throw had already recorded the position.
+ * <p>
+ * For a subscribe with {@link StartAt#subscriptionModelDefault()}, when the wrapped model evaluated the start position
+ * before it threw, the exception has a suppressed exception saying the wrapped model may still hold a subscription for
+ * the id, unless the exception is {@link DuplicateSubscriptionIdException}, whose id belongs to another subscribe. When
+ * nothing else subscribed the id, {@code getWrappedSubscriptionModel().cancelSubscription(id)} frees that subscription
+ * and keeps the checkpoint stored for the id, while {@link #cancelSubscription(String)} can delete that checkpoint as
+ * well.
  * <p>
  * A wrapped model of your own has three requirements that this model doesn't check:
  * <ul>
@@ -403,7 +412,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 // subscribe. For a duplicate it always does, so a duplicate gets no suppressed exception
                 if (firstPosition != null) {
                     firstPosition.subscribeEnded();
-                    if (firstPosition.evaluated &&!(wrappedFailure instanceof DuplicateSubscriptionIdException)) {
+                    if (firstPosition.evaluated && !(wrappedFailure instanceof DuplicateSubscriptionIdException)) {
                         wrappedFailure.addSuppressed(mayStillHoldTheSubscription(subscriptionId));
                     }
                 }
@@ -442,7 +451,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                          "When nothing else subscribed the id, getWrappedSubscriptionModel()" +
                                          ".cancelSubscription(\"" + subscriptionId + "\") frees it and keeps the checkpoint " +
                                          "stored for the id, while cancelSubscription(\"" + subscriptionId + "\") on this " +
-                                         "model deletes that checkpoint as well.");
+                                         "model can delete that checkpoint as well.");
     }
 
     // Cancels the subscription the wrapped model accepted when recording its first position fails, so the caller gets
@@ -745,7 +754,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // The first position of a subscribe with the model default, handed to the first evaluation of the start position
     // that finds it recorded. An evaluation while the subscribe records it waits for it. An evaluation that takes
     // recording before the subscribe does, as one before the wrapped model's subscribe returns always does, records it
-    // itself, because the wrapped model may wait for that evaluation, and throws when recording fails
+    // itself, because the wrapped model may wait for that evaluation, and throws when recording fails. One that comes
+    // after the subscribe ended without recording it throws
     private final class FirstPosition {
         private final String subscriptionId;
         private final ReentrantLock recording = new ReentrantLock();
@@ -771,7 +781,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             }
         }
 
-        // Fails an evaluation still waiting when the subscribe ended without recording a position
+        // Fails an evaluation still waiting, and every later one, when the subscribe ended without recording a position
         void subscribeEnded() {
             recorded.cancel(false);
         }

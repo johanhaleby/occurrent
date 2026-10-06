@@ -673,11 +673,16 @@ again when that evaluation throws, started such a subscription in 0.33.0. Its `s
 `globalCheckpoint()` answers. While it waits, `DurableSubscriptionModel.subscribe(..)` holds the lock it takes for the
 subscription id, so `cancelSubscription(..)` and `resumeSubscription(..)` for that id wait too.
 
-A model that passes the evaluation's exception on throws that exception from `subscribe(..)` and keeps the subscription
-it holds, since `DurableSubscriptionModel` cancels nothing when the wrapped `subscribe(..)` throws, as in 0.33.0. The
-exception has a suppressed exception saying the wrapped model may still hold a subscription for the id. When nothing
-else subscribed the id, `getWrappedSubscriptionModel().cancelSubscription(id)` frees that subscription and keeps the
-checkpoint stored for the id, while `cancelSubscription(..)` on the durable model deletes that checkpoint as well.
+A model that passes the evaluation's exception on throws that exception from `subscribe(..)` and still holds its
+subscription, since `DurableSubscriptionModel` cancels nothing when the wrapped `subscribe(..)` throws, as in 0.33.0.
+An evaluation of its start position that starts after the wrapped `subscribe(..)` threw, a retry for example, fails with
+`IllegalStateException`, so the held subscription gets no start position. In 0.33.0 that evaluation returned a start
+position, and the held subscription could deliver events.
+
+The exception has a suppressed exception saying the wrapped model may still hold a subscription for the id. When
+nothing else subscribed the id, `getWrappedSubscriptionModel().cancelSubscription(id)` frees that subscription and
+keeps the checkpoint stored for the id, while `cancelSubscription(..)` on the durable model can delete that checkpoint
+as well.
 
 Three ways forward, and the first needs no code change:
 
