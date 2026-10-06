@@ -129,8 +129,8 @@ class DurableSubscriptionModelResumeRepositioningTest {
     /**
      * Issue #737, finding 2. The opt-out marker used to be cleared only on a failed delegate subscribe (the #690
      * guarantee above); nothing cleared it on the managed path, so a stale marker left by an earlier opt-out call
-     * for this id survived into a later, managed call for the same id, still same id resubscribe without an
-     * intervening cancel, e.g. a stateful {@code StartAt.dynamic} that answers differently across calls.
+     * for this id survived into a later, managed call for the same id, made after the earlier subscription was
+     * cancelled in the wrapped model rather than through this model.
      */
     @Test
     void a_later_subscribe_that_resolves_managed_clears_the_opt_out_marker_an_earlier_call_left_behind() {
@@ -141,7 +141,8 @@ class DurableSubscriptionModelResumeRepositioningTest {
         model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
         }).waitUntilStarted();
 
-        // Same id, no intervening cancel, but this call resolves managed rather than opting out.
+        // Cancelled in the wrapped model only, so the opt-out marker stays behind. This call resolves managed
+        delegate.cancelSubscription(SUBSCRIPTION_ID);
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), event -> {
         }).waitUntilStarted();
         storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));

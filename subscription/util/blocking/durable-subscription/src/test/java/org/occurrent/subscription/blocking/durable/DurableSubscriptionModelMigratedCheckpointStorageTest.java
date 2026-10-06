@@ -36,6 +36,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
@@ -86,8 +87,11 @@ class DurableSubscriptionModelMigratedCheckpointStorageTest {
      */
     private static CheckpointAwareSubscriptionModel oneEventSubscriptionModel() {
         return new CheckpointAwareSubscriptionModel() {
+            private final Set<String> subscriptionIds = ConcurrentHashMap.newKeySet();
+
             @Override
             public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+                subscriptionIds.add(subscriptionId);
                 action.accept(checkpointAwareCloudEvent());
                 return new Subscription() {
                     @Override
@@ -122,7 +126,7 @@ class DurableSubscriptionModelMigratedCheckpointStorageTest {
 
             @Override
             public boolean isRunning(String subscriptionId) {
-                return true;
+                return subscriptionIds.contains(subscriptionId);
             }
 
             @Override
@@ -142,6 +146,7 @@ class DurableSubscriptionModelMigratedCheckpointStorageTest {
 
             @Override
             public void cancelSubscription(String subscriptionId) {
+                subscriptionIds.remove(subscriptionId);
             }
         };
     }
