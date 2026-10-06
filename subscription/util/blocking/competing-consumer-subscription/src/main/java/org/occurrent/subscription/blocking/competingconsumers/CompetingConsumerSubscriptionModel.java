@@ -238,7 +238,10 @@ import static java.util.Objects.requireNonNull;
  * all at once, and waits at most five seconds for them. It does not wait for a registration with the lease strategy
  * under way, and one that returns once {@code shutdown()} has begun makes one attempt to give up the lease it took. A
  * lease not given up expires after the lease time. When the wrapped model throws from its own {@code shutdown()}, no
- * lease is given up, since that model may still deliver.
+ * lease is given up, since that model may still deliver. When the lease strategy throws from its own
+ * {@code shutdown()} or from {@code removeListener(..)}, {@code shutdown()} still shuts the wrapped model down and
+ * makes its attempt to give up each lease, and then throws the first failure, with every later one added to it as
+ * suppressed.
  * <br>
  * <br>
  * A competing subscription made while this model is stopped goes to the wrapped model straight away, through
@@ -1700,7 +1703,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     // The first failure, with every later one attached to it as suppressed
-    private static RuntimeException withSuppressed(@Nullable RuntimeException firstFailure, RuntimeException failure) {
+    private static <T extends Throwable> T withSuppressed(@Nullable T firstFailure, T failure) {
         if (firstFailure == null) {
             return failure;
         }
@@ -3590,11 +3593,22 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         synchronized (this) {
             tries.values().forEach(Try::wake);
         }
+        // What fails is thrown only once the wrapped model is shut down, as every event it delivers from now on goes
+        // to the action without the lease
+        Throwable failure = null;
         // Without the subscription locks, which a call waiting for the lease strategy through an outage can hold.
         // Shutting the strategy down first ends a registration waiting between two attempts, and makes each later
         // unregister one attempt.
-        competingConsumerStrategy.shutdown();
-        competingConsumerStrategy.removeListener(this);
+        try {
+            competingConsumerStrategy.shutdown();
+        } catch (Throwable e) {
+            failure = e;
+        }
+        try {
+            competingConsumerStrategy.removeListener(this);
+        } catch (Throwable e) {
+            failure = withSuppressed(failure, e);
+        }
         Set<SubscriptionIdAndSubscriberId> leased = new HashSet<>(registrations.keySet());
         leased.addAll(competingConsumers.keySet());
         nonCompetingConsumersSubscriptions.clear();
@@ -3602,9 +3616,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
             // A wrapped model that throws may still deliver, so its leases are left to expire rather than given up
             shutDownTheWrappedModel();
             giveUpEveryLeaseOnce(leased);
+        } catch (Throwable e) {
+            failure = withSuppressed(failure, e);
         } finally {
             competingConsumers.clear();
             registrations.clear();
+        }
+        if (failure != null) {
+            throw thrownAsItIs(failure);
         }
     }
 
