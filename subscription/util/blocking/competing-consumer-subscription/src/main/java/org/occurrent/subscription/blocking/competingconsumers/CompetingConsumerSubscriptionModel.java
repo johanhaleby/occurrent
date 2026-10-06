@@ -74,21 +74,24 @@ import static java.util.Objects.requireNonNull;
  * <br>
  * <br>
  * After {@link #stop()}, and until the next {@link #start(boolean)}, this node holds no lease and delivers nothing for a
- * competing subscription, also one made while it is stopped, with three exceptions. {@code stop()} pauses a
+ * competing subscription, also one made while it is stopped, with four exceptions. {@code stop()} pauses a
  * subscription in the wrapped model when that model still runs it, which it can after throwing from its own
  * {@code stop()}. The first exception is a subscription the wrapped model cannot pause, which keeps its lease and stays
  * running, since it still delivers, and {@code stop()} throws. The second is a subscription the user resumes with
  * {@link #resumeSubscription(String)}. It competes for its lease and runs once this node wins it, whether that happens
- * straight away or on a later grant. The third is described below. A {@code subscribe(..)} on another thread whose
- * registration is under way when {@code stop()} runs, or whose subscription the wrapped model is making or already
- * runs, can still hold a lease after {@code stop()} has returned. It tries to give the lease up at its next step, as
- * {@code stop()} would. A subscription whose lock another call holds when {@code stop()} gets to it, such as a try
- * waiting for the lease strategy, can too. That call, or at the latest the try of the subscription once it gets the
- * lock, tries to unregister it. The subscription delivers nothing meanwhile, since {@code stop()} stops the wrapped
- * model. When the try of a subscription fails to unregister it, the try releases the lease instead, if the lease
- * strategy still reports it held. When the MongoDB lease strategies fail to remove a lease, they report it as not held,
- * stop refreshing it and remove it again on their next refresh. Another node can take the subscription over once that
- * removal succeeds, or at the latest once the lease has expired.
+ * straight away or on a later grant. The third is an event that waits for its lease, which this model lets through in
+ * the cases listed below. One of them is a resume by the user of another competing subscription, since this model asks
+ * the wrapped model whether it runs before it runs that subscription there. The fourth is described below. A
+ * {@code subscribe(..)} on another thread whose registration is under way when {@code stop()} runs, or whose
+ * subscription the wrapped model is making or already runs, can still hold a lease after {@code stop()} has returned.
+ * It tries to give the lease up at its next step, as {@code stop()} would. A subscription whose lock another call holds
+ * when {@code stop()} gets to it, such as a try waiting for the lease strategy, can too. That call, or at the latest the
+ * try of the subscription once it gets the lock, tries to unregister it. Since {@code stop()} stops the wrapped model,
+ * the subscription delivers nothing meanwhile, apart from the third exception. When the try of a subscription fails to
+ * unregister it, the try releases the lease instead, if the lease strategy still reports it held. When the MongoDB
+ * lease strategies fail to remove a lease, they report it as not held, stop refreshing it and remove it again on their
+ * next refresh. Another node can take the subscription over once that removal succeeds, or at the latest once the lease
+ * has expired.
  * <br>
  * <br>
  * While this model is started, a competing subscription that is neither cancelled nor paused by the user is registered
@@ -110,8 +113,8 @@ import static java.util.Objects.requireNonNull;
  * This model asks {@link CompetingConsumerStrategy#hasLock} before it runs the action of a competing subscription for
  * an event. The action runs once that reports the lease held and no {@code stop()} has begun since a resume or
  * subscribe of the subscription that it does not wait for, see below. Until then the event waits on the thread the
- * wrapped model delivers it on. A lease strategy whose {@code hasLock} throws an exception counts as reporting the lease
- * not held.
+ * wrapped model delivers it on. A lease strategy whose {@code hasLock} throws, also an {@link Error}, counts as
+ * reporting the lease not held, and the event goes on waiting.
  * <br>
  * <br>
  * A waiting event also runs without {@code hasLock} reporting the lease held, as it would without the lease strategy.
@@ -121,14 +124,17 @@ import static java.util.Objects.requireNonNull;
  * <li>This model calls the wrapped model for a step of its own on the subscription, such as a pause on the loss of
  * the lease, a cancel, or asking whether the wrapped model runs it or holds it paused.</li>
  * <li>This model calls the wrapped model as a whole, to start, stop or shut it down or to ask whether it runs, which
- * lets the waiting events of every competing subscription through. It asks whether the wrapped model runs before every
- * call that may start it, so a grant, resume or subscribe that runs another competing subscription in the wrapped
- * model lets the event through, and so do {@code start(..)} and {@code shutdown()}. {@code stop()} asks the same
- * before it stops the wrapped model.</li>
- * <li>The wrapped model delivers the event on a thread that is inside a call this model makes into it, or hands it
- * over once a cancel of the subscription has returned or a subscribe of it has thrown. That includes a subscription
- * the wrapped model still holds, which it can after a cancel that throws in the wrapped model while the subscription
- * is being made.</li>
+ * lets the waiting events of every competing subscription through. {@code start(..)} and {@code shutdown()} do that,
+ * and so does {@code stop()} before it stops the wrapped model. A grant, resume or subscribe that runs another competing
+ * subscription in the wrapped model does it too, since this model asks whether the wrapped model runs before it runs a
+ * competing subscription there. Two calls don't. A subscribe while this model is stopped, over a wrapped model that
+ * can't hold the subscription paused, runs the subscription there without asking once it holds the lease. A resume of a
+ * subscription that doesn't compete asks whether the wrapped model runs without letting any event through.</li>
+ * <li>The wrapped model delivers the event on a thread that is inside a call this model makes into it for a competing
+ * subscription or for the wrapped model as a whole, or hands it over once a cancel of the subscription has returned or
+ * a subscribe of it has thrown. That includes a subscription the wrapped model still holds, which it can after a cancel
+ * that throws in the wrapped model while the subscription is being made. A call into the wrapped model for a
+ * subscription that doesn't compete counts only when {@code start(..)} makes it to resume the subscription.</li>
  * <li>An interrupt of its thread ends a wait between two looks at the lease, or the interrupt flag is already set as
  * such a wait begins.</li>
  * <li>{@code shutdown()} has begun.</li>
@@ -2542,8 +2548,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     /**
      * As {@link #inTheWrappedModelFor}, for a call that stops, starts or shuts down the wrapped model, or asks whether
      * it runs. It lets the waiting events of every competing subscription through, not only those of the subscription
-     * the caller acts for. Every call that may start the wrapped model asks whether it runs first, so a grant, resume or
-     * subscribe that runs one competing subscription in the wrapped model lets the events of all the others through.
+     * the caller acts for. A grant, resume or subscribe that runs a competing subscription in the wrapped model asks
+     * whether it runs first, so it lets the events of all the others through, apart from a subscribe while this model
+     * is stopped over a wrapped model that refuses {@code subscribePaused}, which doesn't ask.
      */
     private <T> T inTheWrappedModelForEvery(Supplier<T> call) {
         return lettingThrough(List.copyOf(deliveries.values()), call);
@@ -2578,8 +2585,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
     }
 
-    // Counted for every call this model makes into the wrapped model, so an event the wrapped model delivers on the
-    // thread that makes the call is not held by the call it waits inside, see awaitTheLease
+    // Counted for each call this model makes into the wrapped model through here, so an event the wrapped model
+    // delivers on the thread that makes the call is not held by the call it waits inside, see awaitTheLease
     private <T> T callingTheWrappedModel(Supplier<T> call) {
         int[] calls = callsIntoTheWrappedModelOnThisThread.get();
         calls[0]++;
@@ -2614,7 +2621,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * Returns once this node may deliver an event for the subscription. It may while the lease strategy reports the
      * lease held and no {@code stop()} has begun since a resume or subscribe of the subscription that it does not wait
      * for. Until then the event waits here, on the thread the wrapped model delivers it on, and is neither run nor
-     * skipped. A lease strategy that throws counts as reporting the lease not held.
+     * skipped. A lease strategy that throws, also an {@link Error}, counts as reporting the lease not held.
      * <p>
      * It also returns without the lease strategy reporting the lease held, and the event is then delivered as it would
      * be without the lease strategy. It is never dropped, but the node that holds the lease can deliver it too, so it
@@ -2624,15 +2631,20 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * pause or cancel it or to ask whether the wrapped model runs it or holds it paused, lets its events through. One
      * for the wrapped model as a whole, to start, stop or shut it down or to ask whether it runs, lets the events of
      * every subscription through, see {@link #inTheWrappedModelForEvery}. This model asks whether the wrapped model
-     * runs before every call that may start it, so a grant, resume or subscribe that runs another competing
+     * runs before it runs a competing subscription there, so a grant, resume or subscribe that runs another competing
      * subscription in the wrapped model lets this event through, and {@code stop()} asks the same before it stops the
-     * wrapped model. A {@code start(..)} lets every waiting event through also when it makes no such call. The event
+     * wrapped model. A subscribe while this model is stopped, over a wrapped model that refuses
+     * {@code subscribePaused}, runs the subscription without asking once it holds the lease, and a resume of a
+     * subscription that doesn't compete asks through {@link #wrappedModelSaysItRuns}, which lets nothing through. A
+     * {@code start(..)} lets every waiting event through also when it makes no such call. The event
      * goes once such a call has begun since it started waiting, or while one is under way.</li>
      * <li>A forgotten subscription. Once a cancel has forgotten the subscription, or a subscribe of it has thrown, no
      * later call of this model is for it, so an event the wrapped model still hands over goes at once.</li>
-     * <li>The delivering thread itself. An event the wrapped model delivers on a thread that is inside any call this
-     * model makes into it, such as a subscribe or a resume, goes at once, since that call can't return while the event
-     * waits.</li>
+     * <li>The delivering thread itself. An event the wrapped model delivers on a thread that is inside a call this
+     * model makes through {@link #callingTheWrappedModel}, such as a subscribe or a resume of a competing subscription,
+     * goes at once, since that call can't return while the event waits. Every call through {@link #lettingThrough}
+     * counts. The calls for a subscription that doesn't compete count only when {@code start(..)} resumes it, so its
+     * subscribe, pause and resume through this model don't.</li>
      * <li>An interrupt. The thread is interrupted during a wait between two looks at the lease, or has its interrupt
      * flag set as such a wait begins. A lease strategy whose {@code hasLock} clears the interrupt flag can take an
      * interrupt, one that comes while it is asked or one already set when the event came, and the event then goes on
@@ -2693,7 +2705,9 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
         try {
             return hasLock(key.subscriptionId(), key.subscriberId());
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
+            // An Error too, as the threads that try a consumer again keep trying after one. Thrown from here it would
+            // skip the action, and a wrapped model that doesn't deliver the event again would lose it.
             logDebug("Could not find out whether this node holds the lease, so the event waits (subscriberId={}, subscriptionId={})", key.subscriberId(), key.subscriptionId(), e);
             return false;
         }

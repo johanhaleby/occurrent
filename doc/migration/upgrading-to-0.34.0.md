@@ -1636,9 +1636,9 @@ or after, keeps working, and a competing subscription runs once this node holds 
 wrapped model instead runs the subscriptions that don't compete, but no competing subscription competes for its lease,
 so every event the wrapped model hands one waits. A warning that names the subscription and this step is logged the
 first time that happens for each such subscription. An event that waits goes to the handler without the lease once the
-competing consumer model calls the wrapped model for that subscription, or for every subscription as `stop()` and
-`shutdown()` do, and once its thread is interrupted. No event is lost. Code that started neither model now delivers
-nothing and logs nothing, since the wrapped model hands no event over.
+competing consumer model calls the wrapped model for that subscription, or for every subscription as `start(..)`,
+`stop()` and `shutdown()` do, and once its thread is interrupted. No event is lost. Code that started neither model
+now delivers nothing and logs nothing, since the wrapped model hands no event over.
 
 Over a wrapped model that runs as the competing consumer model is built, such as a `SpringMongoSubscriptionModel` with
 the default configuration, nothing changes.

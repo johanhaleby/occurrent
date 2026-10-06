@@ -45,7 +45,7 @@ import static org.awaitility.Awaitility.await;
 /**
  * An event that waits for the lease is delivered once the lease is back, or once this model pauses, stops or starts
  * the subscription, and is never lost, also over an {@code InMemorySubscriptionModel} that does not retry an action
- * that throws.
+ * that throws, and also when the lease strategy throws an {@link Error} while the event waits.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -95,6 +95,23 @@ class CompetingConsumerLosesNoHeldEventTest {
         await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(received).as("[events s1 received once this model was started again]").containsExactly("e1", "e2", "e3"));
     }
 
+    @Test
+    void an_event_for_which_the_lease_strategy_throws_an_error_waits_and_is_delivered_once_it_answers_by_a_model_that_does_not_retry() throws Exception {
+        InMemorySubscriptionModel inMemory = new InMemorySubscriptionModel(RetryStrategy.none());
+        model = new CompetingConsumerSubscriptionModel(inMemory, strategy);
+        subscribeAndBlockInE1(inMemory);
+
+        strategy.errorOnTheDeliveringThread = new Error("hasLock failed");
+        releaseE1.countDown();
+        assertThat(strategy.threwAnError.await(5, SECONDS)).as("hasLock throws an Error for e2").isTrue();
+        // Long enough for e2 to ask more than once
+        await().pollDelay(AWAY_FOR).atMost(AWAY_FOR.multipliedBy(2)).dontCatchUncaughtExceptions().until(() -> true);
+        strategy.errorOnTheDeliveringThread = null;
+        inMemory.accept(List.of(event("e3")));
+
+        await().atMost(EVENTUALLY).dontCatchUncaughtExceptions().untilAsserted(() -> assertThat(received).as("[events s1 received after hasLock threw an Error for e2]").containsExactly("e1", "e2", "e3"));
+    }
+
     // e1 runs while the lease closes without anyone being told, as the MongoDB lease strategies close it, so e2 waits for
     // it. The lease then goes to another node for a while and back.
     private void theLeaseMovesAwayAndBackWhileAnEventWaits(RetryStrategy retryStrategy) throws Exception {
@@ -139,11 +156,14 @@ class CompetingConsumerLosesNoHeldEventTest {
 
     // Reports the lease of a subscription held by the node it went to, unless fenced, which closes it without telling
     // anyone. A transfer tells this node, on the calling thread, of the loss and then of the grant. Records when the
-    // thread that delivered e1 asks without the lease, which is e2 waiting for it.
+    // thread that delivered e1 asks without the lease, which is e2 waiting for it. Throws errorOnTheDeliveringThread, when
+    // set, to the thread that delivered e1.
     static final class FenceStrategy implements CompetingConsumerStrategy {
         private final Map<String, String> holders = new ConcurrentHashMap<>();
         private final List<CompetingConsumerListener> listeners = new CopyOnWriteArrayList<>();
         final CountDownLatch askedWithoutTheLease = new CountDownLatch(1);
+        final CountDownLatch threwAnError = new CountDownLatch(1);
+        volatile @Nullable Error errorOnTheDeliveringThread;
         volatile boolean fenced;
         volatile @Nullable Thread deliveringThread;
 
@@ -165,6 +185,11 @@ class CompetingConsumerLosesNoHeldEventTest {
 
         @Override
         public boolean hasLock(String subscriptionId, String subscriberId) {
+            Error error = errorOnTheDeliveringThread;
+            if (error != null && Thread.currentThread() == deliveringThread) {
+                threwAnError.countDown();
+                throw error;
+            }
             boolean held = !fenced && subscriberId.equals(holders.get(subscriptionId));
             if (!held && Thread.currentThread() == deliveringThread) {
                 askedWithoutTheLease.countDown();
