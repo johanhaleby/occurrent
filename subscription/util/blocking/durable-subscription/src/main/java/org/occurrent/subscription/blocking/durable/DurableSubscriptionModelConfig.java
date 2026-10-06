@@ -121,9 +121,11 @@ public class DurableSubscriptionModelConfig {
     }
 
     /**
-     * Never save the position of a subscription that receives no events, so a checkpoint is only saved for an event.
-     * The stored checkpoint of a subscription that matches no event for longer than the wrapped model keeps its
-     * history is then a position that model can no longer start from.
+     * Turns off the periodic save of the position of a subscription that receives no events, see
+     * {@link #saveQuietPositionEvery(Duration)}. A subscription that then receives no events for longer than the wrapped
+     * model keeps its history gets that model's handling of lost history when it next starts from its stored
+     * checkpoint. The position it restarts from is still stored when the wrapped model reports that its checkpoint is
+     * no longer in the model's history, as the blocking MongoDB models do once the oplog has dropped it.
      *
      * @return A new instance of {@code DurableSubscriptionModelConfig}
      * @see #saveQuietPositionEvery(Duration)

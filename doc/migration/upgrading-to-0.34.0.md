@@ -1478,8 +1478,9 @@ the last event the old filter matched, and received them. When you widen a filte
 subscribe once with a `StartAt` for the position to start from.
 
 Change the interval with `saveQuietPositionEvery(Duration)` on `DurableSubscriptionModelConfig`, and keep it well
-below the oplog window. `neverSaveQuietPosition()` turns the save off, and the stored checkpoint of a subscription
-that matches nothing for longer than the oplog window is then a position MongoDB can no longer start from. The Spring
+below the oplog window. `neverSaveQuietPosition()` turns the save off. A subscription that then matches nothing for
+longer than the oplog window ends in lost history when it next starts from its stored checkpoint, and the position it
+restarts from is still stored. The Spring
 Boot starter has no property for the interval, so define your own `SubscriptionModel` bean to change it there.
 
 ### `ReactorMongoSubscriptionModel` reads the driver's change stream cursor
@@ -1507,8 +1508,11 @@ A `ReactorDurableSubscriptionModel` that wraps `ReactorMongoSubscriptionModel` n
 reports, at most once a minute, with the same `CheckpointStorage` and write condition as for an event. What the
 blocking subsection above says about your persist predicate, a subscription from a `StartAt` of your own and widening a
 filter applies to it too, except the position it restarts from after the oplog dropped its checkpoint, which the reactor
-model doesn't store. A subscription from a `StartAt` of your own that you subscribe while a delete that a cancel of the
-same id started is still running writes back the checkpoint that delete read, whatever your persist predicate is.
+model doesn't store. When you subscribe a subscription from a `StartAt` of your own while a delete that a cancel of
+the same id started is still running, the model writes back any checkpoint that delete read, whatever your persist
+predicate is. Where `ReactorDurableSubscriptionModel` drives the subscription itself and is stopped at the subscribe,
+the `start(..)` or `resumeSubscription(..)` that runs the subscription writes it back instead, if that delete is still
+running then.
 
 Nothing is saved while an event is being delivered either, but a pause cancels the delivery that is under way, so the
 save doesn't wait for it after a resume. The save then stays off until an event is stored again, which is normally the

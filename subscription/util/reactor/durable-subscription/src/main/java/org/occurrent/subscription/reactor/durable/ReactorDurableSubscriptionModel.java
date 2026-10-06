@@ -2273,11 +2273,13 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * <p>
      * Wait for the returned {@code Mono} before subscribing the same id again, to start it clean. A subscribe of the id
      * in this process that comes before the delete is taken out, which happens before the returned {@code Mono}
-     * completes, takes the delete over. The delete then makes no further try, and the subscribe writes back the
-     * checkpoint a try of the delete read. That includes a try that already deleted it, and a try that failed
-     * after the storage applied it, so the store holds what it held before the cancel. The subscription starts as it
-     * would with no delete running, from the checkpoint of the cancelled subscription. A subscription from the
-     * subscription-model default then resumes from that checkpoint.
+     * completes, takes the delete over. Where this model drives the subscription itself and is stopped at the
+     * subscribe, the {@link #start(boolean)} or {@link #resumeSubscription(String)} that runs the subscription takes it
+     * over instead, if the delete has not been taken out by then. The delete then makes no further try, and the call
+     * that took it over writes back the checkpoint a try of the delete read. That includes a try that already deleted
+     * it, and a try that failed after the storage applied it, so the store holds what it held before the cancel. The
+     * subscription starts as it would with no delete running, from the checkpoint of the cancelled subscription. A
+     * subscription from the subscription-model default then resumes from that checkpoint.
      * <p>
      * A {@link StartAt#dynamic(java.util.function.Supplier) dynamic} start position is asked on the thread that calls
      * {@code subscribe(..)}, or {@link #resumeSubscription(String)} or {@link #start(boolean)} when this model drives
