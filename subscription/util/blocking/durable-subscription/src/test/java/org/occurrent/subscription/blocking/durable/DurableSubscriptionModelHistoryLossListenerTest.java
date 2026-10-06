@@ -23,12 +23,14 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.HistoryLossReportingSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
@@ -36,10 +38,13 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The model it wraps can outlive it, so shutting it down has to take back the listener it added there.
+ * The model it wraps can outlive it, so shutting it down has to take back the listener it added there. The position a
+ * subscription restarts from after its history is lost is stored even when its persist predicate stores nothing.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelHistoryLossListenerTest {
+
+    private static final String SUBSCRIPTION_ID = "sub";
 
     @Test
     void shutting_down_removes_the_history_loss_listener_it_added_to_the_wrapped_model() {
@@ -50,6 +55,22 @@ class DurableSubscriptionModelHistoryLossListenerTest {
         model.shutdown();
 
         assertThat(wrapped.listeners).as("the wrapped model no longer holds the listener after shutdown").isEmpty();
+    }
+
+    @Test
+    void a_subscription_from_a_start_position_of_its_own_whose_predicate_stores_nothing_still_has_where_it_restarts_stored_after_its_history_was_lost() {
+        // Given
+        HistoryLossReportingModel wrapped = new HistoryLossReportingModel();
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(__ -> false));
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(new StringBasedCheckpoint("own")), __ -> {
+        });
+
+        // When
+        wrapped.listeners.getFirst().restartingAfterHistoryLoss(SUBSCRIPTION_ID, new StringBasedCheckpoint("restarted-from"), () -> true);
+
+        // Then
+        assertThat(storage.read(SUBSCRIPTION_ID)).as("checkpoint stored").extracting(Checkpoint::asString).isEqualTo("restarted-from");
     }
 
     private static final class HistoryLossReportingModel implements CheckpointAwareSubscriptionModel, HistoryLossReportingSubscriptions {
@@ -67,7 +88,17 @@ class DurableSubscriptionModelHistoryLossListenerTest {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            throw new UnsupportedOperationException();
+            return new Subscription() {
+                @Override
+                public String id() {
+                    return subscriptionId;
+                }
+
+                @Override
+                public boolean waitUntilStarted(Duration timeout) {
+                    return true;
+                }
+            };
         }
 
         @Override

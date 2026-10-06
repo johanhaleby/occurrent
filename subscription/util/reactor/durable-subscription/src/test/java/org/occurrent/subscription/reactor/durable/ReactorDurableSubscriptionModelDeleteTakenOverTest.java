@@ -60,6 +60,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -341,6 +342,42 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         } finally {
             releaseFirstDelete.countDown();
             releaseSecondRead.countDown();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe from a start position of its own, with a persist predicate that declines every event, takes over the
+     * delete a cancel of the id started, whether this model drives the feed or hands the subscription to a wrapped model
+     * that manages named subscriptions. It writes back the checkpoint that delete read, so the store holds it once the
+     * cancel completes.
+     */
+    @ParameterizedTest
+    @CsvSource({"false, false", "true, false", "false, true", "true, true"})
+    void a_subscribe_from_a_start_position_of_its_own_whose_predicate_stores_nothing_writes_back_the_checkpoint_a_delete_it_takes_over_read(boolean conditionalDeletes, boolean handedToTheWrappedModel) throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(conditionalDeletes);
+        Feed feed = handedToTheWrappedModel ? new NamedFeed() : new Feed();
+        AtomicBoolean storesPositions = new AtomicBoolean(true);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage, new ReactorDurableSubscriptionModelConfig(__ -> storesPositions.get()));
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            long stored = storedBeforeTheCancel(model, storage, feed);
+            storesPositions.set(false);
+            storage.deleteGate = release;
+            CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+            assertThat(storage.deleteEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete held").isTrue();
+
+            // When
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), action(new CopyOnWriteArrayList<>()));
+            release.countDown();
+            cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            feed.write();
+
+            // Then
+            assertThat(untilStored(storage, stored)).as("checkpoint stored once the cancel completed").isEqualTo(String.valueOf(stored));
+        } finally {
+            release.countDown();
             model.shutdown();
         }
     }

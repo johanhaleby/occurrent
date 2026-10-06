@@ -44,8 +44,12 @@ public class DurableSubscriptionModelConfig {
     /**
      * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
      *                                           Supply a predicate that always returns {@code false} to store no position for an event. A
-     *                                           subscription from a {@code StartAt} of your own then stores no position at all. One that starts
-     *                                           from a stored position still has its quiet position saved, see {@link #saveQuietPositionEvery(Duration)}.
+     *                                           subscription from a {@code StartAt} of your own then has no position stored for a quiet read
+     *                                           either. The position it restarts from is still stored when the wrapped model reports that its
+     *                                           checkpoint is no longer in the model's history, as the blocking MongoDB models do once the
+     *                                           oplog has dropped it. One that starts from a stored position still has its quiet position saved
+     *                                           until its first event, since an event the predicate declines turns the save off, see
+     *                                           {@link #saveQuietPositionEvery(Duration)}.
      */
     public DurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
         this(persistCloudEventPositionPredicate, false, DEFAULT_QUIET_POSITION_SAVE_INTERVAL);
@@ -92,7 +96,8 @@ public class DurableSubscriptionModelConfig {
      * it subscribes from the subscription-model default, has its quiet position saved before its first event whatever
      * the {@link #persistCloudEventPositionPredicate} is. Any other subscription, such as one from a {@code StartAt} of
      * your own, has none saved until the predicate has stored the position of an event, so with a predicate that
-     * always returns {@code false} it stores no position at all.
+     * always returns {@code false} it has no position stored for an event or a quiet read. The position it restarts from
+     * is still stored when the wrapped model reports that its checkpoint is no longer in the model's history.
      * <p>
      * The position is not saved while the event the running subscription most recently gave the action is one the
      * predicate declined to store, and not while an event is being delivered. After a pause and a resume, an action of

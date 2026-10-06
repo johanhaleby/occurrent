@@ -1465,7 +1465,8 @@ running keeps the save off until it returns, for as long as that takes.
 Before the first event after a subscribe, the position is saved whatever the predicate is, but only for a subscription
 that starts from a stored position, the one in the checkpoint store or the one recorded for it when it subscribes from
 the subscription-model default. A subscription from a `StartAt` of your own gets none saved until the predicate stores
-the position of an event, so a predicate that always returns `false` stores no position for it at all, as in 0.33.0.
+the position of an event, so with a predicate that always returns `false` it gets no position stored for an event or a
+quiet read. The position it restarts from when its checkpoint is no longer in the oplog is still stored.
 
 So with a predicate that declines some events, such as `EveryN` with `n` above 1, a subscription that goes quiet right
 after a declined event gets no position saved until the predicate stores one. If it stays quiet for longer than the
@@ -1505,9 +1506,14 @@ reaches a subscription with an id. Stub `getCollection(..)` as well.
 A `ReactorDurableSubscriptionModel` that wraps `ReactorMongoSubscriptionModel` now saves the quiet position that model
 reports, at most once a minute, with the same `CheckpointStorage` and write condition as for an event. What the
 blocking subsection above says about your persist predicate, a subscription from a `StartAt` of your own and widening a
-filter applies to it too. Nothing is saved while an event is being delivered either, but a pause cancels the delivery
-that is under way, so the save doesn't wait for it after a resume. A cancel waits for a quiet save that is under way before it deletes the checkpoint, so the checkpoint isn't
-written back after the cancel.
+filter applies to it too, except the position it restarts from after the oplog dropped its checkpoint, which the reactor
+model doesn't store. A subscription from a `StartAt` of your own that you subscribe while a delete that a cancel of the
+same id started is still running writes back the checkpoint that delete read, whatever your persist predicate is.
+
+Nothing is saved while an event is being delivered either, but a pause cancels the delivery that is under way, so the
+save doesn't wait for it after a resume. The save then stays off until an event is stored again, which is normally the
+event delivered again after the resume. A cancel waits for a quiet save that is under way before it deletes the
+checkpoint, so a quiet save doesn't write the checkpoint back after the cancel.
 
 When a quiet save fails, the `Mono` that `ReactorMongoSubscriptionModel` waits for fails, and the model reads again
 from the subscription's position after its backoff. The save is tried again at the next quiet position without waiting

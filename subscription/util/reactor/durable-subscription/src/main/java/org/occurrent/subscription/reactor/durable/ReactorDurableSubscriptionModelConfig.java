@@ -44,8 +44,12 @@ public class ReactorDurableSubscriptionModelConfig {
     /**
      * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
      *                                           Supply a predicate that always returns {@code false} to store no position for an event. A
-     *                                           subscription from a {@code StartAt} of your own then stores no position at all. One that starts
-     *                                           from a stored position still has its quiet position saved, see {@link #saveQuietPositionEvery(Duration)}.
+     *                                           subscription from a {@code StartAt} of your own then has no position stored for a quiet read
+     *                                           either. Subscribing it while a delete that a cancel of the same id started is still running
+     *                                           writes back the checkpoint that delete read, see
+     *                                           {@link ReactorDurableSubscriptionModel#cancelSubscription(String)}. One that starts from a stored
+     *                                           position still has its quiet position saved until its first event, since an event the predicate
+     *                                           declines turns the save off, see {@link #saveQuietPositionEvery(Duration)}.
      */
     public ReactorDurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
         this(persistCloudEventPositionPredicate, false, DEFAULT_QUIET_POSITION_SAVE_INTERVAL);
@@ -94,7 +98,9 @@ public class ReactorDurableSubscriptionModelConfig {
      * it subscribes from the subscription-model default, has its quiet position saved before its first event whatever
      * the {@link #persistCloudEventPositionPredicate} is. Any other subscription, such as one from a {@code StartAt} of
      * your own, has none saved until the predicate has stored the position of an event, so with a predicate that
-     * always returns {@code false} it stores no position at all.
+     * always returns {@code false} it has no position stored for an event or a quiet read. Subscribing it while a delete
+     * that a cancel of the same id started is still running writes back the checkpoint that delete read, see
+     * {@link ReactorDurableSubscriptionModel#cancelSubscription(String)}.
      * <p>
      * The position is not saved while the event the running subscription most recently gave the action is one the
      * predicate declined to store, and not while an event is being delivered. So with a predicate that declines some
