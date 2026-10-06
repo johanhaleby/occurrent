@@ -23,6 +23,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -303,6 +304,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // they open a change stream, outside this lock, so a cancelSubscription can run while it reads the
         // checkpoint or writes the first position.
         return underLockFor(subscriptionId, () -> {
+            // Refused here because generateStartAtPositionFrom stores a first position for the id, which a refusal from
+            // the wrapped model would leave behind. A pause of the id can hide it from both checks for a moment, and
+            // the wrapped model then refuses the subscribe after that position is stored
+            if (subscriptionModel.isRunning(subscriptionId) || subscriptionModel.isPaused(subscriptionId)) {
+                throw new DuplicateSubscriptionIdException(subscriptionId);
+            }
             StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
             if (startAtToUse == null) {
                 // Not allowed to start, delegate to the wrapped subscription instead. Whether it was already
