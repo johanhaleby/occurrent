@@ -53,10 +53,13 @@ public interface QuietPositionReportingSubscriptions extends SubscriptionModelCa
     void removeQuietPositionListener(QuietPositionListener listener);
 
     /**
-     * Finds the {@link QuietPositionReportingSubscriptions} capability of {@code subscriptionModel}.
+     * Finds the {@link QuietPositionReportingSubscriptions} capability of {@code subscriptionModel}. A
+     * {@code ReactorCatchupSubscriptionModel} or {@code ReactorStreamCatchupSubscriptionModel} has it when the model it
+     * wraps has it, and this then returns the capability of the wrapped model. A model of your own that wraps another
+     * one has it only when it overrides {@link SubscriptionModelCapability#capability(Class)} the same way.
      *
      * @param subscriptionModel The subscription model to look in.
-     * @return The capability, or empty if the model doesn't implement it.
+     * @return The capability, or empty if the model doesn't have it.
      */
     static Optional<QuietPositionReportingSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
         return subscriptionModel.capability(QuietPositionReportingSubscriptions.class);

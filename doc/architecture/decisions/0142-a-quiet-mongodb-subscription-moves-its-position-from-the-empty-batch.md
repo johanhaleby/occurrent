@@ -375,10 +375,18 @@ the first subscription reports comes after those events. So the quiet save of th
 recorded position is known, and saves nothing when the subscription is started again. The subscription started again
 saves its quiet positions as any other.
 
-`ReactorDurableSubscriptionModel` finds the listener capability on the model it wraps with a plain `instanceof`. The
-reactor catch-up models don't implement it, so when one of them sits between the durable model and
-`ReactorMongoSubscriptionModel`, as in the reactive Spring Boot starter when the event store supports catch-up, no
-quiet position is saved.
+`ReactorDurableSubscriptionModel` finds the listener capability with `QuietPositionReportingSubscriptions.findIn(..)`
+on the model it wraps. `ReactorCatchupSubscriptionModel` and `ReactorStreamCatchupSubscriptionModel` answer it with the
+capability of the model they wrap, and no other capability. So the durable model adds its listener to
+`ReactorMongoSubscriptionModel` also when one of them sits between the two, as in the reactive Spring Boot starter when
+the event store supports catch-up. In dual mode the stream and the DCB catch-up hand their subscriptions to the same
+model, so the listener is added once.
+
+This is safe because a catch-up model hands a subscription to the wrapped model only after its replay has delivered the
+history. `ReactorMongoSubscriptionModel` doesn't know the id during the replay and reports no quiet position for it, and
+a quiet position it reports after that comes after every replayed event. A pause during the replay pauses the
+subscription right after it is handed over. A stop during the replay ends the replay before the subscription is handed
+over, and a cancel during the replay ends it for good.
 
 ## Consequences
 
@@ -432,8 +440,9 @@ implements `QuietPositionReportingSubscriptions`.
 
 A quiet subscription behind a `ReactorDurableSubscriptionModel` that wraps `ReactorMongoSubscriptionModel` costs one
 checkpoint write per interval too. A storage that keeps failing makes the wrapped model read the subscription again
-after each backoff, as a failed save after an event does. Behind a reactor catch-up model nothing saves the quiet
-position, so a restart after a quiet period longer than the oplog window still ends in lost history there.
+after each backoff, as a failed save after an event does. A subscription model of your own between the two gets no
+quiet position saved unless it answers the capability with the one of the model it wraps. That is only safe when it
+hands a subscription to the wrapped model after every event it delivers by itself has reached the action.
 
 A subscription with an id on `ReactorMongoSubscriptionModel` handles one batch at a time, so each batch costs a round
 trip to MongoDB on top of the time its actions take. `ReactiveMongoTemplate.changeStream(..)` fetched the next batch

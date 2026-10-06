@@ -1511,9 +1511,27 @@ tried again at the next quiet position without waiting for the interval.
 Change the interval with `saveQuietPositionEvery(Duration)` on `ReactorDurableSubscriptionModelConfig`, and turn the
 save off with `neverSaveQuietPosition()`.
 
-The save needs `ReactorDurableSubscriptionModel` to wrap `ReactorMongoSubscriptionModel` directly. The reactive Spring
-Boot starter puts a `ReactorCatchupSubscriptionModel` between the two when the event store supports catch-up, and then
-nothing saves the quiet position, so a quiet subscription keeps the checkpoint of its last event, as in 0.33.0.
+The save works when `ReactorDurableSubscriptionModel` wraps `ReactorMongoSubscriptionModel` directly, and also with a
+`ReactorCatchupSubscriptionModel` or `ReactorStreamCatchupSubscriptionModel` between the two, as the reactive Spring Boot
+starter sets it up when the event store supports catch-up. Both answer `capability(QuietPositionReportingSubscriptions.class)`
+with the capability of the model they wrap. `ReactorMongoSubscriptionModel` learns about a subscription only when the
+catch-up model has replayed its history, so it reports no quiet position during the replay.
+
+If you put a subscription model of your own between the two, nothing saves the quiet position unless your model answers
+the capability the same way, and a quiet subscription keeps the checkpoint of its last event, as in 0.33.0. Only answer it
+that way if every event your model delivers by itself, such as a replay, reaches your action before the wrapped model
+reads anything for the subscription. The saved quiet position is a position in what the wrapped model reads, so a
+restart from it skips whatever your model hadn't delivered yet.
+
+```java
+@Override
+public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
+    if (type == QuietPositionReportingSubscriptions.class) {
+        return wrappedSubscriptionModel.capability(type);
+    }
+    return SubscriptionModel.super.capability(type);
+}
+```
 
 There is no recipe for these changes. The removed constructor has no replacement to rewrite to, and the rest is runtime
 behavior that a rewrite of the source cannot see.

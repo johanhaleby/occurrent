@@ -81,10 +81,12 @@ public class ReactorDurableSubscriptionModelConfig {
     /**
      * How often the position of a subscription that receives no events is saved. A wrapped model that implements
      * {@code QuietPositionReportingSubscriptions}, such as {@code ReactorMongoSubscriptionModel}, reports the position a
-     * subscription has read to when a read returned no event for it, and the {@link ReactorDurableSubscriptionModel}
-     * saves that position as the subscription's checkpoint at most once per {@code interval}. A checkpoint saved for an
-     * event starts the interval again, so a subscription that stores a checkpoint for an event at least once per
-     * {@code interval} gets no extra write.
+     * subscription has read to when a read returned no event for it. It does so also with a
+     * {@code ReactorCatchupSubscriptionModel} or {@code ReactorStreamCatchupSubscriptionModel} between it and the
+     * {@link ReactorDurableSubscriptionModel}. The {@link ReactorDurableSubscriptionModel} saves that position as the
+     * subscription's checkpoint at most once per {@code interval}. A checkpoint saved for an event starts the interval
+     * again, so a subscription that stores a checkpoint for an event at least once per {@code interval} gets no extra
+     * write.
      * <p>
      * The position is saved from the subscribe on, whatever the {@link #persistCloudEventPositionPredicate} is, but not
      * while the event the running subscription most recently gave the action is one the predicate declined to store,
