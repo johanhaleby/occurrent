@@ -8,8 +8,8 @@ Accepted. Resolves [#1168](https://github.com/johanhaleby/occurrent/issues/1168)
 `NativeMongoSubscriptionModel`, `SpringMongoSubscriptionModel` and `DurableSubscriptionModel`. Changes one row of
 [ADR 141](0141-a-stopped-subscription-model-holds-a-new-subscription-paused-until-it-is-started.md), which that ADR
 now shows. `ReactorMongoSubscriptionModel` does the same through
-[#1169](https://github.com/johanhaleby/occurrent/issues/1169), and `ReactorDurableSubscriptionModel` doesn't save its
-quiet position yet.
+[#1169](https://github.com/johanhaleby/occurrent/issues/1169), and `ReactorDurableSubscriptionModel` saves its quiet
+position by the rule in the section about it.
 
 ## Context
 
@@ -344,6 +344,42 @@ driver's resume after a failover.
 Moving the position to the token found at the latest look, without waiting to see it replaced, can move past an event
 the action hasn't had. The driver stores the reply of a `getMore` before it hands over the documents in it.
 
+### `ReactorDurableSubscriptionModel`
+
+**`ReactorDurableSubscriptionModel` saves the quiet position the wrapped model reports, by the rule for the blocking
+model with these differences.** It adds its listener when it is made, if the model it wraps implements the reactor
+`QuietPositionReportingSubscriptions` and the interval isn't turned off, and removes it at `shutdown()`. The interval
+is a minute by default, as on the blocking config.
+
+1. The position comes from the listener. `ReactorMongoSubscriptionModel` reports it only once the action's `Mono` has
+   completed for every event before it.
+2. The save uses the write condition of a save after an event, which is `any()` unless the subscribe took over a delete
+   of the id. The reactor stack has no lease that could move to another node during the read.
+3. The interval counts from the subscribe, the last checkpoint written for an event, or the last quiet save that
+   succeeded. A failed quiet save fails the `Mono` the wrapped model waits for, as a failed save after an event fails
+   the action. The wrapped model reads again from the subscription's position after its backoff, and the next quiet
+   position is saved without waiting for the interval. The blocking model logs the failure and tries again after the
+   interval.
+4. No delivery of the subscription is under way, and the delivery that ended last stored the checkpoint of its event,
+   or none has ended. A delivery that ends with an error or a cancel stored nothing. The reactor model hands a
+   subscription one piece of work at a time, and a new run reads nothing until the work of every earlier run has
+   completed or been cancelled, so a late delivery of a closed run can't come after the open run's, and the reads are
+   not numbered. This is checked before the read and again when the save starts.
+5. The save goes through the same check as a save after an event. It starts only while no cancel and no shutdown has
+   retired the subscription's writer, and a cancel waits for a save that started before it, then deletes the
+   checkpoint. A quiet save can't write the checkpoint back after the cancel deleted it.
+
+A subscribe that took over a delete of the id can be started again in the wrapped model from an earlier position than
+it was handed, once the position it recorded is known. Until then its action skips every event, and a quiet position
+the first subscription reports comes after those events. So the quiet save of that first subscription waits until the
+recorded position is known, and saves nothing when the subscription is started again. The subscription started again
+saves its quiet positions as any other.
+
+`ReactorDurableSubscriptionModel` finds the listener capability on the model it wraps with a plain `instanceof`. The
+reactor catch-up models don't implement it, so when one of them sits between the durable model and
+`ReactorMongoSubscriptionModel`, as in the reactive Spring Boot starter when the event store supports catch-up, no
+quiet position is saved.
+
 ## Consequences
 
 A quiet subscription behind a `DurableSubscriptionModel` costs one checkpoint write per interval. Keep the interval
@@ -393,6 +429,11 @@ evaluating the supplier, and the supplier uses the recorded present when it answ
 
 A subscription model of your own that a `DurableSubscriptionModel` wraps gets no quiet position saved unless it
 implements `QuietPositionReportingSubscriptions`.
+
+A quiet subscription behind a `ReactorDurableSubscriptionModel` that wraps `ReactorMongoSubscriptionModel` costs one
+checkpoint write per interval too. A storage that keeps failing makes the wrapped model read the subscription again
+after each backoff, as a failed save after an event does. Behind a reactor catch-up model nothing saves the quiet
+position, so a restart after a quiet period longer than the oplog window still ends in lost history there.
 
 A subscription with an id on `ReactorMongoSubscriptionModel` handles one batch at a time, so each batch costs a round
 trip to MongoDB on top of the time its actions take. `ReactiveMongoTemplate.changeStream(..)` fetched the next batch

@@ -1496,6 +1496,25 @@ before, and a quiet subscription keeps the position of its last event.
 A test that makes the model fail by stubbing `changeStream(..)` on a mocked `ReactiveMongoOperations` no longer
 reaches a subscription with an id. Stub `getCollection(..)` as well.
 
+### A quiet reactor subscription's checkpoint is written once a minute too
+
+A `ReactorDurableSubscriptionModel` that wraps `ReactorMongoSubscriptionModel` now saves the quiet position that model
+reports, at most once a minute, with the same `CheckpointStorage` and write condition as for an event. What the
+blocking subsection above says about your persist predicate, an event being delivered and widening a filter holds for
+it too. A cancel waits for a quiet save that is under way before it deletes the checkpoint, so the checkpoint isn't
+written back after the cancel.
+
+When a quiet save fails, the `Mono` that `ReactorMongoSubscriptionModel` waits for fails, as your action does when the
+save after an event fails. The model reads again from the subscription's position after its backoff, and the save is
+tried again at the next quiet position without waiting for the interval.
+
+Change the interval with `saveQuietPositionEvery(Duration)` on `ReactorDurableSubscriptionModelConfig`, and turn the
+save off with `neverSaveQuietPosition()`.
+
+The save needs `ReactorDurableSubscriptionModel` to wrap `ReactorMongoSubscriptionModel` directly. The reactive Spring
+Boot starter puts a `ReactorCatchupSubscriptionModel` between the two when the event store supports catch-up, and then
+nothing saves the quiet position, so a quiet subscription keeps the checkpoint of its last event, as in 0.33.0.
+
 There is no recipe for these changes. The removed constructor has no replacement to rewrite to, and the rest is runtime
 behavior that a rewrite of the source cannot see.
 
