@@ -2003,14 +2003,15 @@ nothing then, and deletes what it stores for that id, as `CancellableSubscriptio
 `CompetingConsumerSubscriptionModel.shutdown()` shuts the lease strategy down before it shuts the wrapped model down.
 The MongoDB lease strategies stop refreshing their leases once they are shut down. When the wrapped model then throws
 from its own `shutdown()`, `shutdown()` throws that failure and gives up no lease, since the wrapped model may still
-deliver. Each lease expires after the lease time, 20 seconds by default, and another node can take the subscription
-over then.
+deliver. A lease that no later pause, cancel, `stop()` or `shutdown()` gives up expires after the lease time, 20 seconds
+by default, and another node can take the subscription over then.
 
 Each event the wrapped model hands over after the failed `shutdown()` waits for the lease. The MongoDB lease strategies
 report a lease held for at most three quarters of the lease time after the request that last set it was sent, so such
-an event goes to the handler until then at the latest. A later one waits on this node, and is never skipped, until you
-pause or cancel its subscription through the competing consumer model, its thread is interrupted, or a later
-`shutdown()` lets it through.
+an event goes to the handler until then at the latest. A later one waits on this node, and is never skipped, until one
+of the cases the javadoc of `CompetingConsumerSubscriptionModel` lists lets it through. Among them are a pause, a
+cancel or a `resumeSubscription(..)` of its subscription, a `stop()`, a `start()` and a later `shutdown()`, each called
+on the competing consumer model, and an interrupt of the thread the event waits on.
 
 In 0.33.0 such a node kept its leases, since its lease strategy went on refreshing them, and went on delivering every
 event the wrapped model handed over. No other node took those subscriptions over.

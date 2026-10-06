@@ -44,8 +44,9 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * A {@code shutdown()} whose wrapped model throws from its own {@code shutdown()} keeps the leases, and a later
- * {@code shutdown()} whose wrapped model shuts down gives each of them up. A {@code shutdown()} called while another
- * is under way waits for it, lets no event through without the lease meanwhile, and throws the same failure.
+ * {@code shutdown()} whose wrapped model shuts down gives each of them up. A {@code shutdown()} called on a thread of
+ * its own while another shuts the lease strategy or the wrapped model down waits for it, lets no event through without
+ * the lease meanwhile, and throws the same failure.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
