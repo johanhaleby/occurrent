@@ -56,6 +56,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -156,6 +157,43 @@ class ReactorDurableMongoSubscriptionModelQuietPositionTest {
         // Then
         await().atMost(QUIET_POSITION_IS_REPORTED_WITHIN).untilAsserted(() -> assertThat(quietPositions).as("quiet positions the Mongo model reported").anyMatch(position -> !position.asString().equals(positionOfTheMatchedEvent.asString())));
         await().during(Duration.ofSeconds(1)).atMost(TIMEOUT).untilAsserted(() -> assertThat(storedPosition()).as("checkpoint stored after a quiet position was reported").isEqualTo(positionOfTheMatchedEvent.asString()));
+    }
+
+    @Test
+    void a_persist_predicate_that_never_stores_stores_nothing_for_a_subscription_from_a_start_position_of_its_own() {
+        // Given
+        model = new ReactorDurableSubscriptionModel(mongoModel, checkpointStorage, new ReactorDurableSubscriptionModelConfig(__ -> false).saveQuietPositionEvery(Duration.ofMillis(200)));
+        CopyOnWriteArrayList<Checkpoint> quietPositions = new CopyOnWriteArrayList<>();
+        mongoModel.addQuietPositionListener(subscriptionId -> Mono.just(quietPosition -> Mono.fromRunnable(() -> quietPositions.add(quietPosition))));
+        model.subscribe(SUBSCRIPTION_ID, MATCHING_ONLY, StartAt.now(), event -> Mono.fromRunnable(() -> delivered.add(event))).waitUntilStarted(TIMEOUT).block();
+
+        // When only events that do not match are written, then one that matches, and then again only events that don't
+        write("Other");
+        await().atMost(QUIET_POSITION_IS_REPORTED_WITHIN).until(() -> !quietPositions.isEmpty());
+        write("Matching");
+        await().atMost(TIMEOUT).untilAsserted(() -> assertThat(delivered).hasSize(1));
+        int reportedBeforeTheLastQuietPeriod = quietPositions.size();
+        write("Other");
+        await().atMost(QUIET_POSITION_IS_REPORTED_WITHIN).until(() -> quietPositions.size() > reportedBeforeTheLastQuietPeriod);
+
+        // Then
+        await().during(Duration.ofSeconds(1)).atMost(TIMEOUT).untilAsserted(() -> assertThat(storedPosition())
+                .as("checkpoint stored for a subscription from a start position of its own whose predicate never stores").isNull());
+    }
+
+    @Test
+    void the_checkpoint_moves_before_the_first_event_of_a_subscription_whose_start_position_was_recorded_whatever_the_predicate() {
+        // Given
+        model = new ReactorDurableSubscriptionModel(mongoModel, checkpointStorage, new ReactorDurableSubscriptionModelConfig(__ -> false).saveQuietPositionEvery(Duration.ofMillis(200)));
+        model.subscribe(SUBSCRIPTION_ID, MATCHING_ONLY, StartAt.subscriptionModelDefault(), event -> Mono.fromRunnable(() -> delivered.add(event))).waitUntilStarted(TIMEOUT).block();
+        String recorded = await().atMost(TIMEOUT).until(this::storedPosition, Objects::nonNull);
+
+        // When
+        write("Other");
+
+        // Then
+        await().atMost(QUIET_POSITION_IS_REPORTED_WITHIN).untilAsserted(() -> assertThat(storedPosition()).as("checkpoint stored after only events that do not match were written").isNotEqualTo(recorded));
+        assertThat(delivered).as("events delivered to the action").isEmpty();
     }
 
     private Checkpoint subscribeAndDeliverAMatchingEvent(ReactorDurableSubscriptionModel durable) {

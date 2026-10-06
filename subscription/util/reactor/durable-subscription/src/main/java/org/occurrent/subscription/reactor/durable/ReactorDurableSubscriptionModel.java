@@ -1138,7 +1138,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         // One per subscription, so an EveryN configured for the whole model counts this subscription's events only
         Predicate<CloudEvent> persistCheckpoint = EveryN.forOneSubscription(config.persistCloudEventPositionPredicate);
         // A start again hands the wrapped model a second action for the writer, whose events don't wait for settled
-        QuietSaves quietSaves = new QuietSaves(writer.quietSaves == null ? writer.settled : null);
+        QuietSaves quietSaves = new QuietSaves(writer.quietSaves == null ? writer.settled : null, writer.startsFromAStoredPosition);
         writer.quietSaves = quietSaves;
         return cloudEvent -> {
             AtomicBoolean stored = new AtomicBoolean();
@@ -1163,7 +1163,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     // Asked by a wrapped model that reports quiet positions. Answers a save of the quiet position once the interval has
     // passed since the subscription's last save, and only while no event is being delivered and the latest one was
-    // stored, since the quiet position would otherwise move the checkpoint past an event that isn't.
+    // stored, since the quiet position would otherwise move the checkpoint past an event that isn't. Before the first
+    // event, only when the subscription started from a stored position, see QuietSaves.
     private Mono<Function<Checkpoint, Mono<Void>>> quietPositionSaverFor(String subscriptionId) {
         @Nullable Duration interval = config.quietPositionSaveInterval;
         final @Nullable PositionWriter writer;
@@ -1219,7 +1220,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             Mono<StartAt> resolved = writer.takeOver.waitsForNothing && writer.takeOver.writtenBack == null
                     ? resolveStartAt(subscriptionId, startAt, seed, null, null, writer, null)
                     : startAtTheCall(subscriptionId, startAt, writer, seed);
-            return Mono.firstWithSignal(resolved, ended, writer.overtaken.asMono().then(Mono.empty())).block();
+            @Nullable StartAt resolvedStartAt = Mono.firstWithSignal(resolved, ended, writer.overtaken.asMono().then(Mono.empty())).block();
+            // A checkpoint here is the one storage held or the one recorded for the subscription, and the model
+            // default is what startWhenNoStartPositionCanBeRecorded starts from with nothing recorded
+            writer.startsFromAStoredPosition = resolvedStartAt != null && !resolvedStartAt.isDefault();
+            return resolvedStartAt;
         } else if (startAt.isDynamic()) {
             StartAt nextStartAt = startAt.get(new SubscriptionModelContext(ReactorDurableSubscriptionModel.class));
             return nextStartAt == null ? null : durableStartAt(subscriptionId, nextStartAt, writer, present);
@@ -3342,6 +3347,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         private @Nullable KeptLifecycle kept;
         // Set by each action this model hands the wrapped model for the writer, see persistingAction
         private volatile @Nullable QuietSaves quietSaves;
+        // Set when the subscription starts from the position storage held for it or the one recorded for it, see
+        // durableStartAt, and never for a StartAt of the caller's own
+        private volatile boolean startsFromAStoredPosition;
     }
 
     // Whether the quiet position of a subscription in the wrapped model may be saved, for one action handed to it
@@ -3353,11 +3361,13 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         private volatile long lastWrite = System.nanoTime();
         // Both read and changed while holding this object's monitor
         private int deliveriesUnderWay;
-        // True before the first event, since no event then comes before the quiet position
-        private boolean latestStored = true;
+        // Before the first event, whether a position of the subscription is stored, so a quiet save moves that position
+        // on and never stores the first one for a subscription that stores no position of its own
+        private boolean latestStored;
 
-        private QuietSaves(@Nullable Mono<Optional<Checkpoint>> settled) {
+        private QuietSaves(@Nullable Mono<Optional<Checkpoint>> settled, boolean positionStored) {
             this.settled = settled;
+            this.latestStored = positionStored;
         }
 
         private synchronized void deliveryStarted() {

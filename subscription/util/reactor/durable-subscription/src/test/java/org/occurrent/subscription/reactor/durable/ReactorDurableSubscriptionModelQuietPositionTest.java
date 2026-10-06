@@ -68,7 +68,7 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
         HoldableStorage storage = new HoldableStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(1));
-        subscribe(model);
+        subscribeFromTheStoredStart(model, storage);
 
         // When
         saveFunctionFor(wrapped).apply(QUIET_POSITION).block(TIMEOUT);
@@ -83,7 +83,7 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
         HoldableStorage storage = new HoldableStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(1));
-        subscribe(model);
+        subscribeFromTheStoredStart(model, storage);
         Function<Checkpoint, Mono<Void>> save = saveFunctionFor(wrapped);
         CountDownLatch releaseSave = storage.holdSaves();
 
@@ -109,7 +109,7 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
         HoldableStorage storage = new HoldableStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(1));
-        subscribe(model);
+        subscribeFromTheStoredStart(model, storage);
         Function<Checkpoint, Mono<Void>> save = saveFunctionFor(wrapped);
         model.cancelSubscription(SUBSCRIPTION_ID).block(TIMEOUT);
 
@@ -126,7 +126,7 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
         HoldableStorage storage = new HoldableStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(1));
-        subscribe(model);
+        subscribeFromTheStoredStart(model, storage);
         RuntimeException failure = new IllegalStateException("The storage cannot save right now");
         storage.failNextSave = failure;
 
@@ -135,7 +135,7 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
 
         // Then
         StepVerifier.create(failedSave).expectErrorMatches(error -> error == failure).verify(TIMEOUT);
-        assertThat(storedPosition(storage)).as("checkpoint stored by the save that failed").isNull();
+        assertThat(storedPosition(storage)).as("checkpoint stored by the save that failed").isEqualTo(STARTS_AT.asString());
         Function<Checkpoint, Mono<Void>> offeredAgain = wrapped.beforeReading(SUBSCRIPTION_ID);
         assertThat(offeredAgain).as("save offered for the read that follows the failed one").isNotNull();
         offeredAgain.apply(QUIET_POSITION).block(TIMEOUT);
@@ -148,7 +148,7 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
         HoldableStorage storage = new HoldableStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(1));
-        subscribe(model);
+        subscribeFromTheStoredStart(model, storage);
         RuntimeException failure = new IllegalStateException("The storage cannot save right now");
         storage.failNextSave = failure;
 
@@ -165,7 +165,7 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
         HoldableStorage storage = new HoldableStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage, quickToSave(2));
-        subscribe(model);
+        subscribeFromTheStoredStart(model, storage);
         Function<CloudEvent, Mono<Void>> action = wrapped.actions.getFirst();
 
         // When
@@ -203,12 +203,55 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
     }
 
     @Test
+    void a_persist_predicate_that_never_stores_has_no_position_saved_for_a_subscription_from_a_start_position_of_its_own() {
+        // Given
+        QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
+        HoldableStorage storage = new HoldableStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage,
+                new ReactorDurableSubscriptionModelConfig(__ -> false).saveQuietPositionEvery(SHORTER_THAN_ANY_WAIT));
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(STARTS_AT), __ -> Mono.empty());
+
+        // When the wrapped model reads nothing, delivers events the predicate declines, and reads nothing again
+        saveIfOffered(wrapped, QUIET_POSITION);
+        wrapped.actions.getFirst().apply(eventAt(1)).block(TIMEOUT);
+        wrapped.actions.getFirst().apply(eventAt(2)).block(TIMEOUT);
+        saveIfOffered(wrapped, new StringBasedCheckpoint("quiet-position-after-the-events"));
+
+        // Then
+        assertThat(storedPosition(storage)).as("checkpoint stored for a subscription from a start position of its own whose predicate never stores").isNull();
+    }
+
+    @Test
+    void a_subscription_whose_start_position_was_recorded_has_its_quiet_position_saved_before_its_first_event_whatever_the_predicate() {
+        // Given
+        QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
+        HoldableStorage storage = new HoldableStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage,
+                new ReactorDurableSubscriptionModelConfig(__ -> false).saveQuietPositionEvery(SHORTER_THAN_ANY_WAIT));
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        // When
+        Function<Checkpoint, Mono<Void>> offeredBeforeAnyEvent = wrapped.beforeReading(SUBSCRIPTION_ID);
+        if (offeredBeforeAnyEvent != null) {
+            offeredBeforeAnyEvent.apply(QUIET_POSITION).block(TIMEOUT);
+        }
+        wrapped.actions.getFirst().apply(eventAt(1)).block(TIMEOUT);
+        Function<Checkpoint, Mono<Void>> offeredAfterADeclinedEvent = wrapped.beforeReading(SUBSCRIPTION_ID);
+
+        // Then
+        assertThat(offeredBeforeAnyEvent).as("save offered before the first event of a subscription whose start position was recorded").isNotNull();
+        assertThat(storedPosition(storage)).as("checkpoint stored").isEqualTo(QUIET_POSITION.asString());
+        assertThat(offeredAfterADeclinedEvent).as("save offered while the latest event is one the predicate declined").isNull();
+    }
+
+    @Test
     void no_save_is_offered_before_the_interval_has_passed() {
         // Given
         QuietPositionReportingModel wrapped = new QuietPositionReportingModel();
-        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, new HoldableStorage(),
+        HoldableStorage storage = new HoldableStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage,
                 new ReactorDurableSubscriptionModelConfig(1).saveQuietPositionEvery(Duration.ofHours(1)));
-        subscribe(model);
+        subscribeFromTheStoredStart(model, storage);
 
         // When
         Function<Checkpoint, Mono<Void>> offered = wrapped.beforeReading(SUBSCRIPTION_ID);
@@ -225,7 +268,7 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         Duration interval = Duration.ofSeconds(1);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage,
                 new ReactorDurableSubscriptionModelConfig(1).saveQuietPositionEvery(interval));
-        subscribe(model);
+        subscribeFromTheStoredStart(model, storage);
         await().atMost(TIMEOUT).until(() -> wrapped.beforeReading(SUBSCRIPTION_ID) != null);
         wrapped.beforeReading(SUBSCRIPTION_ID).apply(QUIET_POSITION).block(TIMEOUT);
 
@@ -268,8 +311,18 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         return new ReactorDurableSubscriptionModelConfig(persistPositionForEveryNCloudEvent).saveQuietPositionEvery(SHORTER_THAN_ANY_WAIT);
     }
 
-    private static void subscribe(ReactorDurableSubscriptionModel model) {
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(STARTS_AT), __ -> Mono.empty());
+    // A subscribe from the model default that finds STARTS_AT stored, as after an earlier run stored a position
+    private static void subscribeFromTheStoredStart(ReactorDurableSubscriptionModel model, CheckpointStorage storage) {
+        storage.save(SUBSCRIPTION_ID, STARTS_AT).block(TIMEOUT);
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+    }
+
+    // What a wrapped model does with the function offered for a read that returned nothing
+    private static void saveIfOffered(QuietPositionReportingModel wrapped, Checkpoint quietPosition) {
+        @Nullable Function<Checkpoint, Mono<Void>> save = wrapped.beforeReading(SUBSCRIPTION_ID);
+        if (save != null) {
+            save.apply(quietPosition).block(TIMEOUT);
+        }
     }
 
     private static Function<Checkpoint, Mono<Void>> saveFunctionFor(QuietPositionReportingModel wrapped) {
