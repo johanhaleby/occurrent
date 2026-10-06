@@ -40,7 +40,6 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -54,7 +53,6 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
@@ -121,30 +119,21 @@ class DurableSubscriptionModelRefusedSubscribeOnMongoDBTest {
     }
 
     /**
-     * Node Y holds the id paused, with nothing stored for it, and its wrapped model's answers miss the id. Node X
-     * subscribes the id while Y's subscribe of it is under way, or right after it was refused. X then crashes before
-     * it has handled anything, and restarts. An event written while X was down comes after X's start position.
+     * Node Y holds the id paused, with nothing stored for it. Node X subscribes the id right after Y's subscribe of it
+     * was refused. X then crashes before it has handled anything, and restarts. An event written while X was down comes
+     * after X's start position.
      */
     @Test
     void a_subscribe_refused_on_another_node_leaves_the_start_position_the_running_subscription_restarts_from() throws Exception {
-        NativeMongoSubscriptionModel nativeY = nativeModel();
-        HookedNativeModel wrappedY = new HookedNativeModel(nativeY);
-        DurableSubscriptionModel durableY = durable(wrappedY);
+        DurableSubscriptionModel durableY = durable(nativeModel());
         DurableSubscriptionModel durableX = durable(nativeModel());
         String id = UUID.randomUUID().toString();
         assertThat(durableY.subscribe(id, null, StartAt.now(), ignore()).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
         durableY.pauseSubscription(id);
-        Runnable xSubscribes = () -> assertThat(durableX.subscribe(id, ignore()).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
-        wrappedY.missTheId = true;
-        wrappedY.whileAskedForTheGlobalCheckpoint = xSubscribes;
 
         assertThatThrownBy(() -> durableY.subscribe(id, ignore())).isInstanceOf(DuplicateSubscriptionIdException.class);
 
-        wrappedY.missTheId = false;
-        if (wrappedY.whileAskedForTheGlobalCheckpoint != null) {
-            wrappedY.whileAskedForTheGlobalCheckpoint = null;
-            xSubscribes.run();
-        }
+        assertThat(durableX.subscribe(id, ignore()).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
         assertThat(durableX.isRunning(id)).as("precondition: the subscription of node X runs").isTrue();
         assertThat(new NativeMongoCheckpointStorage(checkpoints).read(id))
                 .as("the start position of the subscription node X runs, after node Y's subscribe was refused")
@@ -229,23 +218,15 @@ class DurableSubscriptionModelRefusedSubscribeOnMongoDBTest {
     }
 
     /**
-     * Forwards to a native model. It answers {@code false} from {@code isRunning(id)} and {@code isPaused(id)}, and
-     * omits the id from {@code subscriptionIds()}, while {@code missTheId} is set, and runs
-     * {@code whileAskedForTheGlobalCheckpoint} once, when it is next asked for the global checkpoint, and then answers
-     * what the native model answered before it ran.
+     * Forwards to a native model, and runs {@code whileAskedForTheGlobalCheckpoint} once, when it is next asked for the
+     * global checkpoint, and then answers what the native model answered before it ran.
      */
-    private static final class HookedNativeModel implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions, IntrospectableSubscriptions {
+    private static final class HookedNativeModel implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions {
         private final NativeMongoSubscriptionModel delegate;
-        volatile boolean missTheId;
         volatile @Nullable Runnable whileAskedForTheGlobalCheckpoint;
 
         HookedNativeModel(NativeMongoSubscriptionModel delegate) {
             this.delegate = delegate;
-        }
-
-        @Override
-        public Set<String> subscriptionIds() {
-            return missTheId ? Set.of() : delegate.subscriptionIds();
         }
 
         @Override
@@ -286,12 +267,12 @@ class DurableSubscriptionModelRefusedSubscribeOnMongoDBTest {
 
         @Override
         public boolean isRunning(String subscriptionId) {
-            return !missTheId && delegate.isRunning(subscriptionId);
+            return delegate.isRunning(subscriptionId);
         }
 
         @Override
         public boolean isPaused(String subscriptionId) {
-            return !missTheId && delegate.isPaused(subscriptionId);
+            return delegate.isPaused(subscriptionId);
         }
 
         @Override

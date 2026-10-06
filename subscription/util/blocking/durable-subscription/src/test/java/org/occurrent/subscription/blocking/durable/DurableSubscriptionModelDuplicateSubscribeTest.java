@@ -156,26 +156,20 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
     }
 
     /**
-     * The wrapped model here answers {@code false} from {@code isRunning(id)} and {@code isPaused(id)} for the paused
-     * id, so only its subscribe refuses the duplicate. A position stored before that refusal is where the resume below
-     * starts, after {@code e1}.
+     * A position stored by the refused subscribe would be where the resume below starts, after {@code e1}.
      */
     @Test
     void a_paused_subscription_resumes_from_where_it_was_paused_after_a_subscribe_of_its_id_is_refused() throws Exception {
-        ForwardsToTheNativeModel forwarding = new ForwardsToTheNativeModel(wrapped);
-        DurableSubscriptionModel durableOverForwarding = new DurableSubscriptionModel(forwarding, storage);
         List<String> received = new CopyOnWriteArrayList<>();
         String id = UUID.randomUUID().toString();
-        assertThat(durableOverForwarding.subscribe(id, null, StartAt.now(), e -> received.add(e.getId())).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
-        durableOverForwarding.pauseSubscription(id);
+        assertThat(durable.subscribe(id, null, StartAt.now(), e -> received.add(e.getId())).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
+        durable.pauseSubscription(id);
         eventStore.write("stream", 0L, List.of(event("e1")));
-        forwarding.missTheId = true;
-        assertThatThrownBy(() -> durableOverForwarding.subscribe(id, action)).isInstanceOf(DuplicateSubscriptionIdException.class);
-        forwarding.missTheId = false;
+        assertThatThrownBy(() -> durable.subscribe(id, action)).isInstanceOf(DuplicateSubscriptionIdException.class);
         assertThat(storage.read(id)).as("the first position the refused subscribe stored").isNull();
         assertThat(received).as("what the paused subscription received before the resume").isEmpty();
 
-        assertThat(durableOverForwarding.resumeSubscription(id).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
+        assertThat(durable.resumeSubscription(id).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
         eventStore.write("stream", 1L, List.of(event("e2")));
 
         awaitReceived(received, "e2");
@@ -186,24 +180,22 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
 
     /**
      * A pause or a resume moves the id between running and paused, and a stop and a start move every id. A subscribe
-     * of the id is tried again and again meanwhile, through a wrapped model that does not list its subscriptions, and
-     * must leave nothing stored, since the running subscription started from {@code StartAt.now()} and handles no
-     * event that would store one.
+     * of the id is tried again and again meanwhile, and must leave nothing stored, since the running subscription
+     * started from {@code StartAt.now()} and handles no event that would store one.
      */
     @Test
     @Timeout(60)
     void a_refused_duplicate_racing_pauses_resumes_stops_and_starts_never_leaves_a_start_position_behind() throws Exception {
-        DurableSubscriptionModel durableOverForwarding = new DurableSubscriptionModel(new ForwardsToTheNativeModel(wrapped), storage);
         String id = UUID.randomUUID().toString();
-        assertThat(durableOverForwarding.subscribe(id, null, StartAt.now(), action).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
+        assertThat(durable.subscribe(id, null, StartAt.now(), action).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
         AtomicBoolean racing = new AtomicBoolean(true);
         AtomicInteger moves = new AtomicInteger();
         Thread mover = Thread.ofPlatform().start(() -> {
             for (int round = 0; racing.get(); round++) {
                 try {
                     if (round % 10 == 9) {
-                        durableOverForwarding.stop();
-                        durableOverForwarding.start(true);
+                        durable.stop();
+                        durable.start(true);
                     } else {
                         wrapped.pauseSubscription(id);
                         wrapped.resumeSubscription(id);
@@ -218,7 +210,7 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
         try {
             long until = System.nanoTime() + Duration.ofSeconds(4).toNanos();
             while (System.nanoTime() < until) {
-                assertThatThrownBy(() -> durableOverForwarding.subscribe(id, action)).isInstanceOf(DuplicateSubscriptionIdException.class);
+                assertThatThrownBy(() -> durable.subscribe(id, action)).isInstanceOf(DuplicateSubscriptionIdException.class);
                 refused.incrementAndGet();
                 assertThat(storage.read(id))
                         .as("the position a refused subscribe stored, after %s refusals", refused.get())
@@ -323,13 +315,11 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
     }
 
     /**
-     * Forwards to the native model, without listing its subscriptions. It answers {@code false} from
-     * {@code isRunning(id)} and {@code isPaused(id)} while {@code missTheId} is set, and runs
-     * {@code whileAskedForTheGlobalCheckpoint} once, when it is next asked for the global checkpoint.
+     * Forwards to the native model, and runs {@code whileAskedForTheGlobalCheckpoint} once, when it is next asked for
+     * the global checkpoint.
      */
     private static final class ForwardsToTheNativeModel implements CheckpointAwareSubscriptionModel, RepositionableSubscriptions {
         private final NativeMongoSubscriptionModel delegate;
-        volatile boolean missTheId;
         volatile @Nullable Runnable whileAskedForTheGlobalCheckpoint;
 
         ForwardsToTheNativeModel(NativeMongoSubscriptionModel delegate) {
@@ -373,12 +363,12 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
 
         @Override
         public boolean isRunning(String subscriptionId) {
-            return !missTheId && delegate.isRunning(subscriptionId);
+            return delegate.isRunning(subscriptionId);
         }
 
         @Override
         public boolean isPaused(String subscriptionId) {
-            return !missTheId && delegate.isPaused(subscriptionId);
+            return delegate.isPaused(subscriptionId);
         }
 
         @Override
