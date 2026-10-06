@@ -425,7 +425,10 @@ public final class ChangeStreamSubscriptions {
             } else if (isChangeStreamHistoryLost(e)) {
                 if (restartSubscriptionsOnChangeStreamHistoryLost) {
                     log.warn("There was not enough oplog to resume subscription {}, will restart subscription from current time.", subscriptionId, e);
-                    internalSubscription.movedUnlessReplacedTo(restartPositionAfterHistoryLost(subscriptionId, internalSubscription));
+                    StartAt restartPosition = restartPositionAfterHistoryLost(subscriptionId, internalSubscription);
+                    if (restartPosition != null) {
+                        internalSubscription.movedUnlessReplacedTo(restartPosition);
+                    }
                     throw e;
                 } else {
                     log.error("There was not enough oplog to resume subscription {}, will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.", subscriptionId, e);
@@ -490,12 +493,16 @@ public final class ChangeStreamSubscriptions {
     }
 
     // Tells the listeners the present before restarting from it. A listener that throws fails this attempt and
-    // the retry runs it again. Without an operation time in the reply to ping, restarts from now and tells nobody.
-    // A listener asks the run whether a resume or a cancel came while this asked for the present
-    private StartAt restartPositionAfterHistoryLost(String subscriptionId, InternalSubscription internalSubscription) {
-        BsonTimestamp operationTime = currentOperationTime();
+    // the retry runs it again. So does a reply to ping without an operation time, since restarting from a present
+    // nobody stored keeps the lost position stored, and a process that stops before the next event then skips what
+    // was written in between. A listener asks the run whether a resume or a cancel came while this asked for the present
+    private @Nullable StartAt restartPositionAfterHistoryLost(String subscriptionId, InternalSubscription internalSubscription) {
+        Document reply = model.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND);
+        BsonTimestamp operationTime = MongoCommons.operationTimeAfter(reply);
         if (operationTime == null) {
-            return StartAt.now();
+            log.warn("The reply to {} had no {}, so subscription {} is not restarted from a present that cannot be recorded. Its retry strategy tries the restart again. Reply was: {}",
+                    MongoCommons.CURRENT_OPERATION_TIME_COMMAND.toJson(), MongoCommons.OPERATION_TIME, subscriptionId, reply.toJson());
+            return null;
         }
         Checkpoint present = new MongoOperationTimeCheckpoint(operationTime);
         historyLossListeners.forEach(listener -> listener.restartingAfterHistoryLoss(subscriptionId, present, internalSubscription::isCurrent));

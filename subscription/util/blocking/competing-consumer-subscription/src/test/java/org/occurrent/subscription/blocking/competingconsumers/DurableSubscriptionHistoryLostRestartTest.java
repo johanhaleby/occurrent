@@ -18,11 +18,16 @@ package org.occurrent.subscription.blocking.competingconsumers;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.event.CommandListener;
+import com.mongodb.event.CommandStartedEvent;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.BsonDocument;
 import org.bson.Document;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -31,7 +36,12 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig;
@@ -49,6 +59,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
@@ -63,6 +75,8 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
  * it restarted from, so the next process start resumes from there. Otherwise that process reads the lost position
  * again, restarts from its own present, and skips every event written while nothing ran. The lost history is a
  * {@code failCommand} fail point answering the {@code aggregate} that opens the change stream with error code 286.
+ * A reply to {@code ping} without an operation time gives no present to record, so the subscription opens at no
+ * position other than the stored one until a reply has one.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -71,7 +85,10 @@ class DurableSubscriptionHistoryLostRestartTest {
     private static final MongoDBContainer mongo = ReplicaSetReadyMongoDBContainer.withDefaultVersion()
             .withCommand("--replSet", "docker-rs", "--setParameter", "enableTestCommands=1");
 
+    private static final String SUBSCRIPTION_APP = "history-lost-subscription";
+
     private MongoClient client;
+    private @Nullable MongoClient subscriptionClient;
     private MongoTemplate template;
     private SpringMongoEventStore eventStore;
     private DurableSubscriptionModel running;
@@ -80,28 +97,14 @@ class DurableSubscriptionHistoryLostRestartTest {
     void shutdown() {
         client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", "off"));
         if (running != null) running.shutdown();
+        if (subscriptionClient != null) subscriptionClient.close();
     }
 
     @Test
     void events_written_after_a_history_lost_restart_survive_a_process_restart() {
-        ConnectionString cs = new ConnectionString(mongo.getReplicaSetUrl() + ".events");
-        client = MongoClients.create(cs);
-        template = new MongoTemplate(client, requireNonNull(cs.getDatabase()));
-        eventStore = new SpringMongoEventStore(template, new EventStoreConfig.Builder().eventStoreCollectionName("events")
-                .transactionConfig(new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(client, requireNonNull(cs.getDatabase()))))
-                .timeRepresentation(TimeRepresentation.RFC_3339_STRING).build());
-        String checkpoints = "checkpoints-" + UUID.randomUUID();
-        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, checkpoints);
-
-        // Process 1 checkpoints event e0 at token T0
-        CopyOnWriteArrayList<CloudEvent> p1 = new CopyOnWriteArrayList<>();
-        running = durable(storage);
-        running.subscribe("X", p1::add).waitUntilStarted();
-        String e0 = write();
-        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(p1).extracting(CloudEvent::getId).contains(e0));
-        await().pollDelay(Duration.ofMillis(300)).until(() -> true);
-        String t0 = storage.read("X").asString();
-        running.shutdown();
+        connect();
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
+        String t0 = checkpointOneEventInProcessOne(storage).asString();
 
         // Process 2 starts after T0 fell off the oplog, so its change stream history is lost and it restarts
         historyLostOnNextOpen();
@@ -127,9 +130,130 @@ class DurableSubscriptionHistoryLostRestartTest {
         assertThat(p3).as("the event written while no process ran is still in the oplog and must be delivered").extracting(CloudEvent::getId).contains(eDown);
     }
 
+    @Test
+    void a_restart_after_lost_history_opens_at_no_position_but_the_stored_one_until_the_reply_to_ping_has_an_operation_time() {
+        // Given
+        ConnectionString cs = connect();
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
+        Checkpoint t0 = checkpointOneEventInProcessOne(storage);
+        List<Opening> openings = new CopyOnWriteArrayList<>();
+        AtomicBoolean pingWithoutOperationTime = new AtomicBoolean(true);
+        AtomicInteger pingsWithoutOperationTime = new AtomicInteger();
+        MongoClient subscriptions = MongoClients.create(MongoClientSettings.builder().applyConnectionString(cs).applicationName(SUBSCRIPTION_APP)
+                .addCommandListener(new CommandListener() {
+                    @Override
+                    public void commandStarted(CommandStartedEvent event) {
+                        BsonDocument changeStream = changeStreamStage(event);
+                        if (changeStream != null) {
+                            openings.add(new Opening(openedAt(changeStream), storage.read("X")));
+                        }
+                    }
+                }).build());
+        subscriptionClient = subscriptions;
+        MongoTemplate subscriptionTemplate = new MongoTemplate(subscriptions, requireNonNull(cs.getDatabase())) {
+            @Override
+            public Document executeCommand(Document command) {
+                Document reply = super.executeCommand(command);
+                if (command.containsKey("ping") && pingWithoutOperationTime.get()) {
+                    reply.remove("operationTime");
+                    pingsWithoutOperationTime.incrementAndGet();
+                }
+                return reply;
+            }
+        };
+        historyLostOnEveryOpenBy(SUBSCRIPTION_APP);
+        CopyOnWriteArrayList<CloudEvent> p2 = new CopyOnWriteArrayList<>();
+        running = durable(storage, subscriptionTemplate);
+
+        // When
+        Subscription subscription = running.subscribe("X", p2::add);
+        await("the restart asks for the present again").atMost(10, SECONDS).until(() -> pingsWithoutOperationTime.get() >= 3);
+
+        // Then
+        assertThat(storage.read("X")).as("the stored position while no reply to ping has an operation time").isEqualTo(t0);
+        assertThat(openings).as("the positions the change stream opened at while no reply to ping has an operation time, null for the present")
+                .isNotEmpty().allSatisfy(opening -> assertThat(opening.at()).isEqualTo(t0));
+
+        // When
+        pingWithoutOperationTime.set(false);
+        await("the position the subscription restarts from is stored").atMost(10, SECONDS).until(() -> !t0.equals(storage.read("X")));
+        historyLostOff();
+
+        // Then
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(10))).as("started").isTrue();
+        assertThat(openings).as("each position the change stream opened at, against the position stored as it opened")
+                .allSatisfy(opening -> assertThat(opening.at()).isEqualTo(opening.stored()));
+        assertThat(openings.getLast().at()).as("the position the change stream finally opened at").isInstanceOf(MongoOperationTimeCheckpoint.class);
+        String eAfter = write();
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(p2).extracting(CloudEvent::getId).contains(eAfter));
+    }
+
+    private ConnectionString connect() {
+        ConnectionString cs = new ConnectionString(mongo.getReplicaSetUrl() + ".events");
+        client = MongoClients.create(cs);
+        template = new MongoTemplate(client, requireNonNull(cs.getDatabase()));
+        eventStore = new SpringMongoEventStore(template, new EventStoreConfig.Builder().eventStoreCollectionName("events")
+                .transactionConfig(new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(client, requireNonNull(cs.getDatabase()))))
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING).build());
+        return cs;
+    }
+
+    // Process 1 checkpoints an event at a token, the position the next process finds stored
+    private Checkpoint checkpointOneEventInProcessOne(SpringMongoCheckpointStorage storage) {
+        CopyOnWriteArrayList<CloudEvent> p1 = new CopyOnWriteArrayList<>();
+        running = durable(storage);
+        running.subscribe("X", p1::add).waitUntilStarted();
+        String e0 = write();
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(p1).extracting(CloudEvent::getId).contains(e0));
+        await().pollDelay(Duration.ofMillis(300)).until(() -> true);
+        Checkpoint t0 = storage.read("X");
+        running.shutdown();
+        return t0;
+    }
+
     private DurableSubscriptionModel durable(SpringMongoCheckpointStorage storage) {
-        return new DurableSubscriptionModel(new SpringMongoSubscriptionModel(template,
-                SpringMongoSubscriptionModelConfig.withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(true)), storage);
+        return durable(storage, template);
+    }
+
+    private DurableSubscriptionModel durable(SpringMongoCheckpointStorage storage, MongoTemplate subscriptionTemplate) {
+        return new DurableSubscriptionModel(new SpringMongoSubscriptionModel(subscriptionTemplate,
+                SpringMongoSubscriptionModelConfig.withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(true)
+                        .retryStrategy(RetryStrategy.fixed(Duration.ofMillis(100)))), storage);
+    }
+
+    private void historyLostOnEveryOpenBy(String appName) {
+        client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", "alwaysOn")
+                .append("data", new Document("failCommands", List.of("aggregate")).append("errorCode", 286).append("appName", appName)));
+    }
+
+    private void historyLostOff() {
+        client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", "off"));
+    }
+
+    // A copy, since the event's command is only readable while the listener runs
+    private static @Nullable BsonDocument changeStreamStage(CommandStartedEvent event) {
+        if (!event.getCommandName().equals("aggregate") || !event.getCommand().isArray("pipeline")) {
+            return null;
+        }
+        return event.getCommand().getArray("pipeline").stream().findFirst()
+                .filter(stage -> stage.isDocument() && stage.asDocument().isDocument("$changeStream"))
+                .map(stage -> BsonDocument.parse(stage.asDocument().getDocument("$changeStream").toJson()))
+                .orElse(null);
+    }
+
+    // null for a change stream that opens at the present
+    private static @Nullable Checkpoint openedAt(BsonDocument changeStream) {
+        if (changeStream.isDocument("startAfter")) {
+            return new MongoResumeTokenCheckpoint(changeStream.getDocument("startAfter"));
+        } else if (changeStream.isDocument("resumeAfter")) {
+            return new MongoResumeTokenCheckpoint(changeStream.getDocument("resumeAfter"));
+        } else if (changeStream.isTimestamp("startAtOperationTime")) {
+            return new MongoOperationTimeCheckpoint(changeStream.getTimestamp("startAtOperationTime"));
+        }
+        return null;
+    }
+
+    private record Opening(@Nullable Checkpoint at, @Nullable Checkpoint stored) {
     }
 
     private void historyLostOnNextOpen() {
