@@ -88,6 +88,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -681,13 +682,16 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
     /**
      * A subscribe of the id while another subscribe of it still runs its dynamic start position starts, as the Mongo
      * model takes it when nothing of the id waits to be handed over. The other subscribe then throws what its start
-     * position threw.
+     * position threw, or, when the start position answers, the DuplicateSubscriptionIdException of the Mongo model, so
+     * only one of the two delivers.
      */
-    @Test
-    void a_subscribe_of_the_id_while_another_runs_a_start_position_that_then_throws_starts() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void a_subscribe_of_the_id_while_another_runs_its_start_position_starts_and_only_one_of_them_delivers(boolean theStartPositionThrows) throws Exception {
         // Given
         CountDownLatch inTheStartPosition = new CountDownLatch(1);
         CountDownLatch startPositionLetGo = new CountDownLatch(1);
+        List<Long> deliveredToTheOther = new CopyOnWriteArrayList<>();
         CompletableFuture<Subscription> other = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(() -> {
             inTheStartPosition.countDown();
             try {
@@ -695,8 +699,11 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-            throw new IllegalStateException("The start position failed");
-        }), action(new CopyOnWriteArrayList<>())), caller);
+            if (theStartPositionThrows) {
+                throw new IllegalStateException("The start position failed");
+            }
+            return StartAt.now();
+        }), action(deliveredToTheOther)), caller);
         assertThat(inTheStartPosition.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start position reached").isTrue();
         List<Long> delivered = new CopyOnWriteArrayList<>();
 
@@ -706,12 +713,18 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
         @Nullable Throwable otherFailed = failureOf(other);
         long written = write();
         Throwable notDelivered = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> delivered.contains(written)));
+        long writtenLast = write();
+        Throwable lastNotDelivered = catchThrowable(() -> await().atMost(TIMEOUT).until(() -> delivered.contains(writtenLast)));
 
         // Then
         SoftAssertions.assertSoftly(softly -> {
             softly.assertThat(subscribeFailed).as("how the subscribe while the other ran its start position ended").isNull();
-            softly.assertThat(otherFailed).as("how the other subscribe ended").isInstanceOf(IllegalStateException.class);
+            softly.assertThat(otherFailed).as("how the other subscribe ended")
+                    .isInstanceOf(theStartPositionThrows ? IllegalStateException.class : DuplicateSubscriptionIdException.class);
             softly.assertThat(notDelivered).as("how waiting for the event written once it started ended").isNull();
+            softly.assertThat(lastNotDelivered).as("how waiting for the event written after it ended").isNull();
+            softly.assertThat(Stream.of(delivered, deliveredToTheOther).filter(events -> !events.isEmpty()).count())
+                    .as("subscriptions of the id that delivered").isLessThanOrEqualTo(1);
         });
     }
 

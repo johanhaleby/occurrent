@@ -2236,7 +2236,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * drives the subscription itself. A write back that fails is tried again, see below, and the function is asked
      * once one succeeds. When this model hands the subscription to a wrapped model that manages named subscriptions,
      * a {@code subscribe(..)} of the id while the subscription waits for the write back throws
-     * {@link DuplicateSubscriptionIdException} at the call, as that model throws for a subscription it has.
+     * {@link DuplicateSubscriptionIdException} at the call, as that model throws for a subscription it has. Where no
+     * subscription of the id waits, a {@code subscribe(..)} of the id is accepted while another one still reads where
+     * to start, and the wrapped model gets at most one of the two.
      * <p>
      * When a subscribe, a resume or a start of the id fails once it has taken the delete over, as a subscribe that
      * Reactor refuses on a thread that may not block does, no subscription needs the checkpoint any more. The same goes
