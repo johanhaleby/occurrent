@@ -457,14 +457,16 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
     }
 
     @Test
-    void a_wrapped_model_that_manages_named_subscriptions_refuses_an_unreadable_position_from_subscribe_itself() {
-        // That path awaits the position inside subscribe so the wrapped model is handed one, so it can refuse where
-        // the caller is standing rather than on a handle.
+    void a_wrapped_model_that_manages_named_subscriptions_refuses_an_unreadable_position_on_the_subscription_subscribe_returned() {
+        // That path reads the position once subscribe has returned and hands the wrapped model what it read, so it
+        // refuses on the handle.
         NamedRecordingSubscriptionModel delegate = new NamedRecordingSubscriptionModel("at-registration");
         delegate.feed.failGlobalCheckpoint = true;
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
 
-        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Cannot read the position right now");
         assertThat(delegate.subscribedIds).isEmpty();
@@ -618,8 +620,10 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
 
-        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
-                .as("the refusal reaches the caller from subscribe itself on this path, since it awaits the position there")
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
+                .as("the refusal reaches the caller on the subscription subscribe returned, since this path reads the position after the call")
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(SUBSCRIPTION_ID)
                 .hasMessageContaining("answered nothing");
@@ -638,7 +642,9 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
 
-        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("answered nothing");
         assertThat(delegate.subscribedIds).isEmpty();
@@ -655,7 +661,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("from-a-previous-run")).block(TIMEOUT);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
 
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
 
         assertThat(delegate.subscribedIds).containsExactly(SUBSCRIPTION_ID);
         assertThat(delegate.startedAt.getFirst())
@@ -689,13 +695,13 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
 
     @Test
     void a_wrapped_model_that_manages_named_subscriptions_is_handed_the_position_read_at_registration() {
-        // Path D reads the position inside subscribe and hands the wrapped model a concrete one, so there is nothing
-        // for it to resolve later and no second read to disagree with the first.
+        // Path D reads the position before the hand-over and hands the wrapped model a concrete one, so there is
+        // nothing for it to resolve later and no second read to disagree with the first.
         NamedRecordingSubscriptionModel delegate = new NamedRecordingSubscriptionModel("at-registration");
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
 
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
 
         assertThat(delegate.subscribedIds).containsExactly(SUBSCRIPTION_ID);
         assertThat(delegate.feed.globalCheckpointReads).hasValue(1);

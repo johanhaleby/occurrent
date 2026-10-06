@@ -31,6 +31,8 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException       If {@code subscriptionId} is already in use on this subscription model instance.
      * @throws UnsupportedSubscriptionFilterException If this model cannot apply a filter of that shape.
+     *                                               A model that hears of the refusal only once the call has returned reports it
+     *                                               through {@link Subscription#waitUntilStarted(java.time.Duration)} instead.
      * @throws UnsupportedStartAtException            If this model does not accept that start position.
      */
     Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action);
@@ -56,6 +58,8 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException       If {@code subscriptionId} is already in use on this subscription model instance.
      * @throws UnsupportedSubscriptionFilterException If this model cannot apply a filter of that shape.
+     *                                               A model that hears of the refusal only once the call has returned reports it
+     *                                               through {@link Subscription#waitUntilStarted(java.time.Duration)} instead.
      */
     default Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);

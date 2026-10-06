@@ -29,6 +29,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -41,6 +43,10 @@ import java.util.function.Function;
 final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
 
     final List<String> subscribedIds = new CopyOnWriteArrayList<>();
+    /**
+     * The ids it holds a subscription for, from the subscribe until the cancel, as a real named model does
+     */
+    private final Set<String> held = ConcurrentHashMap.newKeySet();
     final List<StartAt> startedAt = new CopyOnWriteArrayList<>();
     /**
      * The actions it was handed, so a test can run an event through one the way the wrapped model would.
@@ -100,6 +106,7 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
             startAt.get(new SubscriptionModelContext(NamedRecordingSubscriptionModel.class));
         }
         subscribedIds.add(subscriptionId);
+        held.add(subscriptionId);
         actions.add(action);
         // What the durable model hands a named model is the whole of what decides where the subscription begins on
         // this path, since this model resolves nothing further.
@@ -122,6 +129,7 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
     public Mono<Void> cancelSubscription(String subscriptionId) {
         calls.add("cancel " + subscriptionId);
         cancelledIds.add(subscriptionId);
+        held.remove(subscriptionId);
         return cancelled;
     }
 
@@ -145,12 +153,12 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
 
     @Override
     public boolean isRunning(String subscriptionId) {
-        return running && subscribedIds.contains(subscriptionId);
+        return running && held.contains(subscriptionId);
     }
 
     @Override
     public boolean isPaused(String subscriptionId) {
-        return !running && subscribedIds.contains(subscriptionId);
+        return !running && held.contains(subscriptionId);
     }
 
     @Override

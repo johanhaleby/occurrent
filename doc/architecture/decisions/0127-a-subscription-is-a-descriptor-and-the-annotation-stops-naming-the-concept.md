@@ -348,8 +348,7 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 >
 > The subscribe can block as well. For the beginning or an explicit position the reactive MongoDB starter first
 > checks for a stored position with `blockOptional()`. For `DEFAULT`, `ReactorDurableSubscriptionModel` reads the
-> stored position with `block()` inside `subscribe` when it wraps a `SubscriptionModel`, which is how the starter
-> builds it. Wrapping a model that is not a `SubscriptionModel`, it reads the position without blocking. So what a late `@Subscription`,
+> stored position without blocking `subscribe`, whatever model it wraps. So what a late `@Subscription`,
 > `@Snapshot` or event store `@Projection` does on a non-blocking thread depends on where it starts. That is decided
 > per handler, so one bean can have a handler of each kind.
 >
@@ -395,9 +394,11 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > that subscribe, so it subscribes on the calling thread, and every such subscription handler on a bean does so before
 > the bean's other subscription handlers are handed to the scheduler. A bean's subscription handlers subscribe in
 > that order on every thread, startup included, where the others then subscribe in place. A `DEFAULT` handler with a
-> position stored resumes from there, but finding that out is the blocking read, so it goes the same way.
-> `ReactorDurableSubscriptionModel` wrapping a `SubscriptionModel` blocks for `DEFAULT`, and then the bean fails to build with a message saying to
-> build it on a thread that may block or to start it at the beginning or at an explicit position. When that handler is
+> position stored resumes from there, and finding that out is a read of storage, so it goes the same way.
+> `ReactorDurableSubscriptionModel` makes that read without blocking `subscribe`, so on the model the starter builds a
+> `NOW` or `DEFAULT` handler subscribes on a non-blocking thread too. A subscription model that blocks in `subscribe`
+> fails the bean instead, with a message saying to build it on a thread that may block or to start it at the beginning
+> or at an explicit position. When that handler is
 > a subscription handler, the bean's other subscription handlers that start at the beginning or at an explicit
 > position have not been handed to the scheduler by then, and they give their ids back. Everything that registered
 > before the failing handler stays, as it does on any thread, since cancelling it would delete its stored position. A

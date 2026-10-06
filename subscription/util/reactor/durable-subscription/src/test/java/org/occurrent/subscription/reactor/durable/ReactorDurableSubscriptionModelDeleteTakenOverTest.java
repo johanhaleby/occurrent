@@ -612,6 +612,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             // When
             Subscription subscription = subscribeOn(caller, model, delivered);
             List<Long> writtenWhileHeld = List.of(feed.write(), feed.write());
+            untilHandedOver(feed);
             release.countDown();
             long writtenAfter = feed.write();
 
@@ -669,8 +670,10 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             final Throwable pauseFailed;
             if (startingAgain == null) {
                 pauseFailed = catchThrowable(() -> model.pauseSubscription(SUBSCRIPTION_ID));
+                untilHandedOver(feed);
                 release.countDown();
             } else {
+                untilHandedOver(feed);
                 release.countDown();
                 assertThat(startingAgain.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start again held").isTrue();
                 pauseFailed = catchThrowable(() -> model.pauseSubscription(SUBSCRIPTION_ID));
@@ -723,6 +726,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
 
             // When
             subscribeOn(caller, model, delivered);
+            untilHandedOver(feed);
             release.countDown();
             assertThat(startingAgain.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start again held").isTrue();
             model.stop();
@@ -774,6 +778,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
 
             // When
             subscribeOn(caller, model, delivered);
+            untilHandedOver(feed);
             release.countDown();
             assertThat(startingAgain.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start again held").isTrue();
             Throwable pauseFailed = catchThrowable(() -> model.pauseSubscription(SUBSCRIPTION_ID));
@@ -824,6 +829,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             long storedElsewhere = loseTheFirstPosition(model, storage, feed, release);
             CountDownLatch startingAgain = feed.holdCancel(2, false);
             subscribeOn(caller, model, delivered);
+            untilHandedOver(feed);
             release.countDown();
             assertThat(startingAgain.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start again held").isTrue();
 
@@ -909,6 +915,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             subscribeOn(caller, model, delivered);
 
             // When
+            untilHandedOver(feed);
             release.countDown();
             Throwable pauseFailed = pause.ended();
             long writtenWhilePaused = feed.write();
@@ -955,6 +962,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             model.pauseSubscription(SUBSCRIPTION_ID);
 
             // When
+            untilHandedOver(feed);
             release.countDown();
             Throwable resumeFailed = resume.ended();
             long writtenAfter = feed.write();
@@ -996,6 +1004,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             loseTheFirstPosition(model, storage, feed, release);
             CountDownLatch subscribingAgain = feed.holdSubscribe(3);
             Subscription first = subscribeOn(caller, model, new CopyOnWriteArrayList<>());
+            untilHandedOver(feed);
             release.countDown();
             assertThat(subscribingAgain.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("subscribe that starts it again held").isTrue();
 
@@ -1027,12 +1036,12 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     }
 
     /**
-     * Against a wrapped model that lets a subscribe replace the subscription of the id it has, a subscribe handed to it
-     * whose first position fails ends while a later subscribe of the id is being handed to it. The subscription the later
-     * one handed over stays in the wrapped model and delivers what is written after it.
+     * Against a wrapped model that lets a subscribe replace the subscription of the id it has, a subscribe of the id is
+     * refused while the first position of an earlier one is being recorded. Once that fails, a subscribe of the id
+     * starts in the wrapped model and delivers what is written after it.
      */
     @Test
-    void a_subscribe_handed_to_a_wrapped_model_whose_first_position_fails_leaves_a_later_one_of_the_id_in_the_wrapped_model() throws Exception {
+    void a_subscribe_handed_to_a_wrapped_model_whose_first_position_fails_refuses_a_later_one_of_the_id_until_it_has_ended() throws Exception {
         // Given
         GatedStorage storage = new GatedStorage(false);
         PausableFeed feed = new PausableFeed(true);
@@ -1050,23 +1059,20 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             Subscription first = subscribeOn(caller, model, new CopyOnWriteArrayList<>());
             release.countDown();
             assertThat(storage.ifAbsentEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("first position held").isTrue();
-            CountDownLatch laterInWrappedModel = feed.holdSubscribe(3);
-            CompletableFuture<Subscription> subscribedLater = CompletableFuture.supplyAsync(
-                    () -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(later)), otherCaller);
-            assertThat(laterInWrappedModel.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("later subscribe held in the wrapped model").isTrue();
+            Throwable refusedWhileHeld = catchThrowable(() -> subscribeOn(otherCaller, model, later));
 
             // When
             releaseFirstPosition.countDown();
             Throwable firstEnded = catchThrowable(() -> first.waitUntilStarted(TIMEOUT).block());
             // Time for the end of the first subscription to cancel the id in the wrapped model, if it does
             Thread.sleep(300);
-            feed.letGo();
-            subscribedLater.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted(TIMEOUT).block();
+            subscribeOn(otherCaller, model, later).waitUntilStarted(TIMEOUT).block();
             long writtenAfter = feed.write();
 
             // Then
             untilDelivered(later, writtenAfter);
             SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(refusedWhileHeld).as("how the subscribe made while the first position was held ended").hasCauseInstanceOf(DuplicateSubscriptionIdException.class);
                 softly.assertThat(firstEnded).as("how waiting for the start of the first subscription ended").hasStackTraceContaining(SAVE_FAILED);
                 softly.assertThat(later).as("events delivered to the later subscription").contains(writtenAfter);
                 softly.assertThat(feed.isRunning(SUBSCRIPTION_ID)).as("the later subscription running in the wrapped model").isTrue();
@@ -1326,6 +1332,11 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             assertThat(made.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("call made once nothing was left to put in place").isTrue();
             return failure.get();
         }
+    }
+
+    // The subscribe returns before it reads storage, so a test lets the delete go only once it is handed over
+    private static void untilHandedOver(SubscriptionModel feed) {
+        await().atMost(TIMEOUT).until(() -> feed.isRunning(SUBSCRIPTION_ID) || feed.isPaused(SUBSCRIPTION_ID));
     }
 
     private static Called callOnceNothingIsLeftToPutInPlace(ReactorDurableSubscriptionModel model, Runnable call) {

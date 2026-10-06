@@ -42,8 +42,8 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
 
-// Runs the subscribe call of a registration for a bean built after startup. A subscription model may block inside
-// subscribe, and ReactorDurableSubscriptionModel does, so on a Reactor non-blocking thread that block() throws.
+// Runs the subscribe call of a registration for a bean built after startup. A subscription model may call block()
+// inside subscribe, which throws on a Reactor non-blocking thread.
 //
 // Where the subscription starts decides what happens there. A start that is the same whenever the subscribe runs,
 // BEGINNING or an explicit position, is subscribed on the scheduler, and tried again after a failure that can go away,

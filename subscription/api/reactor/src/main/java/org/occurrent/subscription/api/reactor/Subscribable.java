@@ -57,6 +57,10 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException       If {@code subscriptionId} is already in use on this subscription model instance.
      * @throws UnsupportedSubscriptionFilterException If this model cannot apply a filter of that shape.
+     *                                               A model that hands the subscription to a wrapped model once the call has
+     *                                               returned, as {@code ReactorDurableSubscriptionModel} does from the
+     *                                               subscription-model default, reports it through {@link Subscription#waitUntilStarted()}
+     *                                               instead.
      * @throws UnsupportedStartAtException            If this model does not accept that start position.
      */
     default Subscription subscribe(String subscriptionId, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
@@ -71,6 +75,10 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException       If {@code subscriptionId} is already in use on this subscription model instance.
      * @throws UnsupportedSubscriptionFilterException If this model cannot apply a filter of that shape.
+     *                                               A model that hands the subscription to a wrapped model once the call has
+     *                                               returned, as {@code ReactorDurableSubscriptionModel} does from the
+     *                                               subscription-model default, reports it through {@link Subscription#waitUntilStarted()}
+     *                                               instead.
      */
     default Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, Function<CloudEvent, Mono<Void>> action) {
         return subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);

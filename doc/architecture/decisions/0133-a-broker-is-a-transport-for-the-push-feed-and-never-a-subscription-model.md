@@ -1718,8 +1718,9 @@ for by an earlier cancel, is still under way, with the same `subscribe(..)` in 0
    restart. On a storage that evaluates no condition on a delete, a process that ends between a try deleting the
    position and the write back reaching the store is the exception, which the rule that a subscription is durable once
    its start position is stored covers, described below.
-2. It waits only where 0.33.0 waits, which is the read of the subscription-model default on the caller's thread when
-   the durable model hands the subscription to a wrapped model. No `subscribe(..)`, resume or start waits for the
+2. It waits nowhere that 0.33.0 doesn't. Where the durable model hands the subscription to a wrapped model, 0.33.0
+   waited on the caller's thread for the read of the subscription-model default, and that read no longer holds up the
+   caller. No `subscribe(..)`, resume or start waits for the
    storage calls the takeover makes, and on a storage that evaluates a condition on a delete, no `subscribe(..)`,
    resume or delivery waits for a delete.
 3. It refuses only where 0.33.0 refuses, apart from a write of the position read to start from that fails on a storage
@@ -1887,12 +1888,13 @@ warning.
 A function that runs at the call and throws makes `subscribe(..)` throw, as in 0.33.0. A `shutdown()` that ends a
 subscription before it starts fails its `waitUntilStarted()` with `SubscriptionModelShutdownException`. In 0.33.0 that
 wait never ended when the durable model drove the subscription itself. A subscription from the subscription-model
-default, on a durable model that wraps a model that manages named subscriptions, reads where the feed is on the caller's
-thread, with or without a delete, as 0.33.0 did. On a thread where Reactor refuses that read, the `subscribe(..)`
-throws, as in 0.33.0. That refusal stays. A read that ends after `subscribe(..)` returns would start the subscription
-from a position later than the return, so it would skip the events the caller writes in between. The Spring Boot reactor
-autoconfigure depends on the refusal to fail a bean built late on such a thread with a `DEFAULT` start, with a message
-saying to build it on a thread that may block or to start it at the beginning or at an explicit position.
+default, on a durable model that wraps a model that manages named subscriptions, no longer reads where to start on the
+caller's thread. 0.33.0 read there, so a `subscribe(..)` on a thread where Reactor refuses to block threw, and one on a
+Netty event loop thread of the MongoDB driver could wait for good for a read that needed that thread. Now the call
+returns at once, and the subscription is handed to the wrapped model once the read answers. The read of where the feed
+is starts at the call, so with nothing stored the subscription starts from where the feed was then and skips nothing
+the caller writes after the return. A refusal on the way fails `waitUntilStarted()` and is logged as an error, since the
+call has returned by then. A duplicate id is still refused at the call, before anything is read or stored.
 
 When the durable model drives the subscription itself, no lifecycle call holds its monitor while it calls the storage,
 the wrapped model or a function the caller supplies, or while it cancels the feed of a subscription. Each call decides

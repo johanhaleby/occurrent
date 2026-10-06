@@ -53,6 +53,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -205,12 +206,11 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     /**
      * A subscribe on a thread where Reactor does not allow blocking comes while the delete of an earlier cancel of the
      * same id runs, with a dynamic start position that answers the model default, and is handed to a wrapped model that
-     * manages named subscriptions. The function runs at the subscribe, and the model default is read there by
-     * blocking, which Reactor refuses on such a thread. So the subscribe throws, as it does without the delete, and
-     * nothing reaches the wrapped model.
+     * manages named subscriptions. The model default is read once the subscribe has returned, so nothing blocks the
+     * subscribing thread, and the subscription is handed to the wrapped model and starts once the delete has ended.
      */
     @Test
-    void a_dynamic_start_position_answering_the_model_default_is_refused_on_a_thread_that_may_not_block_while_a_delete_runs_when_handed_over() {
+    void a_dynamic_start_position_answering_the_model_default_subscribed_on_a_thread_that_may_not_block_while_a_delete_runs_starts_once_the_delete_ends_when_handed_over() {
         // Given
         HeldDeleteStorage storage = new HeldDeleteStorage();
         NamedFeed feed = new NamedFeed(true);
@@ -219,14 +219,17 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
         try {
             // When
-            Throwable thrown = catchThrowable(() -> Mono.fromCallable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::subscriptionModelDefault), __ -> Mono.empty()))
+            Subscription subscription = requireNonNull(Mono.fromCallable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(StartAt::subscriptionModelDefault), __ -> Mono.empty()))
                     .subscribeOn(Schedulers.parallel())
                     .block(TIMEOUT));
+            Set<String> handedOverWhileTheDeleteRuns = Set.copyOf(feed.subscriptions.keySet());
+            storage.releaseDelete.countDown();
+            Throwable thrown = catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
 
             // Then
-            assertThat(thrown).as("how the subscribe on a thread that may not block ended").isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("are blocking");
-            assertThat(feed.subscriptions).as("subscriptions handed to the wrapped model").isEmpty();
+            assertThat(handedOverWhileTheDeleteRuns).as("subscriptions handed to the wrapped model while the delete runs").isEmpty();
+            assertThat(thrown).as("how waiting for the start of the subscription ended").isNull();
+            assertThat(feed.subscriptions).as("subscriptions handed to the wrapped model").containsOnlyKeys(SUBSCRIPTION_ID);
         } finally {
             storage.releaseDelete.countDown();
             model.shutdown();
@@ -1843,29 +1846,25 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
 
     /**
      * A subscribe of the id comes on a thread where Reactor does not allow blocking while the delete of an earlier
-     * cancel of the same id runs, and the storage still holds the checkpoint of the cancelled subscription. Reactor
-     * refuses the subscribe, by refusing the read of the model default where the subscription is handed to a wrapped
-     * model that manages named subscriptions, and by refusing the read a dynamic start position makes itself where this
-     * model drives the subscription and the storage evaluates a condition on a delete, since nothing then waits to be
-     * written back and the function is asked on the subscribing thread. After the refused subscribe no subscription of
-     * the id exists, so the delete goes ahead and removes the checkpoint before the cancel completes, as it does with no
-     * subscribe. Where this model drives the subscription on a storage without that condition, the checkpoint waits to
-     * be written back and the function is asked on another thread once it is, so nothing refuses the subscribe.
+     * cancel of the same id runs, and the storage still holds the checkpoint of the cancelled subscription. This model
+     * drives the subscription and the storage evaluates a condition on a delete, so nothing waits to be written back
+     * and the function of the dynamic start position is asked on the subscribing thread. Reactor refuses the read the
+     * function makes there. After the refused subscribe no subscription of the id exists, so the delete goes ahead and
+     * removes the checkpoint before the cancel completes, as it does with no subscribe. On a storage without that
+     * condition, the checkpoint waits to be written back and the function is asked on another thread once it is, so
+     * nothing refuses the subscribe.
      */
-    @ParameterizedTest
-    @CsvSource({"false, true", "true, false", "true, true"})
-    void a_subscribe_that_reactor_refuses_while_a_delete_runs_leaves_the_delete_to_remove_the_checkpoint(boolean handsOver, boolean conditionalDeletes) throws Exception {
+    @Test
+    void a_subscribe_that_reactor_refuses_while_a_delete_runs_leaves_the_delete_to_remove_the_checkpoint() throws Exception {
         // Given
         InMemoryCheckpointStorage store = new InMemoryCheckpointStorage();
-        HeldDeleteStorage storage = new HeldDeleteStorage(store, conditionalDeletes);
-        Feed feed = handsOver ? new NamedFeed(true) : new Feed();
+        HeldDeleteStorage storage = new HeldDeleteStorage(store, true);
+        Feed feed = new Feed();
         store.save(SUBSCRIPTION_ID, checkpoint(feed.write())).block(TIMEOUT);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
         CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
         await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 1);
-        StartAt startAt = handsOver
-                ? StartAt.subscriptionModelDefault()
-                : StartAt.dynamic(() -> store.read(SUBSCRIPTION_ID).blockOptional().isPresent() ? StartAt.subscriptionModelDefault() : StartAt.now());
+        StartAt startAt = StartAt.dynamic(() -> store.read(SUBSCRIPTION_ID).blockOptional().isPresent() ? StartAt.subscriptionModelDefault() : StartAt.now());
 
         try {
             // When
@@ -1879,6 +1878,50 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
             assertThat(thrown).as("how the subscribe on a thread that may not block ended").isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("blocking");
             assertThat(store.read(SUBSCRIPTION_ID).map(Checkpoint::asString).blockOptional(TIMEOUT)).as("checkpoint stored once the cancel completed").isEmpty();
+        } finally {
+            storage.releaseDelete.countDown();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe of the id from the model default comes on a thread where Reactor does not allow blocking while the
+     * delete of an earlier cancel of the same id runs, the storage still holds the checkpoint of the cancelled
+     * subscription, and the subscription is handed to a wrapped model that manages named subscriptions. The subscribe
+     * returns and takes the delete over, so the subscription resumes from that checkpoint and the position of what it
+     * delivers stays stored once the cancel completed.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_subscribe_from_the_model_default_on_a_thread_that_may_not_block_while_a_delete_runs_resumes_from_the_checkpoint_when_handed_over(boolean conditionalDeletes) throws Exception {
+        // Given
+        InMemoryCheckpointStorage store = new InMemoryCheckpointStorage();
+        HeldDeleteStorage storage = new HeldDeleteStorage(store, conditionalDeletes);
+        NamedFeed feed = new NamedFeed(true);
+        store.save(SUBSCRIPTION_ID, checkpoint(feed.write())).block(TIMEOUT);
+        long writtenAfterTheCheckpoint = feed.write();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+        await().atMost(TIMEOUT).until(() -> storage.deleteAttempts.get() >= 1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+
+        try {
+            // When
+            Subscription subscription = requireNonNull(Mono.fromCallable(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered)))
+                    .subscribeOn(Schedulers.parallel())
+                    .block(TIMEOUT));
+            storage.releaseDelete.countDown();
+            Throwable cancelFailed = catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            Throwable notStarted = catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
+            long writtenAfterTheStart = feed.write();
+
+            // Then
+            assertThat(cancelFailed).as("how the cancel ended").isNull();
+            assertThat(notStarted).as("how waiting for the start of the subscription ended").isNull();
+            await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(writtenAfterTheStart)));
+            assertThat(delivered).as("events delivered to the subscription").containsExactlyElementsOf(ids(List.of(writtenAfterTheCheckpoint, writtenAfterTheStart)));
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(store.read(SUBSCRIPTION_ID).map(Checkpoint::asString).blockOptional(TIMEOUT))
+                    .as("checkpoint stored once the cancel completed").contains(String.valueOf(writtenAfterTheStart)));
         } finally {
             storage.releaseDelete.countDown();
             model.shutdown();

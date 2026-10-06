@@ -247,15 +247,17 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
     }
 
     @Test
-    void the_refusal_is_thrown_from_subscribe_when_the_wrapped_model_manages_named_subscriptions() {
-        // This path awaits the position so that the wrapped model is handed one, so the refusal is what the caller
-        // gets back from subscribe itself, unwrapped, the way the blocking model refuses a registration.
+    void the_refusal_fails_the_start_when_the_wrapped_model_manages_named_subscriptions() {
+        // This path reads the position once subscribe has returned and hands the wrapped model what it read, so the
+        // refusal is reported where any start it could not make is, unwrapped.
         RaceSimulatingCheckpointStorage storage = new RaceSimulatingCheckpointStorage();
         storage.whenTheFirstReadFindsNothing = () -> storage.writeWithoutScripting("landed-during-registration");
         NamedRecordingSubscriptionModel delegate = new NamedRecordingSubscriptionModel("this-nodes-own-position");
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
 
-        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(StartPositionAlreadyPinnedException.class);
         assertThat(delegate.subscribedIds)
                 .as("a registration that was refused is not handed to the wrapped model, so nothing runs from a position nobody read")
