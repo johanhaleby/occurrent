@@ -1835,11 +1835,11 @@ model is stopped keeps the subscription paused there after the hand-over, where 
 nothing until it is resumed. The durable model cannot ask a model that does not know the id yet how it will register
 it. While the subscription waits, a `subscribe(..)` of the id throws `DuplicateSubscriptionIdException` at the call, as
 the wrapped model throws for a subscription it has, since a call kept for the waiting subscription would not reach a
-second one. In 0.33.0 the wrapped model got the subscription at the call, so such a `subscribe(..)` threw there too.
-Where no subscription of the id waits, the durable model accepts a `subscribe(..)` of the id while another
-`subscribe(..)` of it still reads where to start, and the wrapped model gets at most one of the two. The durable model
-checks that no other subscription of the id is registered, being taken by the wrapped model or waiting itself, checks
-that no cancel or shutdown ended the subscription, and starts keeping the calls for the id in one step under one lock. A
+second one. In 0.33.0 the wrapped model got the subscription at the call, so such a `subscribe(..)` threw there too. The
+durable model checks that no other subscription of the id is registered, being taken by the wrapped model or waiting
+itself, checks that no cancel or shutdown ended the subscription, and starts keeping the calls for the id in one step
+under one lock. It keeps them until the wrapped model has the subscription and the state kept for it, so the refusal
+also lasts while the function runs and while a read of where the feed was retries, which has no time limit. A
 `subscribe(..)` of the id that is still under way at that step, and doesn't wait itself, is refused at the next of its
 two checks, the one before it reads its start position or the one after, so the wrapped model never gets it, since a
 pause kept for the waiting subscription would not reach it. A call for the id therefore comes before that step or after
@@ -1848,6 +1848,18 @@ finds the id unknown in the wrapped model, and while that call is still under wa
 throws `DuplicateSubscriptionIdException`, as point 1 of
 [section 23 of the 0.34.0 upgrade guide](../../migration/upgrading-to-0.34.0.md#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted)
 describes. After it, the call is kept.
+
+A `subscribe(..)` of the id is refused at the call in three more cases. The wrapped model refuses it while it has a
+subscription of the id or is taking one, and the durable model refuses one that would wait in that case itself. The
+durable model refuses it while it starts a subscription of the id again in the wrapped model, and while a cancel, a pause
+or a resume it sent the wrapped model for the id is under way, as described above. A `subscribe(..)` that waits is
+checked again before the hand-over, and the wrapped model checks it at the hand-over. A refusal there fails
+`waitUntilStarted()` and is logged as an error, since the call has returned. A wrapped model that still has a
+subscription of the id after its cancel failed refuses it there, for one.
+
+In every other case the durable model accepts a `subscribe(..)` of the id, also while another `subscribe(..)` of it still
+reads where to start, and hands both to the wrapped model. Over `ReactorMongoSubscriptionModel` only one of them starts
+there, since that model refuses any `subscribe(..)` of an id it has. The durable model refuses neither of them.
 
 This amends a sentence of [ADR 89](0089-manual-subscription-mode-on-the-reactive-stack.md), which shipped in 0.33.0 and
 says a registration naming its own `StartAt` is not read for, `StartAt.now()` included. Where the durable model drives

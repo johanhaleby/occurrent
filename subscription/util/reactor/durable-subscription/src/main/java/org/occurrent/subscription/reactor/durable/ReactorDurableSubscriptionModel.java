@@ -2235,10 +2235,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * function, and the subscription doesn't start. So do a pause of the id and a {@link #stop()} when this model
      * drives the subscription itself. A write back that fails is tried again, see below, and the function is asked
      * once one succeeds. When this model hands the subscription to a wrapped model that manages named subscriptions,
-     * a {@code subscribe(..)} of the id while the subscription waits for the write back throws
-     * {@link DuplicateSubscriptionIdException} at the call, as that model throws for a subscription it has. Where no
-     * subscription of the id waits, a {@code subscribe(..)} of the id is accepted while another one still reads where
-     * to start, and the wrapped model gets at most one of the two.
+     * a {@code subscribe(..)} of the id throws {@link DuplicateSubscriptionIdException} at the call from the moment
+     * the subscription starts to wait until that model has it and the state kept for it, see below. That includes the
+     * time the function runs, and for a function that answers {@link StartAt#now()}, the read of where the feed was,
+     * which has no time limit.
      * <p>
      * When a subscribe, a resume or a start of the id fails once it has taken the delete over, as a subscribe that
      * Reactor refuses on a thread that may not block does, no subscription needs the checkpoint any more. The same goes
@@ -2250,6 +2250,26 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * returned {@code Mono} ends only once the delete that goes ahead has ended. With a storage that evaluates no
      * condition on a delete, the checkpoint a try under way read is then not written back, when the call failed or the
      * subscription ended before that try ended.
+     * <p>
+     * When this model hands subscriptions to a wrapped model that manages named subscriptions, a {@code subscribe(..)}
+     * of an id throws {@link DuplicateSubscriptionIdException} at the call
+     * <ul>
+     * <li>while that model has a subscription of the id or is taking one, which that model refuses itself, and which
+     * this model refuses for a subscribe that would wait for a write back,</li>
+     * <li>while a subscription of the id waits for a write back, from the moment it starts to wait until that model
+     * has it and the state kept for it, since a pause or a resume kept for it would not reach a second subscription
+     * of the id,</li>
+     * <li>while this model starts a subscription of the id again in that model from an earlier position, see below,
+     * until that model has it again with the state asked for meanwhile,</li>
+     * <li>while a cancel, a pause or a resume that this model sent that model for the id has not ended, see below.</li>
+     * </ul>
+     * A subscribe that waits for a write back is checked again before it is handed over, and that model
+     * checks it at the hand-over. A refusal there fails its {@link Subscription#waitUntilStarted()} with {@link
+     * DuplicateSubscriptionIdException} and is logged at {@code ERROR}, since the call has returned. That can happen
+     * when that model still has a subscription of the id after its cancel failed. In every other case this model
+     * accepts the subscribe, also while another subscribe of the id still reads where to start, and hands both to that
+     * model. {@code ReactorMongoSubscriptionModel} refuses a subscribe of an id it has, so it throws {@link
+     * DuplicateSubscriptionIdException} for the one of the two that reaches it second.
      * <p>
      * A wrapped model that manages named subscriptions cancels, pauses and resumes by id, so a call this model sends it
      * for one subscription reaches whichever subscription of the id that model holds when the call runs. While a

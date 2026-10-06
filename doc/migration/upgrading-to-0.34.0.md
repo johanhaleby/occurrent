@@ -1657,15 +1657,27 @@ where that model would answer `false` and pause it. A `start(false)` while that 
 paused once that model has it, where in 0.33.0 it ran. Resume it to start it. Without a pause, a `stop()` or such a
 `start(false)` meanwhile, it runs once that model has it.
 
-A `subscribe(..)` of the id throws `DuplicateSubscriptionIdException` at the call while the subscription waits, since
-the durable model keeps a pause, a resume, a `stop()` or a `start(..)` for it from the moment it starts to wait until
-the wrapped model has it, and such a call would not reach a second subscription of the id. A `subscribe(..)` of the id
-also throws while the wrapped model has a subscription of the id, as in 0.33.0, and while a cancel, a pause or a resume
-of the id is still under way there, as point 1 of
-[section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted)
-describes. Otherwise a `subscribe(..)` of the id is accepted, also while another `subscribe(..)` of the id still reads
-where to start, and the wrapped model gets at most one of the two. The other throws `DuplicateSubscriptionIdException`,
-unless it failed before, for instance in its own start position.
+A `subscribe(..)` of the id throws `DuplicateSubscriptionIdException` at the call from the moment the subscription
+starts to wait until the wrapped model has it and the state kept for it. That includes the time your function runs, and
+when it answers `StartAt.now()`, the read of where the feed was, however long that read takes. The durable model keeps a
+pause, a resume, a `stop()` or a `start(..)` for the waiting subscription, and such a call would not reach a second
+subscription of the id.
+
+A `subscribe(..)` of the id also throws at the call while the wrapped model has a subscription of the id or is taking
+one, as in 0.33.0. It throws while the durable model starts a subscription of the id there again, and while a cancel, a
+pause or a resume of the id is still under way there.
+[Section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted) describes
+both.
+
+A `subscribe(..)` that waits is checked again before the wrapped model gets it, and the wrapped model checks it then too.
+A refusal there fails its `waitUntilStarted()` with `DuplicateSubscriptionIdException` and is logged as an error, since
+the call has returned. That can happen when the wrapped model still has a subscription of the id after its cancel
+failed.
+
+In every other case the durable model accepts the `subscribe(..)`, also while another `subscribe(..)` of the id still
+reads where to start, and hands both to the wrapped model. `ReactorMongoSubscriptionModel` refuses a `subscribe(..)` of
+an id it has, so it throws `DuplicateSubscriptionIdException` for the one of the two that reaches it second. One that
+fails before then, in its own start position for instance, never reaches it.
 
 There is no recipe for this change. Where a subscription starts is runtime behavior that a rewrite of the source cannot
 see.
