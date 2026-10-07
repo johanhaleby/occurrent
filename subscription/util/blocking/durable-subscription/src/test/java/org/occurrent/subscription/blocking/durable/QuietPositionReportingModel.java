@@ -43,6 +43,14 @@ import java.util.function.Consumer;
 final class QuietPositionReportingModel implements CheckpointAwareSubscriptionModel, QuietPositionReportingSubscriptions {
     final List<QuietPositionListener> listeners = new CopyOnWriteArrayList<>();
     final Map<String, Consumer<CloudEvent>> actions = new ConcurrentHashMap<>();
+    final Map<String, StartAt> startAts = new ConcurrentHashMap<>();
+    // Whether subscribe evaluates the StartAt it got before it returns, as a model that opens its feed there does
+    volatile boolean evaluatesStartAtInSubscribe;
+
+    // Evaluates the StartAt the latest subscribe of the id got, as a model does each time it opens its feed
+    @Nullable StartAt evaluateStartAt(String subscriptionId) {
+        return startAts.get(subscriptionId).get(new StartAt.SubscriptionModelContext(QuietPositionReportingModel.class));
+    }
 
     // A read that returned no event. True when a listener wanted the quiet position
     boolean readNothing(String subscriptionId, Checkpoint quietPosition) {
@@ -76,6 +84,10 @@ final class QuietPositionReportingModel implements CheckpointAwareSubscriptionMo
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         actions.put(subscriptionId, action);
+        startAts.put(subscriptionId, startAt);
+        if (evaluatesStartAtInSubscribe) {
+            evaluateStartAt(subscriptionId);
+        }
         return new Subscription() {
             @Override
             public String id() {

@@ -668,7 +668,39 @@ before the first checkpoint was saved started over from wherever the feed had re
 delivery failed just before the crash was never seen again.
 
 The refusal replaces that quiet loss with an error at `subscribe(..)`, which for a Spring Boot application means
-at startup. Nothing is registered for the id, so subscribing again once the model can answer works.
+at startup. The subscription the wrapped model accepted is cancelled, so subscribing again once the model can
+answer works. When that cancel throws as well, the exception has a suppressed exception saying the wrapped model may
+still hold the id, and `cancelSubscription(..)` tries the cancel again and keeps the checkpoint stored for the id.
+
+A wrapped model of your own that evaluates the start position inside its `subscribe(..)`, and waits and evaluates it
+again when that evaluation throws, started such a subscription in 0.33.0. Its `subscribe(..)` now waits instead, until
+`globalCheckpoint()` answers. While it waits, `DurableSubscriptionModel.subscribe(..)` holds the lock it takes for the
+subscription id, so `cancelSubscription(..)` and `resumeSubscription(..)` for that id wait too.
+
+A model that passes the evaluation's exception on throws that exception from `subscribe(..)` and still holds its
+subscription, since `DurableSubscriptionModel` cancels nothing when the wrapped `subscribe(..)` throws, as in 0.33.0.
+
+An evaluation that starts after `DurableSubscriptionModel.subscribe(..)` threw, a retry for example, can fail with
+`IllegalStateException`, and the held subscription may then get no start position. In 0.33.0 the evaluation inside its
+`subscribe(..)` returned `StartAt.subscriptionModelDefault()` when `globalCheckpoint()` answered `null`, so
+`DurableSubscriptionModel.subscribe(..)` returned and the subscription started from the wrapped model's default
+position.
+
+The exception has a suppressed exception saying the wrapped model may still hold a subscription for the id. When
+nothing else subscribed the id, `getWrappedSubscriptionModel().cancelSubscription(id)` frees that subscription and
+keeps the checkpoint stored for the id, while `cancelSubscription(..)` on the durable model can delete that checkpoint
+as well. It also stops the checkpoint writes of the held subscription before it deletes anything, so an action that
+returns after the cancel doesn't write its checkpoint back, and an evaluation of its start position records no
+position. A later `subscribe(..)` of the id, before it hands the wrapped model anything, stops the checkpoint an action
+of the held subscription writes and the first position an evaluation of its start position records, so neither
+overwrites a checkpoint that subscribe stores. A later `subscribe(..)` that the wrapped model refuses stops them too,
+so the held subscription then stores no checkpoint for an event it delivers until a cancel of the id, and an
+evaluation of its start position that finds nothing stored is refused.
+
+`DurableSubscriptionModel` stores the position a wrapped `QuietPositionReportingSubscriptions` reports for a quiet
+subscription, and the one a wrapped `HistoryLossReportingSubscriptions` restarts a subscription from after its history
+was lost, for the id rather than for one subscribe. When your model reports either for the held subscription, that
+position can replace the checkpoint of a later `subscribe(..)` of the id.
 
 Three ways forward, and the first needs no code change:
 
