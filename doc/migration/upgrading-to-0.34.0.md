@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-The guide has twenty-five sections, five of them about compile-time breaks. At compile time, if you use the flow saga's
+The guide has twenty-five sections, six of them about compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -82,12 +82,13 @@ Then a `ReactorMongoSubscriptionModel` subscription started at the present now s
 `subscribe(..)` is called. It can receive events written up to 16 seconds before the call, and one whose change stream
 first opens after its history is gone stops, unless you configure the model to restart it. A
 `ReactorDurableSubscriptionModel` subscription at `StartAt.now()` over a model of your own that is not a
-`SubscriptionModel` now starts from the `subscribe(..)` call too. Read
+`SubscriptionModel` now starts from the `subscribe(..)` call too. A reactor `CheckpointAwareSubscriptionModel` of your
+own must implement `globalCheckpointAsOfNow()`, which has no default, and that is a fifth compile-time break. Read
 [section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call).
 Then a new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running runs a competing
 subscription only once you call its own `start(..)`, and calling `start()` on the wrapped model instead never gets one
 running. Read [section 22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start).
-Then the reactor `cancelSubscription(..)` returns a `Mono<Void>`, which is a fifth compile-time break for a class
+Then the reactor `cancelSubscription(..)` returns a `Mono<Void>`, which is a sixth compile-time break for a class
 that implements it. Read
 [section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted).
 Then a `CompetingConsumerSubscriptionModel` whose wrapped model throws from its own `shutdown()` no longer keeps its
@@ -1709,12 +1710,14 @@ that it still waits. For a subscription from `StartAt.now()`, the durable model 
 running, and a resume after a pause or a stop waits for that read instead of asking again. One from
 `StartAt.dynamic(..)` can read your model twice, once at `subscribe(..)` for the subscription-model default in case the
 function answers it, and once at its first start when the function answers `StartAt.now()`. A cancel of the subscription
-or a shutdown cancels the read. Your model answers what its `globalCheckpoint()` answers unless it overrides
-`globalCheckpointAsOfNow()`, so a model whose `globalCheckpoint()` always fails or never answers keeps such a
-subscription from starting, where 0.33.0 started it. Override `globalCheckpointAsOfNow()` to answer `Mono.empty()` for
-the 0.33.0 start. A subscription from the subscription-model default refuses that answer, as it refuses the failure. To
-also deliver what is written between the call and the read, override `globalCheckpointAsOfNow()` to answer with where
-your feed was when it was called.
+or a shutdown cancels the read. A model whose `globalCheckpointAsOfNow()` always fails or never answers keeps such a
+subscription from starting, where 0.33.0 started it. An answer of `Mono.empty()` gives a subscription from
+`StartAt.now()` the 0.33.0 start, and a subscription from the subscription-model default refuses it, as it refuses a
+failure.
+
+`globalCheckpointAsOfNow()` has no default implementation, so a reactor `CheckpointAwareSubscriptionModel` of your own
+stops compiling until it implements the method. Answer with where your feed was when the method was called, however
+late the returned `Mono` is subscribed to. A model that wraps another one passes the call on to the model it wraps.
 
 Where `ReactorDurableSubscriptionModel` wraps a model that manages named subscriptions, such as
 `ReactorMongoSubscriptionModel`, it hands the subscription to that model. A `subscribe(..)` from `StartAt.dynamic(..)`
@@ -1781,7 +1784,7 @@ refuses a `subscribe(..)` of an id it has. One that fails before then, in its ow
 reaches it.
 
 There is no recipe for this change. Where a subscription starts is runtime behavior that a rewrite of the source cannot
-see.
+see, and only you know where the feed of a model of your own was at a call.
 
 ## 22. A competing consumer over a wrapped model that is not running waits for its own `start()`
 
@@ -1910,14 +1913,14 @@ the Spring Boot starter's `BEGINNING` start with the default `ResumeBehavior` re
 `ReactorDurableSubscriptionModel` drives the subscription itself, a resume or a `start(..)` does the same. With no
 checkpoint waiting to be written back, your function is called at the call, as with no delete running.
 
-While the subscribe waits to call your function, a cancel of the id or a `shutdown()` ends the wait without calling it,
-and the subscription doesn't start. When `ReactorDurableSubscriptionModel` drives the subscription itself, a pause of
+While the subscribe, resume or `start(..)` waits to call your function, a cancel of the id or a `shutdown()` ends
+the wait without calling it, and the subscription doesn't start. When `ReactorDurableSubscriptionModel` drives the subscription itself, a pause of
 the id and a `stop()` end it the same way. A write back that fails is tried again, as described below, and your function
 is called once one succeeds. An exception your function throws then is logged as an error. It fails `waitUntilStarted()`
 of the subscription the subscribe returned, and keeps a subscription that a resume or a `start(..)` began paused, so you
 can resume it. Wait for `waitUntilStarted()` if your code needs to know that such a subscription started.
 
-Your function runs on a thread that may block whenever the subscribe waited for a write back before calling it, also
+Your function runs on a thread that may block whenever the call waited for a write back before calling it, also
 when you subscribe on a thread where Reactor refuses to block, a WebFlux request thread for example. With nothing to
 wait for it runs on your thread, as with no delete running.
 
@@ -2064,8 +2067,8 @@ so such a try can still reach the store after the `shutdown()`. When the checkpo
 
 When `ReactorDurableSubscriptionModel` drives the subscription itself, no call waits for where the feed is, on any
 thread. A `subscribe(..)` from the subscription-model default, or from `StartAt.now()`, asks the wrapped model's
-`globalCheckpointAsOfNow()` at the call, which answers with where the feed was at that call however late it answers. So
-the subscription delivers what you write after the call returned, also when it was registered on a stopped model or
+`globalCheckpointAsOfNow()` at the call, which answers with a position no later than where the feed was at that call,
+however late it answers. So the subscription delivers what you write after the call returned, also when it was registered on a stopped model or
 paused before it started, see section 21 for `StartAt.now()`. A `subscribe(..)` on a running model asks storage first
 and asks the wrapped model only when no checkpoint is stored. `start(..)` waits for no read of where the feed is, so a
 read that never answers holds up neither the start nor the other subscriptions it starts. A subscription from the
@@ -2074,22 +2077,15 @@ subscription-model default, or from `StartAt.now()`, whose read never answers do
 model is started. When it answers the subscription-model default, the subscription starts from where the feed was at the
 `subscribe(..)`, and when it answers `StartAt.now()`, from where the feed was at the start.
 
-On that path, a wrapped model of your own that does not override `globalCheckpointAsOfNow()` answers with where its feed
-is when the read runs, so a subscription over it can still skip what you write between the call and the read, as in
-0.33.0, where that path didn't wait for the read either. Override it to answer with where the feed was when it was
-called.
-
 When `ReactorDurableSubscriptionModel` wraps a model that manages named subscriptions, a `subscribe(..)` from the
 subscription-model default, or from a `StartAt.dynamic(..)` that answers it, reads where the feed is whether that model
 runs or not. It returns without waiting for that read, and hands the subscription to the wrapped model once the read
-answers. Over a wrapped model that overrides `globalCheckpointAsOfNow()` to answer with where its feed was when it was
-called, a subscription with nothing stored starts from where the feed was at the call, however late the read answers, so
-it skips nothing written after the call returned. `ReactorMongoSubscriptionModel` answers for the call within the limits
-[section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call) describes. Over
-a wrapped model that doesn't override it, the subscription can skip what you write until the read answers, also after
-`subscribe(..)` returned. [Section
-25](#25-a-durable-reactor-subscribe-from-the-model-default-returns-without-waiting-for-storage) describes that break,
-and where a refusal is reported then. A cancel of that id or a `shutdown()` ends the wait, and calls for other ids don't
+answers. A subscription with nothing stored starts from what `globalCheckpointAsOfNow()` answers, which is no later than
+where the feed was at the call, however late the read answers, so it delivers what you write after the call returned.
+`ReactorMongoSubscriptionModel` answers for the call within the limits
+[section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call) describes.
+[Section 25](#25-a-durable-reactor-subscribe-from-the-model-default-returns-without-waiting-for-storage) describes where
+a refusal is reported then. A cancel of that id or a `shutdown()` ends the wait, and calls for other ids don't
 wait for it.
 
 A function that runs at the call and throws makes `subscribe(..)` throw, as in 0.33.0. One that runs later, because a
@@ -2144,23 +2140,16 @@ doesn't mark as non-blocking, it could wait for good, since that thread has to d
 
 Now `subscribe(..)` doesn't wait for storage. The durable model reads where to start on a thread of its own and hands
 the subscription to the wrapped model once the read answers. It asks the wrapped model's `globalCheckpointAsOfNow()` at
-the call, whether a checkpoint is stored or not. So over a wrapped model that overrides `globalCheckpointAsOfNow()` to
-answer with where its feed was when it was called, a subscription with nothing stored starts from where the feed was at
-the call, however late the read answers. `ReactorMongoSubscriptionModel` answers for the call within the limits [section
-21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call) describes.
-
-Over a wrapped model of your own that keeps the default `globalCheckpointAsOfNow()`, this is a break. The default
-answers what `globalCheckpoint()` answers, which works out where the feed is when that read runs. With nothing stored,
-the subscription can then skip what you write until the read answers, and for a `globalCheckpoint()` that answers
-asynchronously that can be after `subscribe(..)` returned. In 0.33.0 `subscribe(..)` waited for the read, so nothing
-written after it returned was skipped. Override `globalCheckpointAsOfNow()` to answer with where your feed was when it
-was called. Every reactor model Occurrent ships overrides it or asks the model it wraps.
+the call, whether a checkpoint is stored or not. So a subscription with nothing stored starts from what that method
+answers, which is no later than where the feed was at the call, however late the read answers.
+`ReactorMongoSubscriptionModel` answers for the call within the limits [section
+21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call) describes, and a wrapped
+model of your own implements the method as that section describes.
 
 Unless the call waits, before calling its `StartAt.dynamic(..)` function, for a checkpoint that a cancel of the id read
-to delete to be written back, as section 23 describes, the call subscribes to that read on the calling thread, so a
-wrapped model that keeps the default `globalCheckpointAsOfNow()`, which answers with where its feed is when the read
-runs, starts that read before the call returns. A wrapped model whose `globalCheckpointAsOfNow()` blocks when subscribed
-to therefore blocks `subscribe(..)`, and an implementation of your own shouldn't block there. A `subscribe(..)` that
+to delete to be written back, as section 23 describes, the call subscribes to that read on the calling thread. A wrapped
+model whose `globalCheckpointAsOfNow()` blocks when subscribed to therefore blocks `subscribe(..)`, and an
+implementation of your own shouldn't block there. A `subscribe(..)` that
 waits for such a write back doesn't subscribe to the read before the write back has ended.
 `ReactorMongoSubscriptionModel` doesn't block there, so with it `subscribe(..)` doesn't wait for storage on any thread.
 The call still takes an internal lock of the durable model and asks `ReactorMongoSubscriptionModel` which ids it holds,
@@ -2208,7 +2197,7 @@ The hand-over also waits until each cancel, pause or resume that the durable mod
 ended, since the wrapped model takes such a call by id and would apply it to the subscription handed over. While it
 waits, a warning is logged each time another 10 seconds have passed since the hand-over first checked for such a call,
 also when it waits once before the read and once after it. A `subscribe(..)` that doesn't wait for a write back makes
-that check right after the call, on a Reactor `boundedElastic` thread, before storage is read. One that waits for a
+that check on a Reactor `boundedElastic` thread that the call hands it to, before storage is read. One that waits for a
 write back makes it after the write back has ended and its `StartAt.dynamic(..)` function has answered. A cancel of the
 id or a `shutdown()` ends this wait too. When a wrapped model of your own never ends such a call, the subscription isn't
 handed over until you cancel the id or call `shutdown()`.
@@ -2232,9 +2221,6 @@ What to do:
    `waitUntilStarted()` first, or ask `ReactorDurableSubscriptionModel` instead.
 3. Keep handling `DuplicateSubscriptionIdException` from `subscribe(..)`, and handle it on `waitUntilStarted()` too,
    for a duplicate found at the hand-over.
-4. Where a wrapped model of your own keeps the default `globalCheckpointAsOfNow()`, override it to answer with where
-   your feed was when it was called, so a subscription with nothing stored doesn't skip what you write after
-   `subscribe(..)` returned.
 
 A `StartAt.dynamic(..)` function still runs on the calling thread.
 `ResumeStartPositions.replayThenResume(..)` reads storage with `blockOptional()` inside its function, and so does the

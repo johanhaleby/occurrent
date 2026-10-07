@@ -135,22 +135,19 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * wrapped model once that read answers, on a thread of this model's own. Unless the subscribe waits, before asking its
  * dynamic start position, for a checkpoint that a cancel of the id read to delete to be written back, the call
  * subscribes to {@link CheckpointAwareSubscriptionModel#globalCheckpointAsOfNow()} of the wrapped model on the calling
- * thread before it returns, so that a wrapped model that keeps the default of that method, which answers with where its
- * feed is when the read runs, starts that read before the call returns. So a wrapped model whose
- * {@code globalCheckpointAsOfNow()} blocks when subscribed to blocks the call, and an implementation of that method
- * should not block when subscribed to. The read of {@code ReactorMongoSubscriptionModel} doesn't. A subscribe that
- * waits for such a write back doesn't subscribe to the read before the write back has ended.
+ * thread before it returns. So a wrapped model whose {@code globalCheckpointAsOfNow()} blocks when subscribed to
+ * blocks the call, and an implementation of that method should not block when subscribed to. The read of {@code
+ * ReactorMongoSubscriptionModel} doesn't. A subscribe that waits for such a write back doesn't subscribe to the read
+ * before the write back has ended.
  * The call still takes an internal lock of this model and asks the wrapped model which ids it holds, which {@code
  * ReactorMongoSubscriptionModel} answers under its own monitor, so the call can wait while another call holds either
  * of them. A dynamic start position is asked on the calling thread before that read is subscribed to, unless the
  * subscribe waits for such a write back, and the call waits for whatever its function waits for. So over {@code
  * ReactorMongoSubscriptionModel}, a subscribe from the subscription-model default made on a thread that must not wait
  * for storage, such as the Netty event loop thread that delivers the answer of that read, doesn't wait for it. Where
- * nothing is stored and the wrapped model overrides {@code globalCheckpointAsOfNow()} to answer with where its feed
- * was when it was called, the subscription starts from where the feed was at the call, however late the read answers.
- * {@code ReactorMongoSubscriptionModel} answers for the call within the limits its {@code globalCheckpointAsOfNow()}
- * documents. One over a wrapped model that keeps the default can skip what was written until that model has worked
- * out where its feed is, also what was written after the call returned, since the call doesn't wait for the read.
+ * nothing is stored, the subscription starts from what {@code globalCheckpointAsOfNow()} answers, which is no later
+ * than where the feed was at the call, however late the read answers. {@code ReactorMongoSubscriptionModel} answers
+ * for the call within the limits its {@code globalCheckpointAsOfNow()} documents.
  * <p>
  * Until the hand-over, this model answers {@link #pauseSubscription(String)}, {@link #resumeSubscription(String)},
  * {@link #isRunning(String)}, {@link #isPaused(String)} and {@link #subscriptionIds()} for that subscription itself,
@@ -167,7 +164,7 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * ended, since the wrapped model takes such a call by id and would apply it to the subscription handed over. While it
  * waits, a {@code WARN} is logged each time another 10 seconds have passed since the hand-over first checked for such a
  * call, also when it waits once before the read and once after it. A subscribe that doesn't wait for a write back makes
- * that check right after the call, on a Reactor {@code boundedElastic} thread, before storage is read. One that waits
+ * that check on a Reactor {@code boundedElastic} thread that the call hands it to, before storage is read. One that waits
  * for a write back makes it after the write back has ended and its dynamic start position has answered. A cancel of
  * the id or a {@link #shutdown()} ends this wait too. When the wrapped model never ends such a call, the subscription is not
  * handed over until a cancel of the id or a shutdown ends the wait.
@@ -182,9 +179,9 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * running and paused, and then the check misses a subscription that this model handed over to it earlier.
  * <p>
  * Where this model drives the subscription itself, no call waits for that read, on any thread. The read asks
- * {@link CheckpointAwareSubscriptionModel#globalCheckpointAsOfNow()} of the wrapped model, which answers with where the
- * feed was when the call was made, however late it answers. So the subscription delivers what was written after the
- * call returned. A subscription from {@link StartAt#now()} begins from such a read of its subscribe too, so one
+ * {@link CheckpointAwareSubscriptionModel#globalCheckpointAsOfNow()} of the wrapped model, which answers with a position
+ * no later than where the feed was when the call was made, however late it answers. So the subscription delivers what
+ * was written after the call returned. A subscription from {@link StartAt#now()} begins from such a read of its subscribe too, so one
  * registered on a stopped model, or paused before it started, delivers what was written after the subscribe once it
  * starts. A dynamic start position that answers {@link StartAt#now()} begins from such a read of the call that first
  * starts the subscription. When that read answers nothing, the subscription opens its feed at {@link StartAt#now()}
@@ -195,9 +192,7 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * subscription-model default. A subscription from {@link StartAt#now()} has at most one such read running, which every
  * start and resume of it waits for instead of asking again. A cancel of the subscription or a {@link #shutdown()}
  * cancels the read, and a pause or a stop does not. A subscription whose read never answers does not start, and holds
- * up neither a call nor another subscription. A wrapped model that does not override {@code globalCheckpointAsOfNow()}
- * answers with where its feed is when the read runs, so a subscription over it can skip what was written between the
- * call and the read, as that method documents. A dynamic start position on a stopped model is asked only once the model
+ * up neither a call nor another subscription. A dynamic start position on a stopped model is asked only once the model
  * is started, and when it answers the subscription-model default, the subscription starts from where the feed was at
  * the subscribe, since the subscribe reads that in case it does.
  * <p>
@@ -259,8 +254,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private final CheckpointStorage storage;
     private final ReactorDurableSubscriptionModelConfig config;
     // Set when the wrapped model manages named subscriptions of its own, which is when this model hands the
-    // subscription to it instead of driving the cold primitive. Null for a model that only exposes the primitive,
-    // which is what the reactor catch-up models do.
+    // subscription to it instead of driving the cold primitive. Null for a model that only exposes the primitive.
     private final @Nullable SubscriptionModel delegate;
     // Only used when delegating, and only to answer subscriptionIds() for a wrapped model that cannot be asked. Every
     // reactor model that carries a subscription id in this repository is also introspectable, so this is the answer for
@@ -594,10 +588,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             positionWriterNoLongerStarting(subscriptionId, writer);
             return new ReactorDurableSubscription(subscriptionId, Mono.error(cancelledBeforeItStarted(subscriptionId)));
         }
-        // Asked here, whether storage holds a checkpoint or not, since that is known only once storage answers. A wrapped
-        // model that keeps the default of globalCheckpointAsOfNow() answers with where its feed is when the read runs,
-        // so it starts that read before this call returns. Cancelled once the hand-over has ended, for a read that has
-        // not answered by then.
+        // Asked here, whether storage holds a checkpoint or not, since that is known only once storage answers, and
+        // subscribed to before this call returns. Cancelled once the hand-over has ended, for a read that has not
+        // answered by then.
         CompletableFuture<Checkpoint> presentAtTheCall = present.toFuture();
         Mono<Checkpoint> readAtTheCall = Mono.fromFuture(presentAtTheCall, true);
         // Subscribed on a thread of this model's own, so not even a storage that blocks while subscribing holds up the
@@ -1499,9 +1492,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // Where the wrapped model's feed is at this call, as globalCheckpointAsOfNow() answers it. Taken here and read only
-    // when subscribed to, so a read that answers late, or is subscribed to late, still answers with this moment where
-    // the wrapped model keeps that promise. One that keeps the default of globalCheckpointAsOfNow() answers with where
-    // its feed is when the read runs. What the call throws is answered as the read's failure.
+    // when subscribed to, so a read that answers late, or is subscribed to late, still answers with this moment. What
+    // the call throws is answered as the read's failure.
     private Mono<Checkpoint> asOfNow() {
         try {
             return subscription.globalCheckpointAsOfNow();
@@ -1926,7 +1918,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // compare, which the onErrorResume and defaultIfEmpty below both fall back to. See ADR 130 and #771.
             // The read the seed comes from is of the moment of the call, see capturePositionNow, so nothing waits for
             // it, and a position source that answers late still answers with where the feed was before the call
-            // returned, where the wrapped model keeps the promise of globalCheckpointAsOfNow(). On a running model
+            // returned, as globalCheckpointAsOfNow() requires of the wrapped model. On a running model
             // that read asks storage first, so a stored checkpoint never waits for the wrapped model.
             //
             // Storage is read without waiting for a delete taken over, see readStoredPosition(String, TakeOver), and

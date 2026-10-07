@@ -645,6 +645,12 @@ class ReactorDurableSubscriptionModelRefusedHandOverTest {
         }
 
         @Override
+        // Where the feed is at the call, however late the Mono is subscribed to
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return Mono.just(new StringBasedCheckpoint(String.valueOf(present.get())));
+        }
+
+        @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
             RuntimeException refused = refusal;
             if (refused != null) {

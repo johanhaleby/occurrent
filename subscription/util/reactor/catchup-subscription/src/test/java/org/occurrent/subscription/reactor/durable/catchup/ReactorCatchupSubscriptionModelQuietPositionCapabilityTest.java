@@ -111,6 +111,12 @@ class ReactorCatchupSubscriptionModelQuietPositionCapabilityTest {
         }
 
         @Override
+        // No position, as globalCheckpoint() answers
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return Mono.empty();
+        }
+
+        @Override
         public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
             return Flux.empty();
         }

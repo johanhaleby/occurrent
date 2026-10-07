@@ -117,6 +117,12 @@ class ReactorStreamCatchupSubscriptionModelPayloadFilterTest {
         }
 
         @Override
+        // The position never moves, so it is the one at the call
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return globalCheckpoint();
+        }
+
+        @Override
         public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
             return Flux.just(events);
         }

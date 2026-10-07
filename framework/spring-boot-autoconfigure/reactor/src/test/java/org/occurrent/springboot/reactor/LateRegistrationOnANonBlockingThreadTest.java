@@ -1325,6 +1325,12 @@ class LateRegistrationOnANonBlockingThreadTest {
         }
 
         @Override
+        // The position never moves, so it is the one at the call
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return globalCheckpoint();
+        }
+
+        @Override
         public void stop() {
         }
 

@@ -380,6 +380,38 @@ class ReactorDurableSubscriptionModelWrittenAfterTheCallTest {
     }
 
     /**
+     * The wrapped model answers where its feed was at the call only once its read is released, whether this model
+     * drives the feed itself or hands the subscription over to it. An event written after the subscribe returned and
+     * before that read answered is delivered, as the answer is where the feed was at the call and not where it is when
+     * the read answers.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void an_event_written_after_the_subscribe_returned_and_before_the_read_of_where_the_feed_was_answered_reaches_a_subscription_from_the_model_default(boolean handsOver) {
+        // Given
+        Feed feed = handsOver ? new NamedFeed(true) : new Feed();
+        feed.readHeld = true;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, new InMemoryCheckpointStorage());
+        List<String> delivered = new CopyOnWriteArrayList<>();
+
+        try {
+            // When
+            Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), deliveredTo(delivered));
+            await().atMost(TIMEOUT).until(() -> feed.reads.get() >= 1);
+            long writtenBeforeTheReadAnswered = feed.write();
+            feed.releaseReads();
+            subscription.waitUntilStarted().block(TIMEOUT);
+            long writtenAfterTheStart = feed.write();
+
+            // Then
+            await().atMost(TIMEOUT).until(() -> delivered.contains(String.valueOf(writtenAfterTheStart)));
+            assertThat(delivered).as("events delivered to the subscription").containsExactly(String.valueOf(writtenBeforeTheReadAnswered), String.valueOf(writtenAfterTheStart));
+        } finally {
+            model.shutdown();
+        }
+    }
+
+    /**
      * A subscription from StartAt.now() that this model drives begins where the feed was when subscribe(..) was called,
      * however late it starts. The model is stopped at the subscribe, so what is written between the subscribe and the
      * start is delivered once the model is started.

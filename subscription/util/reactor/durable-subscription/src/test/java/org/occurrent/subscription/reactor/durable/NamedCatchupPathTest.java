@@ -408,5 +408,11 @@ class NamedCatchupPathTest {
         public Mono<org.occurrent.subscription.Checkpoint> globalCheckpoint() {
             return Mono.empty();
         }
+
+        @Override
+        // No position, as globalCheckpoint() answers
+        public Mono<org.occurrent.subscription.Checkpoint> globalCheckpointAsOfNow() {
+            return Mono.empty();
+        }
     }
 }

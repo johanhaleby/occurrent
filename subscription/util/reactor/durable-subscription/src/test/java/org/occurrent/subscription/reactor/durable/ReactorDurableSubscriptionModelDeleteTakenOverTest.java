@@ -694,7 +694,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             storage.storedElsewhereBeforeIfAbsent = new StringBasedCheckpoint(String.valueOf(storedElsewhere));
             storage.resolvesRaceByPosition = true;
             Subscription subscription = subscribeOn(caller, model, delivered);
-            untilHandedOver(feed);
+            await().atMost(TIMEOUT).until(() -> feed.quietPositionSaverFor(SUBSCRIPTION_ID) != null);
             feed.write();
             feed.write();
             Function<Checkpoint, Mono<Void>> saveQuietPosition = feed.quietPositionSaverFor(SUBSCRIPTION_ID);
@@ -1687,6 +1687,12 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
             return Mono.fromSupplier(() -> new StringBasedCheckpoint(String.valueOf(present.get())));
+        }
+
+        @Override
+        // Where the feed is at the call, however late the Mono is subscribed to
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return Mono.just(new StringBasedCheckpoint(String.valueOf(present.get())));
         }
 
         synchronized long write() {

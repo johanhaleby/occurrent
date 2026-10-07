@@ -1815,6 +1815,12 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
             public Mono<Checkpoint> globalCheckpoint() {
                 return Mono.just(new StringBasedCheckpoint(WHERE_THE_FEED_IS_NOW));
             }
+
+            @Override
+            // The position never moves, so it is the one at the call
+            public Mono<Checkpoint> globalCheckpointAsOfNow() {
+                return globalCheckpoint();
+            }
         };
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
         AtomicBoolean holdTheFunction = new AtomicBoolean();

@@ -353,7 +353,7 @@ class ReactorDurableSubscriptionModelHandOverTest {
 
     // Manages named subscriptions by id and refuses a duplicate as a real one does. Each reads the events written after
     // where it starts and moves past an event once its action for it has ended, and a pause stops the reading until a
-    // resume. Keeps the default of globalCheckpointAsOfNow(), which reads globalCheckpoint() when it is subscribed.
+    // resume. globalCheckpointAsOfNow() answers with where the feed is at the call.
     private static final class NamedFeed implements CheckpointAwareSubscriptionModel, SubscriptionModel {
         private final AtomicLong present = new AtomicLong();
         private final Sinks.Many<CloudEvent> written = Sinks.many().replay().all();
@@ -372,6 +372,12 @@ class ReactorDurableSubscriptionModelHandOverTest {
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
             return Mono.fromSupplier(() -> new StringBasedCheckpoint(String.valueOf(present.get())));
+        }
+
+        @Override
+        // Where the feed is at the call, however late the Mono is subscribed to
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return Mono.just(new StringBasedCheckpoint(String.valueOf(present.get())));
         }
 
         synchronized long write() {
