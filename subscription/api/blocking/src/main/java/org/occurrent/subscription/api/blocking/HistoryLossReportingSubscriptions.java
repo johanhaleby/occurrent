@@ -74,9 +74,9 @@ public interface HistoryLossReportingSubscriptions extends SubscriptionModelCapa
     @FunctionalInterface
     interface HistoryLossListener {
         /**
-         * Called before the subscription restarts from {@code restartedFrom}. A listener that throws makes the model
-         * try the restart again later, as it does for any other failure to restart, and ask again for the position
-         * to restart from.
+         * Called before the subscription restarts from {@code restartedFrom}. A listener that throws fails that restart
+         * attempt, which the model tries again as its retry strategy says, as for any other failure to restart. Each
+         * new attempt asks again for the position to restart from.
          * <p>
          * The model asks MongoDB for {@code restartedFrom} before it calls this, and the subscription can be resumed,
          * or cancelled and subscribed again, while it asks. {@code stillCurrent} returns {@code false} once either has
@@ -100,8 +100,8 @@ public interface HistoryLossReportingSubscriptions extends SubscriptionModelCapa
          * While a listener answers {@code true}, the model doesn't restart the subscription, since the lost position
          * would stay stored and a process that starts from it later would skip the events written in between. It tries
          * again as its retry strategy says. When every listener answers {@code false}, the model restarts the
-         * subscription from the present. A listener that throws makes the model try the restart again later, as it
-         * does for any other failure to restart.
+         * subscription from the present. A listener that throws fails that restart attempt, which the model tries
+         * again as its retry strategy says, as for any other failure to restart.
          * <p>
          * Answers {@code true} unless overridden. Override it to answer {@code false} for a subscription whose position
          * this listener doesn't store, so a listener that only counts or logs lost history doesn't keep that

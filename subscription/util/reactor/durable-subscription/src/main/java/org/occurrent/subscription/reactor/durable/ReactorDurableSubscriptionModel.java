@@ -2263,9 +2263,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * model's own cancel has completed, see below for a subscribe that model is taking meanwhile. A delete that fails
      * is tried again until it succeeds, a subscribe of the id takes it over or the model is shut down. The wait before
      * a try starts at 100 milliseconds and about doubles after each failure, never past 5 seconds, with some
-     * randomness so that deletes failing together are not tried again together. Until then, the {@code Mono} neither
-     * completes nor fails. It fails with the error of the last try when a shutdown stopped the tries, and with the
-     * error of that model's cancel when that cancel fails. Once it completes with no subscribe of the id taking the
+     * randomness so that deletes failing together are not tried again together. Until then, the {@code Mono} doesn't
+     * complete. It fails with the error of the last try when a shutdown stopped the tries. It fails earlier only when
+     * that model's cancel fails, with that error, and the delete is still tried again after that. Once it completes with no subscribe of the id taking the
      * delete over, the store holds no checkpoint that the cancelled subscription wrote, so a later subscribe of the
      * same id does not resume from where the cancelled one got to, in this process or after a restart. The delete runs
      * after every checkpoint write the cancelled subscription had already started, and a write it had not started by
@@ -2424,8 +2424,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * this ends for an event that model delivers after this returns.
      * <p>
      * Neither the delete nor its tries has a time limit. The delete waits for the checkpoint writes it runs after,
-     * however long the storage takes to answer them, and its tries go on until one succeeds or a subscribe of the id
-     * takes the delete over. A storage that does not answer those writes holds up the checkpoint writes of a
+     * however long the storage takes to answer them, and its tries go on until one succeeds, a subscribe of the id
+     * takes the delete over, or the model is shut down. A storage that does not answer those writes holds up the checkpoint writes of a
      * subscription of the same id, and its start from a checkpoint or the events a wrapped model delivers to it, until
      * it answers, until the id is cancelled again or until the model is shut down. So does one that evaluates no
      * condition on a delete and does not answer the try under way or the write of the checkpoint back. With either
