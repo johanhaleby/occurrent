@@ -33,6 +33,7 @@ import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
+import java.lang.ref.Reference;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -55,11 +56,11 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 
 /**
- * For every subscribe of an id that returned or threw before {@code cancelSubscription(id)} was called, nothing that
- * subscribe writes is stored after the cancel returned, whether or not the wrapped model's subscribe threw. That covers
- * the checkpoint of an event and a first position an evaluation of its start position would record. A wrapped model can
- * throw from its subscribe and still hold a run that calls the action it was given. A later subscribe of the id also
- * stops those writes, before the wrapped model gets it.
+ * For every subscribe of an id that returned or threw before {@code cancelSubscription(id)} was called, no write of
+ * that subscribe reaches the checkpoint storage after the cancel returned, whether or not the wrapped model's
+ * subscribe threw. That covers the checkpoint of an event and a first position an evaluation of its start position
+ * would record. A wrapped model can throw from its subscribe and still hold a run that calls the action it was given.
+ * A later subscribe of the id also stops those writes, before the wrapped model gets it.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelFailedSubscribeCancelTest {
@@ -419,6 +420,49 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
         }
     }
 
+    /**
+     * A wrapped model may evaluate the start position and hold the action before it refuses the id as a duplicate, so
+     * the checkpoint that action writes for an event is not stored after a cancel or a later subscribe of the id, as
+     * for any other subscribe that failed.
+     */
+    @Test
+    void a_checkpointing_action_the_wrapped_model_held_while_refusing_the_id_as_a_duplicate_stores_nothing_after_cancel_subscription_returned() {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        RetainsTheRunOfAFailedSubscribe wrapped = new RetainsTheRunOfAFailedSubscribe();
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("0");
+        wrapped.outcomes.add(Outcome.HOLDS_THE_ACTION_AND_REFUSES_AS_A_DUPLICATE);
+        wrapped.outcomes.add(Outcome.HOLDS_THE_ACTION_AND_REFUSES_AS_A_DUPLICATE);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        assertThat(catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }))).as("the first subscribe").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(wrapped.heldByRefusedSubscribes).as("the actions the wrapped model held").hasSize(1);
+        Consumer<CloudEvent> held = wrapped.heldByRefusedSubscribes.getFirst();
+
+        held.accept(new CheckpointAwareCloudEvent(cloudEvent("event-1"), new StringBasedCheckpoint("5")));
+
+        assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored before cancelSubscription").isNotNull()
+                .extracting(Checkpoint::asString).isEqualTo("5");
+
+        durable.cancelSubscription(SUBSCRIPTION_ID);
+        held.accept(new CheckpointAwareCloudEvent(cloudEvent("event-2"), new StringBasedCheckpoint("6")));
+
+        assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored after cancelSubscription returned").isNull();
+
+        assertThat(catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        }))).as("the second subscribe").isInstanceOf(DuplicateSubscriptionIdException.class);
+        Checkpoint storedBeforeDelivery = storage.read(SUBSCRIPTION_ID);
+        held.accept(new CheckpointAwareCloudEvent(cloudEvent("event-3"), new StringBasedCheckpoint("7")));
+
+        assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored after the second subscribe").isEqualTo(storedBeforeDelivery);
+
+        for (int i = 0; i < 3; i++) {
+            System.gc();
+            durable.cancelSubscription("an-id-never-subscribed");
+            assertThat(durable.idsWithUntrackedRegistrations()).as("the ids the model keeps registrations for, after collection " + (i + 1)).isEqualTo(1);
+        }
+        Reference.reachabilityFence(held);
+    }
+
     private static void releaseAndJoinTheRuns(BlockingAction action, RetainsTheRunOfAFailedSubscribe wrapped) throws InterruptedException {
         action.mayReturn.countDown();
         for (Thread run : wrapped.runs) {
@@ -476,7 +520,12 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
          * Throws a {@link DuplicateSubscriptionIdException} and keeps nothing, no start position, no action and no
          * thread.
          */
-        REFUSES_AS_A_DUPLICATE
+        REFUSES_AS_A_DUPLICATE,
+        /**
+         * Evaluates the start position, keeps the action in {@code heldByRefusedSubscribes}, and throws a
+         * {@link DuplicateSubscriptionIdException}.
+         */
+        HOLDS_THE_ACTION_AND_REFUSES_AS_A_DUPLICATE
     }
 
     /**
@@ -488,6 +537,7 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
         final Semaphore actionStarted = new Semaphore(0);
         final List<Thread> runs = new CopyOnWriteArrayList<>();
         final Queue<Throwable> runFailures = new ConcurrentLinkedQueue<>();
+        final List<Consumer<CloudEvent>> heldByRefusedSubscribes = new CopyOnWriteArrayList<>();
         volatile @Nullable StartAt keptStartAt;
         volatile @Nullable StartAt lastEvaluated;
         volatile @Nullable Runnable whileSubscribing;
@@ -511,6 +561,11 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
                 throw new IllegalStateException("the subscribe fails");
             }
             if (outcome == Outcome.REFUSES_AS_A_DUPLICATE) {
+                throw new DuplicateSubscriptionIdException(subscriptionId);
+            }
+            if (outcome == Outcome.HOLDS_THE_ACTION_AND_REFUSES_AS_A_DUPLICATE) {
+                evaluate(startAt);
+                heldByRefusedSubscribes.add(action);
                 throw new DuplicateSubscriptionIdException(subscriptionId);
             }
             if (outcome == Outcome.FAILS_WITH_A_RETAINED_RUN) {
