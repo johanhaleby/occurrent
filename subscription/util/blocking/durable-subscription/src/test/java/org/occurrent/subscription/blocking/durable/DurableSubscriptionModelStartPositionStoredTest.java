@@ -45,7 +45,7 @@ class DurableSubscriptionModelStartPositionStoredTest {
     private final InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
 
     @Test
-    void the_quiet_position_is_saved_before_the_first_event_when_an_evaluation_in_the_wrapped_subscribe_reads_the_stored_start_position() throws InterruptedException {
+    void the_quiet_position_is_saved_before_the_first_event_when_the_start_position_was_stored_before_a_subscribe_whose_wrapped_model_evaluates_it_inside_subscribe() throws InterruptedException {
         // Given
         storage.save("id", START);
         wrapped.evaluatesStartAtInSubscribe = true;

@@ -118,11 +118,11 @@ them.
 
 The wait covers only the first position the caller's thread and the evaluations record together. A later evaluation
 that finds nothing stored, for example after `startWhenNoStartPositionCanBeRecorded(true)` let the subscription start
-without one, writes its position the way another node would. On a storage that evaluates write conditions, one first
-position stays stored, and that evaluation starts from it, or from its own position when that is earlier and the
-storage replaced the stored one with it, as ADR 130 describes. The stored position is then never later than the
-position an evaluation started from, so a restart can deliver events again but skips none. On a storage that doesn't
-evaluate write conditions, the later write is kept, as before this decision.
+without one, records a position the way another node would. When the wrapped model answers no position, it starts
+from the wrapped model's default and stores nothing instead. On a storage that evaluates write conditions,
+an evaluation whose write loses starts from the position `resolveFirstCheckpointRace(..)` answers, as ADR 130
+describes, or else from the one it reads back, and it's refused when that read fails or finds nothing. On a storage
+that doesn't evaluate write conditions, the later write is kept, as before this decision.
 
 When the position can't be recorded, the wrapped model held the subscription for a moment before `subscribe(..)`
 cancelled it. The MongoDB models delivered nothing in that moment, since their evaluation throws.
@@ -164,5 +164,11 @@ may still hold after a `subscribe(..)` of the id threw, before it deletes the ch
 subscription that returns after the cancel then writes nothing. In 0.33.0 that action wrote its checkpoint after the
 cancel had deleted it, so the next subscribe of the id resumed from that checkpoint. The durable model refers to those
 subscriptions only weakly, so it keeps each one only as long as the wrapped model, or an action of that subscription
-still running, refers to it. A later subscribe of the id doesn't stop their writes, so until a cancel of the id they
-write their checkpoints as in 0.33.0.
+still running, refers to it.
+
+A later `subscribe(..)` of the id stops those writes as well, before it hands the wrapped model anything. An action of
+such a subscription that returns after that then can't overwrite a position the later subscribe stored. In 0.33.0 it
+could, and when the action's position was later than the one the later subscribe had stored, a restart skipped the
+events between the two. A later subscribe that is refused stops those writes too. That costs replays only, since the
+subscription still delivers and a restart delivers again what it delivered after its last checkpoint. Until a cancel or
+a later `subscribe(..)` of the id, the subscription writes its checkpoints as in 0.33.0.

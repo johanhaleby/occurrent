@@ -44,6 +44,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -54,7 +55,8 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 /**
  * For every subscribe of an id that started before {@code cancelSubscription(id)} returned, no checkpoint write
  * through that subscribe lands after the cancel returned, whether or not the wrapped model's subscribe threw. A wrapped
- * model can throw from its subscribe and still hold a run that calls the action it was given.
+ * model can throw from its subscribe and still hold a run that calls the action it was given. A later subscribe of the
+ * id also stops those writes, before the wrapped model gets it.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelFailedSubscribeCancelTest {
@@ -106,11 +108,11 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
     }
 
     /**
-     * A subscribe that threw leaves the id free, so nothing but a cancel of the id stops what a run it left behind
-     * writes. The run's action returns here before anything cancels the id.
+     * A subscribe that threw doesn't hold the id, so only a cancel or a later subscribe of the id stops what a run it
+     * left behind writes. The run's action returns here before either happens.
      */
     @Test
-    void a_run_the_wrapped_model_kept_after_its_subscribe_failed_still_stores_its_checkpoint_while_nothing_has_cancelled_the_id() throws InterruptedException {
+    void a_run_the_wrapped_model_kept_after_its_subscribe_failed_still_stores_its_checkpoint_while_nothing_has_cancelled_or_subscribed_the_id_again() throws InterruptedException {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         RetainsTheRunOfAFailedSubscribe wrapped = new RetainsTheRunOfAFailedSubscribe();
         wrapped.globalCheckpoint = new StringBasedCheckpoint("0");
@@ -126,11 +128,11 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
     }
 
     /**
-     * The first run's action is still blocked while the id is subscribed again, and returns once the checks are done.
-     * What that run writes at that point is not asserted, since only the later subscribe's own delivery is.
+     * The first run's action is still blocked while the id is subscribed again, and returns once the second subscribe's
+     * event is checkpointed, and must not replace that checkpoint then.
      */
     @Test
-    void subscribing_an_id_again_after_a_failed_subscribe_whose_run_the_wrapped_model_kept_is_accepted_and_checkpoints_its_events() throws InterruptedException {
+    void subscribing_an_id_again_after_a_failed_subscribe_whose_run_the_wrapped_model_kept_is_accepted_and_the_kept_run_does_not_overwrite_the_checkpoint_of_its_events() throws InterruptedException {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         RetainsTheRunOfAFailedSubscribe wrapped = new RetainsTheRunOfAFailedSubscribe();
         wrapped.globalCheckpoint = new StringBasedCheckpoint("0");
@@ -149,8 +151,118 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
             assertThat(delivered).as("the events the second subscribe delivered").containsExactly("event-2");
             assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored for the second subscribe's event").isNotNull()
                     .extracting(Checkpoint::asString).isEqualTo("after-event-2");
+
+            releaseAndJoinTheRuns(blockedAction, wrapped);
+
+            assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored after the first run's action returned").isNotNull()
+                    .extracting(Checkpoint::asString).isEqualTo("after-event-2");
+        } finally {
+            blockedAction.mayReturn.countDown();
+        }
+    }
+
+    /**
+     * Nothing cancels the id between the two subscribes, so only the later subscribe of the id can stop what the first
+     * run writes.
+     */
+    @Test
+    void a_run_the_wrapped_model_kept_after_its_subscribe_failed_does_not_overwrite_the_checkpoint_of_a_later_subscribe_of_the_id() throws InterruptedException {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        RetainsTheRunOfAFailedSubscribe wrapped = new RetainsTheRunOfAFailedSubscribe();
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("0");
+        wrapped.outcomes.add(Outcome.FAILS_WITH_A_RETAINED_RUN);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        BlockingAction blockedAction = new BlockingAction(wrapped.actionStarted);
+        assertThat(catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, blockedAction))).isInstanceOf(IllegalStateException.class);
+        List<String> delivered = new ArrayList<>();
+
+        try {
+            assertThatCode(() -> durable.subscribe(SUBSCRIPTION_ID, cloudEvent -> delivered.add(cloudEvent.getId())))
+                    .as("subscribing the id again").doesNotThrowAnyException();
+            wrapped.deliver(SUBSCRIPTION_ID, new CheckpointAwareCloudEvent(cloudEvent("event-2"), new StringBasedCheckpoint("after-event-2")));
+
+            assertThat(delivered).as("the events the second subscribe delivered").containsExactly("event-2");
+            assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored for the second subscribe's event").isNotNull()
+                    .extracting(Checkpoint::asString).isEqualTo("after-event-2");
+
+            releaseAndJoinTheRuns(blockedAction, wrapped);
+
+            assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored after the first run's action returned").isNotNull()
+                    .extracting(Checkpoint::asString).isEqualTo("after-event-2");
+        } finally {
+            blockedAction.mayReturn.countDown();
+        }
+    }
+
+    /**
+     * The first run writes while the second subscribe is still inside the wrapped model, after the evaluation there
+     * settled the second subscribe's first position and before that subscribe returned. A write at that point moves the
+     * stored position past events the second subscribe has not delivered, so a restart would skip them.
+     */
+    @Test
+    void a_run_the_wrapped_model_kept_after_its_subscribe_failed_does_not_overwrite_the_start_position_a_later_subscribe_settled_inside_its_wrapped_subscribe() throws InterruptedException {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        RetainsTheRunOfAFailedSubscribe wrapped = new RetainsTheRunOfAFailedSubscribe();
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("0");
+        wrapped.outcomes.add(Outcome.FAILS_WITH_A_RETAINED_RUN);
+        wrapped.outcomes.add(Outcome.EVALUATES_THEN_RUNS_A_HOOK_AND_ACCEPTS);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        BlockingAction blockedAction = new BlockingAction(wrapped.actionStarted);
+        assertThat(catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, blockedAction))).isInstanceOf(IllegalStateException.class);
+        assertThat(wrapped.runs).as("the runs the wrapped model kept").hasSize(1);
+        Thread leftoverRun = wrapped.runs.getFirst();
+        AtomicBoolean leftoverRunEnded = new AtomicBoolean();
+        wrapped.whileSubscribing = () -> {
+            blockedAction.mayReturn.countDown();
+            try {
+                leftoverRunEnded.set(leftoverRun.join(Duration.ofSeconds(10)));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+        };
+
+        try {
+            assertThatCode(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+            })).as("subscribing the id again").doesNotThrowAnyException();
+
+            assertThat(leftoverRunEnded).as("whether the first run ended while the second subscribe was inside the wrapped model").isTrue();
+            assertThat(wrapped.lastEvaluated).as("the start position the second subscribe's evaluation produced")
+                    .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+                            startAtCheckpoint -> assertThat(startAtCheckpoint.checkpoint.asString()).as("the checkpoint the second subscribe starts from").isEqualTo("0"));
+            assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored once the second subscribe returned").isNotNull()
+                    .extracting(Checkpoint::asString).isEqualTo("0");
         } finally {
             releaseAndJoinTheRuns(blockedAction, wrapped);
+        }
+    }
+
+    /**
+     * A start position that resolves to null opts the id out of checkpointing and hands the wrapped model the action
+     * as it is, so the only checkpoint write left is the first run's.
+     */
+    @Test
+    void a_run_the_wrapped_model_kept_after_its_subscribe_failed_does_not_write_a_checkpoint_once_a_later_subscribe_of_the_id_opted_out_of_checkpointing() throws InterruptedException {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        RetainsTheRunOfAFailedSubscribe wrapped = new RetainsTheRunOfAFailedSubscribe();
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("0");
+        wrapped.outcomes.add(Outcome.FAILS_WITH_A_RETAINED_RUN);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        BlockingAction blockedAction = new BlockingAction(wrapped.actionStarted);
+        assertThat(catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, blockedAction))).isInstanceOf(IllegalStateException.class);
+        assertThat(storage.read(SUBSCRIPTION_ID)).as("the first position the evaluation recorded before the opt-out").isNotNull()
+                .extracting(Checkpoint::asString).isEqualTo("0");
+
+        try {
+            assertThatCode(() -> durable.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(context -> null), __ -> {
+            })).as("subscribing the id again without checkpointing").doesNotThrowAnyException();
+
+            releaseAndJoinTheRuns(blockedAction, wrapped);
+
+            assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored after the first run's action returned").isNotNull()
+                    .extracting(Checkpoint::asString).isEqualTo("0");
+        } finally {
+            blockedAction.mayReturn.countDown();
         }
     }
 
@@ -229,7 +341,12 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
          * Starts a run that evaluates the start position and calls the action with the checkpoint {@code after-e<n>} for
          * the n:th such run, throws once the action has started, and keeps the run.
          */
-        FAILS_WITH_A_RETAINED_RUN
+        FAILS_WITH_A_RETAINED_RUN,
+        /**
+         * Evaluates the start position and records it in {@code lastEvaluated}, then runs {@code whileSubscribing}, then
+         * holds the action and returns.
+         */
+        EVALUATES_THEN_RUNS_A_HOOK_AND_ACCEPTS
     }
 
     /**
@@ -242,6 +359,8 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
         final List<Thread> runs = new CopyOnWriteArrayList<>();
         final Queue<Throwable> runFailures = new ConcurrentLinkedQueue<>();
         volatile @Nullable StartAt keptStartAt;
+        volatile @Nullable StartAt lastEvaluated;
+        volatile @Nullable Runnable whileSubscribing;
         volatile @Nullable Checkpoint globalCheckpoint;
         private final Map<String, Consumer<CloudEvent>> actions = new ConcurrentHashMap<>();
         private final AtomicInteger retainedRuns = new AtomicInteger();
@@ -250,7 +369,7 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
             actions.get(subscriptionId).accept(cloudEvent);
         }
 
-        StartAt evaluate(StartAt startAt) {
+        @Nullable StartAt evaluate(StartAt startAt) {
             return startAt.get(new SubscriptionModelContext(RetainsTheRunOfAFailedSubscribe.class));
         }
 
@@ -281,7 +400,15 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
                 }
                 throw new IllegalStateException("the subscribe fails");
             }
-            evaluate(startAt);
+            if (outcome == Outcome.EVALUATES_THEN_RUNS_A_HOOK_AND_ACCEPTS) {
+                lastEvaluated = evaluate(startAt);
+                Runnable hook = whileSubscribing;
+                if (hook != null) {
+                    hook.run();
+                }
+            } else {
+                evaluate(startAt);
+            }
             actions.put(subscriptionId, action);
             return dummySubscription(subscriptionId);
         }
