@@ -1822,8 +1822,9 @@ to the `Mono`. The `Mono` completes once the state stored for that id is deleted
 model it wraps. What it does when a delete fails depends on the model that deletes. `CatchupThenPushSubscriptionModel`
 tries the delete of its catch-up marker once, and its `Mono` fails with that error. `ReactorDurableSubscriptionModel`
 tries a failed delete of the checkpoint again until one succeeds, a subscribe of the id takes it over, or the model is
-shut down, and its `Mono` neither completes nor fails until then, as described further down. Neither the method nor
-the `Mono` has to wait for a call of the subscription's action that is already running, so that call may still be
+shut down, and its `Mono` doesn't complete until then, as described further down. It fails earlier only when the
+cancel in the model it wraps fails, and the delete is still tried again after that. Neither the method nor the `Mono`
+has to wait for a call of the subscription's action that is already running, so that call may still be
 running after the `Mono` completes. Waiting for it would let one action that never ends hold up the cancel.
 
 What to do:
@@ -2036,9 +2037,9 @@ A delete that fails is tried again until it succeeds, a subscribe of the id take
 and each failure is logged as a warning.
 The wait before a try starts at 100 milliseconds and about doubles after each failure, never past 5 seconds, with some
 randomness so that deletes failing together are not tried again together. Until a try succeeds or a subscribe takes
-the delete over, the cancel's `Mono` neither completes nor fails. A `shutdown()` stops the
-tries, also one waiting to be tried again. A try already under way runs to its end, and otherwise the `Mono` fails with
-the error of the last try. A store can retry within one try, as `ReactorCheckpointStorage` for MongoDB does by default,
+the delete over, the cancel's `Mono` doesn't complete. It fails earlier only when the cancel in the model it wraps
+fails, and the delete is still tried again after that. A `shutdown()` stops the tries, also one waiting to be tried
+again. A try already under way runs to its end, and otherwise the `Mono` fails with the error of the last try. A store can retry within one try, as `ReactorCheckpointStorage` for MongoDB does by default,
 so such a try can still reach the store after the `shutdown()`. When the checkpoint stays stored, call
 `cancelSubscription(id)` again once a model runs, as step 2 describes.
 

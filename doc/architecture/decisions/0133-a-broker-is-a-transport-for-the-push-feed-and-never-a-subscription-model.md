@@ -1501,8 +1501,9 @@ cancel have both completed.
 The durable model's `Mono` completes once the stored position is deleted, or once a `subscribe(..)` of the id has
 taken the delete over, as described below. Unlike the catch-up model's, it doesn't fail at the first failed delete.
 The model tries the delete again until it succeeds, a `subscribe(..)` of the id takes it over or the model is shut
-down, and the `Mono` neither completes nor fails until then, as described below. A position save that the cancelled
-subscription sent just before the cancel can reach the store after a delete sent just after it, and put the position
+down, and the `Mono` doesn't complete until then, as described below. It fails earlier only when the cancel in the
+model it wraps fails, and the delete is still tried again after that. A position save that the cancelled subscription
+sent just before the cancel can reach the store after a delete sent just after it, and put the position
 back. So the delete runs after every position write the cancelled subscription had already started, and a write it had
 not started by then never runs, even when the wrapped model runs an event through the action after the cancel.
 
@@ -1694,7 +1695,8 @@ resumes from the position of the cancelled subscription. So the model tries the 
 failure, never past 5 seconds, with some randomness so that deletes failing together are not tried again together.
 Every failure is logged as a warning. A store that fails for a few seconds should not keep a stale position stored, and
 a caller that ignores the `Mono` would never learn that the delete has to be made again. Until a try succeeds or a
-`subscribe(..)` of the id takes the delete over, the cancel's `Mono` neither completes nor fails.
+`subscribe(..)` of the id takes the delete over, the cancel's `Mono` doesn't complete. It fails earlier only when the
+cancel in the model it wraps fails, and the delete is still tried again after that.
 
 A `shutdown()` stops the model's own tries, also one waiting to be tried again. A try already under way runs to its end,
 and so does one that checked for a shutdown just before the `shutdown()` came, which then calls the store after it. The
