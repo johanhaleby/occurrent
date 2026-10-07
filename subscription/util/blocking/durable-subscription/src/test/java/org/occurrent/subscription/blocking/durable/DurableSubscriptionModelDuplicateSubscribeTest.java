@@ -68,6 +68,7 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
+import static org.awaitility.Awaitility.await;
 
 /**
  * A subscribe with the model default for an id that is already running or paused is refused with the
@@ -261,6 +262,28 @@ class DurableSubscriptionModelDuplicateSubscribeTest {
         durableOverForwarding.start(true);
         awaitReceived(received, "e1");
         assertThat(received).as("the events from the first position on").containsExactly("e1");
+    }
+
+    /**
+     * The running subscription started from {@code StartAt.now()}, so the first checkpoint stored for the id is its own,
+     * after {@code e1}. A refused duplicate must not stop the checkpoints it goes on to store.
+     */
+    @Test
+    void a_refused_duplicate_of_a_running_subscription_leaves_the_checkpoints_it_goes_on_storing_alone() throws Exception {
+        List<String> received = new CopyOnWriteArrayList<>();
+        String id = UUID.randomUUID().toString();
+        assertThat(durable.subscribe(id, null, StartAt.now(), e -> received.add(e.getId())).waitUntilStarted(STARTED_TIMEOUT)).isTrue();
+        eventStore.write("stream", 0L, List.of(event("e1")));
+        awaitReceived(received, "e1");
+        await().atMost(STARTED_TIMEOUT).untilAsserted(() -> assertThat(storage.read(id)).as("the checkpoint after the first event").isNotNull());
+        Checkpoint afterE1 = storage.read(id);
+
+        assertThatThrownBy(() -> durable.subscribe(id, action)).isInstanceOf(DuplicateSubscriptionIdException.class);
+        eventStore.write("stream", 1L, List.of(event("e2")));
+        awaitReceived(received, "e2");
+
+        await().atMost(STARTED_TIMEOUT).untilAsserted(() -> assertThat(storage.read(id)).as("A's checkpoint after its second event").isNotNull()
+                .extracting(Checkpoint::asString).isNotEqualTo(afterE1.asString()));
     }
 
     private static void awaitReceived(List<String> received, String eventId) throws InterruptedException {

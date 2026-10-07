@@ -24,6 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -51,12 +52,14 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
 
 /**
- * For every subscribe of an id that started before {@code cancelSubscription(id)} returned, no checkpoint write
- * through that subscribe lands after the cancel returned, whether or not the wrapped model's subscribe threw. A wrapped
- * model can throw from its subscribe and still hold a run that calls the action it was given. A later subscribe of the
- * id also stops those writes, before the wrapped model gets it.
+ * For every subscribe of an id that returned or threw before {@code cancelSubscription(id)} was called, nothing that
+ * subscribe writes is stored after the cancel returned, whether or not the wrapped model's subscribe threw. That covers
+ * the checkpoint of an event and a first position an evaluation of its start position would record. A wrapped model can
+ * throw from its subscribe and still hold a run that calls the action it was given. A later subscribe of the id also
+ * stops those writes, before the wrapped model gets it.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelFailedSubscribeCancelTest {
@@ -295,6 +298,127 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
                 .extracting(Checkpoint::asString).isEqualTo("5");
     }
 
+    /**
+     * A cancel of an id nothing subscribed is how the model gets to drop what it kept for ids whose registrations were
+     * collected.
+     */
+    @Test
+    void subscribes_the_wrapped_model_refuses_leave_nothing_kept_for_their_ids_once_their_registrations_are_collected() {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        RetainsTheRunOfAFailedSubscribe wrapped = new RetainsTheRunOfAFailedSubscribe();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        int refusals = 1000;
+        for (int i = 0; i < refusals; i++) {
+            wrapped.outcomes.add(Outcome.REFUSES_AS_A_DUPLICATE);
+        }
+
+        for (int i = 0; i < refusals; i++) {
+            String id = "refused-" + i;
+            Throwable refused = catchThrowable(() -> durable.subscribe(id, __ -> {
+            }));
+            assertThat(refused).as("the subscribe of " + id).isInstanceOf(DuplicateSubscriptionIdException.class);
+        }
+
+        await().atMost(Duration.ofSeconds(20)).pollInterval(Duration.ofMillis(100)).untilAsserted(() -> {
+            System.gc();
+            durable.cancelSubscription("an-id-never-subscribed");
+            assertThat(durable.idsWithUntrackedRegistrations()).as("the ids the model still keeps registrations for").isZero();
+        });
+    }
+
+    /**
+     * The cancel removes the stored checkpoint, and the kept run then evaluates its start position again. No subscribe
+     * of the id is waiting for the position that evaluation would store, so it must not be stored.
+     */
+    @Test
+    void a_run_the_wrapped_model_kept_after_its_subscribe_failed_stores_no_start_position_when_it_evaluates_it_again_after_cancel_subscription_returned() throws InterruptedException {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        RetainsTheRunOfAFailedSubscribe wrapped = new RetainsTheRunOfAFailedSubscribe();
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("0");
+        wrapped.outcomes.add(Outcome.FAILS_WITH_A_RETAINED_RUN);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        BlockingAction action = new BlockingAction(wrapped.actionStarted);
+        assertThat(catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, action))).isInstanceOf(IllegalStateException.class);
+        StartAt kept = wrapped.keptStartAt;
+        assertThat(kept).as("the start position the kept run got").isNotNull();
+
+        try {
+            durable.cancelSubscription(SUBSCRIPTION_ID);
+            assertThat(storage.read(SUBSCRIPTION_ID)).as("precondition: the checkpoint stored after cancelSubscription returned").isNull();
+            wrapped.globalCheckpoint = new StringBasedCheckpoint("7");
+
+            Throwable reEvaluation = catchThrowable(() -> wrapped.evaluate(kept));
+
+            assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored after the kept run evaluated its start position again").isNull();
+            assertThat(reEvaluation).isInstanceOf(IllegalStateException.class).hasMessageContaining("before this evaluation recorded a first position");
+        } finally {
+            releaseAndJoinTheRuns(action, wrapped);
+        }
+    }
+
+    /**
+     * The later subscribe starts from a checkpoint of its own, so it stores nothing, and the kept run's evaluation
+     * must not store a position either.
+     */
+    @Test
+    void a_run_the_wrapped_model_kept_after_its_subscribe_failed_stores_no_start_position_when_it_evaluates_it_again_after_a_later_subscribe_from_a_checkpoint() throws InterruptedException {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        RetainsTheRunOfAFailedSubscribe wrapped = new RetainsTheRunOfAFailedSubscribe();
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("0");
+        wrapped.outcomes.add(Outcome.FAILS_WITH_A_RETAINED_RUN);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        BlockingAction action = new BlockingAction(wrapped.actionStarted);
+        assertThat(catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, action))).isInstanceOf(IllegalStateException.class);
+        StartAt kept = wrapped.keptStartAt;
+        assertThat(kept).as("the start position the kept run got").isNotNull();
+
+        try {
+            durable.cancelSubscription(SUBSCRIPTION_ID);
+            assertThatCode(() -> durable.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(new StringBasedCheckpoint("3")), __ -> {
+            })).as("subscribing the id again from a checkpoint").doesNotThrowAnyException();
+            assertThat(storage.read(SUBSCRIPTION_ID)).as("precondition: the checkpoint stored by the later subscribe").isNull();
+            wrapped.globalCheckpoint = new StringBasedCheckpoint("7");
+
+            Throwable reEvaluation = catchThrowable(() -> wrapped.evaluate(kept));
+
+            assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored after the kept run evaluated its start position again").isNull();
+            assertThat(reEvaluation).isInstanceOf(IllegalStateException.class).hasMessageContaining("before this evaluation recorded a first position");
+        } finally {
+            releaseAndJoinTheRuns(action, wrapped);
+        }
+    }
+
+    /**
+     * The checkpoint is deleted directly here, which stands for a checkpoint removed outside this model.
+     */
+    @Test
+    void a_run_the_wrapped_model_kept_after_its_subscribe_failed_stores_its_start_position_when_it_evaluates_it_again_while_nothing_stopped_its_writes() throws InterruptedException {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        RetainsTheRunOfAFailedSubscribe wrapped = new RetainsTheRunOfAFailedSubscribe();
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("0");
+        wrapped.outcomes.add(Outcome.FAILS_WITH_A_RETAINED_RUN);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        BlockingAction action = new BlockingAction(wrapped.actionStarted);
+        assertThat(catchThrowable(() -> durable.subscribe(SUBSCRIPTION_ID, action))).isInstanceOf(IllegalStateException.class);
+        StartAt kept = wrapped.keptStartAt;
+        assertThat(kept).as("the start position the kept run got").isNotNull();
+
+        try {
+            storage.delete(SUBSCRIPTION_ID);
+            wrapped.globalCheckpoint = new StringBasedCheckpoint("7");
+
+            StartAt reEvaluation = wrapped.evaluate(kept);
+
+            assertThat(storage.read(SUBSCRIPTION_ID)).as("the checkpoint stored after the kept run evaluated its start position again").isNotNull()
+                    .extracting(Checkpoint::asString).isEqualTo("7");
+            assertThat(reEvaluation).as("the start position the second evaluation produced")
+                    .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+                            startAtCheckpoint -> assertThat(startAtCheckpoint.checkpoint.asString()).as("the checkpoint the kept run starts from").isEqualTo("7"));
+        } finally {
+            releaseAndJoinTheRuns(action, wrapped);
+        }
+    }
+
     private static void releaseAndJoinTheRuns(BlockingAction action, RetainsTheRunOfAFailedSubscribe wrapped) throws InterruptedException {
         action.mayReturn.countDown();
         for (Thread run : wrapped.runs) {
@@ -339,14 +463,20 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
         FAILS_BEFORE_EVALUATING,
         /**
          * Starts a run that evaluates the start position and calls the action with the checkpoint {@code after-e<n>} for
-         * the n:th such run, throws once the action has started, and keeps the run.
+         * the n:th such run, throws once the action has started, and keeps the run and the start position it got in
+         * {@code keptStartAt}.
          */
         FAILS_WITH_A_RETAINED_RUN,
         /**
          * Evaluates the start position and records it in {@code lastEvaluated}, then runs {@code whileSubscribing}, then
          * holds the action and returns.
          */
-        EVALUATES_THEN_RUNS_A_HOOK_AND_ACCEPTS
+        EVALUATES_THEN_RUNS_A_HOOK_AND_ACCEPTS,
+        /**
+         * Throws a {@link DuplicateSubscriptionIdException} and keeps nothing, no start position, no action and no
+         * thread.
+         */
+        REFUSES_AS_A_DUPLICATE
     }
 
     /**
@@ -380,7 +510,11 @@ class DurableSubscriptionModelFailedSubscribeCancelTest {
                 keptStartAt = startAt;
                 throw new IllegalStateException("the subscribe fails");
             }
+            if (outcome == Outcome.REFUSES_AS_A_DUPLICATE) {
+                throw new DuplicateSubscriptionIdException(subscriptionId);
+            }
             if (outcome == Outcome.FAILS_WITH_A_RETAINED_RUN) {
+                keptStartAt = startAt;
                 int run = retainedRuns.incrementAndGet();
                 runs.add(Thread.ofPlatform().start(() -> {
                     try {
