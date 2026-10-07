@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-The guide has twenty-three sections, five of them about compile-time breaks. At compile time, if you use the flow saga's
+The guide has twenty-four sections, five of them about compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -84,12 +84,15 @@ first opens after its history is gone stops, unless you configure the model to r
 `ReactorDurableSubscriptionModel` subscription at `StartAt.now()` over a model of your own that is not a
 `SubscriptionModel` now starts from the `subscribe(..)` call too. Read
 [section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call).
-A new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running runs a competing
+Then a new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running runs a competing
 subscription only once you call its own `start(..)`, and calling `start()` on the wrapped model instead never gets one
 running. Read [section 22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start).
-Finally, the reactor `cancelSubscription(..)` returns a `Mono<Void>`, which is a fifth compile-time break for a class
+Then the reactor `cancelSubscription(..)` returns a `Mono<Void>`, which is a fifth compile-time break for a class
 that implements it. Read
 [section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted).
+Finally, a `CompetingConsumerSubscriptionModel` whose wrapped model throws from its own `shutdown()` no longer keeps its
+leases, and stops delivering once they may have expired. Read
+[section 24](#24-a-competing-consumer-whose-wrapped-model-fails-to-shut-down-lets-its-leases-expire).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1625,7 +1628,10 @@ for a model with a subscription that doesn't compete, since only then did its `s
 it happens for any model whose wrapped model is not running when `start(..)` is called.
 
 If you called `isRunning()` to find out whether this node delivers events, call `isRunning(id)` for each subscription
-instead. It asks the wrapped model, which runs a competing subscription only on the node that holds its lease.
+instead. It asks the wrapped model, which runs a competing subscription only on the node that holds its lease. A node
+can still hand an event that waits for the lease to the handler without it, for instance when the node resumes another
+competing subscription in the wrapped model, so the same event can reach the handler on two nodes. No event is lost
+that way.
 
 There is no recipe for this change. The call compiles as before, and what it returns is runtime behavior that a rewrite
 of the source cannot see.
@@ -1797,11 +1803,12 @@ on the wrapped model, which 0.33.0 never did. When that call throws, the constru
 
 Call `start()` on the `CompetingConsumerSubscriptionModel`. Code that also calls `start()` on the wrapped model, before
 or after, keeps working, and a competing subscription runs once this node holds its lease. Calling `start()` on the
-wrapped model instead runs the subscriptions that don't compete, but no competing subscription competes for its lease, so every
-event the wrapped model hands one waits. A warning that names the subscription and this step is logged the first time
-that happens for each such subscription. A `stop()` or `shutdown()` on the competing consumer model hands the events
-that wait to the handler. Code that started neither model now delivers nothing and logs nothing, since the wrapped model
-hands no event over.
+wrapped model instead runs the subscriptions that don't compete, but no competing subscription competes for its lease,
+so every event the wrapped model hands one waits. A warning that names the subscription and this step is logged the
+first time that happens for each such subscription. An event that waits goes to the handler without the lease once the
+competing consumer model calls the wrapped model for that subscription, or for every subscription as `start(..)`,
+`stop()` and `shutdown()` do, and once its thread is interrupted. No event is lost. Code that started neither model
+now delivers nothing and logs nothing, since the wrapped model hands no event over.
 
 Over a wrapped model that runs as the competing consumer model is built, such as a `SpringMongoSubscriptionModel` with
 the default configuration, nothing changes.
@@ -2077,3 +2084,30 @@ A reactor catch-up model cancelled before its replay handed the subscription ove
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has. A wrapped model
 you wrote yourself can therefore get `cancelSubscription(..)` for an id it was never given in this process. It stops
 nothing then, and deletes what it stores for that id, as `CancellableSubscriptions` describes.
+
+## 24. A competing consumer whose wrapped model fails to shut down lets its leases expire
+
+`CompetingConsumerSubscriptionModel.shutdown()` shuts the lease strategy down before it shuts the wrapped model down.
+The MongoDB lease strategies stop refreshing their leases once they are shut down. When the wrapped model then throws
+from its own `shutdown()`, `shutdown()` throws that failure and gives up no lease, since the wrapped model may still
+deliver. A lease that no later pause, cancel, `stop()` or `shutdown()` gives up expires after the lease time, 20 seconds
+by default, and another node can take the subscription over then.
+
+Each event the wrapped model hands over after the failed `shutdown()` waits for the lease. The MongoDB lease strategies
+report a lease held for at most three quarters of the lease time after the request that last set it was sent, so such
+an event goes to the handler until then at the latest. A later one waits on this node, and is never skipped, until one
+of the cases the javadoc of `CompetingConsumerSubscriptionModel` lists lets it through. Among them are a pause, a
+cancel or a `resumeSubscription(..)` of its subscription, a `stop()`, a `start()` and a later `shutdown()`, each called
+on the competing consumer model, and an interrupt of the thread the event waits on.
+
+In 0.33.0 such a node kept its leases, since its lease strategy went on refreshing them, and went on delivering every
+event the wrapped model handed over. No other node took those subscriptions over.
+
+Call `shutdown()` again once the wrapped model can shut down. That call shuts the wrapped model down and then makes one
+attempt to give up each lease the failed `shutdown()` kept. A lease strategy of your own whose `shutdown()` doesn't stop
+it refreshing its leases keeps them until then.
+
+A `shutdown()` called while another one is under way returns at once, on any thread, without waiting for it. It can
+return before the model is shut down, and it doesn't throw what the one under way throws. So a caller that needs to
+know whether the shutdown failed calls `shutdown()` again once the one under way has returned. In 0.33.0 such a call
+on another thread waited for the one under way, and then ran every step again itself.

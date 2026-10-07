@@ -80,11 +80,11 @@ subscription paused because that model is stopped, it gives up its registration 
 stopped node competes for nothing it does not deliver. Waiting for `start()` also after winning would start it where the
 wrapped model starts a subscription at that moment, and lose every event written in between. Losing no event ranks above
 what `stop()` promises, so the rule for this case is that for any wrapped model, nothing that works in 0.33.0 throws or
-delivers fewer events, and nothing is delivered without the lease.
+delivers fewer events, and the subscription runs in the wrapped model only once the node has won its lease.
 
 **`CompetingConsumerSubscriptionModel.stop()` pauses a subscription in the wrapped model when that model still runs it
 before it gives up the lease.** A wrapped model that threw from its own `stop()` can still run every subscription, and
-a node delivers only while it holds the lease. A subscription the wrapped model still runs after
+a node should run a subscription only while it holds the lease. A subscription the wrapped model still runs after
 `pauseSubscription(..)` has returned keeps its lease and stays running, and `stop()` throws. When the wrapped model's
 own `stop()` threw, `stop()` throws an `IllegalStateException` with that failure as its cause, which names the
 subscriptions it paused and says that `start(true)` resumes them while `start(false)` keeps them paused.
@@ -211,12 +211,17 @@ wrapped model, or runs a subscription there, after that `stop()` has returned.
 
 These rules follow:
 
-1. A subscription delivers only while the node holds its lease, except for two cases. A wrapped model that refuses
-   `subscribePaused(..)` runs a subscription whose lease is lost while that model makes it, until the step after
-   pauses it. A wrapped model that returns from `pauseSubscription(..)` normally but keeps running the subscription
-   goes on delivering it. A pause that throws is tried again until the wrapped model no longer runs the subscription
-   or the node holds the lease again, so it delivers without the lease only until a try succeeds. 0.33.0 never paused
-   a subscription whose lease went while the wrapped model made it, and never tried a failed pause again.
+1. A subscription runs in the wrapped model only while the node holds its lease, except for two cases. A wrapped
+   model that refuses `subscribePaused(..)` runs a subscription whose lease is lost while that model makes it, until
+   the step after pauses it. A wrapped model that returns from `pauseSubscription(..)` normally but keeps running the
+   subscription goes on running it. A pause that throws is tried again until the wrapped model no longer runs the
+   subscription or the node holds the lease again, so it runs without the lease only until a try succeeds. 0.33.0
+   never paused a subscription whose lease went while the wrapped model made it, and never tried a failed pause again.
+   Each event of a competing subscription also waits for the lease before it reaches the handler, even while the
+   wrapped model runs the subscription. The model lets a waiting event through without the lease in some cases, for
+   instance when it calls the wrapped model for that subscription or for every subscription. Such an event
+   can reach the handler on two nodes, but it is never lost. The javadoc of `CompetingConsumerSubscriptionModel` lists
+   every case.
 2. Once `subscribe(..)` has returned, the model records the id, whatever ran on other threads in the meantime. When a
    call failed on the way, the thread that tries it again brings the registration and the wrapped model to the end
    state above. Once `subscribe(..)` has thrown, the model records nothing, and the wrapped model holds nothing, except
