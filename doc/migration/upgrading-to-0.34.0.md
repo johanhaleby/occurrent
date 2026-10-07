@@ -1483,9 +1483,11 @@ below the oplog window. `neverSaveQuietPosition()` turns the save off. A subscri
 longer than the oplog window ends in lost history when it next starts from its stored checkpoint. With
 `restartSubscriptionsOnChangeStreamHistoryLost` turned on the model restarts it, and the position it restarts from is
 still stored, unless another node has written the subscription's checkpoint with a newer lease by then. The model asks
-MongoDB for that position with `ping`. While the reply has no operation time, it doesn't restart the subscription,
-since there is no position to store. It opens the change stream at the lost position again, with a `WARN` each
-attempt, for as long as its `RetryStrategy` retries, and logs an `ERROR` once the strategy gives up.
+MongoDB for that position with `ping`. While the reply has no operation time, it doesn't restart a subscription that
+`DurableSubscriptionModel` stores checkpoints for, since there is no position to store. It opens the change stream at
+the lost position again, with a `WARN` each attempt, for as long as its `RetryStrategy` retries, and logs an `ERROR`
+once the strategy gives up. A subscription that `DurableSubscriptionModel` stores no checkpoint for restarts from the
+present.
 The Spring Boot starter has no property for the interval, so define your own `SubscriptionModel` bean to change it
 there.
 

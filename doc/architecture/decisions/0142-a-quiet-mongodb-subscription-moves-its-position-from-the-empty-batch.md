@@ -94,8 +94,9 @@ and a resume or a start makes a new run of the same subscription.
   event, so an action that returns after the cancel stores nothing.
 - After lost history the model asks MongoDB for the present, and `DurableSubscriptionModel` stores it as the
   checkpoint to restart from. When MongoDB's reply to `ping` has no operation time, there is no present to store,
-  so the model doesn't restart the subscription while a `HistoryLossListener` is added, as `DurableSubscriptionModel`
-  adds one, and tries again as its `RetryStrategy` says. With none added it restarts from the present all the same.
+  so the model doesn't restart the subscription while an added `HistoryLossListener` answers `true` from
+  `storesRestartPositionOf(..)` for it, as `DurableSubscriptionModel` does for each subscription it stores checkpoints
+  for, and tries again as its `RetryStrategy` says. Every other subscription restarts from the present all the same.
   A resume, or a cancel and a new subscribe of the id, can come while the model asks.
   `HistoryLossListener` is therefore also given a `BooleanSupplier` that returns `false` once either has come, and
   `DurableSubscriptionModel` calls it under the lock that `resumeSubscription(..)` and `cancelSubscription(..)` take.

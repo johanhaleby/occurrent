@@ -97,8 +97,20 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private final Set<String> notCheckpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
     // Ids this model stores checkpoints for, so a restart after lost history stores a position only for those
     private final Set<String> checkpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
-    // Kept so shutdown can remove the same instance it added, since every method reference is a new object
-    private final HistoryLossReportingSubscriptions.HistoryLossListener historyLossListener = this::storeRestartPositionAfterHistoryLoss;
+    // Kept so shutdown can remove the same instance it added
+    private final HistoryLossReportingSubscriptions.HistoryLossListener historyLossListener = new HistoryLossReportingSubscriptions.HistoryLossListener() {
+        @Override
+        public void restartingAfterHistoryLoss(String subscriptionId, Checkpoint restartedFrom, BooleanSupplier stillCurrent) {
+            storeRestartPositionAfterHistoryLoss(subscriptionId, restartedFrom, stillCurrent);
+        }
+
+        // Under the lock subscribe holds until it has recorded the id, so a restart that comes before that waits for
+        // it rather than restarting from a present this model doesn't store
+        @Override
+        public boolean storesRestartPositionOf(String subscriptionId) {
+            return underLockFor(subscriptionId, () -> checkpointedSubscriptions.contains(subscriptionId));
+        }
+    };
     private final QuietPositionReportingSubscriptions.QuietPositionListener quietPositionListener = this::quietPositionSaverFor;
     // The current subscribe of each id this model stores checkpoints for. A new object for every subscribe, so a read
     // that began before a cancel saves nothing for a later subscribe of the id

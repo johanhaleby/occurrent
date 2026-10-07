@@ -493,25 +493,26 @@ public final class ChangeStreamSubscriptions {
 
     // Decides where the subscription restarts and logs one warning that says so. The listeners are told the present
     // before the restart from it, and a listener that throws fails this attempt so the retry runs it again. Without an
-    // operation time in the reply to ping, the restart is refused while a listener is added, since a listener that
-    // stores positions would keep the lost one stored. With none added it restarts from now. A listener asks the run
-    // whether a resume or a cancel came while this asked for the present
+    // operation time in the reply to ping, the restart is refused while a listener stores this subscription's restart
+    // position, since that listener would keep the lost one stored. Otherwise it restarts from now. A listener asks
+    // the run whether a resume or a cancel came while this asked for the present
     private @Nullable StartAt restartPositionAfterHistoryLost(String subscriptionId, InternalSubscription internalSubscription, RuntimeException historyLost) {
         Document reply;
         try {
             reply = model.runCommand(MongoCommons.CURRENT_OPERATION_TIME_COMMAND);
         } catch (RuntimeException e) {
-            log.warn("There was not enough oplog to resume subscription {}, and asking MongoDB for the current time failed, so it is not restarted yet. Its retry strategy tries the restart again.", subscriptionId, e);
+            e.addSuppressed(historyLost);
+            log.warn("There was not enough oplog to resume subscription {}, and asking MongoDB for the current time failed, so it is not restarted yet. Its retry strategy decides whether to try the restart again.", subscriptionId, e);
             throw e;
         }
         BsonTimestamp operationTime = MongoCommons.operationTimeAfter(reply);
         if (operationTime == null) {
-            if (historyLossListeners.isEmpty()) {
+            if (!restartPositionStoredBySomeListener(subscriptionId)) {
                 log.warn("There was not enough oplog to resume subscription {}, will restart subscription from current time. The reply to {} had no {}, so the restart asks for it again when it opens the change stream. Reply was: {}",
                         subscriptionId, MongoCommons.CURRENT_OPERATION_TIME_COMMAND.toJson(), MongoCommons.OPERATION_TIME, reply.toJson(), historyLost);
                 return StartAt.now();
             }
-            log.warn("There was not enough oplog to resume subscription {}, and the reply to {} had no {}, so it is not restarted from a present that cannot be stored. Its retry strategy tries the restart again. Reply was: {}",
+            log.warn("There was not enough oplog to resume subscription {}, and the reply to {} had no {}, so it is not restarted from a present that cannot be stored. Its retry strategy decides whether to try the restart again. Reply was: {}",
                     subscriptionId, MongoCommons.CURRENT_OPERATION_TIME_COMMAND.toJson(), MongoCommons.OPERATION_TIME, reply.toJson(), historyLost);
             return null;
         }
@@ -519,11 +520,21 @@ public final class ChangeStreamSubscriptions {
         try {
             historyLossListeners.forEach(listener -> listener.restartingAfterHistoryLoss(subscriptionId, present, internalSubscription::isCurrent));
         } catch (RuntimeException e) {
-            log.warn("There was not enough oplog to resume subscription {}, and a listener failed on operation time {}, where it would restart, so it is not restarted yet. Its retry strategy tries the restart again.", subscriptionId, operationTime, e);
+            log.warn("There was not enough oplog to resume subscription {}, and a listener failed on operation time {}, where it would restart, so it is not restarted yet. Its retry strategy decides whether to try the restart again.", subscriptionId, operationTime, e);
             throw e;
         }
         log.warn("There was not enough oplog to resume subscription {}, will restart subscription from current time, operation time {}.", subscriptionId, operationTime, historyLost);
         return StartAt.checkpoint(present);
+    }
+
+    // A listener that throws fails this attempt, as it does when told the present
+    private boolean restartPositionStoredBySomeListener(String subscriptionId) {
+        try {
+            return historyLossListeners.stream().anyMatch(listener -> listener.storesRestartPositionOf(subscriptionId));
+        } catch (RuntimeException e) {
+            log.warn("There was not enough oplog to resume subscription {}, and a listener failed when asked whether it stores where the subscription restarts, so it is not restarted yet. Its retry strategy decides whether to try the restart again.", subscriptionId, e);
+            throw e;
+        }
     }
 
     public void addHistoryLossListener(HistoryLossListener listener) {

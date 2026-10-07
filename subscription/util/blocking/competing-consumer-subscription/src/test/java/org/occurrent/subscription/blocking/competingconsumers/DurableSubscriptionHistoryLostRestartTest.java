@@ -19,13 +19,21 @@ package org.occurrent.subscription.blocking.competingconsumers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
+import com.mongodb.MongoCommandException;
+import com.mongodb.ServerAddress;
 import com.mongodb.client.MongoClient;
+import com.mongodb.client.ChangeStreamIterable;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoDatabase;
 import com.mongodb.event.CommandListener;
 import com.mongodb.event.CommandStartedEvent;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.BsonDocument;
+import org.bson.BsonInt32;
+import org.bson.BsonString;
+import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -38,6 +46,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
@@ -76,7 +85,8 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
  * again, restarts from its own present, and skips every event written while nothing ran. The lost history is a
  * {@code failCommand} fail point answering the {@code aggregate} that opens the change stream with error code 286.
  * A reply to {@code ping} without an operation time gives no present to record, so the subscription opens at no
- * position other than the stored one until a reply has one.
+ * position other than the stored one until a reply has one. A subscription the durable model stores no checkpoint for
+ * restarts from the present all the same.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -86,6 +96,7 @@ class DurableSubscriptionHistoryLostRestartTest {
             .withCommand("--replSet", "docker-rs", "--setParameter", "enableTestCommands=1");
 
     private static final String SUBSCRIPTION_APP = "history-lost-subscription";
+    private static final BsonTimestamp LOST = new BsonTimestamp(1, 0);
 
     private MongoClient client;
     private @Nullable MongoClient subscriptionClient;
@@ -188,6 +199,46 @@ class DurableSubscriptionHistoryLostRestartTest {
         await().atMost(5, SECONDS).untilAsserted(() -> assertThat(p2).extracting(CloudEvent::getId).contains(eAfter));
     }
 
+    @Test
+    void a_subscription_made_on_the_wrapped_model_restarts_from_the_present_after_lost_history_when_the_reply_to_ping_has_no_operation_time() {
+        // Given
+        connect();
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
+        running = durable(storage, pingWithoutOperationTimeAndHistoryLostAt(LOST));
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+
+        // When
+        Subscription subscription = running.getWrappedSubscriptionModel().subscribe("X", null, StartAt.checkpoint(new MongoOperationTimeCheckpoint(LOST)), received::add);
+
+        // Then
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(10))).as("restarted after lost history").isTrue();
+        String eAfter = write();
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(received).extracting(CloudEvent::getId).contains(eAfter));
+        assertThat(storage.read("X")).as("checkpoint stored").isNull();
+    }
+
+    @Test
+    void a_subscription_the_durable_model_stores_no_checkpoint_for_restarts_from_the_present_after_lost_history_when_the_reply_to_ping_has_no_operation_time() {
+        // Given
+        connect();
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "checkpoints-" + UUID.randomUUID());
+        running = durable(storage, pingWithoutOperationTimeAndHistoryLostAt(LOST));
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        // The durable model gets null from it and hands the subscription to the wrapped model, which then gets the
+        // lost position from it
+        AtomicInteger evaluations = new AtomicInteger();
+        StartAt nothingThenLost = StartAt.dynamic(() -> evaluations.getAndIncrement() == 0 ? null : StartAt.checkpoint(new MongoOperationTimeCheckpoint(LOST)));
+
+        // When
+        Subscription subscription = running.subscribe("X", null, nothingThenLost, received::add);
+
+        // Then
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(10))).as("restarted after lost history").isTrue();
+        String eAfter = write();
+        await().atMost(5, SECONDS).untilAsserted(() -> assertThat(received).extracting(CloudEvent::getId).contains(eAfter));
+        assertThat(storage.read("X")).as("checkpoint stored").isNull();
+    }
+
     private ConnectionString connect() {
         ConnectionString cs = new ConnectionString(mongo.getReplicaSetUrl() + ".events");
         client = MongoClients.create(cs);
@@ -254,6 +305,58 @@ class DurableSubscriptionHistoryLostRestartTest {
     }
 
     private record Opening(@Nullable Checkpoint at, @Nullable Checkpoint stored) {
+    }
+
+    // Every reply to ping has no operation time, and a change stream told to open at lostAt fails with history lost, as
+    // MongoDB answers once the oplog has dropped that position
+    private MongoTemplate pingWithoutOperationTimeAndHistoryLostAt(BsonTimestamp lostAt) {
+        return new MongoTemplate(client, template.getDb().getName()) {
+            @Override
+            public Document executeCommand(Document command) {
+                Document reply = super.executeCommand(command);
+                if (command.containsKey("ping")) {
+                    reply.remove("operationTime");
+                }
+                return reply;
+            }
+
+            @Override
+            public MongoDatabase getDb() {
+                return proxy(MongoDatabase.class, super.getDb(), (method, args, result) -> method.getName().equals("getCollection")
+                        ? proxy(MongoCollection.class, result, (m, a, r) -> m.getName().equals("watch") ? changeStreamLostAt(lostAt, r, false) : r)
+                        : result);
+            }
+        };
+    }
+
+    private static Object changeStreamLostAt(BsonTimestamp lostAt, Object changeStream, boolean opensAtLostAt) {
+        return proxy(ChangeStreamIterable.class, changeStream, (method, args, result) -> {
+            if (method.getName().equals("startAtOperationTime")) {
+                return changeStreamLostAt(lostAt, result, lostAt.equals(args[0]));
+            } else if (opensAtLostAt && (method.getName().equals("cursor") || method.getName().equals("iterator"))) {
+                throw new MongoCommandException(new BsonDocument("ok", new BsonInt32(0)).append("code", new BsonInt32(286))
+                        .append("codeName", new BsonString("ChangeStreamHistoryLost")), new ServerAddress());
+            }
+            return result instanceof ChangeStreamIterable ? changeStreamLostAt(lostAt, result, opensAtLostAt) : result;
+        });
+    }
+
+    @FunctionalInterface
+    private interface AfterCall {
+        Object apply(java.lang.reflect.Method method, Object[] args, Object result);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T proxy(Class<T> type, Object target, AfterCall afterCall) {
+        return (T) java.lang.reflect.Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (proxy, method, args) -> {
+            Object result;
+            try {
+                result = method.invoke(target, args);
+            } catch (java.lang.reflect.InvocationTargetException e) {
+                throw e.getCause();
+            }
+            return afterCall.apply(method, args, result);
+        });
     }
 
     private void historyLostOnNextOpen() {

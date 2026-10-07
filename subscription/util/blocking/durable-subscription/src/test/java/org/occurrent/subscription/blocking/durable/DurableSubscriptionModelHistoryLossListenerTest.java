@@ -36,14 +36,18 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The model it wraps can outlive it, so shutting it down has to take back the listener it added there. The position a
  * subscription restarts from after its history is lost is stored even when its persist predicate stores nothing.
+ * A restart that asks whether that position is stored before {@code subscribe} has returned is told it is.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelHistoryLossListenerTest {
@@ -84,6 +88,29 @@ class DurableSubscriptionModelHistoryLossListenerTest {
         assertThat(storage.read(SUBSCRIPTION_ID)).as("checkpoint stored").extracting(Checkpoint::asString).isEqualTo("restarted-from");
     }
 
+    @Test
+    void a_restart_after_lost_history_that_asks_before_subscribe_has_returned_is_told_its_position_is_stored() throws Exception {
+        // Given
+        HistoryLossReportingModel wrapped = new HistoryLossReportingModel();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, new InMemoryCheckpointStorage());
+        CompletableFuture<Boolean> stored = new CompletableFuture<>();
+        wrapped.onSubscribe = subscriptionId -> {
+            Thread.ofPlatform().start(() -> stored.complete(wrapped.listeners.getFirst().storesRestartPositionOf(subscriptionId)));
+            // Waits a moment, so an answer that doesn't wait for subscribe arrives before subscribe returns
+            try {
+                stored.get(200, MILLISECONDS);
+            } catch (Exception ignored) {
+            }
+        };
+
+        // When
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(new StringBasedCheckpoint("own")), __ -> {
+        });
+
+        // Then
+        assertThat(stored.get(5, SECONDS)).as("the position the subscription restarts from is stored").isTrue();
+    }
+
     private static CloudEvent checkpointAwareCloudEvent(String checkpoint) {
         CloudEvent cloudEvent = CloudEventBuilder.v1()
                 .withId("1")
@@ -96,6 +123,8 @@ class DurableSubscriptionModelHistoryLossListenerTest {
     private static final class HistoryLossReportingModel implements CheckpointAwareSubscriptionModel, HistoryLossReportingSubscriptions {
         final List<HistoryLossListener> listeners = new ArrayList<>();
         final List<Consumer<CloudEvent>> actions = new ArrayList<>();
+        Consumer<String> onSubscribe = __ -> {
+        };
 
         @Override
         public void addHistoryLossListener(HistoryLossListener listener) {
@@ -110,6 +139,7 @@ class DurableSubscriptionModelHistoryLossListenerTest {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             actions.add(action);
+            onSubscribe.accept(subscriptionId);
             return new Subscription() {
                 @Override
                 public String id() {

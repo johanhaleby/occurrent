@@ -39,6 +39,11 @@ public interface HistoryLossReportingSubscriptions extends SubscriptionModelCapa
     /**
      * Adds a listener that is told the position a subscription restarts from after its history was lost, before the
      * subscription is restarted from it.
+     * <p>
+     * While a listener whose {@link HistoryLossListener#storesRestartPositionOf(String)} answers {@code true} for a
+     * subscription is added, a model whose reply to {@code ping} has no operation time doesn't restart that
+     * subscription after its history was lost, and tries again as its {@code RetryStrategy} says. Every other
+     * subscription restarts from the present.
      *
      * @param listener The listener to add.
      */
@@ -86,5 +91,26 @@ public interface HistoryLossReportingSubscriptions extends SubscriptionModelCapa
          *                       lost its history.
          */
         void restartingAfterHistoryLoss(String subscriptionId, Checkpoint restartedFrom, BooleanSupplier stillCurrent);
+
+        /**
+         * Whether this listener stores the position {@code subscriptionId} restarts from after its history was lost, as
+         * the checkpoint the subscription resumes from. The model asks this when it can't find out where the present
+         * is, so it has no position to pass to
+         * {@link #restartingAfterHistoryLoss(String, Checkpoint, BooleanSupplier)}.
+         * While a listener answers {@code true}, the model doesn't restart the subscription, since the lost position
+         * would stay stored and a process that starts from it later would skip the events written in between. It tries
+         * again as its retry strategy says. When every listener answers {@code false}, the model restarts the
+         * subscription from the present.
+         * <p>
+         * Answers {@code true} unless overridden. Override it to answer {@code false} for a subscription whose position
+         * this listener doesn't store, so a listener that only counts or logs lost history doesn't keep that
+         * subscription from restarting.
+         *
+         * @param subscriptionId The subscription that lost its history.
+         * @return {@code true} if this listener stores the position {@code subscriptionId} restarts from.
+         */
+        default boolean storesRestartPositionOf(String subscriptionId) {
+            return true;
+        }
     }
 }

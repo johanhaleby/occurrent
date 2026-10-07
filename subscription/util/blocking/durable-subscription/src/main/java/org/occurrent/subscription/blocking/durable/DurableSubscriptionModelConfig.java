@@ -131,8 +131,8 @@ public class DurableSubscriptionModelConfig {
      * blocking MongoDB models do that once the oplog has dropped it, when
      * {@code restartSubscriptionsOnChangeStreamHistoryLost} is turned on. It is off by default, and on by default in
      * the Spring Boot starter. With it off they don't restart the subscription. They ask MongoDB for the position with
-     * {@code ping}, and while the reply has no operation time they don't restart the subscription either, and try
-     * again as their {@code RetryStrategy} says.
+     * {@code ping}, and while the reply has no operation time they don't restart a subscription this model stores
+     * checkpoints for either, and try again as their {@code RetryStrategy} says.
      *
      * @return A new instance of {@code DurableSubscriptionModelConfig}
      * @see #saveQuietPositionEvery(Duration)

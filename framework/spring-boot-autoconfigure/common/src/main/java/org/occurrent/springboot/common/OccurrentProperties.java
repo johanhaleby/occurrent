@@ -482,8 +482,9 @@ public class OccurrentProperties {
          * The blocking starter wraps {@code SpringMongoSubscriptionModel} in a {@code DurableSubscriptionModel}, which
          * stores the current time MongoDB answers {@code ping} with as the subscription's checkpoint before the restart,
          * unless another node has written that checkpoint with a newer lease. While the reply has no operation time,
-         * there is nothing to store, so the subscription is not restarted, and the restart is tried again as the
-         * subscription model's {@code RetryStrategy} says. The reactive starter's {@code ReactorMongoSubscriptionModel}
+         * there is nothing to store, so a subscription the {@code DurableSubscriptionModel} stores checkpoints for is
+         * not restarted, and the restart is tried again as the subscription model's {@code RetryStrategy} says. The
+         * reactive starter's {@code ReactorMongoSubscriptionModel}
          * doesn't send {@code ping}, and restarts the subscription from the current time.
          *
          * @return The resolved value, {@code true} when neither property is set.
@@ -564,8 +565,9 @@ public class OccurrentProperties {
              * If there’s not enough history available in the MongoDB oplog to resume a subscription created from a
              * SpringMongoSubscriptionModel, you can configure it to restart the subscription from the current time
              * automatically. Defaults to {@code true}. In the blocking starter, a {@code DurableSubscriptionModel}
-             * stores that time before the restart, so while MongoDB's reply to {@code ping} has no operation time the
-             * subscription is not restarted, and the restart is tried again as the {@code RetryStrategy} says. See
+             * stores that time before the restart, so while MongoDB's reply to {@code ping} has no operation time a
+             * subscription it stores checkpoints for is not restarted, and the restart is tried again as the
+             * {@code RetryStrategy} says. See
              * {@link SubscriptionProperties#resolveRestartOnChangeStreamHistoryLost()}.
              */
             private @Nullable Boolean restartOnChangeStreamHistoryLost;
