@@ -676,11 +676,11 @@ subscription id, so `cancelSubscription(..)` and `resumeSubscription(..)` for th
 A model that passes the evaluation's exception on throws that exception from `subscribe(..)` and still holds its
 subscription, since `DurableSubscriptionModel` cancels nothing when the wrapped `subscribe(..)` throws, as in 0.33.0.
 
-When none of its evaluations got a start position before `DurableSubscriptionModel.subscribe(..)` threw, an evaluation
-that starts after that, a retry for example, fails with `IllegalStateException`, so the held subscription gets no start
-position. In 0.33.0 the evaluation inside its `subscribe(..)` returned `StartAt.subscriptionModelDefault()` when
-`globalCheckpoint()` answered `null`, so `DurableSubscriptionModel.subscribe(..)` returned and the subscription delivered
-events from wherever the feed had reached.
+An evaluation that starts after `DurableSubscriptionModel.subscribe(..)` threw, a retry for example, can fail with
+`IllegalStateException`, and the held subscription may then get no start position. In 0.33.0 the evaluation inside its
+`subscribe(..)` returned `StartAt.subscriptionModelDefault()` when `globalCheckpoint()` answered `null`, so
+`DurableSubscriptionModel.subscribe(..)` returned and the subscription started from the wrapped model's default
+position.
 
 The exception has a suppressed exception saying the wrapped model may still hold a subscription for the id. When
 nothing else subscribed the id, `getWrappedSubscriptionModel().cancelSubscription(id)` frees that subscription and

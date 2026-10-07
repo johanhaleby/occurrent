@@ -96,12 +96,9 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * that held the id before it threw still holds that subscription, and any position an evaluation of the start position
  * stored stays stored.
  * <p>
- * For a subscribe with {@link StartAt#subscriptionModelDefault()}, unless an evaluation of the start position that
- * started earlier had already got its start position, an evaluation that starts after this model's {@code subscribe(..)}
- * threw fails with {@link IllegalStateException}, so the subscription the wrapped model holds gets no start position.
- * In 0.33.0 that evaluation returned a start position, and the held subscription could deliver events. When an earlier
- * evaluation had got its start position, a later one reads the stored checkpoint, and when nothing is stored, it asks
- * {@code globalCheckpoint()} for a position, as in 0.33.0.
+ * For a subscribe with {@link StartAt#subscriptionModelDefault()}, an evaluation of the start position that starts
+ * after this model's {@code subscribe(..)} threw can fail with {@link IllegalStateException}, and the subscription the
+ * wrapped model still holds may then get no start position. In 0.33.0 that evaluation returned a start position.
  * <p>
  * For a subscribe with {@link StartAt#subscriptionModelDefault()}, when the wrapped model evaluated the start position
  * before it threw, the exception has a suppressed exception saying the wrapped model may still hold a subscription for
