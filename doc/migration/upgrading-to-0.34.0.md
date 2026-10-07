@@ -90,8 +90,9 @@ Then the reactor `cancelSubscription(..)` returns a `Mono<Void>`, which is a fif
 that implements it. Read
 [section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted).
 Finally, `ReactorDurableSubscriptionModel` over a model that manages named subscriptions returns from a `subscribe(..)`
-from the subscription-model default without waiting for storage, and reports a refusal through `waitUntilStarted()`
-instead of throwing it. Read
+from the subscription-model default without waiting for storage. A duplicate id it finds at the call, and what a
+`StartAt.dynamic(..)` function throws, still come out of the call. A refusal it finds only at the hand-over, once
+storage has answered, fails `waitUntilStarted()` instead of being thrown. Read
 [section 25](#25-a-durable-reactor-subscribe-from-the-model-default-returns-without-waiting-for-storage).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
@@ -1667,8 +1668,11 @@ That includes the time your function runs, and when it answers `StartAt.now()`, 
 long that read takes. The durable model keeps a pause, a resume, a `stop()` or a `start(..)` for the waiting
 subscription, and such a call would not reach a second subscription of the id.
 
-A `subscribe(..)` of the id that doesn't wait for a write back also throws at the call while the wrapped model has a
-subscription of the id or is taking one, as in 0.33.0. One that waits for a write back throws at the call while the
+A `subscribe(..)` of the id that doesn't wait for a write back also throws at the call while the wrapped model reports
+a subscription of the id or is taking one, as in 0.33.0. The durable model asks `subscriptionIds()` where the wrapped
+model lists its ids, and `isRunning(..)` and `isPaused(..)` where it doesn't. A wrapped model that doesn't list its ids
+can answer `false` from both for a subscription it moves between running and paused, and then the durable model's
+check misses that subscription. One that waits for a write back throws at the call while the
 durable model still records a subscription of the id that it handed over or is handing over. The record ends when the durable model cancels that
 subscription, when it can't record where that subscription starts, when its hand-over or a start again of it fails,
 when a later subscription of the id replaces it, and at `shutdown()`. It stays when the wrapped model fails or drops the
@@ -1858,8 +1862,10 @@ the subscription. `ReactorDurableSubscriptionModel` cancels the subscription in 
 subscribe, and pauses or resumes it there afterwards to give it the state you asked for. The wrapped model takes each of
 these calls by id, so each would reach a later subscription of the id. A subscribe is therefore refused until each has
 ended, also after you cancel the id. Your cancel's `Mono` completes only after that, so a subscribe made once it has
-completed is not refused for this reason. A wrapped model of your own whose cancel never completes keeps the subscribe
-of the id refused and your cancel's `Mono` from completing.
+completed is not refused for this reason. A wrapped model of your own whose cancel never completes keeps a subscribe
+of the id made meanwhile refused and your cancel's `Mono` from completing. A `subscribe(..)` from the model default
+that was made before such a call and still waits to be handed over isn't refused for it. Unless you cancel the id or
+call `shutdown()`, it waits at the hand-over until the call has ended, as section 25 describes.
 
 When the checkpoint cannot be recorded, or that second subscribe fails, `ReactorDurableSubscriptionModel` cancels the
 subscription in the wrapped model and its `waitUntilStarted()` fails with that error, since the subscribe has returned
@@ -2010,10 +2016,15 @@ doesn't mark as non-blocking, it could wait for good, since that thread has to d
 Now `subscribe(..)` doesn't wait for storage. The durable model reads where to start on a thread of its own and hands
 the subscription to the wrapped model once the read answers. It asks the wrapped model's `globalCheckpointAsOfNow()` at
 the call, whether a checkpoint is stored or not, so a subscription with nothing stored starts from where the feed was at
-the call, however late the read answers. The call subscribes to that read before it returns, so with
-`ReactorMongoSubscriptionModel`, whose read doesn't block when subscribed to, `subscribe(..)` doesn't wait for storage
-on any thread. The call still takes a monitor of the durable model and asks `ReactorMongoSubscriptionModel` which ids it
-holds, which that model answers under its own monitor, so the call can wait while another call holds one of them. A
+the call, however late the read answers.
+
+The call subscribes to that read on the calling thread before it returns. A wrapped model that keeps the default
+`globalCheckpointAsOfNow()` answers with where its feed is when the read runs, so a read that runs after the call
+returned would skip what was written in between. A wrapped model whose `globalCheckpointAsOfNow()` blocks when
+subscribed to therefore blocks `subscribe(..)`, and an implementation of your own shouldn't block there.
+`ReactorMongoSubscriptionModel` doesn't, so with it `subscribe(..)` doesn't wait for storage on any thread. The call
+still takes an internal lock of the durable model and asks `ReactorMongoSubscriptionModel` which ids it holds, which that
+model answers under its own monitor, so the call can wait while another call holds either of them. A
 `StartAt.dynamic(..)` function that answers the default runs on the calling thread before the call subscribes to the
 read, unless it waits for a write back as section 23 describes, and the call waits for whatever the function waits for.
 While the read hasn't answered, a warning is logged every 10 seconds.
@@ -2051,6 +2062,12 @@ model anyway. A cancel of the id ends the wait, and `waitUntilStarted()` fails w
 subscription the wrapped model is taking as the cancel comes is cancelled there before the cancel's `Mono` completes,
 see section 23. A `shutdown()` ends the wait too, and `waitUntilStarted()` fails with
 `SubscriptionModelShutdownException`. A read for one id doesn't hold up a `subscribe(..)` of another.
+
+The hand-over also waits until each cancel, pause or resume that the durable model sent the wrapped model for the id
+has ended, since the wrapped model takes such a call by id and would apply it to the subscription handed over. While it
+waits, a warning is logged every 10 seconds, counted from the start of the wait. A cancel of the id or a `shutdown()`
+ends this wait too. When a wrapped model of your own never ends such a call, the subscription isn't handed over until
+you cancel the id or call `shutdown()`.
 
 What to do:
 

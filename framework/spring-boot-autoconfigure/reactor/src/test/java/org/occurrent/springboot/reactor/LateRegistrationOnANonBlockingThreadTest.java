@@ -114,7 +114,8 @@ import static org.mockito.Mockito.withSettings;
  * events. A registration that starts at the beginning subscribes on another thread. One with a {@code DEFAULT} start
  * subscribes on the calling thread, and where the subscription model blocks inside {@code subscribe} it fails the bean
  * with a message saying how to register it. {@code ReactorDurableSubscriptionModel} subscribes to the model it wraps on
- * a thread of its own, so there a {@code DEFAULT} start resolves as well.
+ * a thread of its own, and the read of where that model's feed was, which it subscribes to on the calling thread,
+ * doesn't block here, so there a {@code DEFAULT} start resolves as well.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)

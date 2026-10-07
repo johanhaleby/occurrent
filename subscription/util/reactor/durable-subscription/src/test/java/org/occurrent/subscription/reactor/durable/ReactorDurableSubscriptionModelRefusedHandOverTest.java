@@ -259,6 +259,32 @@ class ReactorDurableSubscriptionModelRefusedHandOverTest {
         assertThat(catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT))).as("why the subscription did not start").isInstanceOf(SubscriptionModelShutdownException.class);
         Thread.sleep(10_500);
         assertThat(stillWaiting()).as("warnings in the 10.5 seconds after the shutdown").hasSize(warnedBeforeTheShutdown);
+        assertThat(waitingForACallToTheWrappedModel()).as("warnings of a wait for a call to the wrapped model, with no such call made").isEmpty();
+    }
+
+    @Test
+    void a_subscribe_that_waits_for_one_call_to_the_wrapped_model_after_another_is_logged_at_warn_counted_from_the_first_wait() throws Exception {
+        // Given
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), cloudEvent -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
+        CompletableFuture<Subscription> duplicate = subscribeFromTheModelDefaultWhileTheWrappedModelPausesTheSubscription();
+        feed.resumeSubscription(SUBSCRIPTION_ID);
+        AtomicInteger callsLeft = new AtomicInteger(4);
+        model.runOnceNoWrappedCallIsInFlight(() -> {
+            if (callsLeft.getAndDecrement() > 0) {
+                sendACallTheWrappedModelTakes(Duration.ofSeconds(3));
+            }
+        });
+
+        // When
+        storage.releaseRead.complete(null);
+        Subscription subscription = duplicate.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        Throwable duplicateRefused = catchThrowable(() -> subscription.waitUntilStarted().block(Duration.ofSeconds(30)));
+
+        // Then
+        assertThat(duplicateRefused).as("why the duplicate did not start").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(callsLeft.get()).as("calls left to send once the duplicate was refused").isNegative();
+        assertThat(waitingForACallToTheWrappedModel()).as("warnings while 4 calls of 3 seconds each were sent to the wrapped model one after another").first().asString()
+                .startsWith("Subscription " + SUBSCRIPTION_ID + " is still waiting, after 10 seconds, for a call this model made to the wrapped model");
     }
 
     @Test
@@ -342,6 +368,37 @@ class ReactorDurableSubscriptionModelRefusedHandOverTest {
         storage.releaseRead.complete(null);
         Subscription subscription = duplicate.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         return catchThrowable(() -> subscription.waitUntilStarted().block(TIMEOUT));
+    }
+
+    // A pause, or a resume of a paused subscription, made on another thread, that the wrapped model takes for as long as
+    // given. Returns once the wrapped model has the call.
+    private void sendACallTheWrappedModelTakes(Duration taking) {
+        CountDownLatch taken = new CountDownLatch(1);
+        feed.moving = __ -> {
+            taken.countDown();
+            try {
+                Thread.sleep(taking.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        boolean pause = feed.isRunning(SUBSCRIPTION_ID);
+        caller.execute(() -> {
+            if (pause) {
+                model.pauseSubscription(SUBSCRIPTION_ID);
+            } else {
+                model.resumeSubscription(SUBSCRIPTION_ID);
+            }
+        });
+        try {
+            assertThat(taken.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("the wrapped model has the call").isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private List<String> waitingForACallToTheWrappedModel() {
+        return logged.at(Level.WARN).stream().filter(message -> message.contains("for a call this model made to the wrapped model")).collect(Collectors.toList());
     }
 
     private List<String> stillWaiting() {

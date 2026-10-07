@@ -133,15 +133,19 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * subscription-model default, or from a dynamic start position that answers it, does not wait for storage. It reads the
  * stored checkpoint, and where none is stored, where the feed was at the call, and hands the subscription to the
  * wrapped model once that read answers, on a thread of this model's own. The call subscribes to {@link
- * CheckpointAwareSubscriptionModel#globalCheckpointAsOfNow()} of the wrapped model before it returns, so it doesn't
- * wait for storage where that read does not block when subscribed to, as the read of {@code
- * ReactorMongoSubscriptionModel} does not. The call still takes a monitor of this model and asks the wrapped model
- * which ids it holds, which {@code ReactorMongoSubscriptionModel} answers under its own monitor, so the call can wait
- * while another call holds one of them. A dynamic start position is asked on the calling thread before that read is
- * subscribed to, unless a checkpoint that a cancel of the id deleted is still being written back, and the call waits
- * for whatever its function waits for. So a subscribe from the subscription-model default made on a thread that must
- * not wait for storage, such as the Netty event loop thread that delivers the answer of that read, doesn't wait for it.
- * Where nothing is stored, the subscription starts from where the feed was at the call, however late the read answers.
+ * CheckpointAwareSubscriptionModel#globalCheckpointAsOfNow()} of the wrapped model on the calling thread before it
+ * returns, since a wrapped model that keeps the default of that method answers with where its feed is when the read
+ * runs, and a read that runs after the call returned would skip what was written in between. So a wrapped model whose
+ * {@code globalCheckpointAsOfNow()} blocks when subscribed to blocks the call, and an implementation of that method
+ * should not block when subscribed to. The read of {@code ReactorMongoSubscriptionModel} doesn't. The call still takes
+ * an internal lock of this model and asks the wrapped model which ids it holds, which {@code
+ * ReactorMongoSubscriptionModel} answers under its own monitor, so the call can wait while another call holds either
+ * of them. A dynamic start position is asked on the calling thread before that read is subscribed to, unless a
+ * checkpoint that a cancel of the id deleted is still being written back, and the call waits for whatever its function
+ * waits for. So over {@code ReactorMongoSubscriptionModel}, a subscribe from the subscription-model default made on a
+ * thread that must not wait for storage, such as the Netty event loop thread that delivers the answer of that read,
+ * doesn't wait for it. Where nothing is stored, the subscription starts from where the feed was at the call, however
+ * late the read answers.
  * <p>
  * Until the hand-over, this model answers {@link #pauseSubscription(String)}, {@link #resumeSubscription(String)},
  * {@link #isRunning(String)}, {@link #isPaused(String)} and {@link #subscriptionIds()} for that subscription itself,
@@ -153,6 +157,12 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * ERROR} logged. The start position is recorded only once the wrapped model has taken the subscribe, so a subscribe it
  * refuses stores nothing for the id. A cancel of the id or a {@link #shutdown()} ends the wait, and a read for one id
  * does not hold up another id. While the read has not answered, a {@code WARN} is logged every 10 seconds.
+ * <p>
+ * The hand-over also waits until each cancel, pause or resume that this model sent the wrapped model for the id has
+ * ended, since the wrapped model takes such a call by id and would apply it to the subscription handed over. While it
+ * waits, a {@code WARN} is logged every 10 seconds, counted from the start of the wait. A cancel of the id or a {@link
+ * #shutdown()} ends this wait too. When the wrapped model never ends such a call, the subscription is not handed over
+ * until a cancel of the id or a shutdown ends the wait.
  * <p>
  * A subscribe from the subscription-model default throws {@link DuplicateSubscriptionIdException} at the call when the
  * wrapped model reports the id, from {@link IntrospectableSubscriptions#subscriptionIds()} where it lists its ids and
@@ -287,6 +297,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // is retired. Exists so a test can take the delete over at that point, which nothing outside this model can reach.
     private volatile Runnable beforeADeleteIsRetired = () -> {
     };
+    // Runs on the thread that hands a subscription to the wrapped model, each time it has found no call this model sent
+    // the wrapped model for the id in flight and before it checks for one again. Exists so a test can send a call at
+    // that point, which nothing outside this model can reach.
+    private volatile Runnable onceNoWrappedCallIsInFlight = () -> {
+    };
 
     /**
      * Create a durable subscription model that stores the checkpoint after each successful call to the action.
@@ -324,6 +339,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // of this model's contract.
     void runBeforeADeleteIsRetired(Runnable hook) {
         this.beforeADeleteIsRetired = requireNonNull(hook, "hook cannot be null");
+    }
+
+    // Package-private for the test that sends a call at the point the field describes. Not public, and not part of
+    // this model's contract.
+    void runOnceNoWrappedCallIsInFlight(Runnable hook) {
+        this.onceNoWrappedCallIsInFlight = requireNonNull(hook, "hook cannot be null");
     }
 
     /**
@@ -613,18 +634,32 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // step with WrappedCallStillInFlight, and step runs again once that call has ended too. A cancel of the id that
     // overtakes the subscribe, and a shutdown, end the wait. Each call decided ends once its call to the wrapped model
     // has, and none of them waits for the subscribe, see wrappedCallDecided. One the wrapped model never answers holds
-    // the subscribe up, with a WARN every STILL_WAITING_FOR_A_POSITION_READ_EVERY while it does.
+    // the subscribe up, with a WARN every STILL_WAITING_FOR_A_POSITION_READ_EVERY while it does. The WARN counts from
+    // the first wait, so a call decided each time the one before it has ended doesn't start the count again. It is
+    // logged only while the subscribe waits, and not while step runs.
     private <T> Mono<T> onceNoWrappedCallInFlight(String subscriptionId, PositionWriter writer, Mono<T> step) {
-        Mono<Void> noneInFlight = Mono.defer(() -> {
+        return Mono.defer(() -> {
+            AtomicBoolean waiting = new AtomicBoolean();
             Disposable warnings = Flux.interval(STILL_WAITING_FOR_A_POSITION_READ_EVERY, STILL_WAITING_FOR_A_POSITION_READ_EVERY)
+                    .filter(__ -> waiting.get())
                     .subscribe(tick -> log.warn("Subscription {} is still waiting, after {} seconds, for a call this model made to the wrapped model {} for the id to end. It is handed to that model once that call has ended.",
                             subscriptionId, (tick + 1) * STILL_WAITING_FOR_A_POSITION_READ_EVERY.toSeconds(), subscription.getClass().getName()));
-            return noWrappedCallInFlight(subscriptionId).doFinally(__ -> warnings.dispose());
+            return untilNoWrappedCallInFlight(subscriptionId, writer, step, waiting).doFinally(__ -> warnings.dispose());
+        });
+    }
+
+    private <T> Mono<T> untilNoWrappedCallInFlight(String subscriptionId, PositionWriter writer, Mono<T> step, AtomicBoolean waiting) {
+        Mono<Void> noneInFlight = Mono.defer(() -> {
+            waiting.set(true);
+            return noWrappedCallInFlight(subscriptionId).doFinally(__ -> waiting.set(false));
         });
         return untilEnded(writer, noneInFlight)
                 .publishOn(Schedulers.boundedElastic())
-                .then(step)
-                .onErrorResume(WrappedCallStillInFlight.class, __ -> onceNoWrappedCallInFlight(subscriptionId, writer, step));
+                .then(Mono.defer(() -> {
+                    onceNoWrappedCallIsInFlight.run();
+                    return step;
+                }))
+                .onErrorResume(WrappedCallStillInFlight.class, __ -> untilNoWrappedCallInFlight(subscriptionId, writer, step, waiting));
     }
 
     // The handle of a subscription that handedOver hands to the wrapped model once the call has returned. A failure on the
@@ -2483,7 +2518,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * A pause or a resume ends when that model returns or throws. A cancel ends when that model throws, or when the
      * {@code Mono} it returned completes or fails. The returned {@code Mono} completes or fails only once none of these
      * calls is under way for the id, so a subscribe made after that is not refused for this reason. A call that model
-     * never ends keeps a subscribe of the id refused and the returned {@code Mono} from completing.
+     * never ends keeps a subscribe of the id refused and the returned {@code Mono} from completing. A subscribe from the
+     * subscription-model default that was made before such a call and still waits to be handed over is not refused for
+     * it. Unless a cancel of the id or a shutdown ends that subscribe, it waits at the hand-over until the call has
+     * ended, see the class documentation.
      * <p>
      * How long the subscription waits for the delete depends on the storage. One that evaluates a condition on a
      * delete, see {@link CheckpointStorage#evaluatesDeleteConditions()}, deletes on the condition that the stored

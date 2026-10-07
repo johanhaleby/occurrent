@@ -60,6 +60,12 @@ public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel,
      * <p>
      * The default implementation returns {@link #globalCheckpoint()}, which works out the position when it's subscribed
      * to, so events written between the call and the subscription can be skipped.
+     * <p>
+     * An implementation should not block when the returned {@code Mono} is subscribed to. For some start positions, the
+     * subscription-model default for one, {@code ReactorDurableSubscriptionModel} subscribes to it on the thread that
+     * calls its {@code subscribe(..)}, so that a model keeping the default implementation doesn't skip what is written
+     * once that call has returned. A {@code Mono} that blocks when subscribed to then blocks that {@code subscribe(..)},
+     * also on a thread that must not block, such as a Netty event loop thread.
      *
      * @return A {@link Mono} that emits the global checkpoint as of the call, fails when the position can't be
      * worked out, or, for a model that doesn't override this method, behaves like {@link #globalCheckpoint()}.
