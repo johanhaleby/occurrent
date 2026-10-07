@@ -30,10 +30,13 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.blocking.durable.WinnerHiddenFromTheConfirmReadStorage.ConfirmRead;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -89,10 +92,8 @@ class DurableSubscriptionModelFirstPositionRaceTest {
         DurableSubscriptionModel durable = new DurableSubscriptionModel(
                 feed, storage, new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true));
 
-        // Must not throw. A StartPositionAlreadyPinnedException surfacing from inside StartAt.dynamic's supplier
-        // reaches the wrapped model's own evaluation path instead of this call, which a retry wrapper could catch
-        // and re-evaluate forever, telling nobody, exactly what recordFirstPositionOrRefuse's own placement
-        // outside the supplier exists to avoid for the eager path.
+        // Must not throw. Reading the stored position back named it, and it is where every later evaluation starts
+        // from too, so refusing it would only delay a start that cannot skip anything.
         assertThatCode(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
         })).doesNotThrowAnyException();
 
@@ -102,27 +103,56 @@ class DurableSubscriptionModelFirstPositionRaceTest {
     }
 
     @Test
-    void when_the_confirm_read_itself_finds_nothing_the_dynamic_supplier_falls_back_to_the_computed_checkpoint_never_to_the_model_default() {
-        // A storage that always refuses ifAbsent() and always reads back empty, standing in for the doubly rare
-        // case where the confirm-read behind a lost race finds nothing (the racing checkpoint deleted between the
-        // failed write and the read that would have named it). globalCheckpoint is the position this node itself
-        // computed and would have started from had the race gone the other way, so falling back to it risks a
-        // duplicate delivery against whatever the other node's write actually holds, never a loss, unlike falling
-        // through to the caller's model-default fallback, which would skip everything between here and now.
-        AlwaysConflictingCheckpointStorage storage = new AlwaysConflictingCheckpointStorage();
+    void a_lost_first_position_write_whose_confirm_read_fails_never_starts_from_this_nodes_later_position() {
+        aLostFirstPositionWriteWhoseConfirmReadCannotNameTheWinnerNeverStartsFromThisNodesLaterPosition(ConfirmRead.FAILS);
+    }
+
+    @Test
+    void a_lost_first_position_write_whose_confirm_read_finds_nothing_never_starts_from_this_nodes_later_position() {
+        aLostFirstPositionWriteWhoseConfirmReadCannotNameTheWinnerNeverStartsFromThisNodesLaterPosition(ConfirmRead.FINDS_NOTHING);
+    }
+
+    private static void aLostFirstPositionWriteWhoseConfirmReadCannotNameTheWinnerNeverStartsFromThisNodesLaterPosition(ConfirmRead confirmRead) {
+        // The other node read the feed first, so the position it stored is earlier than the one this node reads
+        // below. Starting from this node's position would skip every event between the two.
+        WinnerHiddenFromTheConfirmReadStorage storage = new WinnerHiddenFromTheConfirmReadStorage(confirmRead, new StringBasedCheckpoint("earlier-position-the-other-node-stored"));
         InMemoryFeed feed = new InMemoryFeed();
         feed.answersCurrentPosition = true;
+        feed.currentPosition = "later-position-this-node-read";
         feed.answersNullOnFirstCallOnly = true;
+        feed.keepsGoingWhenTheStartPositionThrows = true;
         DurableSubscriptionModel durable = new DurableSubscriptionModel(
                 feed, storage, new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true));
 
-        assertThatCode(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
-        })).doesNotThrowAnyException();
+        durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        });
 
-        assertThat(feed.lastResolvedStartAt)
-                .as("the computed checkpoint, not the model-default StartAt this feed answers 'now' for")
-                .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
-                        checkpoint -> assertThat(checkpoint.checkpoint.asString()).isEqualTo("this-nodes-own-position"));
+        assertThat(feed.positionsStartedFrom)
+                .as("the confirm-read could not name what the other node stored, so this node's own position cannot be ordered against it")
+                .doesNotContain("later-position-this-node-read");
+        assertThat(feed.startPositionFailures)
+                .singleElement()
+                .isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class, refusal -> {
+                    assertThat(refusal.positionRead.asString()).isEqualTo("later-position-this-node-read");
+                    assertThat(refusal.positionStored).isEmpty();
+                    assertThat(refusal).hasMessageContaining("could skip the events between the two");
+                    if (confirmRead == ConfirmRead.FAILS) {
+                        assertThat(refusal.getCause())
+                                .as("a read back that failed is told apart by its cause, the failure of the read itself")
+                                .hasMessage("Checkpoint storage cannot be reached");
+                    } else {
+                        assertThat(refusal.getCause())
+                                .as("a read back that found nothing is told apart by having no cause")
+                                .isNull();
+                    }
+                });
+
+        storage.answersReadsAgain();
+        feed.evaluateTheStartPositionAgain(SUBSCRIPTION_ID);
+
+        assertThat(feed.positionsStartedFrom)
+                .as("evaluated again once storage answers, the start is the position the other node stored")
+                .containsExactly("earlier-position-the-other-node-stored");
     }
 
     /**
@@ -181,64 +211,50 @@ class DurableSubscriptionModelFirstPositionRaceTest {
     }
 
     /**
-     * Always refuses {@code ifAbsent()} and always reads back empty, standing in for a storage where the racing
-     * checkpoint behind a lost write is gone again by the time the confirm-read looks for it.
-     */
-    private static final class AlwaysConflictingCheckpointStorage implements CheckpointStorage {
-        @Override
-        public @Nullable Checkpoint read(String subscriptionId) {
-            return null;
-        }
-
-        @Override
-        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, org.occurrent.subscription.CheckpointWriteCondition condition) {
-            if (condition instanceof org.occurrent.subscription.CheckpointWriteCondition.IfAbsent) {
-                throw new org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException(subscriptionId, java.util.OptionalLong.empty(), condition);
-            }
-            return checkpoint;
-        }
-
-        @Override
-        public boolean evaluatesWriteConditions() {
-            return true;
-        }
-
-        @Override
-        public java.util.OptionalLong writeVersion(String subscriptionId) {
-            return java.util.OptionalLong.empty();
-        }
-
-        @Override
-        public void delete(String subscriptionId) {
-        }
-
-        @Override
-        public boolean exists(String subscriptionId) {
-            return false;
-        }
-    }
-
-    /**
      * A feed with change-stream mechanics reduced to what this test needs: the model default means the end of what
      * has been published so far, and a subscription is registered but never delivered to.
      */
     private static final class InMemoryFeed implements CheckpointAwareSubscriptionModel {
         final Map<String, Boolean> subscriptions = new LinkedHashMap<>();
         boolean answersCurrentPosition = false;
-        // Set only by the test that needs the eager, outside-the-supplier globalCheckpoint() call to answer
+        // Set only by the tests that need the eager, outside-the-supplier globalCheckpoint() call to answer
         // unanswerable, so recordFirstPositionOrRefuse returns null without writing anything and the dynamic
         // supplier's own retry-path branch is what asks again.
         boolean answersNullOnFirstCallOnly = false;
+        String currentPosition = "this-nodes-own-position";
+        // Set by the tests that stand in for a model evaluating the start position on a thread of its own, the way
+        // the MongoDB models do, where a throw is logged and the evaluation is tried again rather than reaching
+        // the caller of subscribe
+        boolean keepsGoingWhenTheStartPositionThrows = false;
         private int globalCheckpointCalls = 0;
-        @Nullable StartAt lastResolvedStartAt;
+        final List<String> positionsStartedFrom = new ArrayList<>();
+        final List<Throwable> startPositionFailures = new ArrayList<>();
+        private final Map<String, StartAt> startAts = new LinkedHashMap<>();
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            startAts.put(subscriptionId, startAt);
             if (startAt.isDynamic()) {
-                lastResolvedStartAt = startAt.get(new SubscriptionModelContext(InMemoryFeed.class));
+                evaluateTheStartPositionAgain(subscriptionId);
             }
             subscriptions.put(subscriptionId, true);
             return dummySubscription(subscriptionId);
+        }
+
+        void evaluateTheStartPositionAgain(String subscriptionId) {
+            @Nullable StartAt resolved;
+            try {
+                resolved = startAts.get(subscriptionId).get(new SubscriptionModelContext(InMemoryFeed.class));
+            } catch (RuntimeException e) {
+                if (!keepsGoingWhenTheStartPositionThrows) {
+                    throw e;
+                }
+                startPositionFailures.add(e);
+                return;
+            }
+            if (resolved instanceof StartAt.StartAtCheckpoint checkpoint) {
+                positionsStartedFrom.add(checkpoint.checkpoint.asString());
+            }
         }
 
         @Override
@@ -247,7 +263,7 @@ class DurableSubscriptionModelFirstPositionRaceTest {
             if (answersNullOnFirstCallOnly && globalCheckpointCalls == 1) {
                 return null;
             }
-            return answersCurrentPosition ? new StringBasedCheckpoint("this-nodes-own-position") : null;
+            return answersCurrentPosition ? new StringBasedCheckpoint(currentPosition) : null;
         }
 
         @Override
