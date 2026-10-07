@@ -42,8 +42,8 @@ The wrapped model gets a dynamic `StartAt`, and the first evaluation that finds 
 | Before `subscribe(..)` starts recording the position, for example before the wrapped model's `subscribe(..)` has returned | The evaluation records the position itself and returns it. When recording fails, the evaluation throws, and `subscribe(..)` records again once the wrapped model's `subscribe(..)` has returned |
 | While `subscribe(..)` records the position | The evaluation waits until the position is stored, then returns it |
 | After `subscribe(..)` failed to record it | `subscribe(..)` cancels the wrapped subscription and the evaluation throws `IllegalStateException`, so the wrapped model gets no start position |
-| Before the wrapped model's `subscribe(..)` throws | `subscribe(..)` cancels nothing on the wrapped model, as in 0.33.0. The exception the wrapped model threw gets a suppressed exception saying the wrapped model may still hold a subscription for the id, unless it is `DuplicateSubscriptionIdException`. An evaluation still recording the position when the wrapped `subscribe(..)` threw gets no start position. It throws `IllegalStateException` once recording returns, or what recording threw |
-| After the wrapped model's `subscribe(..)` threw | The evaluation throws `IllegalStateException`, so the subscription the wrapped model may still hold gets no start position. In 0.33.0 that evaluation returned a start position, and the held subscription could deliver events. When an evaluation before the throw had already recorded the position, a later one reads the stored checkpoint instead |
+| Before the wrapped model's `subscribe(..)` throws | `subscribe(..)` cancels nothing on the wrapped model, as in 0.33.0. The exception the wrapped model threw gets a suppressed exception saying the wrapped model may still hold a subscription for the id, unless it is `DuplicateSubscriptionIdException`. An evaluation still recording the position when `subscribe(..)` rethrows that exception gets no start position. It throws `IllegalStateException` once recording returns, or what recording threw |
+| After `subscribe(..)` rethrew what the wrapped model's `subscribe(..)` threw | Unless an evaluation that started earlier had already got its start position, the evaluation throws `IllegalStateException`, so the subscription the wrapped model may still hold gets no start position. In 0.33.0 that evaluation returned a start position, and the held subscription could deliver events. When an earlier evaluation had got its start position, a later one reads the stored checkpoint, and when nothing is stored, it asks `globalCheckpoint()` for a position, as in 0.33.0 |
 
 The first row exists because a wrapped model may wait for its own evaluation inside `subscribe(..)`, and that model
 would wait forever for a position the caller records only after `subscribe(..)` returns. That gives a wrapped model
@@ -124,16 +124,18 @@ then throw. `subscribe(..)` cancels nothing on the wrapped model then, as in 0.3
 that subscription and any position the evaluation stored stays stored. Deleting the position would repeat the first fix
 described under context, which deleted a position the running subscription relied on.
 
-For a subscribe with the model default, an evaluation that starts after the wrapped `subscribe(..)` threw fails with
-`IllegalStateException`, so the subscription the wrapped model still holds gets no start position. In 0.33.0 that
-evaluation returned a start position, and the held subscription could deliver events. When an evaluation before the
-throw had already recorded the position, a later one reads the stored checkpoint instead.
-
 Cancelling the subscription isn't safe either, because the durable model can't tell whether the subscription the
 wrapped model holds for the id is this subscribe's. It may belong to an earlier `subscribe(..)` on the same durable
 model, to a second durable model over the same wrapped model, or to a subscription made with the same id straight on
 the wrapped model. A cancel by id would stop that subscription, which then receives no more events, and nothing
 reports why.
+
+For a subscribe with the model default, unless an evaluation that started earlier had already got its start position,
+an evaluation that starts after `subscribe(..)` rethrew what the wrapped `subscribe(..)` threw fails with
+`IllegalStateException`, so the subscription the wrapped model still holds gets no start position. In 0.33.0 that
+evaluation returned a start position, and the held subscription could deliver events. When an earlier evaluation had
+got its start position, a later one reads the stored checkpoint, and when nothing is stored, it asks
+`globalCheckpoint()` for a position, as in 0.33.0.
 
 For a subscribe with the model default, when the wrapped model evaluated the start position before it threw, the
 exception gets a suppressed exception saying the wrapped model may still hold a subscription for the id. An evaluation
