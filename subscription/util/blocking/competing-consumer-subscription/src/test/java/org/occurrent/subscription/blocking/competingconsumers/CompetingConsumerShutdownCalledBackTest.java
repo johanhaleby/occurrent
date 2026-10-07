@@ -43,10 +43,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * A {@code shutdown()} that the wrapped model or the lease strategy calls back while another {@code shutdown()} can wait
- * for the call it runs inside returns at once instead of waiting for the other one. That is a call back from their own
- * {@code shutdown()}, on the thread of the other one, and one from the wrapped model's {@code start(..)} that the other
- * one waits for.
+ * A {@code shutdown()} that overlaps another one under way returns at once, without waiting for the other one. That holds
+ * for a call back from the wrapped model's or the lease strategy's own {@code shutdown()}, for one from a helper thread
+ * that either of them waits for without a time limit, and for one from the wrapped model's {@code start(..)} that the
+ * other one waits for.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(60)
@@ -184,12 +184,59 @@ class CompetingConsumerShutdownCalledBackTest {
         await().atMost(EVENTUALLY).untilAsserted(() -> assertThat(strategy.holders).as("[subscriptions with a lease held]").isEmpty());
     }
 
+    @Test
+    void a_shutdown_a_helper_thread_of_the_lease_strategy_makes_returns_promptly_although_the_lease_strategy_waits_for_that_helper_without_a_time_limit() throws Exception {
+        Leases waitingForAHelper = new Leases() {
+            @Override
+            public void shutdown() {
+                joinWithoutATimeLimit(Thread.ofPlatform().daemon().start(CompetingConsumerShutdownCalledBackTest.this::callBackOnce));
+            }
+        };
+        subscribeOver(new InMemorySubscriptionModel(RetryStrategy.none()), waitingForAHelper);
+
+        Thread shuttingDown = Thread.ofPlatform().daemon().start(() -> model.get().shutdown());
+        shuttingDown.join(EVENTUALLY.toMillis());
+
+        assertThat(shuttingDown.isAlive()).as("the shutdown() under way is still waiting for the helper that calls shutdown()").isFalse();
+        assertThat(millisInTheShutdownCalledBack.get()).as("milliseconds the shutdown() the helper called took").isBetween(0L, PROMPTLY.toMillis());
+        assertThat(thrownByTheShutdownCalledBack.get()).as("[what the shutdown() the helper called threw]").isNull();
+        assertThat(waitingForAHelper.holders).as("[subscriptions with a lease held]").isEmpty();
+    }
+
+    @Test
+    void a_shutdown_a_listener_thread_of_the_wrapped_model_makes_returns_promptly_although_the_wrapped_model_waits_for_that_thread_without_a_time_limit() throws Exception {
+        InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel(RetryStrategy.none()) {
+            @Override
+            public void shutdown() {
+                joinWithoutATimeLimit(Thread.ofPlatform().daemon().start(CompetingConsumerShutdownCalledBackTest.this::callBackOnce));
+                super.shutdown();
+            }
+        };
+        subscribeOver(wrapped, strategy);
+
+        Thread shuttingDown = Thread.ofPlatform().daemon().start(() -> model.get().shutdown());
+        shuttingDown.join(EVENTUALLY.toMillis());
+
+        assertThat(shuttingDown.isAlive()).as("the shutdown() under way is still waiting for the listener thread that calls shutdown()").isFalse();
+        assertThat(millisInTheShutdownCalledBack.get()).as("milliseconds the shutdown() the listener thread called took").isBetween(0L, PROMPTLY.toMillis());
+        assertThat(thrownByTheShutdownCalledBack.get()).as("[what the shutdown() the listener thread called threw]").isNull();
+        assertThat(strategy.holders).as("[subscriptions with a lease held]").isEmpty();
+    }
+
     private void subscribeOver(InMemorySubscriptionModel wrapped, CompetingConsumerStrategy leases) {
         CompetingConsumerSubscriptionModel made = new CompetingConsumerSubscriptionModel(wrapped, leases);
         model.set(made);
         made.subscribe("node", "s1", null, StartAt.subscriptionModelDefault(), event -> received.add(event.getId())).waitUntilStarted();
         wrapped.accept(List.of(event("e1")));
         await().atMost(EVENTUALLY).until(() -> received.contains("e1"));
+    }
+
+    private static void joinWithoutATimeLimit(Thread thread) {
+        try {
+            thread.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private void callBackOnce() {

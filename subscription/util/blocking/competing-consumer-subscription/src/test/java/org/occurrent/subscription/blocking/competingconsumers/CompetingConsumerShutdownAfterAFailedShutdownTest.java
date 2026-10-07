@@ -45,14 +45,16 @@ import static org.awaitility.Awaitility.await;
 /**
  * A {@code shutdown()} whose wrapped model throws from its own {@code shutdown()} keeps the leases, and a later
  * {@code shutdown()} whose wrapped model shuts down gives each of them up. A {@code shutdown()} called on a thread of
- * its own while another shuts the lease strategy or the wrapped model down waits for it, lets no event through without
- * the lease meanwhile, and throws the same failure.
+ * its own while another shuts the lease strategy or the wrapped model down returns at once and throws nothing, and no
+ * event goes through without the lease meanwhile. The one under way throws its own failure, and a {@code shutdown()}
+ * called after it has ended runs again.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
 class CompetingConsumerShutdownAfterAFailedShutdownTest {
 
     private static final Duration EVENTUALLY = Duration.ofSeconds(5);
+    private static final Duration PROMPTLY = Duration.ofSeconds(2);
     private static final Duration AFTERWARDS = Duration.ofMillis(500);
 
     private final Leases strategy = new Leases();
@@ -86,12 +88,12 @@ class CompetingConsumerShutdownAfterAFailedShutdownTest {
     }
 
     @Test
-    void a_shutdown_called_while_one_whose_wrapped_model_throws_is_under_way_throws_the_same_failure_and_lets_no_event_through_without_the_lease() throws Exception {
+    void a_shutdown_called_while_one_whose_wrapped_model_throws_is_under_way_returns_promptly_and_throws_nothing_and_a_later_one_gives_the_lease_up() throws Exception {
         IllegalStateException failure = new IllegalStateException("wrapped model shutdown failed");
         CountDownLatch inWrappedShutdown = new CountDownLatch(1);
         CountDownLatch releaseWrappedShutdown = new CountDownLatch(1);
         AtomicInteger wrappedShutdownCalls = new AtomicInteger();
-        // Only the first call throws, so a second shutdown() that calls it again returns
+        // Only the first call throws, so a shutdown() that calls it again returns
         InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel(RetryStrategy.none()) {
             @Override
             public void shutdown() {
@@ -116,30 +118,38 @@ class CompetingConsumerShutdownAfterAFailedShutdownTest {
         Thread first = Thread.ofPlatform().start(() -> thrownByFirst.set(catchThrowable(model::shutdown)));
         assertThat(inWrappedShutdown.await(EVENTUALLY.toSeconds(), SECONDS)).as("the first shutdown() reaches the wrapped model's own shutdown()").isTrue();
         Thread second = Thread.ofPlatform().start(() -> thrownBySecond.set(catchThrowable(model::shutdown)));
-        second.join(AFTERWARDS.toMillis());
+        second.join(PROMPTLY.toMillis());
 
         try {
-            assertThat(second.isAlive()).as("the second shutdown() waits for the first").isTrue();
+            assertThat(second.isAlive()).as("the second shutdown() is still running while the first waits in the wrapped model").isFalse();
+            assertThat(first.isAlive()).as("the first shutdown() is still waiting in the wrapped model").isTrue();
             releaseWrappedShutdown.countDown();
             first.join(EVENTUALLY.toMillis());
-            second.join(EVENTUALLY.toMillis());
+            assertThat(first.isAlive()).as("the first shutdown() is still running after the wrapped model threw").isFalse();
             wrapped.accept(List.of(event("e2")));
             Thread.sleep(AFTERWARDS.toMillis());
 
             assertThat(thrownByFirst.get()).as("[what the first shutdown() threw]").isSameAs(failure);
-            assertThat(thrownBySecond.get()).as("[what the second shutdown() threw]").isSameAs(failure);
+            assertThat(thrownBySecond.get()).as("[what the second shutdown() threw]").isNull();
             assertThat(wrappedShutdownCalls.get()).as("calls to the wrapped model's own shutdown()").isEqualTo(1);
             assertThat(strategy.unregisterAttempts.get()).as("attempts to give up the lease of s1").isZero();
-            assertThat(received).as("[events s1 received after both shutdown() calls threw, with hasLock false]").containsExactly("e1");
+            assertThat(received).as("[events s1 received after the first shutdown() threw, with hasLock false]").containsExactly("e1");
+
+            model.shutdown();
+
+            assertThat(wrappedShutdownCalls.get()).as("calls to the wrapped model's own shutdown() once a later shutdown() ran").isEqualTo(2);
+            assertThat(strategy.unregisterAttempts.get()).as("attempts to give up the lease of s1 once a later shutdown() ran").isEqualTo(1);
+            assertThat(strategy.holders).as("[subscriptions with a lease held]").isEmpty();
         } finally {
             releaseWrappedShutdown.countDown();
             strategy.fenced = false;
+            first.join(EVENTUALLY.toMillis());
             model.shutdown();
         }
     }
 
     // The first shutdown() waits in the lease strategy's own shutdown(), so an event handed over then waits for the
-    // lease. The second shutdown() must not let it through on its way to waiting for the first.
+    // lease. The second shutdown() returns at once and must not let it through either.
     @Test
     void a_shutdown_called_while_another_shuts_the_lease_strategy_down_lets_no_event_through_without_the_lease() throws Exception {
         InMemorySubscriptionModel wrapped = new InMemorySubscriptionModel(RetryStrategy.none());
@@ -157,6 +167,8 @@ class CompetingConsumerShutdownAfterAFailedShutdownTest {
             assertThat(received).as("[events s1 received while the lease strategy shuts down, with hasLock false]").containsExactly("e1");
 
             second[0] = Thread.ofPlatform().start(model::shutdown);
+            second[0].join(PROMPTLY.toMillis());
+            assertThat(second[0].isAlive()).as("the second shutdown() is still running while the first waits in the lease strategy").isFalse();
             Thread.sleep(AFTERWARDS.toMillis());
             assertThat(received).as("[events s1 received once a second shutdown() is called, with hasLock false]").containsExactly("e1");
         } finally {

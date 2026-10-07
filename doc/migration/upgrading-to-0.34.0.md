@@ -2019,3 +2019,8 @@ event the wrapped model handed over. No other node took those subscriptions over
 Call `shutdown()` again once the wrapped model can shut down. That call shuts the wrapped model down and then makes one
 attempt to give up each lease the failed `shutdown()` kept. A lease strategy of your own whose `shutdown()` doesn't stop
 it refreshing its leases keeps them until then.
+
+A `shutdown()` called while another one is under way returns at once, on any thread, without waiting for it. It can
+return before the model is shut down, and it doesn't throw what the one under way throws. So a caller that needs to
+know whether the shutdown failed calls `shutdown()` again once the one under way has returned. In 0.33.0 such a call
+on another thread waited for the one under way, and then ran every step again itself.

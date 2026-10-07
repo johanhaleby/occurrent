@@ -49,9 +49,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * A {@code shutdown()} called from the action of a subscription while another {@code shutdown()} can wait for that
- * action to return doesn't wait for the other one, so neither waits for the other. The other one waits in the wrapped
- * model's own {@code shutdown()}, or for the call into the wrapped model that runs the action.
+ * A {@code shutdown()} called from the action of a subscription returns at once while another {@code shutdown()} waits
+ * for that action to return. The other one waits in the wrapped model's own {@code shutdown()}, or for the call into
+ * the wrapped model that runs the action.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(60)
