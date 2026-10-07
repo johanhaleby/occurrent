@@ -82,8 +82,8 @@ Then a `ReactorMongoSubscriptionModel` subscription started at the present now s
 `subscribe(..)` is called. It can receive events written up to 16 seconds before the call, and one whose change stream
 first opens after its history is gone stops, unless you configure the model to restart it. A
 `ReactorDurableSubscriptionModel` subscription at `StartAt.now()` over a model of your own that is not a
-`SubscriptionModel` now starts from what your model's `globalCheckpointAsOfNow()` answers for the `subscribe(..)` call. A reactor `CheckpointAwareSubscriptionModel` of your
-own must implement `globalCheckpointAsOfNow()`, which has no default, and that is a fifth compile-time break. Read
+`SubscriptionModel` now asks your model's `globalCheckpointAsOfNow()` at the `subscribe(..)` call and starts from its
+answer. A reactor `CheckpointAwareSubscriptionModel` of your own must implement `globalCheckpointAsOfNow()`, which has no default, and that is a fifth compile-time break. Read
 [section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call).
 Then a new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running runs a competing
 subscription only once you call its own `start(..)`, and calling `start()` on the wrapped model instead never gets one
@@ -1754,7 +1754,8 @@ late the returned `Mono` is subscribed to. A model that wraps another one passes
 
 Returning `globalCheckpoint()` compiles, but where that works out where the feed is only when it runs, a subscription
 with nothing stored can skip what is written after `subscribe(..)` returned. When you can't work out where the feed was
-at the call, fail the returned `Mono`, which refuses a subscription from the subscription-model default.
+at the call, fail the returned `Mono`, which refuses a subscription from the subscription-model default that has
+nothing stored.
 
 Where `ReactorDurableSubscriptionModel` wraps a model that manages named subscriptions, such as
 `ReactorMongoSubscriptionModel`, it hands the subscription to that model. A `subscribe(..)` from `StartAt.dynamic(..)`
@@ -1799,15 +1800,22 @@ A `subscribe(..)` of the id that doesn't wait for a write back also throws at th
 a subscription of the id or is taking one, as in 0.33.0. The durable model asks `subscriptionIds()` where the wrapped
 model lists its ids, and `isRunning(..)` and `isPaused(..)` where it doesn't. A wrapped model that doesn't list its ids
 can answer `false` from both for a subscription it moves between running and paused, and then the durable model's
-check misses that subscription. When asking the wrapped model fails, the `subscribe(..)` throws what the wrapped
-model threw, at the call, and the wrapped model doesn't get the subscribe. An `UnknownSubscriptionException` from `isRunning(..)` or
-`isPaused(..)` counts as the wrapped model not holding the id. One that waits for a write back throws at the call while the
+check misses that subscription. One that waits for a write back throws at the call while the
 durable model still records a subscription of the id that it handed over or is handing over. The record ends when the durable model cancels that
 subscription, when it can't record where that subscription starts, when its hand-over or a start again of it fails,
 when a later subscription of the id replaces it, and at `shutdown()`. It stays when the wrapped model fails or drops the
 subscription by itself, as it does after an error there, also when that error fails `waitUntilStarted()`. A
 `subscribe(..)` of the id throws while the durable model starts a subscription of the id there again, and while a
 cancel, a pause or a resume that the durable model sent the wrapped model for the id is still under way.
+
+Asking the wrapped model whether it holds the id is a break with 0.33.0, which asked nothing and handed the subscribe
+over. Every `subscribe(..)` asks it now, whatever the start position. When asking the wrapped model whether it holds
+the id throws, any `subscribe(..)` of the id throws what it threw, at the call, and the wrapped model doesn't get the
+subscribe. Only an `UnknownSubscriptionException` from `isRunning(..)` or `isPaused(..)` counts as the wrapped model
+not holding the id. So where a wrapped model of your own throws from `subscriptionIds()`, or throws anything else from
+`isRunning(..)` or `isPaused(..)` for an id it doesn't hold, every durable `subscribe(..)` over it throws. Make
+`subscriptionIds()` answer, and answer `false` from `isRunning(..)` and `isPaused(..)` for an id you don't hold, as
+`SubscriptionModelLifeCycle` documents.
 [Section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted) describes
 the last two.
 
@@ -1942,7 +1950,8 @@ stopped at the subscribe, or a pause of the subscription or a `stop()` comes bef
 over, the `start(..)` or `resumeSubscription(..)` that runs the subscription takes it over instead, if the delete has
 not been taken out by then. The delete makes no further try, and the call that took it over writes back the checkpoint
 that a try of the delete read. That includes a try that already deleted it, and a try that failed after the store
-applied it, so the store holds what it held before the cancel. The cancel's `Mono` then completes. A subscription from
+applied it, so the store holds what it held before the cancel. The cancel's `Mono` completes once that subscription has
+started or written a checkpoint, as described below. A subscription from
 the subscription-model default resumes from the cancelled subscription's checkpoint.
 
 While a checkpoint waits to be written back, for this cancel or for an earlier subscribe of the id, the subscribe
@@ -1971,9 +1980,23 @@ When a subscribe fails once it has taken the delete over, as one that Reactor re
 does, the delete still removes the checkpoint, as in 0.33.0, unless another subscription of the id is starting or
 registered by then. The same goes for a subscription that took the delete over and ends before it started without
 writing a checkpoint, for instance because its start position cannot be read. A subscription that a pause ended before
-it started keeps the delete taken over until you resume it. When that subscribe fails, or that subscription ends,
-before the delete has ended, the cancel's `Mono` ends only once the delete that goes ahead has ended. To start the id
-clean, wait for the `Mono` before you subscribe it again, as step 2 describes.
+it started keeps the delete taken over until you resume it. When a later cancel of the id has started a delete by then,
+that delete removes the checkpoint instead.
+
+So the cancel's `Mono` waits, once the delete's tries and the write back have ended, until every subscribe, resume or
+`start(..)` that took the delete over has failed, or its subscription has ended before it started, started, or written
+a checkpoint. It then waits for the delete that goes ahead in place of the cancel's delete, when there is one.
+
+Once the `Mono` has completed, no delete of the id that this cancel started or that goes ahead in its place is still
+running. The checkpoint is deleted by then unless a subscription of the id started or wrote a checkpoint, another
+subscription of the id was starting or registered when the last of those calls failed or ended, or the model was shut
+down.
+
+The wait has no time limit. A subscription that took the delete over and that a pause or a `stop()` set aside before it
+started holds the `Mono` up until you resume or start it, cancel it, or shut the model down. A shutdown ends the wait,
+and the `Mono` then fails with `SubscriptionModelShutdownException`.
+
+To start the id clean, wait for the `Mono` before you subscribe it again, as step 2 describes.
 
 Apart from a subscribe that waits for a write back before it calls its `StartAt.dynamic(..)` function, the subscribe
 reads the store without waiting for the delete or for the checkpoint writes the delete runs after. When the store holds
@@ -2120,8 +2143,8 @@ When `ReactorDurableSubscriptionModel` wraps a model that manages named subscrip
 subscription-model default, or from a `StartAt.dynamic(..)` that answers it, reads where the feed is whether that model
 runs or not. It returns without waiting for that read, and hands the subscription to the wrapped model once the read
 answers. A subscription with nothing stored starts from what `globalCheckpointAsOfNow()` answers, which is no later than
-where the feed was at the call, however late the read answers, so it delivers what you write after the call returned.
-`ReactorMongoSubscriptionModel` answers for the call within the limits
+where the feed was at the call, however late the read answers, within the limits the wrapped model documents, so it
+delivers what you write after the call returned. `ReactorMongoSubscriptionModel` answers for the call within the limits
 [section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call) describes.
 [Section 25](#25-a-durable-reactor-subscribe-from-the-model-default-returns-without-waiting-for-storage) describes where
 a refusal is reported then. A cancel of that id or a `shutdown()` ends the wait, and calls for other ids don't
@@ -2180,8 +2203,8 @@ doesn't mark as non-blocking, it could wait for good, since that thread has to d
 Now `subscribe(..)` doesn't wait for storage. The durable model reads where to start on a thread of its own and hands
 the subscription to the wrapped model once the read answers. It asks the wrapped model's `globalCheckpointAsOfNow()` at
 the call, whether a checkpoint is stored or not. So a subscription with nothing stored starts from what that method
-answers, which is no later than where the feed was at the call, however late the read answers.
-`ReactorMongoSubscriptionModel` answers for the call within the limits [section
+answers, which is no later than where the feed was at the call, however late the read answers, within the limits the
+wrapped model documents. `ReactorMongoSubscriptionModel` answers for the call within the limits [section
 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call) describes, and a wrapped
 model of your own implements the method as that section describes.
 
