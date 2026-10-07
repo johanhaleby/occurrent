@@ -688,7 +688,8 @@ position.
 The exception has a suppressed exception saying the wrapped model may still hold a subscription for the id. When
 nothing else subscribed the id, `getWrappedSubscriptionModel().cancelSubscription(id)` frees that subscription and
 keeps the checkpoint stored for the id, while `cancelSubscription(..)` on the durable model can delete that checkpoint
-as well.
+as well. It also stops the checkpoint writes of the held subscription before it deletes anything, so an action that
+returns after the cancel doesn't write its checkpoint back.
 
 Three ways forward, and the first needs no code change:
 

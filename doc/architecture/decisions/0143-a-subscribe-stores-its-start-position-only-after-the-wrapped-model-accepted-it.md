@@ -39,7 +39,7 @@ The wrapped model gets a dynamic `StartAt`, and the first evaluation that finds 
 
 | When the wrapped model evaluates it | What happens |
 |---|---|
-| Before `subscribe(..)` has recorded the position, for example before the wrapped model's `subscribe(..)` has returned, or while `subscribe(..)` records it | The evaluation records the position itself and returns it, without waiting for `subscribe(..)`. When both record, only the first to write a position to checkpoint storage writes one, and the evaluation returns that position. When recording fails, the evaluation throws and records nothing, and `subscribe(..)` records again once the wrapped model's `subscribe(..)` has returned |
+| Before `subscribe(..)` has recorded the position, for example before the wrapped model's `subscribe(..)` has returned, or while `subscribe(..)` records it | The evaluation records the position itself and returns it, without waiting for `subscribe(..)`. When both record, only the first to write a position to checkpoint storage writes one, and the evaluation returns that position. When recording fails, the evaluation throws and records nothing. `subscribe(..)` still records the position, in the recording it already started or once the wrapped model's `subscribe(..)` has returned, and so can a later evaluation |
 | After `subscribe(..)` recorded the position | The evaluation returns that position |
 | After `subscribe(..)` failed to record it | `subscribe(..)` cancels the wrapped subscription and the evaluation throws `IllegalStateException`, so the wrapped model gets no start position |
 | Before the wrapped model's `subscribe(..)` throws | `subscribe(..)` cancels nothing on the wrapped model, as in 0.33.0. The exception the wrapped model threw gets a suppressed exception saying the wrapped model may still hold a subscription for the id, unless it is `DuplicateSubscriptionIdException`. An evaluation still recording the position when `subscribe(..)` rethrows that exception gets no start position. It throws `IllegalStateException` once recording returns, or what recording threw |
@@ -108,12 +108,12 @@ as before this decision, and `DurableSubscriptionModel` logs a warning.
 A wrapped model of your own has the three requirements listed under the decision, and nothing enforces them.
 
 No evaluation waits while the caller's thread reads the stored checkpoint or calls `globalCheckpoint()`. So a wrapped
-model that evaluates the start position while it holds a reentrant lock, which its `globalCheckpoint()` takes as
-well, works as it did in 0.33.0. An evaluation can wait while the caller's thread writes the first position to checkpoint storage, and the
-caller's thread can wait while an evaluation writes it. That write also settles which position is kept when another
-node wrote one first, as ADR 130 describes. Without that wait, a storage that doesn't evaluate write conditions could
-get two first positions from one subscribe, and a crash before the first checkpoint could then restart from the later
-one and skip the events between them.
+model that evaluates the start position while it holds a reentrant lock, which its `globalCheckpoint()` takes as well,
+works as it did in 0.33.0. An evaluation can wait while the caller's thread or another evaluation writes the first
+position to checkpoint storage, and the caller's thread can wait while an evaluation writes it. That write also settles
+which position is kept when another node wrote one first, as ADR 130 describes. Without that wait, a storage that
+doesn't evaluate write conditions could get two first positions from one subscribe, and a crash before the first
+checkpoint could then restart from the later one and skip the events between them.
 
 When the position can't be recorded, the wrapped model held the subscription for a moment before `subscribe(..)`
 cancelled it. The MongoDB models delivered nothing in that moment, since their evaluation throws.
@@ -149,3 +149,11 @@ keeps the checkpoint stored for the id. The durable model's `cancelSubscription(
 delete that checkpoint, so when an earlier run had stored one, the next subscribe starts from the current position
 and skips the events written since that checkpoint. It keeps the checkpoint when an earlier subscribe of the id, whose
 cancel of the wrapped subscription failed, left its registration behind.
+
+The durable model's `cancelSubscription(..)` also stops the checkpoint writes of every subscription the wrapped model
+may still hold after a `subscribe(..)` of the id threw, before it deletes the checkpoint. An action of such a
+subscription that returns after the cancel then writes nothing. In 0.33.0 that action wrote its checkpoint after the
+cancel had deleted it, so the next subscribe of the id resumed from that checkpoint. The durable model refers to those
+subscriptions only weakly, so it keeps each one only as long as the wrapped model, or an action of that subscription
+still running, refers to it. A later subscribe of the id doesn't stop their writes, so until a cancel of the id they
+write their checkpoints as in 0.33.0.

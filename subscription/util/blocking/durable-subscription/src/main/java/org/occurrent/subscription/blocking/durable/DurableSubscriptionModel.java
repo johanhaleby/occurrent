@@ -40,6 +40,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.StringJoiner;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -106,7 +107,8 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * the id, unless the exception is {@link DuplicateSubscriptionIdException}, whose id belongs to another subscribe. When
  * nothing else subscribed the id, {@code getWrappedSubscriptionModel().cancelSubscription(id)} frees that subscription
  * and keeps the checkpoint stored for the id, while {@link #cancelSubscription(String)} can delete that checkpoint as
- * well.
+ * well. It also stops the checkpoint writes of the held subscription before it deletes anything, so an action that
+ * returns after the cancel doesn't write its checkpoint back.
  * <p>
  * A wrapped model of your own has three requirements that this model doesn't check:
  * <ul>
@@ -146,6 +148,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // The current subscribe of each id this model stores checkpoints for. A new object for every subscribe, so a read
     // that began before a cancel saves nothing for a later subscribe of the id
     private final ConcurrentMap<String, CheckpointRegistration> registrations = new ConcurrentHashMap<>();
+    // The registrations of each id's subscribes that ended without being tracked. A wrapped model can still hold a run
+    // that writes through one, so cancelSubscription stops their writes too. Held weakly, so one is kept only as long
+    // as such a run, or an action it is still calling, holds it. Each set is changed only under the lock for its id
+    private final ConcurrentMap<String, Set<CheckpointRegistration>> untrackedRegistrations = new ConcurrentHashMap<>();
     // One lock per id, which exists while a call holds or waits for it. Per id, so a checkpoint store that hangs in
     // one id's call blocks only calls for that id. Removed once no call needs it, so an unknown or made-up id passed
     // to cancelSubscription or resumeSubscription leaves nothing behind. The checkpoint write for an event takes none
@@ -366,7 +372,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     // Stops writing for the same reason as a registration track replaces
                     CheckpointRegistration previous = registrations.remove(subscriptionId);
                     if (previous != null) {
-                        previous.replaced();
+                        previous.stopWriting();
                     }
                     return optedOut;
                 } catch (Throwable t) {
@@ -409,6 +415,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             } catch (Throwable wrappedFailure) {
                 // Nothing is cancelled, since a subscription the wrapped model holds for the id may belong to another
                 // subscribe. For a duplicate it always does, so a duplicate gets no suppressed exception
+                keepUntracked(subscriptionId, registration);
                 if (firstPosition != null) {
                     firstPosition.subscribeEnded();
                     if (firstPosition.evaluated && !(wrappedFailure instanceof DuplicateSubscriptionIdException)) {
@@ -439,8 +446,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         checkpointedSubscriptions.add(subscriptionId);
         CheckpointRegistration previous = registrations.put(subscriptionId, registration);
         if (previous != null && previous != registration) {
-            previous.replaced();
+            previous.stopWriting();
         }
+        untrackedRegistrations.computeIfPresent(subscriptionId, (__, untracked) -> untracked.isEmpty() ? null : untracked);
+    }
+
+    // For a subscribe that ended without being tracked, while the wrapped model may still hold a run of it
+    private void keepUntracked(String subscriptionId, CheckpointRegistration registration) {
+        untrackedRegistrations.computeIfAbsent(subscriptionId, __ -> Collections.newSetFromMap(new WeakHashMap<>())).add(registration);
     }
 
     private IllegalStateException mayStillHoldTheSubscription(String subscriptionId) {
@@ -450,7 +463,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                          "When nothing else subscribed the id, getWrappedSubscriptionModel()" +
                                          ".cancelSubscription(\"" + subscriptionId + "\") frees it and keeps the checkpoint " +
                                          "stored for the id, while cancelSubscription(\"" + subscriptionId + "\") on this " +
-                                         "model can delete that checkpoint as well.");
+                                         "model can delete that checkpoint as well, and stops the checkpoint writes of " +
+                                         "that subscription before it does.");
     }
 
     // Cancels the subscription the wrapped model accepted when recording its first position fails, so the caller gets
@@ -473,6 +487,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private void cancelAfterFailedSubscribe(String subscriptionId, CheckpointRegistration registration, Throwable failure) {
         try {
             subscriptionModel.cancelSubscription(subscriptionId);
+            // The wrapped model doesn't wait for an action that is running
+            keepUntracked(subscriptionId, registration);
         } catch (RuntimeException | Error cancelFailure) {
             registration.keepCheckpointWhenCancelled();
             track(subscriptionId, registration);
@@ -496,9 +512,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     // Thrown on the subscriber's own thread once the wrapped model's subscribe has returned, so the refusal reaches
-    // the caller, or on the thread of an evaluation that records the position before the subscriber's thread does.
-    // A refusal there records nothing, so the subscriber's thread records again once the wrapped subscribe has
-    // returned.
+    // the caller, or on the thread of an evaluation that finds no position settled. A refusal there settles nothing, so
+    // the subscriber's thread still records the position, in the recording it already started or once the wrapped
+    // subscribe has returned, and so can a later evaluation.
     private IllegalStateException noStartPositionCanBeRecorded(String subscriptionId) {
         return new IllegalStateException("The wrapped subscription model " + subscriptionModel.getClass().getName() +
                                          " answered nothing when asked for the current position for subscription " +
@@ -697,6 +713,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * The checkpoint that is persisted in the {@link CheckpointStorage} will also be removed, except after a
      * {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)} that threw with a suppressed exception about a
      * failed cancel. This call then tries that cancel again and keeps the checkpoint.
+     * <p>
+     * It also stops the checkpoint writes of every subscription the wrapped model may still hold after a
+     * {@code subscribe(..)} of the id threw, before it deletes the checkpoint. An action of such a subscription that
+     * returns after this call has returned writes no checkpoint.
      *
      * @param subscriptionId The subscription id to cancel
      */
@@ -705,7 +725,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         runUnderLockFor(subscriptionId, () -> {
             subscriptionModel.cancelSubscription(subscriptionId);
             // The wrapped model doesn't wait for an action that is running, so its checkpoint is written before the
-            // registration is cancelled below or not at all
+            // registrations are cancelled below or not at all. The untracked ones stop before anything is deleted
+            Set<CheckpointRegistration> untracked = untrackedRegistrations.remove(subscriptionId);
+            if (untracked != null) {
+                untracked.forEach(CheckpointRegistration::stopWriting);
+            }
             CheckpointRegistration registration = registrations.remove(subscriptionId);
             if (registration == null) {
                 storage.delete(subscriptionId);
@@ -764,8 +788,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     //   what was stored.
     // - Nothing is stored once the subscribe ended without a settled position, so a subscribe the wrapped model
     //   refuses before evaluating stores nothing, and every evaluation from then on throws.
-    // - A failed evaluation settles nothing, so a later evaluation or the subscribing thread records again. A failure
-    //   on the subscribing thread ends the subscribe, unless an evaluation settled the position first.
+    // - A failed evaluation settles nothing, so a later evaluation or the subscribing thread records again. A
+    //   RuntimeException on the subscribing thread ends the subscribe, unless an evaluation settled the position first.
+    //   An Error there ends the subscribe either way, and a position an evaluation settled stays stored.
     private final class FirstPosition {
         private static final Settled ENDED = new Settled(null);
 
@@ -952,7 +977,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
 
         // Writes nothing from then on and deletes nothing, leaving the stored checkpoint to the subscribe that replaced it
-        void replaced() {
+        // or to the cancel that stopped it
+        void stopWriting() {
             saveLock.lock();
             try {
                 cancelled = true;
