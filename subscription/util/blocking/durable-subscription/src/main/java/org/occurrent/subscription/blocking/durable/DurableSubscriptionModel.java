@@ -126,9 +126,9 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * well. It also stops the checkpoint writes of the held subscription before it deletes anything, so an action that
  * returns after the cancel doesn't write its checkpoint back, and an evaluation of its start position records no
  * position. A later {@code subscribe(..)} of the id stops those writes as well, before it hands the wrapped model
- * anything, so they don't overwrite a checkpoint that subscribe stores. A later {@code subscribe(..)} that the wrapped model refuses stops them
- * too, so the held subscription then delivers without storing a checkpoint until a cancel of the id. Until a cancel or
- * a later {@code subscribe(..)} of the id, the held subscription writes its checkpoints.
+ * anything, so they don't overwrite a checkpoint that subscribe stores. A later {@code subscribe(..)} that the wrapped
+ * model refuses stops them too, so the held subscription then delivers without storing a checkpoint until a cancel of
+ * the id. Until a cancel or a later {@code subscribe(..)} of the id, the held subscription writes its checkpoints.
  * <p>
  * A wrapped model of your own has three requirements that this model doesn't check:
  * <ul>
