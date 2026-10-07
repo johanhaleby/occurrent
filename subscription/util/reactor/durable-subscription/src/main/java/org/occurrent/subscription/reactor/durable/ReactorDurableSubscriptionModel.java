@@ -176,12 +176,15 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * wrapped model again, and while a call this model sent the wrapped model for the id is under way. A duplicate the
  * check at the call misses fails {@link Subscription#waitUntilStarted()} instead, once it is refused at the hand-over.
  * A wrapped model that doesn't list its ids can answer {@code false} from both for a subscription it moves between
- * running and paused, and then the check misses a subscription that this model handed over to it earlier.
+ * running and paused, and then the check misses a subscription that this model handed over to it earlier. When asking
+ * the wrapped model throws, the subscribe throws what the wrapped model threw, at the call, and the wrapped model
+ * doesn't get the subscribe. Only an {@link UnknownSubscriptionException} from {@code isRunning(..)} or
+ * {@code isPaused(..)} counts as the wrapped model not holding the id.
  * <p>
  * Where this model drives the subscription itself, no call waits for that read, on any thread. The read asks
  * {@link CheckpointAwareSubscriptionModel#globalCheckpointAsOfNow()} of the wrapped model, which answers with a position
- * no later than where the feed was when the call was made, however late it answers. So the subscription delivers what
- * was written after the call returned. A subscription from {@link StartAt#now()} begins from such a read of its subscribe too, so one
+ * no later than where the feed was when the call was made, however late it answers, within the limits that model
+ * documents. So the subscription delivers what was written after the call returned. A subscription from {@link StartAt#now()} begins from such a read of its subscribe too, so one
  * registered on a stopped model, or paused before it started, delivers what was written after the subscribe once it
  * starts. A dynamic start position that answers {@link StartAt#now()} begins from such a read of the call that first
  * starts the subscription. When that read answers nothing, the subscription opens its feed at {@link StartAt#now()}
@@ -521,16 +524,19 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
     }
 
-    // A wrapped model that does not know the id may throw instead of answering false. Asked for its ids where it lists
-    // them, since isRunning and isPaused can both answer false for a subscription that a stop, a pause or a resume moves
-    // between running and paused, as ReactorMongoSubscriptionModel does in two steps.
+    // Throws what the wrapped model throws when asking it fails, so a subscribe that can't tell whether the id is free
+    // is refused, and never handed to a wrapped model that may replace a subscription it holds under the id. Only
+    // UnknownSubscriptionException from isRunning or isPaused answers false, since a wrapped model that doesn't know the
+    // id may throw it instead of answering false. Asked for its ids where it lists them, since isRunning and isPaused
+    // can both answer false for a subscription that a stop, a pause or a resume moves between running and paused, as
+    // ReactorMongoSubscriptionModel does in two steps.
     private static boolean heldByTheWrappedModel(SubscriptionModel delegate, String subscriptionId) {
+        if (delegate instanceof IntrospectableSubscriptions introspectable) {
+            return introspectable.subscriptionIds().contains(subscriptionId);
+        }
         try {
-            if (delegate instanceof IntrospectableSubscriptions introspectable) {
-                return introspectable.subscriptionIds().contains(subscriptionId);
-            }
             return delegate.isRunning(subscriptionId) || delegate.isPaused(subscriptionId);
-        } catch (RuntimeException e) {
+        } catch (UnknownSubscriptionException e) {
             return false;
         }
     }
@@ -578,7 +584,16 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 writer.kept = kept;
             }
         }
-        if (refusedAsDuplicate || refused == null && heldByTheWrappedModel(delegate, subscriptionId)) {
+        final boolean duplicate;
+        try {
+            duplicate = refusedAsDuplicate || refused == null && heldByTheWrappedModel(delegate, subscriptionId);
+        } catch (RuntimeException | Error e) {
+            // Ends the keeping as a duplicate does, and subscribeByDelegating gives back the delete taken over and the
+            // writer
+            endKeptLifecycle(writer, kept, null);
+            throw e;
+        }
+        if (duplicate) {
             endKeptLifecycle(writer, kept, null);
             throw new DuplicateSubscriptionIdException(subscriptionId);
         } else if (refused == Registration.SHUT_DOWN) {
@@ -1492,8 +1507,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // Where the wrapped model's feed is at this call, as globalCheckpointAsOfNow() answers it. Taken here and read only
-    // when subscribed to, so a read that answers late, or is subscribed to late, still answers with this moment. What
-    // the call throws is answered as the read's failure.
+    // when subscribed to, so a read that answers late, or is subscribed to late, still answers for this moment, as
+    // globalCheckpointAsOfNow() requires of the wrapped model. What the call throws is answered as the read's failure.
     private Mono<Checkpoint> asOfNow() {
         try {
             return subscription.globalCheckpointAsOfNow();

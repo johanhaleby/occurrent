@@ -76,7 +76,7 @@ public class ReactorDurableSubscriptionModelConfig {
 
     /**
      * Whether a subscription that asks for the model default, with no checkpoint stored and a wrapped model whose
-     * {@code globalCheckpoint()} answers empty, starts anyway instead of being refused. Starting anyway means no
+     * {@code globalCheckpointAsOfNow()} answers empty, starts anyway instead of being refused. Starting anyway means no
      * start position is recorded before the first delivery, so a crash before the first checkpoint is saved starts
      * over from wherever the feed has reached by then, and an event whose delivery failed before the crash is not
      * redelivered. The default is {@code false}, which refuses such a registration the way

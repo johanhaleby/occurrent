@@ -82,7 +82,7 @@ Then a `ReactorMongoSubscriptionModel` subscription started at the present now s
 `subscribe(..)` is called. It can receive events written up to 16 seconds before the call, and one whose change stream
 first opens after its history is gone stops, unless you configure the model to restart it. A
 `ReactorDurableSubscriptionModel` subscription at `StartAt.now()` over a model of your own that is not a
-`SubscriptionModel` now starts from the `subscribe(..)` call too. A reactor `CheckpointAwareSubscriptionModel` of your
+`SubscriptionModel` now starts from what your model's `globalCheckpointAsOfNow()` answers for the `subscribe(..)` call. A reactor `CheckpointAwareSubscriptionModel` of your
 own must implement `globalCheckpointAsOfNow()`, which has no default, and that is a fifth compile-time break. Read
 [section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call).
 Then a new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running runs a competing
@@ -1696,7 +1696,8 @@ What to do:
   to `false`.
 
 `ReactorDurableSubscriptionModel` over a model of your own that is not a `SubscriptionModel` drives the feed itself, and
-a subscription there from `StartAt.now()` now starts from the moment `subscribe(..)` is called too. In 0.33.0 it opened
+a subscription there from `StartAt.now()` now starts from what your model's `globalCheckpointAsOfNow()` answers for the
+`subscribe(..)` call. In 0.33.0 it opened
 its feed at the present each time it started. Now the durable model asks your model's `globalCheckpointAsOfNow()` at the
 call. So a subscription registered while the durable model is stopped, or paused before it started, receives the events
 written between `subscribe(..)` and the start. A subscription whose `StartAt.dynamic(..)` function answers `StartAt.now()`
@@ -1719,12 +1720,16 @@ failure.
 stops compiling until it implements the method. Answer with where your feed was when the method was called, however
 late the returned `Mono` is subscribed to. A model that wraps another one passes the call on to the model it wraps.
 
+Returning `globalCheckpoint()` compiles, but where that works out where the feed is only when it runs, a subscription
+with nothing stored can skip what is written after `subscribe(..)` returned. When you can't work out where the feed was
+at the call, fail the returned `Mono`, which refuses a subscription from the subscription-model default.
+
 Where `ReactorDurableSubscriptionModel` wraps a model that manages named subscriptions, such as
 `ReactorMongoSubscriptionModel`, it hands the subscription to that model. A `subscribe(..)` from `StartAt.dynamic(..)`
 that comes after a `cancelSubscription(..)` of the same id found a stored checkpoint to delete, and before the durable
 model has written that checkpoint back, asks the function only once it is written back. When the function then answers
-`StartAt.now()`, the subscription starts from where the feed was at `subscribe(..)`, where in 0.33.0 the wrapped model
-opened its feed at the present. That read is asked again and warned about the same way, and the wrapped model does not
+`StartAt.now()`, the subscription starts from what the wrapped model's `globalCheckpointAsOfNow()` answers for the
+`subscribe(..)` call, where in 0.33.0 the wrapped model opened its feed at the present. That read is asked again and warned about the same way, and the wrapped model does not
 get the subscription before it answers. A `stop()` or a pause does not end its retries, only an answer, a cancel or a
 shutdown does.
 
@@ -1762,7 +1767,9 @@ A `subscribe(..)` of the id that doesn't wait for a write back also throws at th
 a subscription of the id or is taking one, as in 0.33.0. The durable model asks `subscriptionIds()` where the wrapped
 model lists its ids, and `isRunning(..)` and `isPaused(..)` where it doesn't. A wrapped model that doesn't list its ids
 can answer `false` from both for a subscription it moves between running and paused, and then the durable model's
-check misses that subscription. One that waits for a write back throws at the call while the
+check misses that subscription. When asking the wrapped model fails, the `subscribe(..)` throws what the wrapped
+model threw, at the call, and the wrapped model doesn't get the subscribe. An `UnknownSubscriptionException` from `isRunning(..)` or
+`isPaused(..)` counts as the wrapped model not holding the id. One that waits for a write back throws at the call while the
 durable model still records a subscription of the id that it handed over or is handing over. The record ends when the durable model cancels that
 subscription, when it can't record where that subscription starts, when its hand-over or a start again of it fails,
 when a later subscription of the id replaces it, and at `shutdown()`. It stays when the wrapped model fails or drops the
@@ -2068,7 +2075,7 @@ so such a try can still reach the store after the `shutdown()`. When the checkpo
 When `ReactorDurableSubscriptionModel` drives the subscription itself, no call waits for where the feed is, on any
 thread. A `subscribe(..)` from the subscription-model default, or from `StartAt.now()`, asks the wrapped model's
 `globalCheckpointAsOfNow()` at the call, which answers with a position no later than where the feed was at that call,
-however late it answers. So the subscription delivers what you write after the call returned, also when it was registered on a stopped model or
+however late it answers, within the limits that model documents. So the subscription delivers what you write after the call returned, also when it was registered on a stopped model or
 paused before it started, see section 21 for `StartAt.now()`. A `subscribe(..)` on a running model asks storage first
 and asks the wrapped model only when no checkpoint is stored. `start(..)` waits for no read of where the feed is, so a
 read that never answers holds up neither the start nor the other subscriptions it starts. A subscription from the
@@ -2180,7 +2187,8 @@ durable model starts a subscription of the id there again or a cancel, a pause o
 the id is under way. What a `StartAt.dynamic(..)` function throws comes out of the call as well, since the function runs
 on the calling thread. When a checkpoint of the id waits to be written back, as section 23 describes, the function runs
 later instead, and what it throws fails `waitUntilStarted()`. The durable model checks for a duplicate again at the
-hand-over, and a refusal there fails `waitUntilStarted()` instead.
+hand-over, and a refusal there fails `waitUntilStarted()` instead. When asking the wrapped model at the call
+whether it holds the id throws, `subscribe(..)` throws what the wrapped model threw, see section 21.
 
 Until the hand-over, the durable model answers `pauseSubscription(..)`, `resumeSubscription(..)`, `isRunning(..)`,
 `isPaused(..)` and `subscriptionIds()` for the subscription itself, and the wrapped model's own `isRunning(..)` answers

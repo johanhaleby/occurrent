@@ -1795,7 +1795,7 @@ thread.
 When the durable model drives the subscription itself, no call waits for its read of where the feed is, on any thread. A
 `subscribe(..)` from the subscription-model default, or from `StartAt.now()`, asks `globalCheckpointAsOfNow()` of the
 wrapped model at the call, which answers with a position no later than where the feed was at that call, however late it
-answers, as that method requires. The subscription starts from that answer whenever it starts. An earlier version of this change waited for that read on a
+answers, within the limits that model documents, as that method requires. The subscription starts from that answer whenever it starts. An earlier version of this change waited for that read on a
 thread that may block, since 0.33.0 started the default from an answer that could come after the return. A Netty event
 loop thread that the reactive MongoDB driver is given is not one where Reactor refuses to block, so a `subscribe(..)`
 made inside a callback of the driver on its only event loop thread waited there for a read that needed that thread, and
@@ -1827,7 +1827,7 @@ cancel of the subscription or a shutdown cancels the read and ends its warnings.
 subscription, the read for the subscription-model default warns the same way. Without the warning a wrapped model that
 never answers would keep the subscription from starting with nothing in the log. None of these reads holds up a call or
 another subscription. Where the durable model hands the subscription to a wrapped model, the wait for the read of the
-subscription-model default, described below, still logs nothing.
+subscription-model default, described below, logs a warning every 10 seconds too.
 
 Until the wrapped model has a subscription that waits for the write back, a pause or a resume of it is kept, and the
 wrapped model gets it once it has the subscription, so a subscription paused meanwhile delivers nothing until it is
@@ -1902,7 +1902,8 @@ caller's thread. 0.33.0 read there, so a `subscribe(..)` on a thread where React
 Netty event loop thread of the MongoDB driver could wait for good for a read that needed that thread. Now the call
 doesn't wait for storage, and the subscription is handed to the wrapped model once the read answers. The read of where
 the feed is starts at the call. A subscription with nothing stored starts from what `globalCheckpointAsOfNow()`
-answers, which is no later than where the feed was at the call, so it skips nothing the caller writes after the return.
+answers, which is no later than where the feed was at the call, within the limits the wrapped model documents, so it
+skips nothing the caller writes after the return.
 `ReactorMongoSubscriptionModel` answers for the call within the limits that section 21 of the 0.34.0 upgrade guide
 describes.
 
@@ -1917,7 +1918,10 @@ The read of where the feed is is subscribed to on the caller's thread, so the ca
 wrapped model's `globalCheckpointAsOfNow()` doesn't block when subscribed to, as with `ReactorMongoSubscriptionModel`. The start position is stored only once the wrapped model has taken the subscribe, so a
 subscribe it refuses, as a duplicate or over a filter it doesn't support, stores nothing for the id. Such a refusal
 fails `waitUntilStarted()` and is logged as an error, since the call has returned by then. A duplicate that the wrapped
-model reports as running or paused at the call is still refused there.
+model reports as running or paused at the call is still refused there. When asking the wrapped model fails, the
+subscribe throws what the wrapped model threw, at the call, and the wrapped model doesn't get it, since a wrapped model that replaces a
+subscription it holds would otherwise end the running one. Only an `UnknownSubscriptionException` from `isRunning(..)`
+or `isPaused(..)` counts as the id being free.
 
 When the durable model drives the subscription itself, no lifecycle call holds its monitor while it calls the storage,
 the wrapped model or a function the caller supplies, or while it cancels the feed of a subscription. Each call decides
