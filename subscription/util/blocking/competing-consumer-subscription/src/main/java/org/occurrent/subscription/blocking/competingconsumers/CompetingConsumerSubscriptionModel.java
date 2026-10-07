@@ -268,9 +268,11 @@ import static java.util.Objects.requireNonNull;
  * added to it as suppressed. The failure is thrown as it is, a checked one too, without being wrapped. A
  * {@code shutdown()} that finds another one under way waits for it, and then returns or throws the same failure as that
  * one does. With none under way, it makes an attempt of its own, also after a {@code shutdown()} that threw. A
- * {@code shutdown()} called while another one is under way, on a thread that the other one can wait for, returns at
- * once without waiting for it. {@link #shutdown()} lists those threads, among them each thread running the action of a
- * subscription of this model.
+ * {@code shutdown()} called while another one is under way returns at once, without waiting for it, when it runs on
+ * one of three kinds of thread. These are a thread running the action of a subscription of this model, a thread inside
+ * a call this model makes to start the wrapped model or to resume there a subscription that doesn't compete, and the
+ * thread running the other {@code shutdown()}. On any other thread it waits for the one under way, also when that one
+ * waits for the thread, as {@link #shutdown()} describes.
  * <br>
  * <br>
  * A competing subscription made while this model is stopped goes to the wrapped model straight away, through
@@ -3655,8 +3657,8 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * not wait for a resume of a competing subscription that a {@code start(..)} handed to a try.
      * <p>
      * A {@code shutdown()} that finds another one under way waits for it, as the class documentation describes, unless
-     * it is called on a thread that the one under way can wait for. It then returns at once, without waiting for the
-     * other one and without throwing what that one throws. These are the threads it returns at once on:
+     * it is called on one of three kinds of thread. It then returns at once, without waiting for the other one and
+     * without throwing what that one throws. These are the three kinds of thread it returns at once on:
      * <ul>
      * <li>A thread running the action of a subscription of this model.</li>
      * <li>The thread running the other {@code shutdown()}, which a wrapped model or a lease strategy of your own calls
@@ -3678,11 +3680,19 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * <li>The threads that give up the leases, for at most five seconds.</li>
      * </ul>
      * A {@code shutdown()} called on any other thread that one of these waits for still waits for the one under way. Such
-     * a thread is a thread of your own that a call or an action waits for, or a thread of the wrapped model or of the
-     * lease strategy that runs no action, such as one that calls a listener of your own. The two calls then wait for each
-     * other until the one under way stops waiting, which with no time limit never happens. A {@code shutdown()} that the
-     * lease strategy's {@code unregisterCompetingConsumer} calls while the one under way gives up the leases waits for
-     * at most five seconds.
+     * a thread can be, among others, one of the following:
+     * <ul>
+     * <li>A thread of your own that a call or an action waits for, such as one an action starts to call
+     * {@code shutdown()} on and then joins.</li>
+     * <li>A thread of the wrapped model or of the lease strategy that runs no action, such as one that calls a listener of
+     * your own.</li>
+     * <li>A thread inside another call this model makes into the wrapped model, such as a pause, a cancel, or a subscribe
+     * or resume of a competing subscription once it has started the wrapped model, when the wrapped model calls back on
+     * that thread without running an action.</li>
+     * </ul>
+     * The two calls then wait for each other until the one under way stops waiting, which with no time limit never
+     * happens. A {@code shutdown()} that the lease strategy's {@code unregisterCompetingConsumer} calls while the one
+     * under way gives up the leases waits for at most five seconds.
      *
      * @see SubscriptionModelLifeCycle#shutdown()
      */
