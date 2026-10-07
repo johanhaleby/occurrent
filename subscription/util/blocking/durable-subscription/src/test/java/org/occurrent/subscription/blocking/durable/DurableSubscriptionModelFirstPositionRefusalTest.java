@@ -130,8 +130,8 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
     /**
      * The wrapped model here accepts the id and evaluates the start position on a thread of its own while the
      * subscribe asks it for the global checkpoint, the way the MongoDB models do once their subscribe has returned.
-     * The evaluation has to wait, and once the subscribe is refused it has to fail rather than start at the present
-     * with nothing stored.
+     * The evaluation asks the wrapped model for the position itself, gets no answer, and has to fail rather than start
+     * at the present with nothing stored, while the subscribe is refused.
      */
     @Test
     void a_start_position_evaluated_while_the_first_position_is_recorded_starts_nothing_once_the_subscribe_is_refused() {
@@ -146,14 +146,16 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
                 .failsWithin(Duration.ofSeconds(5))
                 .withThrowableThat()
                 .havingCause()
-                .withMessageContaining("failed before this evaluation got its start position");
+                .isInstanceOf(IllegalStateException.class)
+                .withMessageContaining("answered nothing");
         assertThat(wrapped.subscriptions).as("the subscriptions the wrapped model holds").isEmpty();
         assertThat(storage.exists(SUBSCRIPTION_ID)).isFalse();
     }
 
     /**
      * The wrapped model here waits on cancel for the thread that evaluates the start position, the way a model with a
-     * thread per subscription can, and that evaluation waits while the first position is recorded.
+     * thread per subscription can. That evaluation asks the wrapped model for the position itself, without waiting
+     * for the subscribing thread, and fails because the model answers nothing.
      */
     @Test
     void a_refused_subscribe_returns_when_the_wrapped_models_cancel_waits_for_the_thread_evaluating_the_start_position() {
@@ -905,9 +907,10 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
     }
 
     /**
-     * Evaluates the start position of a subscription on a thread of its own once it is asked for the global
-     * checkpoint, and answers {@code null} only once that evaluation waits or has finished, so the evaluation always
-     * comes while the first position is recorded. The first {@code cancelsThatFail} cancels throw, and with
+     * Evaluates the start position of a subscription on a thread of its own once the subscribing thread asks for the
+     * global checkpoint. The subscribing thread gets {@code null} only once that evaluation waits or has finished, so
+     * the evaluation always comes while the subscribing thread is inside {@code globalCheckpoint()}. The evaluating
+     * thread gets {@code null} at once. The first {@code cancelsThatFail} cancels throw, and with
      * {@code cancelWaitsForTheEvaluation} set a cancel waits for the evaluating thread to end.
      */
     private static final class EvaluatesWhileAskedForTheGlobalCheckpoint implements CheckpointAwareSubscriptionModel {
@@ -936,6 +939,9 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
 
         @Override
         public @Nullable Checkpoint globalCheckpoint() {
+            if (Thread.currentThread() == evaluator) {
+                return null;
+            }
             askedForTheGlobalCheckpoint.countDown();
             long until = System.nanoTime() + Duration.ofSeconds(5).toNanos();
             while (!evaluationWaitsOrIsDone() && System.nanoTime() < until) {
