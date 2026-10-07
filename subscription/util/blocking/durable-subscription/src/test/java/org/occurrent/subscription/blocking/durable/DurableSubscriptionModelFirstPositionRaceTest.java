@@ -136,6 +136,15 @@ class DurableSubscriptionModelFirstPositionRaceTest {
                     assertThat(refusal.positionRead.asString()).isEqualTo("later-position-this-node-read");
                     assertThat(refusal.positionStored).isEmpty();
                     assertThat(refusal).hasMessageContaining("could skip the events between the two");
+                    if (confirmRead == ConfirmRead.FAILS) {
+                        assertThat(refusal.getCause())
+                                .as("a read back that failed is told apart by its cause, the failure of the read itself")
+                                .hasMessage("Checkpoint storage cannot be reached");
+                    } else {
+                        assertThat(refusal.getCause())
+                                .as("a read back that found nothing is told apart by having no cause")
+                                .isNull();
+                    }
                 });
 
         storage.answersReadsAgain();

@@ -374,9 +374,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // Runs on the subscriber's own thread before the wrapped model is handed anything, so the refusal reaches
     // the caller. Thrown from inside the dynamic supplier it would surface on the wrapped model's own evaluation
     // path instead, which NativeMongoSubscriptionModel runs under a retry wrapper that logs it and evaluates
-    // again, so the caller of subscribe never hears of it. Answers the checkpoint it recorded, for the supplier's
-    // first evaluation, and null when something was stored already or the override let an unanswerable source
-    // through.
+    // again until its retry strategy gives up, and a strategy that gives up logs an error. The caller of subscribe
+    // hears of neither. Answers the checkpoint it recorded, for the supplier's first evaluation, and null when
+    // something was stored already or the override let an unanswerable source through.
     private @Nullable Checkpoint recordFirstPositionOrRefuse(String subscriptionId) {
         Checkpoint checkpoint = storage.read(subscriptionId);
         if (checkpoint != null) {
@@ -433,11 +433,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
     }
 
-    // Runs inside the StartAt.dynamic supplier below, so what it throws reaches the wrapped model's evaluation and
-    // not the caller of subscribe. A stored position that was read back is adopted, since every later evaluation
-    // starts from it too. When the read back failed or found nothing, the stored position may be earlier than
-    // globalCheckpoint, so the evaluation is refused rather than started from a position that could skip the
-    // events between the two. An evaluation once storage can be read starts from what it holds then.
+    // Runs inside the StartAt.dynamic supplier below, so for a wrapped model that evaluates the StartAt on a thread
+    // of its own, what it throws reaches that evaluation and not the caller of subscribe. A stored position that
+    // was read back is adopted, since every later evaluation starts from it too. When the read back failed or found
+    // nothing, the stored position may be earlier than globalCheckpoint, so the evaluation is refused rather than
+    // started from a position that could skip the events between the two. An evaluation once storage can be read
+    // starts from what it holds then.
     private Checkpoint saveFirstPositionOrAdoptWhatWon(String subscriptionId, Checkpoint globalCheckpoint) {
         try {
             return saveFirstPosition(subscriptionId, globalCheckpoint);
@@ -446,16 +447,19 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
     }
 
+    // Keeps the refusal's cause, so a read back that failed still has one and a read back that found nothing still
+    // has none, which is how StartPositionAlreadyPinnedException tells the two apart
     private static StartPositionAlreadyPinnedException storedPositionCouldNotBeReadBack(String subscriptionId, Checkpoint positionRead,
-                                                                                       StartPositionAlreadyPinnedException cause) {
+                                                                                       StartPositionAlreadyPinnedException refusal) {
         return new StartPositionAlreadyPinnedException(subscriptionId, positionRead, null,
                 "No checkpoint was stored for subscription " + subscriptionId + " when its start position was " +
                 "evaluated, so recording " + positionRead.asString() + " as its first position was tried. Storage " +
                 "refused that write because a checkpoint was stored in between, and reading that checkpoint back " +
-                "did not name it, see the cause. It can hold an earlier position, so starting from " +
-                positionRead.asString() + " could skip the events between the two, and the start is refused " +
-                "instead. Evaluating the start position again once storage can be read starts the subscription " +
-                "from the checkpoint storage holds then.", cause);
+                "did not name it. It can hold an earlier position, so starting from " + positionRead.asString() +
+                " could skip the events between the two, and the start is refused instead. Evaluating the start " +
+                "position again once storage can be read starts the subscription from the checkpoint storage holds " +
+                "then. Reading it back produced the refusal \"" + refusal.getMessage() + "\"",
+                refusal.getCause());
     }
 
     // Something was stored between the read above and this write, so it was written where this model cannot order

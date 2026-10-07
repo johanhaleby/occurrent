@@ -126,11 +126,13 @@ class DurableSubscriptionModelFirstPositionRaceMongoTest {
             assertThat(handled).as("nothing starts while the stored position cannot be read back").isEmpty();
 
             storage.answersReadsAgain();
+            CloudEvent writtenOnceStorageAnswers = event("written-once-storage-answers", "SomethingHappened");
+            eventStore.write("stream", List.of(writtenOnceStorageAnswers));
 
-            assertThat(eventually(() -> !handled.isEmpty()))
-                    .as("started from the position the other node stored, which is before this event")
-                    .isTrue();
-            assertThat(idsOf(handled)).containsExactly(writtenAfterIt.getId());
+            eventually(() -> handled.size() >= 2);
+            assertThat(idsOf(handled))
+                    .as("started from the position the other node stored, which is before the first event")
+                    .containsExactly(writtenAfterIt.getId(), writtenOnceStorageAnswers.getId());
             assertThat(evaluatedAgain)
                     .as("the start position is evaluated again, not given up on, while storage cannot name what it holds")
                     .isTrue();
