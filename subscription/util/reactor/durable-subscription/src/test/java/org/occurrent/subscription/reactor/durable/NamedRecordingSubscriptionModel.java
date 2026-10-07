@@ -40,7 +40,7 @@ import java.util.function.Function;
  * awaits the start position inside {@code subscribe} rather than driving the cold primitive itself. Reads the position
  * through a {@link RecordingSubscriptionModel}, so the same knobs decide what a read answers on either path.
  */
-final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
+class NamedRecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
 
     final List<String> subscribedIds = new CopyOnWriteArrayList<>();
     /**

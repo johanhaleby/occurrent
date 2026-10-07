@@ -89,9 +89,12 @@ final class QuietPositionReportingModel implements CheckpointAwareSubscriptionMo
         };
     }
 
+    // What globalCheckpoint() answers
+    volatile @Nullable Checkpoint globalCheckpoint;
+
     @Override
     public @Nullable Checkpoint globalCheckpoint() {
-        return null;
+        return globalCheckpoint;
     }
 
     @Override

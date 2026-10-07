@@ -43,7 +43,15 @@ public class DurableSubscriptionModelConfig {
 
     /**
      * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
-     *                                           Supply a predicate that always returns {@code false} to never store the position.
+     *                                           Supply a predicate that always returns {@code false} to store no position for an event. A
+     *                                           subscription from a {@code StartAt} of your own then has no position stored for a quiet read
+     *                                           either. The position it restarts from is still stored when the wrapped model reports that its
+     *                                           checkpoint is no longer in the model's history, as the blocking MongoDB models do once the
+     *                                           oplog has dropped it when {@code restartSubscriptionsOnChangeStreamHistoryLost}
+     *                                           is turned on and the reply to {@code ping} has an operation time, see
+     *                                           {@link #neverSaveQuietPosition()}. One that starts from a stored position still has its quiet position saved
+     *                                           until its first event, since an event the predicate declines turns the save off, see
+     *                                           {@link #saveQuietPositionEvery(Duration)}.
      */
     public DurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
         this(persistCloudEventPositionPredicate, false, DEFAULT_QUIET_POSITION_SAVE_INTERVAL);
@@ -86,12 +94,18 @@ public class DurableSubscriptionModelConfig {
      * event starts the interval again, so a subscription that stores a checkpoint for an event at least once per
      * {@code interval} gets no extra write.
      * <p>
-     * The position is saved from the subscribe on, whatever the {@link #persistCloudEventPositionPredicate} is, but not
-     * while the event the running subscription most recently gave the action is one the predicate declined to store,
-     * and not while an event is being delivered. After a pause and a resume, an action of the paused run that is still
-     * running keeps the save off until it returns, for as long as that takes. So with a predicate that declines some
-     * events, such as {@link EveryN} with {@code n} above 1, a subscription that goes quiet right after a declined
-     * event gets no position saved until the predicate stores one.
+     * A subscription that starts from a stored position, the one the store held for it or the one recorded for it when
+     * it subscribes from the subscription-model default, has its quiet position saved before its first event whatever
+     * the {@link #persistCloudEventPositionPredicate} is. Any other subscription, such as one from a {@code StartAt} of
+     * your own, has none saved until the predicate has stored the position of an event, so with a predicate that
+     * always returns {@code false} it has no position stored for an event or a quiet read. The position it restarts from
+     * is still stored when the wrapped model reports that its checkpoint is no longer in the model's history.
+     * <p>
+     * The position is not saved while the event the running subscription most recently gave the action is one the
+     * predicate declined to store, and not while an event is being delivered. After a pause and a resume, an action of
+     * the paused run that is still running keeps the save off until it returns, for as long as that takes. So with a
+     * predicate that declines some events, such as {@link EveryN} with {@code n} above 1, a subscription that goes
+     * quiet right after a declined event gets no position saved until the predicate stores one.
      * <p>
      * The default is one minute. Keep it well below the time the wrapped model keeps its history, which for MongoDB
      * is the oplog window.
@@ -109,9 +123,16 @@ public class DurableSubscriptionModelConfig {
     }
 
     /**
-     * Never save the position of a subscription that receives no events, so a checkpoint is only saved for an event.
-     * The stored checkpoint of a subscription that matches no event for longer than the wrapped model keeps its
-     * history is then a position that model can no longer start from.
+     * Turns off the periodic save of the position of a subscription that receives no events, see
+     * {@link #saveQuietPositionEvery(Duration)}. A subscription that then receives no events for longer than the wrapped
+     * model keeps its history gets that model's handling of lost history when it next starts from its stored
+     * checkpoint. The position it restarts from is still stored when the wrapped model reports that its checkpoint is
+     * no longer in the model's history, unless another node has written the checkpoint with a newer lease. The
+     * blocking MongoDB models do that once the oplog has dropped it, when
+     * {@code restartSubscriptionsOnChangeStreamHistoryLost} is turned on. It is off by default, and on by default in
+     * the Spring Boot starter. With it off they don't restart the subscription. They ask MongoDB for the position with
+     * {@code ping}, and while the reply has no operation time they don't restart a subscription this model stores
+     * checkpoints for either, and try again as their {@code RetryStrategy} says.
      *
      * @return A new instance of {@code DurableSubscriptionModelConfig}
      * @see #saveQuietPositionEvery(Duration)

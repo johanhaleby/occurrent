@@ -27,13 +27,16 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
@@ -61,6 +64,7 @@ import static java.util.Objects.requireNonNull;
 @NullMarked
 public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, ReplayAwareSubscriptions {
 
+    private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final @Nullable ReactorStreamCatchupSubscriptionModel streamCatchupSubscriptionModel;
     private final @Nullable ReactorDcbCatchupSubscriptionModel dcbCatchupSubscriptionModel;
     // The capability-agnostic position catch-up: the same position catch-up as the stream model but with no capability
@@ -77,7 +81,8 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     }
 
     public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
-        this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, ReactorStreamCatchupSubscriptionModel.STREAM_CAPABILITY_FILTER, ReactorCatchupSubscriptionModel.class);
+        this.subscriptionModel = requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
+        this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, ReactorStreamCatchupSubscriptionModel.STREAM_CAPABILITY_FILTER, ReactorCatchupSubscriptionModel.class);
         this.dcbCatchupSubscriptionModel = null;
         this.agnosticCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, null, ReactorCatchupSubscriptionModel.class);
     }
@@ -90,8 +95,9 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     }
 
     public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery, long windowSize, int handoverCacheSize) {
+        this.subscriptionModel = requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
         this.streamCatchupSubscriptionModel = null;
-        this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), dcbEventStore, defaultQuery, windowSize, handoverCacheSize, ReactorCatchupSubscriptionModel.class);
+        this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, defaultQuery, windowSize, handoverCacheSize, ReactorCatchupSubscriptionModel.class);
         this.agnosticCatchupSubscriptionModel = null;
     }
 
@@ -102,7 +108,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
      * both streams and DCB.
      */
     public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
-        requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
+        this.subscriptionModel = requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
         this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, ReactorStreamCatchupSubscriptionModel.STREAM_CAPABILITY_FILTER, ReactorCatchupSubscriptionModel.class);
         this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, defaultQuery, windowSize, handoverCacheSize, ReactorCatchupSubscriptionModel.class);
         this.agnosticCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, null, ReactorCatchupSubscriptionModel.class);
@@ -116,6 +122,22 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         return route(filter, startAt).subscribe(filter, startAt);
+    }
+
+    /**
+     * Answers {@link QuietPositionReportingSubscriptions} with the capability of the wrapped model, or empty when that
+     * model doesn't have it. A {@code ReactorDurableSubscriptionModel} on top of this model then adds its listener to
+     * the wrapped model, and only once in dual mode, since the stream and the DCB catch-up both hand their
+     * subscriptions over to that same model. The wrapped model learns the id of a subscription only once its replay is
+     * done and the subscription is handed over to it, so it reports no quiet position while the history is being
+     * replayed. This model answers every other capability itself.
+     */
+    @Override
+    public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
+        if (type == QuietPositionReportingSubscriptions.class) {
+            return subscriptionModel instanceof SubscriptionModelCapability wrapped ? wrapped.capability(type) : Optional.empty();
+        }
+        return SubscriptionModel.super.capability(type);
     }
 
     // Route to the DCB, stream, or capability-agnostic catch-up model. An AgnosticSubscriptionFilter routes to the

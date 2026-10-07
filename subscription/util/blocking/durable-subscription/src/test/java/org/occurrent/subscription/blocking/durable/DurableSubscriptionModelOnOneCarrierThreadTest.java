@@ -74,7 +74,9 @@ class DurableSubscriptionModelOnOneCarrierThreadTest {
     void a_slow_save_of_a_quiet_position_does_not_hold_up_the_delivery_to_another_subscription() throws InterruptedException {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(everyEvent()).saveQuietPositionEvery(INTERVAL));
-        model.subscribe("a", null, StartAt.checkpoint(START), __ -> {
+        // A position stored for a, which is what lets its quiet position be saved before its first event
+        storage.save("a", START);
+        model.subscribe("a", null, StartAt.subscriptionModelDefault(), __ -> {
         });
         model.subscribe("b", null, StartAt.checkpoint(START), __ -> {
         });
@@ -85,6 +87,7 @@ class DurableSubscriptionModelOnOneCarrierThreadTest {
         long millisForTheOther = millisForTheOtherWhile(() -> wrapped.readNothing("a", new StringBasedCheckpoint("quiet")));
 
         // Then
+        assertThat(storage.read("a")).as("checkpoint of a once the slow save of its quiet position returned").isEqualTo(new StringBasedCheckpoint("quiet"));
         assertThat(millisForTheOther).as("delivery to b while the save of a's quiet position is slow").isLessThan(500L);
     }
 

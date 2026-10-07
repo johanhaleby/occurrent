@@ -24,23 +24,27 @@ import java.util.Optional;
  * {@link SubscriptionModel} is one transitively, without declaring it directly. Mirrors the blocking stack's
  * {@code org.occurrent.subscription.api.blocking.SubscriptionModelCapability}.
  * <p>
- * This stack has no {@code SubscriptionModelWrapper} to unwrap and no recursive {@code of(...)} lookup, so nothing here
- * declares a parameter of this type yet. Callers check the model they hold with {@code instanceof} directly, as
- * {@link IntrospectableSubscriptions} and {@link ReplayAwareSubscriptions} already document. The type exists for the
- * same reason the blocking one does even without a current caller. A whole {@link SubscriptionModel} is the
- * intersection of {@link Subscribable} and {@link SubscriptionModelLifeCycle}, not their union, so a future method that
- * needs to accept any partial or complete capability set on this stack has a real supertype to declare instead of
- * {@link Object}.
+ * This stack has no {@code SubscriptionModelWrapper} to unwrap and no recursive {@code of(...)} lookup. Callers check
+ * the model they hold with {@code instanceof} directly, as {@link IntrospectableSubscriptions} and
+ * {@link ReplayAwareSubscriptions} already document. {@link QuietPositionReportingSubscriptions} is the one exception.
+ * {@code ReactorCatchupSubscriptionModel} and {@code ReactorStreamCatchupSubscriptionModel} answer
+ * {@link #capability(Class)} for it with the capability of the model they wrap, so callers find it with
+ * {@link QuietPositionReportingSubscriptions#findIn(SubscriptionModelCapability)}. A whole {@link SubscriptionModel} is
+ * the intersection of {@link Subscribable} and {@link SubscriptionModelLifeCycle}, not their union, so a method like
+ * {@code findIn} that accepts any partial or complete capability set on this stack has a supertype to declare
+ * instead of {@link Object}.
  */
 public interface SubscriptionModelCapability {
 
     /**
-     * The capability of type {@code type} behind this object. This stack has no wrapper type to unwrap, so the check
-     * is a direct {@code instanceof} against this object rather than a chain walk.
+     * The capability of type {@code type} behind this object. By default the check is a direct {@code instanceof}
+     * against this object. {@code ReactorCatchupSubscriptionModel} and {@code ReactorStreamCatchupSubscriptionModel}
+     * answer {@link QuietPositionReportingSubscriptions} with the capability of the model they wrap instead, and no
+     * other capability.
      *
      * @param type The capability to look for.
      * @param <T>  The capability type.
-     * @return The capability, or empty if this object does not implement {@code type}.
+     * @return The capability, or empty if this object doesn't have it.
      */
     default <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
         return type.isInstance(this) ? Optional.of(type.cast(this)) : Optional.empty();

@@ -333,6 +333,8 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
             when(throwingOperations.executeCommand(any(Document.class))).thenReturn(serverClockReply());
             when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class))).thenThrow(historyLost);
+            // A subscription with an id opens its change stream from the collection while the model reads the driver's cursor
+            when(throwingOperations.getCollection("events")).thenThrow(historyLost);
             ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING);
 
             // When
@@ -353,6 +355,8 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
             when(throwingOperations.executeCommand(any(Document.class))).thenReturn(serverClockReply());
             when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class))).thenThrow(historyLost);
+            // A subscription with an id opens its change stream from the collection while the model reads the driver's cursor
+            when(throwingOperations.getCollection("events")).thenThrow(historyLost);
             ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING);
             String subscriptionId = UUID.randomUUID().toString();
 
