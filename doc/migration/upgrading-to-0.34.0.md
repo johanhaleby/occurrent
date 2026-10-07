@@ -1812,10 +1812,10 @@ Asking the wrapped model whether it holds the id is a break with 0.33.0, which a
 over. Every `subscribe(..)` asks it now, whatever the start position. When asking the wrapped model whether it holds
 the id throws, any `subscribe(..)` of the id throws what it threw, at the call, and the wrapped model doesn't get the
 subscribe. Only an `UnknownSubscriptionException` from `isRunning(..)` or `isPaused(..)` counts as the wrapped model
-not holding the id. So where a wrapped model of your own throws from `subscriptionIds()`, or throws anything else from
-`isRunning(..)` or `isPaused(..)` for an id it doesn't hold, every durable `subscribe(..)` over it throws. Make
-`subscriptionIds()` answer, and answer `false` from `isRunning(..)` and `isPaused(..)` for an id you don't hold, as
-`SubscriptionModelLifeCycle` documents.
+not holding the id. So where a wrapped model of your own throws from `subscriptionIds()`, or, where it doesn't list
+its ids, throws anything else from `isRunning(..)` or `isPaused(..)` for an id it doesn't hold, a durable
+`subscribe(..)` of that id throws. Make `subscriptionIds()` answer, and answer `false` from `isRunning(..)` and
+`isPaused(..)` for an id you don't hold, as `SubscriptionModelLifeCycle` documents.
 [Section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted) describes
 the last two.
 
@@ -1950,9 +1950,9 @@ stopped at the subscribe, or a pause of the subscription or a `stop()` comes bef
 over, the `start(..)` or `resumeSubscription(..)` that runs the subscription takes it over instead, if the delete has
 not been taken out by then. The delete makes no further try, and the call that took it over writes back the checkpoint
 that a try of the delete read. That includes a try that already deleted it, and a try that failed after the store
-applied it, so the store holds what it held before the cancel. The cancel's `Mono` completes once that subscription has
-started or written a checkpoint, as described below. A subscription from
-the subscription-model default resumes from the cancelled subscription's checkpoint.
+applied it, so the store holds what it held before the cancel. The cancel's `Mono` waits for that subscription, as
+described below. A subscription from the subscription-model default resumes from the cancelled subscription's
+checkpoint.
 
 While a checkpoint waits to be written back, for this cancel or for an earlier subscribe of the id, the subscribe
 returns without calling your `StartAt.dynamic(..)` function, on any thread. `ReactorDurableSubscriptionModel` calls it
@@ -1985,16 +1985,18 @@ that delete removes the checkpoint instead.
 
 So the cancel's `Mono` waits, once the delete's tries and the write back have ended, until every subscribe, resume or
 `start(..)` that took the delete over has failed, or its subscription has ended before it started, started, or written
-a checkpoint. It then waits for the delete that goes ahead in place of the cancel's delete, when there is one.
+a checkpoint. It then waits for each delete that goes ahead in place of the cancel's delete, when there is one.
 
 Once the `Mono` has completed, no delete of the id that this cancel started or that goes ahead in its place is still
 running. The checkpoint is deleted by then unless a subscription of the id started or wrote a checkpoint, another
 subscription of the id was starting or registered when the last of those calls failed or ended, or the model was shut
 down.
 
-The wait has no time limit. A subscription that took the delete over and that a pause or a `stop()` set aside before it
-started holds the `Mono` up until you resume or start it, cancel it, or shut the model down. A shutdown ends the wait,
-and the `Mono` then fails with `SubscriptionModelShutdownException`.
+The wait has no time limit. Where `ReactorDurableSubscriptionModel` drives the subscription itself, a subscription that
+took the delete over and that a pause or a `stop()` set aside before it started holds the `Mono` up until you resume or
+start it, cancel it, or shut the model down. A shutdown ends the wait, and the `Mono` then fails with
+`SubscriptionModelShutdownException`. While the `Mono` waits for a subscribe, resume or `start(..)` that took the delete
+over, `ReactorDurableSubscriptionModel` logs a warning naming the id every 10 seconds.
 
 To start the id clean, wait for the `Mono` before you subscribe it again, as step 2 describes.
 

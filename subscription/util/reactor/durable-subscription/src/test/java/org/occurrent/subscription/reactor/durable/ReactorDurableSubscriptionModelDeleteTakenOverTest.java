@@ -1447,6 +1447,218 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         }
     }
 
+    /**
+     * A subscribe on a running model takes over the delete a cancel of the id started, and is held reading storage at
+     * the call. A stop() comes before the subscribe registers the subscription, so it is registered paused, and a start
+     * of the model then runs it. Once that subscription runs and delivers, the cancel has completed, as it has when no
+     * stop() comes in between.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void a_cancel_completes_once_a_subscribe_that_took_its_delete_over_and_that_a_racing_stop_registered_paused_runs(boolean stopRaces) throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        Feed feed = new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService readingCaller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        List<Long> delivered = new CopyOnWriteArrayList<>();
+        try {
+            CompletableFuture<Void> cancelled = cancelWithCheckpointStored(model, storage, feed, release).toFuture();
+            storage.nextReadHeldOnItsThread = releaseRead;
+            // The held read runs on the thread that calls subscribe, so the call is not waited for
+            CompletableFuture<Subscription> takingOver = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(delivered)), readingCaller);
+            assertThat(storage.readHeldOnItsThread.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("read of the subscribe that takes the delete over held").isTrue();
+
+            // When
+            if (stopRaces) {
+                model.stop();
+            }
+            releaseRead.countDown();
+            takingOver.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            boolean pausedAfterTheCall = model.isPaused(SUBSCRIPTION_ID);
+            release.countDown();
+            if (stopRaces) {
+                model.start(true);
+            }
+            await().atMost(TIMEOUT).until(() -> model.isRunning(SUBSCRIPTION_ID));
+            long writtenOnceRunning = feed.write();
+            await().atMost(TIMEOUT).until(() -> delivered.contains(writtenOnceRunning));
+            Throwable cancelEnded = catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(pausedAfterTheCall).as("whether the subscribe registered the subscription paused").isEqualTo(stopRaces);
+                softly.assertThat(cancelEnded).as("how the cancel ended once the subscription that took its delete over runs").isNull();
+            });
+        } finally {
+            release.countDown();
+            releaseRead.countDown();
+            readingCaller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe on a running model takes over the delete a cancel of the id started, and a stop() before it registers
+     * the subscription makes it register paused, so the cancel waits for it. The cancel logs a warning every 10 seconds
+     * that names the id while it waits, and stops logging once a start of the model has run the subscription and the
+     * cancel has completed.
+     */
+    @Test
+    void a_cancel_that_waits_for_a_paused_subscribe_which_took_its_delete_over_is_logged_at_warn_every_10_seconds_until_the_subscribe_runs() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        Feed feed = new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService readingCaller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        LoggedByTheModel logged = new LoggedByTheModel();
+        try {
+            CompletableFuture<Void> cancelled = cancelWithCheckpointStored(model, storage, feed, release).toFuture();
+            storage.nextReadHeldOnItsThread = releaseRead;
+            // The held read runs on the thread that calls subscribe, so the call is not waited for
+            CompletableFuture<Subscription> takingOver = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())), readingCaller);
+            assertThat(storage.readHeldOnItsThread.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("read of the subscribe that takes the delete over held").isTrue();
+            model.stop();
+            releaseRead.countDown();
+            takingOver.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            boolean pausedAfterTheCall = model.isPaused(SUBSCRIPTION_ID);
+            release.countDown();
+
+            // When
+            await().atMost(Duration.ofSeconds(15)).until(() -> !waitingForATakeOver(logged).isEmpty());
+            List<String> warnedWhileItWaited = waitingForATakeOver(logged);
+            boolean completedWhileItWaited = cancelled.isDone();
+            model.start(true);
+            Throwable cancelEnded = catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            int warnedWhenItCompleted = waitingForATakeOver(logged).size();
+            Thread.sleep(11_000);
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(pausedAfterTheCall).as("whether the subscribe registered the subscription paused").isTrue();
+                softly.assertThat(warnedWhileItWaited).as("warnings while the cancel waited for the paused subscribe").first().asString()
+                        .startsWith("The cancel of subscription " + SUBSCRIPTION_ID + " is still waiting, after 10 seconds, for a subscribe, a resume or a start of the id that took its delete over");
+                softly.assertThat(completedWhileItWaited).as("whether the cancel completed while it was warned about").isFalse();
+                softly.assertThat(cancelEnded).as("how the cancel ended once the subscription that took its delete over was started").isNull();
+                softly.assertThat(waitingForATakeOver(logged)).as("warnings in the 11 seconds after the cancel completed").hasSize(warnedWhenItCompleted);
+            });
+        } finally {
+            logged.close();
+            release.countDown();
+            releaseRead.countDown();
+            readingCaller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * Two subscribes of the id hand a subscription to a wrapped model, take over the delete a cancel of the id started,
+     * and are each held in the function of their start position. A second cancel of the id overtakes both, and its
+     * delete is held. The first subscribe is refused while that delete runs, and the second once it has ended, so a new
+     * delete goes ahead in place of the first cancel's. The first cancel does not complete when the second cancel has,
+     * nor when the first subscribe has been refused, but only once the new delete has removed the checkpoint.
+     */
+    @Test
+    void a_cancel_completes_only_once_the_delete_that_goes_ahead_when_the_last_of_two_subscribes_that_took_its_delete_over_is_refused_after_a_later_cancel_ended_has_ended() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        NamedFeed feed = new NamedFeed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService firstCaller = Executors.newSingleThreadExecutor();
+        ExecutorService secondCaller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch beforeRetired = new CountDownLatch(1);
+        CountDownLatch retire = new CountDownLatch(1);
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch secondAsked = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch releaseSecond = new CountDownLatch(1);
+        CountDownLatch releaseLaterDelete = new CountDownLatch(1);
+        CountDownLatch releaseNewDelete = new CountDownLatch(1);
+        AtomicInteger heldAt = new AtomicInteger();
+        model.runBeforeADeleteIsRetired(() -> {
+            if (heldAt.getAndIncrement() == 0) {
+                beforeRetired.countDown();
+                awaitLatch(retire);
+            }
+        });
+        try {
+            CompletableFuture<Void> cancelled = cancelWithCheckpointStored(model, storage, feed, release).toFuture();
+            storage.deleteGate = releaseLaterDelete;
+            release.countDown();
+            assertThat(beforeRetired.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete of the first cancel held before it is retired").isTrue();
+            // Each takes the delete over, and a start position that does not wait for the write back is asked at the call
+            CompletableFuture<Subscription> first = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, startPositionHeldUntil(firstAsked, releaseFirst), action(new CopyOnWriteArrayList<>())), firstCaller);
+            assertThat(firstAsked.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start position of the first subscribe asked").isTrue();
+            CompletableFuture<Subscription> second = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, startPositionHeldUntil(secondAsked, releaseSecond), action(new CopyOnWriteArrayList<>())), secondCaller);
+            assertThat(secondAsked.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start position of the second subscribe asked").isTrue();
+            CompletableFuture<Void> cancelledLater = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+            retire.countDown();
+            await().atMost(TIMEOUT).until(() -> storage.deletesHeld.get() == 2);
+            storage.deleteGate = releaseNewDelete;
+
+            // When
+            releaseFirst.countDown();
+            Subscription firstRefused = first.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            Throwable notCompletedWhileTheLaterDeleteIsHeld = catchThrowable(() -> cancelled.get(1, TimeUnit.SECONDS));
+            releaseLaterDelete.countDown();
+            Throwable laterCancelEnded = catchThrowable(() -> cancelledLater.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            Throwable notCompletedWhileTheSecondSubscribeIsHeld = catchThrowable(() -> cancelled.get(1, TimeUnit.SECONDS));
+            releaseSecond.countDown();
+            Subscription secondRefused = second.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            await().atMost(TIMEOUT).until(() -> storage.deletesHeld.get() == 3);
+            Throwable notCompletedWhileTheNewDeleteIsHeld = catchThrowable(() -> cancelled.get(1, TimeUnit.SECONDS));
+            releaseNewDelete.countDown();
+            Throwable cancelEnded = catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            String storedOnceTheCancelCompleted = storage.stored();
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(catchThrowable(() -> firstRefused.waitUntilStarted(TIMEOUT).block())).as("how the first subscribe ended").isInstanceOf(CancellationException.class);
+                softly.assertThat(catchThrowable(() -> secondRefused.waitUntilStarted(TIMEOUT).block())).as("how the second subscribe ended").isInstanceOf(CancellationException.class);
+                softly.assertThat(notCompletedWhileTheLaterDeleteIsHeld).as("how waiting a second for the first cancel to complete ended, while the delete of the later cancel was held")
+                        .isInstanceOf(TimeoutException.class);
+                softly.assertThat(laterCancelEnded).as("how the later cancel ended").isNull();
+                softly.assertThat(notCompletedWhileTheSecondSubscribeIsHeld).as("how waiting a second for the first cancel to complete ended, once the later cancel had completed and the second subscribe was still held")
+                        .isInstanceOf(TimeoutException.class);
+                softly.assertThat(notCompletedWhileTheNewDeleteIsHeld).as("how waiting a second for the first cancel to complete ended, while the delete that went ahead was held")
+                        .isInstanceOf(TimeoutException.class);
+                softly.assertThat(cancelEnded).as("how the first cancel ended once the delete that went ahead was released").isNull();
+                softly.assertThat(storedOnceTheCancelCompleted).as("checkpoint stored once the first cancel completed").isEqualTo("-");
+            });
+        } finally {
+            release.countDown();
+            retire.countDown();
+            releaseFirst.countDown();
+            releaseSecond.countDown();
+            releaseLaterDelete.countDown();
+            releaseNewDelete.countDown();
+            firstCaller.shutdownNow();
+            secondCaller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    // A start position whose function says it was asked and then waits until release opens, and answers StartAt.now()
+    private static StartAt startPositionHeldUntil(CountDownLatch asked, CountDownLatch release) {
+        return StartAt.dynamic(() -> {
+            asked.countDown();
+            awaitLatch(release);
+            return StartAt.now();
+        });
+    }
+
+    // The warnings that a cancel still waits for a subscribe, a resume or a start of the id that took its delete over
+    private static List<String> waitingForATakeOver(LoggedByTheModel logged) {
+        return logged.at(Level.WARN).stream()
+                .filter(message -> message.startsWith("The cancel of subscription " + SUBSCRIPTION_ID + " is still waiting"))
+                .toList();
+    }
+
     // What a subscribe of the id from the model default delivered, of an event written before it and one written after
     private record Later(List<Long> delivered, long writtenBefore, long writtenAfter) {
     }
@@ -1646,6 +1858,8 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         private final InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         private final boolean conditionalDeletes;
         private final CountDownLatch deleteEntered = new CountDownLatch(1);
+        // How many deletes were held, counting each that found deleteGate set
+        private final AtomicInteger deletesHeld = new AtomicInteger();
         private final CountDownLatch ifAbsentEntered = new CountDownLatch(1);
         private final CountDownLatch saveEntered = new CountDownLatch(1);
         private final CountDownLatch readEntered = new CountDownLatch(1);
@@ -1786,6 +2000,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
                     return delete.get();
                 }
                 deleteEntered.countDown();
+                deletesHeld.incrementAndGet();
                 return held(gate).then(Mono.defer(delete));
             });
         }

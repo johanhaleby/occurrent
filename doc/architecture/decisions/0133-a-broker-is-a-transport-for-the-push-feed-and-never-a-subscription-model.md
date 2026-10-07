@@ -1498,11 +1498,11 @@ catch-up model itself, and a second method would reach that caller only if every
 Every reactor model that wraps another now returns a `Mono` that completes once its own delete and the wrapped model's
 cancel have both completed.
 
-The durable model's `Mono` completes once the stored position is deleted, or once a `subscribe(..)` of the id has
-taken the delete over, as described below. Unlike the catch-up model's, it doesn't fail at the first failed delete.
-The model tries the delete again until it succeeds, a `subscribe(..)` of the id takes it over or the model is shut
-down, and the `Mono` doesn't complete until then, as described below. It fails earlier only when the cancel in the
-model it wraps fails, and the delete is still tried again after that. A position save that the cancelled subscription
+The durable model's `Mono` completes once the stored position is deleted, or, where a `subscribe(..)` of the id took
+the delete over, as section 23 of the upgrade guide to 0.34.0 describes. Unlike the catch-up model's, it doesn't fail
+at the first failed delete. The model tries the delete again until it succeeds, a `subscribe(..)` of the id takes it
+over or the model is shut down, and the `Mono` doesn't complete until then, as described below. It fails earlier only
+when the cancel in the model it wraps fails, and the delete is still tried again after that. A position save that the cancelled subscription
 sent just before the cancel can reach the store after a delete sent just after it, and put the position
 back. So the delete runs after every position write the cancelled subscription had already started, and a write it had
 not started by then never runs, even when the wrapped model runs an event through the action after the cancel.
