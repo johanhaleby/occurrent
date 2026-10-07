@@ -70,7 +70,8 @@ Then `SpringMongoSubscriptionModel` no longer skips an event whose action keeps 
 whose history was lost when it is told not to restart it, and no longer builds on Spring Data's
 `MessageListenerContainer`, which removes the `protected` constructor of `SpringMongoSubscription`. A
 `DurableSubscriptionModel` over a MongoDB model also writes a checkpoint once a minute for a subscription that receives
-no events. Read
+no events. `ReactorMongoSubscriptionModel` reads the driver's change stream cursor itself for a subscription with an
+id, which changes what a test that mocks `ReactiveMongoOperations` has to stub. Read
 [section 19](#19-springmongosubscriptionmodel-reads-its-own-cursor-and-a-quiet-durable-subscription-saves-its-position).
 Then `CompetingConsumerSubscriptionModel.isRunning()` now says whether the model is started, and no longer returns
 what the wrapped model returns, which after `stop()` and a `start(..)` that won no lease was `false`, unless the model
@@ -1462,8 +1463,14 @@ gets no extra write.
 The save follows your persist predicate. Nothing is saved while the event the running subscription most recently gave
 your action is one the predicate declined to store, since the saved position would come after that event. Nothing is
 saved while an event is being delivered either. After a pause and a resume, an action of the paused run that is still
-running keeps the save off until it returns, for as long as that takes. Before the first event after a subscribe, the
-position is saved whatever the predicate is.
+running keeps the save off until it returns, for as long as that takes.
+
+Before the first event after a subscribe, the position is saved whatever the predicate is, but only for a subscription
+that starts from a stored position, the one in the checkpoint store or the one recorded for it when it subscribes from
+the subscription-model default. A subscription from a `StartAt` of your own gets none saved until the predicate stores
+the position of an event, so with a predicate that always returns `false` it gets no position stored for an event or a
+quiet read. The position it restarts from when its checkpoint is no longer in the oplog, with
+`restartSubscriptionsOnChangeStreamHistoryLost` turned on, is still stored, as described below.
 
 So with a predicate that declines some events, such as `EveryN` with `n` above 1, a subscription that goes quiet right
 after a declined event gets no position saved until the predicate stores one. If it stays quiet for longer than the
@@ -1475,9 +1482,82 @@ the last event the old filter matched, and received them. When you widen a filte
 subscribe once with a `StartAt` for the position to start from.
 
 Change the interval with `saveQuietPositionEvery(Duration)` on `DurableSubscriptionModelConfig`, and keep it well
-below the oplog window. `neverSaveQuietPosition()` turns the save off, and the stored checkpoint of a subscription
-that matches nothing for longer than the oplog window is then a position MongoDB can no longer start from. The Spring
-Boot starter has no property for the interval, so define your own `SubscriptionModel` bean to change it there.
+below the oplog window. `neverSaveQuietPosition()` turns the save off. A subscription that then matches nothing for
+longer than the oplog window ends in lost history when it next starts from its stored checkpoint. With
+`restartSubscriptionsOnChangeStreamHistoryLost` turned on the model restarts it, and the position it restarts from is
+still stored, unless another node has written the subscription's checkpoint with a newer lease by then. The model asks
+MongoDB for that position with `ping`. While the reply has no operation time, it doesn't restart a subscription that
+`DurableSubscriptionModel` stores checkpoints for, since there is no position to store. It opens the change stream at
+the lost position again, with a `WARN` each attempt, for as long as its `RetryStrategy` retries, and logs an `ERROR`
+once the strategy gives up. A subscription that `DurableSubscriptionModel` stores no checkpoint for restarts from the
+present.
+The Spring Boot starter has no property for the interval, so define your own `SubscriptionModel` bean to change it
+there.
+
+### `ReactorMongoSubscriptionModel` reads the driver's change stream cursor
+
+For a subscription with an id, `ReactorMongoSubscriptionModel` opens the change stream from
+`ReactiveMongoOperations.getCollection(..)` and reads the driver's change stream cursor one batch at a time, so that it
+can move the position of a subscription that matches nothing. The `Flux` that `subscribe(filter, startAt)` returns
+still reads through `ReactiveMongoTemplate.changeStream(..)`.
+
+The model asks MongoDB for the next batch only once your action's `Mono` has completed for every event of the batch
+before. A slow action therefore holds back the next `getMore`, where in 0.33.0 the driver fetched the next batch while
+the action ran.
+
+The resume token MongoDB sends with a batch that has no event isn't in the driver's public API, so the model reads it
+through private fields of the driver. When the driver in use lacks one of those fields, declares one as neither final
+nor volatile, or fails to hand over the token, the model logs a warning with the reason and reads the change stream as
+before, and a quiet subscription keeps the position of its last event.
+
+A test that makes the model fail by stubbing `changeStream(..)` on a mocked `ReactiveMongoOperations` no longer
+reaches a subscription with an id. Stub `getCollection(..)` as well.
+
+### A quiet reactor subscription's checkpoint is written once a minute too
+
+A `ReactorDurableSubscriptionModel` that wraps `ReactorMongoSubscriptionModel` now saves the quiet position that model
+reports, at most once a minute, with the same `CheckpointStorage` and write condition as for an event. What the
+blocking subsection above says about your persist predicate, a subscription from a `StartAt` of your own and widening a
+filter applies to it too, except the position it restarts from after the oplog dropped its checkpoint, which the reactor
+model doesn't store. When you subscribe a subscription from a `StartAt` of your own while a delete that a cancel of
+the same id started is still running, the model writes back any checkpoint that delete read, whatever your persist
+predicate is. Where `ReactorDurableSubscriptionModel` drives the subscription itself and is stopped at the subscribe,
+or a pause of the subscription or a `stop()` comes before the subscribe has taken that delete over, the `start(..)` or
+`resumeSubscription(..)` that runs the subscription writes it back instead, if that delete is still running then.
+
+Nothing is saved while an event is being delivered either, but a pause cancels the delivery that is under way, so the
+save doesn't wait for it after a resume. The save then stays off until an event is stored again, which is normally the
+event delivered again after the resume. A cancel waits for a quiet save that is under way before it deletes the
+checkpoint, so a quiet save doesn't write the checkpoint back after the cancel.
+
+When a quiet save fails, the `Mono` that `ReactorMongoSubscriptionModel` waits for fails, and the model reads again
+from the subscription's position after its backoff. The save is tried again at the next quiet position without waiting
+for the interval.
+
+Change the interval with `saveQuietPositionEvery(Duration)` on `ReactorDurableSubscriptionModelConfig`, and turn the
+save off with `neverSaveQuietPosition()`.
+
+The save works when `ReactorDurableSubscriptionModel` wraps `ReactorMongoSubscriptionModel` directly, and also with a
+`ReactorCatchupSubscriptionModel` or `ReactorStreamCatchupSubscriptionModel` between the two, as the reactive Spring Boot
+starter sets it up when the event store supports catch-up. Both answer `capability(QuietPositionReportingSubscriptions.class)`
+with the capability of the model they wrap. `ReactorMongoSubscriptionModel` learns about a subscription only when the
+catch-up model has replayed its history, so it reports no quiet position during the replay.
+
+If you put a subscription model of your own between the two, nothing saves the quiet position unless your model answers
+the capability the same way, and a quiet subscription keeps the checkpoint of its last event, as in 0.33.0. Only answer it
+that way if every event your model delivers by itself, such as a replay, reaches your action before the wrapped model
+reads anything for the subscription. The saved quiet position is a position in what the wrapped model reads, so a
+restart from it skips whatever your model hadn't delivered yet.
+
+```java
+@Override
+public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
+    if (type == QuietPositionReportingSubscriptions.class) {
+        return wrappedSubscriptionModel.capability(type);
+    }
+    return SubscriptionModel.super.capability(type);
+}
+```
 
 There is no recipe for these changes. The removed constructor has no replacement to rewrite to, and the rest is runtime
 behavior that a rewrite of the source cannot see.
@@ -1746,9 +1826,13 @@ cancelled subscription's position, or skipped its history.
 
 Now it returns `Mono<Void>`. The cancel still takes effect when you call the method, whether or not anything subscribes
 to the `Mono`. The `Mono` completes once the state stored for that id is deleted, in the model you called and in every
-model it wraps, and it fails when a delete fails. Neither the method nor the `Mono` has to wait for a call of the
-subscription's action that is already running, so that call may still be running after the `Mono` completes. Waiting
-for it would let one action that never ends hold up the cancel.
+model it wraps. What it does when a delete fails depends on the model that deletes. `CatchupThenPushSubscriptionModel`
+tries the delete of its catch-up marker once, and its `Mono` fails with that error. `ReactorDurableSubscriptionModel`
+tries a failed delete of the checkpoint again until one succeeds, a subscribe of the id takes it over, or the model is
+shut down, and its `Mono` doesn't complete until then, as described further down. It fails earlier only when the
+cancel in the model it wraps fails, and the delete is still tried again after that. Neither the method nor the `Mono`
+has to wait for a call of the subscription's action that is already running, so that call may still be
+running after the `Mono` completes. Waiting for it would let one action that never ends hold up the cancel.
 
 What to do:
 
@@ -1801,7 +1885,10 @@ see.
 subscription had already started has ended, and a write it had not started by then never runs.
 
 A subscribe of the id in the same process that comes before the delete is taken out, which happens before the cancel's
-`Mono` completes, takes the delete over. The delete makes no further try, and the subscribe writes back the checkpoint
+`Mono` completes, takes the delete over. Where `ReactorDurableSubscriptionModel` drives the subscription itself and is
+stopped at the subscribe, or a pause of the subscription or a `stop()` comes before the subscribe has taken the delete
+over, the `start(..)` or `resumeSubscription(..)` that runs the subscription takes it over instead, if the delete has
+not been taken out by then. The delete makes no further try, and the call that took it over writes back the checkpoint
 that a try of the delete read. That includes a try that already deleted it, and a try that failed after the store
 applied it, so the store holds what it held before the cancel. The cancel's `Mono` then completes. A subscription from
 the subscription-model default resumes from the cancelled subscription's checkpoint.
@@ -1956,10 +2043,10 @@ answers, and one that starts from a stored checkpoint handles no event before th
 A delete that fails is tried again until it succeeds, a subscribe of the id takes it over, or the model is shut down,
 and each failure is logged as a warning.
 The wait before a try starts at 100 milliseconds and about doubles after each failure, never past 5 seconds, with some
-randomness so that deletes failing together are not tried again together. Until a try succeeds or a subscribe takes
-the delete over, the cancel's `Mono` neither completes nor fails. A `shutdown()` stops the
-tries, also one waiting to be tried again. A try already under way runs to its end, and otherwise the `Mono` fails with
-the error of the last try. A store can retry within one try, as `ReactorCheckpointStorage` for MongoDB does by default,
+randomness so that deletes failing together are not tried again together. Until a try succeeds, a subscribe takes
+the delete over, or the model is shut down, the cancel's `Mono` doesn't complete. It fails earlier only when the cancel in the model it wraps
+fails, and the delete is still tried again after that. A `shutdown()` stops the tries, also one waiting to be tried
+again. A try already under way runs to its end, and otherwise the `Mono` fails with the error of the last try. A store can retry within one try, as `ReactorCheckpointStorage` for MongoDB does by default,
 so such a try can still reach the store after the `shutdown()`. When the checkpoint stays stored, call
 `cancelSubscription(id)` again once a model runs, as step 2 describes.
 

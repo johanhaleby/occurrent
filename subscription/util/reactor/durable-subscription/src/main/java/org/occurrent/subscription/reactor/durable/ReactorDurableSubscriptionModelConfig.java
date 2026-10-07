@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.util.predicate.EveryN;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.function.Predicate;
@@ -33,13 +34,30 @@ public class ReactorDurableSubscriptionModelConfig {
 
     public final Predicate<CloudEvent> persistCloudEventPositionPredicate;
     public final boolean startWhenNoStartPositionCanBeRecorded;
+    /**
+     * How often the quiet position of a subscription is saved, or {@code null} when it is never saved.
+     */
+    public final @Nullable Duration quietPositionSaveInterval;
+
+    private static final Duration DEFAULT_QUIET_POSITION_SAVE_INTERVAL = Duration.ofMinutes(1);
 
     /**
      * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
-     *                                           Supply a predicate that always returns {@code false} to never store the position.
+     *                                           Supply a predicate that always returns {@code false} to store no position for an event. A
+     *                                           subscription from a {@code StartAt} of your own then has no position stored for a quiet read
+     *                                           either. Subscribing it while a delete that a cancel of the same id started is still running
+     *                                           writes back any checkpoint that delete read, see
+     *                                           {@link ReactorDurableSubscriptionModel#cancelSubscription(String)}. Where
+     *                                           {@code ReactorDurableSubscriptionModel} drives the subscription itself and is stopped at the
+     *                                           subscribe, or a pause of the subscription or a {@code stop()} comes before the subscribe has
+     *                                           taken that delete over, the {@link ReactorDurableSubscriptionModel#start(boolean)} or
+     *                                           {@link ReactorDurableSubscriptionModel#resumeSubscription(String)} that runs the subscription
+     *                                           writes it back instead, if that delete is still running then. One that starts from a stored
+     *                                           position still has its quiet position saved until its first event, since an event the predicate
+     *                                           declines turns the save off, see {@link #saveQuietPositionEvery(Duration)}.
      */
     public ReactorDurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
-        this(persistCloudEventPositionPredicate, false);
+        this(persistCloudEventPositionPredicate, false, DEFAULT_QUIET_POSITION_SAVE_INTERVAL);
     }
 
     /**
@@ -49,10 +67,11 @@ public class ReactorDurableSubscriptionModelConfig {
         this(new EveryN(persistPositionForEveryNCloudEvent));
     }
 
-    private ReactorDurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate, boolean startWhenNoStartPositionCanBeRecorded) {
+    private ReactorDurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate, boolean startWhenNoStartPositionCanBeRecorded, @Nullable Duration quietPositionSaveInterval) {
         Objects.requireNonNull(persistCloudEventPositionPredicate, "persistCloudEventPositionPredicate cannot be null");
         this.persistCloudEventPositionPredicate = persistCloudEventPositionPredicate;
         this.startWhenNoStartPositionCanBeRecorded = startWhenNoStartPositionCanBeRecorded;
+        this.quietPositionSaveInterval = quietPositionSaveInterval;
     }
 
     /**
@@ -67,7 +86,71 @@ public class ReactorDurableSubscriptionModelConfig {
      * @return A new instance of {@code ReactorDurableSubscriptionModelConfig}
      */
     public ReactorDurableSubscriptionModelConfig startWhenNoStartPositionCanBeRecorded(boolean startWhenNoStartPositionCanBeRecorded) {
-        return new ReactorDurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded);
+        return new ReactorDurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, quietPositionSaveInterval);
+    }
+
+    /**
+     * How often the position of a subscription that receives no events is saved. A wrapped model that implements
+     * {@code QuietPositionReportingSubscriptions}, such as {@code ReactorMongoSubscriptionModel}, reports the position a
+     * subscription has read to when a read returned no event for it. It does so also with a
+     * {@code ReactorCatchupSubscriptionModel} or {@code ReactorStreamCatchupSubscriptionModel} between it and the
+     * {@link ReactorDurableSubscriptionModel}. The {@link ReactorDurableSubscriptionModel} saves that position as the
+     * subscription's checkpoint at most once per {@code interval}. A checkpoint saved for an event starts the interval
+     * again, so a subscription that stores a checkpoint for an event at least once per {@code interval} gets no extra
+     * write.
+     * <p>
+     * A subscription that starts from a stored position, the one the store held for it or the one recorded for it when
+     * it subscribes from the subscription-model default, has its quiet position saved before its first event whatever
+     * the {@link #persistCloudEventPositionPredicate} is. Any other subscription, such as one from a {@code StartAt} of
+     * your own, has none saved until the predicate has stored the position of an event, so with a predicate that
+     * always returns {@code false} it has no position stored for an event or a quiet read. Subscribing it while a delete
+     * that a cancel of the same id started is still running writes back any checkpoint that delete read, see
+     * {@link ReactorDurableSubscriptionModel#cancelSubscription(String)}. Where {@code ReactorDurableSubscriptionModel}
+     * drives the subscription itself and is stopped at the subscribe, or a pause of the subscription or a
+     * {@code stop()} comes before the subscribe has taken that delete over, the
+     * {@link ReactorDurableSubscriptionModel#start(boolean)} or
+     * {@link ReactorDurableSubscriptionModel#resumeSubscription(String)} that runs the subscription writes it back
+     * instead, if that delete is still running then.
+     * <p>
+     * The position is not saved while the event the running subscription most recently gave the action is one the
+     * predicate declined to store, and not while an event is being delivered. So with a predicate that declines some
+     * events, such as {@link EveryN} with {@code n} above 1, a subscription that goes quiet right after a declined event
+     * gets no position saved until the predicate stores one. A save that fails makes the wrapped model read again from
+     * the subscription's position after a backoff. It then reports the position of the next read that returns no event,
+     * and that position is saved without waiting for the interval.
+     * <p>
+     * The default is one minute. Keep it well below the time the wrapped model keeps its history, which for MongoDB
+     * is the oplog window.
+     *
+     * @param interval The shortest time between two saves of a subscription's quiet position, greater than zero
+     * @return A new instance of {@code ReactorDurableSubscriptionModelConfig}
+     * @see #neverSaveQuietPosition()
+     */
+    public ReactorDurableSubscriptionModelConfig saveQuietPositionEvery(Duration interval) {
+        Objects.requireNonNull(interval, "interval cannot be null");
+        if (interval.isZero() || interval.isNegative()) {
+            throw new IllegalArgumentException("interval must be greater than zero but was " + interval);
+        }
+        return new ReactorDurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, interval);
+    }
+
+    /**
+     * Turns off the periodic save of the position of a subscription that receives no events, see
+     * {@link #saveQuietPositionEvery(Duration)}. A subscription that then receives no events for longer than the wrapped
+     * model keeps its history gets that model's handling of lost history when it next starts from its stored
+     * checkpoint. A subscribe made while a delete that a cancel of the same id started is still running writes back any
+     * checkpoint that delete read, see {@link ReactorDurableSubscriptionModel#cancelSubscription(String)}.
+     * Where {@code ReactorDurableSubscriptionModel} drives the subscription itself and is stopped at the subscribe, or a
+     * pause of the subscription or a {@code stop()} comes before the subscribe has taken that delete over, the
+     * {@link ReactorDurableSubscriptionModel#start(boolean)} or
+     * {@link ReactorDurableSubscriptionModel#resumeSubscription(String)} that runs the subscription writes it back
+     * instead, if that delete is still running then.
+     *
+     * @return A new instance of {@code ReactorDurableSubscriptionModelConfig}
+     * @see #saveQuietPositionEvery(Duration)
+     */
+    public ReactorDurableSubscriptionModelConfig neverSaveQuietPosition() {
+        return new ReactorDurableSubscriptionModelConfig(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, null);
     }
 
     @Override
@@ -75,12 +158,13 @@ public class ReactorDurableSubscriptionModelConfig {
         if (this == o) return true;
         if (!(o instanceof ReactorDurableSubscriptionModelConfig that)) return false;
         return startWhenNoStartPositionCanBeRecorded == that.startWhenNoStartPositionCanBeRecorded
-               && Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate);
+               && Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate)
+               && Objects.equals(quietPositionSaveInterval, that.quietPositionSaveInterval);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded);
+        return Objects.hash(persistCloudEventPositionPredicate, startWhenNoStartPositionCanBeRecorded, quietPositionSaveInterval);
     }
 
     @Override
@@ -88,6 +172,7 @@ public class ReactorDurableSubscriptionModelConfig {
         return new StringJoiner(", ", ReactorDurableSubscriptionModelConfig.class.getSimpleName() + "[", "]")
                 .add("persistCloudEventPositionPredicate=" + persistCloudEventPositionPredicate)
                 .add("startWhenNoStartPositionCanBeRecorded=" + startWhenNoStartPositionCanBeRecorded)
+                .add("quietPositionSaveInterval=" + quietPositionSaveInterval)
                 .toString();
     }
 }

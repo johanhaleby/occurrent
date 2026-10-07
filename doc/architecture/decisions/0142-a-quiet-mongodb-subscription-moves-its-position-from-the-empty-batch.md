@@ -7,7 +7,9 @@ Date: 2026-09-30
 Accepted. Resolves [#1168](https://github.com/johanhaleby/occurrent/issues/1168). Applies to
 `NativeMongoSubscriptionModel`, `SpringMongoSubscriptionModel` and `DurableSubscriptionModel`. Changes one row of
 [ADR 141](0141-a-stopped-subscription-model-holds-a-new-subscription-paused-until-it-is-started.md), which that ADR
-now shows. `ReactorMongoSubscriptionModel` is [#1169](https://github.com/johanhaleby/occurrent/issues/1169).
+now shows. `ReactorMongoSubscriptionModel` does the same through
+[#1169](https://github.com/johanhaleby/occurrent/issues/1169), and `ReactorDurableSubscriptionModel` saves its quiet
+position by the rule in the section about it.
 
 ## Context
 
@@ -91,7 +93,11 @@ and a resume or a start makes a new run of the same subscription.
 - `DurableSubscriptionModel` deletes the checkpoint in a cancel under the same lock as the checkpoint write for an
   event, so an action that returns after the cancel stores nothing.
 - After lost history the model asks MongoDB for the present, and `DurableSubscriptionModel` stores it as the
-  checkpoint to restart from. A resume, or a cancel and a new subscribe of the id, can come while the model asks.
+  checkpoint to restart from. When MongoDB's reply to `ping` has no operation time, there is no present to store,
+  so the model doesn't restart the subscription while an added `HistoryLossListener` answers `true` from
+  `storesRestartPositionOf(..)` for it, as `DurableSubscriptionModel` does for each subscription it stores checkpoints
+  for, and tries again as its `RetryStrategy` says. Every other subscription restarts from the present all the same.
+  A resume, or a cancel and a new subscribe of the id, can come while the model asks.
   `HistoryLossListener` is therefore also given a `BooleanSupplier` that returns `false` once either has come, and
   `DurableSubscriptionModel` calls it under the lock that `resumeSubscription(..)` and `cancelSubscription(..)` take.
   Once the new run or registration exists, the closed run stores nothing. Before, it could store a present later
@@ -137,10 +143,15 @@ writes the position under a condition reads that condition when it is asked, whi
   any run, so an action a pause stopped waiting for keeps the save off until it returns. A predicate can decline
   events until a batch the action keeps in memory is written, and a restart from a position after those events would
   lose the batch.
-- Before the first event after a subscribe it saves whatever the predicate is. A read that returns nothing then comes
-  after no event the subscription hasn't been given. After a restart, the events the predicate declined come after the
-  stored checkpoint, so the change stream returns them before any empty read, and the first one the predicate declines
-  stops the save again.
+- Before the first event after a subscribe it saves only when a position of the subscription is stored, the one it
+  read from the checkpoint store or the one it recorded for a subscription from the model default. A read that returns
+  nothing then comes after no event the subscription hasn't been given, and the save moves that position on. After a
+  restart, the events the predicate declined come after the stored checkpoint, so the change stream returns them before
+  any empty read, and the first one the predicate declines stops the save again.
+- A subscription from a `StartAt` of your own gets no quiet save before the predicate stores the position of its first
+  event. With a predicate that declines every event, a quiet save would store a position that no later event moves, and
+  a restart would resume from it until the oplog drops it. The model doesn't read the checkpoint store for such a
+  subscription, so the same goes for one whose id has a position that an earlier run stored.
 - It writes with the same `CheckpointWriteCondition` as a checkpoint for an event, read before the read that
   returned the position.
 - The save holds the lock per subscription id that `subscribe(..)`, `resumeSubscription(..)`, `cancelSubscription(..)`
@@ -172,7 +183,8 @@ A quiet position is saved when all of these hold, and only then:
 3. The interval has passed since the subscribe, the last checkpoint written for an event, the last quiet position
    save that went ahead, or the last failed read of the write condition for one.
 4. No delivery of the subscription is under way in any run, and the current delivery that started last since the
-   subscribe stored the checkpoint of its event, or none has started. A delivery is current unless a current delivery
+   subscribe stored the checkpoint of its event, or none has started and a position of the subscription is stored, as
+   described above. A delivery is current unless a current delivery
    that started before it came from a later read. A delivery stores it when the persist predicate accepts the event,
    no cancel has come and the write succeeds. This must hold when the model asks before the read, and again when the
    position is written.
@@ -248,6 +260,10 @@ outlasts the pause. A checkpoint store
 that hangs would then block a pause of that subscription, and a pause is what takes a subscription away from a node
 that lost its lease.
 
+Reading the checkpoint store for a subscription from a `StartAt` of your own, to find out whether an earlier run
+stored a position for its id, would let its quiet save start before its first event. It would add a read of the store
+to every such subscribe, and the save would move on a position that the subscription didn't start from.
+
 Taking the last thread that read as the open run, and treating a delivery on any other thread as late, would need no
 numbers. A closed run's thread that reads once more after the resume would then make the open run's next delivery
 late, and if the delivery before that was of an event the predicate declined, a quiet subscription would get no quiet
@@ -256,12 +272,151 @@ position saved until its next event.
 Keeping `MessageListenerContainer` and opening a second change stream per subscription only for its resume token
 doubles the change streams, and the token of the second one says nothing about what the first has delivered.
 
+### `ReactorMongoSubscriptionModel`
+
+**A subscription with an id reads its change stream through the driver's change stream cursor, one batch at a time,
+and takes the resume token from the driver's own cursor.** `ChangeStreamPublisher` has no method that returns the
+`postBatchResumeToken`, but the cursor behind it has one. The model opens the change stream with
+`BatchCursorPublisher.batchCursor(int)`, the method the driver itself calls when something subscribes to the
+publisher. It reads the driver's change stream cursor, an `AsyncChangeStreamBatchCursor`, from the private field
+`wrapped` of the `BatchCursor` it gets back, and the cursor that one reads with from the private field `wrapped` of
+`AsyncChangeStreamBatchCursor`. It only reads those fields. Every batch, and the close, go through the public
+`BatchCursor.next()` and `BatchCursor.close()`. So the commands MongoDB gets, the server each one goes to and the
+driver's own resume after a failover or a network error are the same as with `ReactiveMongoTemplate.changeStream(..)`.
+
+**The model asks for the next batch only once the action's `Mono` has completed for every event of the batch before
+it, and looks at the token once a second while it waits.** Within one call to `next()` the driver sends another
+`getMore` only after a reply with no document, and the reply that ends the call comes last. So a token that a later
+look during the same call finds replaced came with a reply that had no document, and the model moves the
+subscription's position to it. The driver decodes a token object of its own from every reply, which lets a look tell
+two replies apart even when MongoDB sends the same token twice. The model never moves to the token it finds at the
+latest look, because the driver stores a reply before it hands over that reply's documents, so that token can belong
+to events the action hasn't had yet.
+
+A look reads the token on another thread than the one the driver stores the reply on. On driver 5.8.0 every field on
+the way is final or volatile. `BatchCursor.wrapped` is final, `AsyncChangeStreamBatchCursor.wrapped` is a final
+`AtomicReference`, `AsyncCommandCursor.commandCursorResult` is volatile and `CommandCursorResult.postBatchResumeToken`
+is final. On 5.5.2 the cursor inside is an `AsyncCommandBatchCursor`, whose `commandCursorResult` is volatile too. The
+looks of one wait come one after the other, so a later look reads a reply at least as new as the one an earlier look
+read. Those modifiers are private to the driver, so the model checks them too.
+
+**When the model loads, it checks that both methods and the three fields exist, that the two `wrapped` fields can be
+read, and that `BatchCursor.wrapped`, `AsyncChangeStreamBatchCursor.wrapped` and
+`CommandCursorResult.postBatchResumeToken` are final. For every cursor it checks that the driver's change stream
+cursor is an `AsyncChangeStreamBatchCursor`, and that the class of the cursor inside declares a volatile
+`commandCursorResult`.** That class is known only once a cursor is
+open, and the driver builds a cursor it opens again the same way. When a check fails, the model logs one warning with
+the reason and reads through `ReactiveMongoTemplate.changeStream(..)` as before.
+
+**A token read that fails ends in the same warning, unless the driver is opening the change stream again.** The driver
+empties `AsyncChangeStreamBatchCursor.wrapped` while it opens the change stream again, and then puts a new cursor in.
+So a look that finds it empty, or that fails and then finds it empty or holding another cursor, gives no token. Any other failure
+means the driver can't hand over the token, and a subscription that kept waiting for one would keep the position of its
+last event without a word.
+
+The events delivered are the same either way, and only the position of a quiet subscription stays at its last event.
+Tests in the build fail when the route is off on the driver version the build uses, or when a field the token is read
+through is neither final nor volatile there.
+
+**The fields can be read when the application runs on the module path too.** The 5.8.0 jars of the driver have no
+`module-info`, only an `Automatic-Module-Name`, so they are automatic modules, and an automatic module opens every
+package. I checked it with a named module on the module path on Temurin 21.0.12.1, where both
+`MethodHandles.privateLookupIn(..)` and `setAccessible(true)` work on `BatchCursor.wrapped`, and
+`MethodHandles.privateLookupIn(..)` works on `AsyncChangeStreamBatchCursor.wrapped`. A driver version with a
+`module-info` that doesn't open `com.mongodb.reactivestreams.client.internal` or `com.mongodb.internal.operation`
+makes the check fail, and the model then logs the warning.
+
+**The reads of a subscription with an id from a subscribe, a resume or a start until a pause, a cancel or a shutdown
+are one run, and a new run for the same id reads nothing until every earlier run for that id has ended.** A run has
+ended once it is closed and the work it started between two reads, an action's `Mono` or a listener's, has completed
+or been cancelled. Closing a run cancels that work. The position moves only while the run is open or that work is
+under way. So the `Mono` of a paused run never runs next to a later run's, and the later run opens at a position that
+comes after every event an earlier run's action completed for.
+
+**A listener gets the quiet position through the reactor `QuietPositionReportingSubscriptions`.** It mirrors the
+blocking capability, with a `Mono` in place of a blocking call. Before each look the model asks each listener for a
+function, calls it when the look finds a new quiet position, and hands the subscription nothing more until the `Mono`
+it returns has completed. An error from that `Mono`, a `CheckpointWriteConditionNotFulfilledException` included, is
+retried forever with the backoff an error from an action is retried with. An action is called again for the same
+event, while the model reads again from the subscription's position instead of calling the function again. That loses
+no event, since the position only moves to a token a later
+look found replaced, and such a token never comes after an event whose action hasn't completed. The blocking models end
+delivery on that exception, since there the quiet save is conditional on the version of the lease and fails once a
+node with a newer lease has written. The reactor stack has no lease, but a subscribe that took over a delete of the
+id writes its positions on a condition, and `ReactorDurableSubscriptionModel` saves a quiet position on that condition
+too. So its own listener raises the exception when the store refuses that write.
+
+The `Flux` that `subscribe(filter, startAt)` returns reads through `ReactiveMongoTemplate.changeStream(..)` as before.
+Nothing listens for its quiet position.
+
+### What I did not choose for `ReactorMongoSubscriptionModel`
+
+Sending the `aggregate` and `getMore` commands from the model on a cursor of its own fails on a sharded cluster
+behind several `mongos` routers. A `getMore` has to reach the `mongos` that opened the cursor, and the model's
+commands went to whichever one the driver picked. Against two `mongos` over 20 seconds, that model sent 8 `aggregate`
+commands, and 8 of its 21 `getMore` commands failed with `CursorNotFound`. The driver's change stream on the same
+cluster sent 1 `aggregate` and 20 `getMore` commands, and none failed. Reading its own cursor also gave up the
+driver's resume after a failover.
+
+Moving the position to the token found at the latest look, without waiting to see it replaced, can move past an event
+the action hasn't had. The driver stores the reply of a `getMore` before it hands over the documents in it.
+
+### `ReactorDurableSubscriptionModel`
+
+**`ReactorDurableSubscriptionModel` saves the quiet position the wrapped model reports, by the rule for the blocking
+model with these differences.** It adds its listener when it is made, if the interval isn't turned off and
+`QuietPositionReportingSubscriptions.findIn(..)` finds the reactor capability on the model it wraps, and removes it at
+`shutdown()`. `ReactorMongoSubscriptionModel` asks the listener before every look, once a second while a subscription
+waits for a batch. The interval is a minute by default, as on the blocking config.
+
+1. The position comes from the listener. `ReactorMongoSubscriptionModel` reports it only once the action's `Mono` has
+   completed for every event before it.
+2. The save uses the write condition of a save after an event, which is `any()` unless the subscribe took over a delete
+   of the id. The reactor stack has no lease that could move to another node during the read.
+3. The interval counts from when the subscription is handed to the wrapped model, and again from when it is started
+   again there, as described below. After that it counts from the last checkpoint written for an event, or the last
+   quiet save that succeeded. A failed quiet save fails the `Mono` the wrapped model waits for, as a failed save after
+   an event fails the action. The wrapped model reads again from the subscription's position after its backoff, and
+   the next quiet position is saved without waiting for the interval. The blocking model logs the failure and tries
+   again after the interval.
+4. No delivery of the subscription is under way, and the delivery that ended last stored the checkpoint of its event,
+   or none has ended and the subscription started from the checkpoint the store held for it or the one this model
+   recorded for it. A subscription from a `StartAt` of your own gets no quiet save before the predicate stores the
+   position of its first event, as on the blocking model. A delivery that ends with an error or a cancel stored
+   nothing. The reactor model hands a
+   subscription one piece of work at a time, and a new run reads nothing until the work of every earlier run has
+   completed or been cancelled, so a late delivery of a closed run can't come after the open run's, and the reads are
+   not numbered. This is checked before the read and again when the save starts.
+5. The save goes through the same check as a save after an event. It starts only while no cancel and no shutdown has
+   retired the subscription's writer, and a cancel waits for a save that started before it, then deletes the
+   checkpoint. A quiet save can't write the checkpoint back after the cancel deleted it.
+
+A subscribe that took over a delete of the id can be started again in the wrapped model from an earlier position than
+it was handed, once the position it recorded is known. Until then its action skips every event, and a quiet position
+the first subscription reports comes after those events. So the quiet save of that first subscription waits until the
+recorded position is known, and saves nothing when the subscription is started again. The subscription started again
+saves its quiet positions as any other.
+
+`QuietPositionReportingSubscriptions.findIn(..)` asks the model it is given for the capability through
+`capability(..)`. `ReactorCatchupSubscriptionModel` and `ReactorStreamCatchupSubscriptionModel` answer it with the
+capability of the model they wrap, and no other capability. So the durable model adds its listener to
+`ReactorMongoSubscriptionModel` also when one of them sits between the two, as in the reactive Spring Boot starter when
+the event store supports catch-up. In dual mode the stream and the DCB catch-up hand their subscriptions to the same
+model, so the listener is added once.
+
+This is safe because a catch-up model hands a subscription to the wrapped model only after its replay has delivered the
+history. `ReactorMongoSubscriptionModel` doesn't know the id during the replay and reports no quiet position for it, and
+a quiet position it reports after that comes after every replayed event. A pause during the replay pauses the
+subscription right after it is handed over. A stop during the replay ends the replay before the subscription is handed
+over, and a cancel during the replay ends it for good.
+
 ## Consequences
 
 A quiet subscription behind a `DurableSubscriptionModel` costs one checkpoint write per interval. Keep the interval
 well below the oplog window. A subscription whose persist predicate declines some events, such as an `EveryN` with
 `n` above 1, gets no quiet position saved after a declined event until the predicate stores one. If it stays quiet
-for longer than the oplog window after that, a restart still ends in lost history.
+for longer than the oplog window after that, a restart still ends in lost history. A subscription from a `StartAt` of
+your own gets no quiet position saved before the predicate stores its first one, on both stacks.
 
 A subscription that matches nothing resumes and restarts from a position the oplog still has, as long as the process
 is down, or the subscription paused, for less than the oplog window. Longer than that still ends in lost history.
@@ -305,3 +460,26 @@ evaluating the supplier, and the supplier uses the recorded present when it answ
 
 A subscription model of your own that a `DurableSubscriptionModel` wraps gets no quiet position saved unless it
 implements `QuietPositionReportingSubscriptions`.
+
+A quiet subscription behind a `ReactorDurableSubscriptionModel` that wraps `ReactorMongoSubscriptionModel` costs one
+checkpoint write per interval too. A storage that keeps failing makes the wrapped model read the subscription again
+after each backoff. A failed save after an event fails the action instead, which the wrapped model calls again for the
+same event after the backoff without reading the change stream again. A subscription model of your own between the
+two gets no
+quiet position saved unless it answers the capability with the one of the model it wraps. That is only safe when it
+hands a subscription to the wrapped model after every event it delivers by itself has reached the action.
+
+A subscription with an id on `ReactorMongoSubscriptionModel` handles one batch at a time, so each batch costs a round
+trip to MongoDB on top of the time its actions take. `ReactiveMongoTemplate.changeStream(..)` fetched the next batch
+while the action ran.
+
+`ReactorMongoSubscriptionModel` reads private fields of the driver and relies on their modifiers, which a driver
+release can change. The model then logs a warning, and a quiet subscription keeps the position of its last event,
+which the oplog can drop. The test
+of the route fails the build on such a driver version, but an application that runs a newer driver than the build
+gets only the warning.
+
+While a subscription with an id waits for a batch, the model looks at the token once a second.
+
+A test that stubs `changeStream(..)` on a mocked `ReactiveMongoOperations` no longer reaches a subscription with an id
+on `ReactorMongoSubscriptionModel`, since the model opens its change stream from `getCollection(..)`.

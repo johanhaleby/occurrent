@@ -26,6 +26,7 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
@@ -66,7 +67,7 @@ class DurableSubscriptionModelQuietPositionTest {
     void the_quiet_position_is_saved_once_the_interval_has_passed_since_the_subscribe() throws InterruptedException {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
-        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        subscribeFromTheStoredStart(model, storage, __ -> {
         });
 
         // When
@@ -84,7 +85,7 @@ class DurableSubscriptionModelQuietPositionTest {
     void the_quiet_position_is_saved_at_most_once_per_interval() throws InterruptedException {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
-        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        subscribeFromTheStoredStart(model, storage, __ -> {
         });
         Thread.sleep(INTERVAL.toMillis() + 50);
 
@@ -118,10 +119,10 @@ class DurableSubscriptionModelQuietPositionTest {
     }
 
     @Test
-    void a_persist_predicate_that_never_stores_has_the_quiet_position_saved_until_its_first_event() throws InterruptedException {
+    void a_persist_predicate_that_never_stores_has_the_quiet_position_saved_until_its_first_event_once_a_position_is_stored() throws InterruptedException {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(__ -> false).saveQuietPositionEvery(INTERVAL));
-        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        subscribeFromTheStoredStart(model, storage, __ -> {
         });
         Thread.sleep(INTERVAL.toMillis() + 50);
 
@@ -161,7 +162,7 @@ class DurableSubscriptionModelQuietPositionTest {
     void a_persist_predicate_other_than_every_n_has_the_quiet_position_saved_before_its_first_event() throws InterruptedException {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(__ -> true).saveQuietPositionEvery(INTERVAL));
-        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        subscribeFromTheStoredStart(model, storage, __ -> {
         });
         Thread.sleep(INTERVAL.toMillis() + 50);
 
@@ -177,13 +178,50 @@ class DurableSubscriptionModelQuietPositionTest {
     }
 
     @Test
+    void a_persist_predicate_that_never_stores_has_no_position_saved_for_a_subscription_from_a_start_position_of_its_own() throws InterruptedException {
+        // Given
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(__ -> false).saveQuietPositionEvery(INTERVAL));
+        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        });
+        Thread.sleep(INTERVAL.toMillis() + 50);
+
+        // When
+        boolean savedBeforeAnyEvent = wrapped.readNothing("id", QUIET);
+        wrapped.deliver("id", new StringBasedCheckpoint("event"));
+        Thread.sleep(INTERVAL.toMillis() + 50);
+        boolean savedAfterADeclinedEvent = wrapped.readNothing("id", new StringBasedCheckpoint("quiet-2"));
+
+        // Then
+        assertThat(storage.read("id")).as("checkpoint stored for a subscription from a start position of its own whose predicate never stores").isNull();
+        assertThat(List.of(savedBeforeAnyEvent, savedAfterADeclinedEvent)).as("wanted the quiet position before any event and after a declined one").containsExactly(false, false);
+    }
+
+    @Test
+    void the_quiet_position_is_saved_before_the_first_event_of_a_subscription_whose_start_position_was_recorded() throws InterruptedException {
+        // Given
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("recorded");
+        DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, new DurableSubscriptionModelConfig(__ -> false).saveQuietPositionEvery(INTERVAL));
+        model.subscribe("id", null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+        Thread.sleep(INTERVAL.toMillis() + 50);
+
+        // When
+        boolean savedBeforeAnyEvent = wrapped.readNothing("id", QUIET);
+
+        // Then
+        assertThat(savedBeforeAnyEvent).as("wanted the quiet position before any event").isTrue();
+        assertThat(storage.read("id")).as("checkpoint stored").isEqualTo(QUIET);
+    }
+
+    @Test
     void the_write_condition_is_the_one_read_before_the_wrapped_model_read() throws InterruptedException {
         // Given
         AtomicLong leaseVersion = new AtomicLong(1);
         RecordingStorage recordingStorage = new RecordingStorage();
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, recordingStorage, saveQuietPositionEvery(INTERVAL), subscriptionId -> OptionalLong.of(leaseVersion.get()));
-        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        subscribeFromTheStoredStart(model, recordingStorage, __ -> {
         });
+        recordingStorage.conditions.clear();
         Thread.sleep(INTERVAL.toMillis() + 50);
 
         // When
@@ -200,7 +238,7 @@ class DurableSubscriptionModelQuietPositionTest {
         // Given
         storage.save("id", START, CheckpointWriteCondition.notOlderThan(2));
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL), subscriptionId -> OptionalLong.of(1));
-        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        model.subscribe("id", null, StartAt.subscriptionModelDefault(), __ -> {
         });
         Thread.sleep(INTERVAL.toMillis() + 50);
 
@@ -217,10 +255,10 @@ class DurableSubscriptionModelQuietPositionTest {
     void a_storage_failure_is_not_thrown_to_the_wrapped_model_and_the_save_is_tried_again_after_the_interval() throws InterruptedException {
         // Given
         RecordingStorage failingStorage = new RecordingStorage();
-        failingStorage.failing.set(true);
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, failingStorage, saveQuietPositionEvery(INTERVAL));
-        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        subscribeFromTheStoredStart(model, failingStorage, __ -> {
         });
+        failingStorage.failing.set(true);
         Thread.sleep(INTERVAL.toMillis() + 50);
 
         // When
@@ -247,7 +285,7 @@ class DurableSubscriptionModelQuietPositionTest {
             }
             return OptionalLong.of(1);
         });
-        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        subscribeFromTheStoredStart(model, storage, __ -> {
         });
         Thread.sleep(INTERVAL.toMillis() + 50);
 
@@ -269,7 +307,7 @@ class DurableSubscriptionModelQuietPositionTest {
     void a_read_that_began_before_a_cancel_saves_nothing_for_a_later_subscribe_of_the_same_id() throws InterruptedException {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
-        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        subscribeFromTheStoredStart(model, storage, __ -> {
         });
         Thread.sleep(INTERVAL.toMillis() + 50);
         Consumer<Checkpoint> saverFromBeforeTheCancel = wrapped.beforeReading("id");
@@ -288,7 +326,7 @@ class DurableSubscriptionModelQuietPositionTest {
     void nothing_is_saved_for_a_cancelled_subscription() throws InterruptedException {
         // Given
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
-        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        subscribeFromTheStoredStart(model, storage, __ -> {
         });
         Thread.sleep(INTERVAL.toMillis() + 50);
 
@@ -423,7 +461,7 @@ class DurableSubscriptionModelQuietPositionTest {
         CountDownLatch e1Started = new CountDownLatch(1);
         CountDownLatch e1MayReturn = new CountDownLatch(1);
         DurableSubscriptionModel model = new DurableSubscriptionModel(wrapped, storage, saveQuietPositionEvery(INTERVAL));
-        model.subscribe("id", null, StartAt.checkpoint(START), __ -> {
+        subscribeFromTheStoredStart(model, storage, __ -> {
             e1Started.countDown();
             awaitQuietly(e1MayReturn);
         });
@@ -563,6 +601,12 @@ class DurableSubscriptionModelQuietPositionTest {
         } finally {
             closedRun.shutdownNow();
         }
+    }
+
+    // A subscribe from the model default that finds START stored, as after an earlier run stored a position
+    private static void subscribeFromTheStoredStart(DurableSubscriptionModel model, CheckpointStorage storage, Consumer<CloudEvent> action) {
+        storage.save("id", START);
+        model.subscribe("id", null, StartAt.subscriptionModelDefault(), action);
     }
 
     private static DurableSubscriptionModelConfig saveQuietPositionEvery(Duration interval) {

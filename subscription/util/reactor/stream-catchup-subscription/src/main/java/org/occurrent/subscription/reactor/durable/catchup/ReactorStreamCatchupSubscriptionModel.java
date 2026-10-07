@@ -28,13 +28,16 @@ import org.occurrent.inmemory.filtermatching.FilterMatcher;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.QuietPositionReportingSubscriptions;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -203,6 +206,21 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
             return Flux.error(e);
         }
         return subscribe(resolvedFilter, startAt);
+    }
+
+    /**
+     * Answers {@link QuietPositionReportingSubscriptions} with the capability of the wrapped model, or empty when that
+     * model doesn't have it, so a {@code ReactorDurableSubscriptionModel} on top of this model adds its listener to the
+     * wrapped model. The wrapped model learns the id of a subscription only once its replay is done and the
+     * subscription is handed over to it, so it reports no quiet position while the history is being replayed. This
+     * model answers every other capability itself.
+     */
+    @Override
+    public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
+        if (type == QuietPositionReportingSubscriptions.class) {
+            return subscriptionModel instanceof SubscriptionModelCapability wrapped ? wrapped.capability(type) : Optional.empty();
+        }
+        return SubscriptionModel.super.capability(type);
     }
 
     // Resolves the caller's SubscriptionFilter to the stream Filter this model replays and delivers, throwing for a
