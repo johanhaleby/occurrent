@@ -59,7 +59,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -622,6 +624,139 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             release.countDown();
             releaseRead.countDown();
             caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe takes over the delete a cancel of the id started, and the delete removes the checkpoint and writes it
+     * back for that subscribe. The subscribe is refused while it still reads its start position, and a delete goes
+     * ahead in place of it. The cancel does not complete while the subscribe still reads, and once it has completed
+     * that delete has removed the checkpoint, so a subscribe made right after starts from where the feed is. That holds
+     * on the path that drives the feed, and on the one that hands the subscription to a wrapped model.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"drives-the-feed", "handed-over"})
+    void a_cancel_completes_only_once_the_delete_that_goes_ahead_in_place_of_a_subscribe_refused_after_its_delete_ended_has_removed_the_checkpoint(String path) throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        Feed feed = path.equals("handed-over") ? new NamedFeed() : new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        ExecutorService readingCaller = Executors.newSingleThreadExecutor();
+        ScheduledExecutorService releaser = Executors.newSingleThreadScheduledExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        CountDownLatch releaseWriteBack = new CountDownLatch(1);
+        CountDownLatch releaseReplacement = new CountDownLatch(1);
+        try {
+            Mono<Void> cancelled = cancelWithCheckpointStored(model, storage, feed, release);
+            long stored = feed.present.get();
+            storage.nextReadHeldOnItsThread = releaseRead;
+            // The held read can run on the thread that calls subscribe, so the call is not waited for
+            CompletableFuture<Subscription> takingOver = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())), readingCaller);
+            assertThat(storage.readHeldOnItsThread.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("read of the subscribe that takes the delete over held").isTrue();
+            storage.heldSave = releaseWriteBack;
+            storage.heldSaveFails = false;
+            release.countDown();
+            assertThat(storage.saveEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("write back of the checkpoint held").isTrue();
+            releaseWriteBack.countDown();
+            assertThat(untilStored(storage, stored)).as("checkpoint written back for the subscribe that took the delete over").isEqualTo(String.valueOf(stored));
+            CompletableFuture<Void> cancelledFuture = cancelled.toFuture();
+            Throwable notCompletedWhileItReads = catchThrowable(() -> cancelledFuture.get(1, TimeUnit.SECONDS));
+            storage.deleteGate = releaseReplacement;
+            storage.readsFail = true;
+            releaseRead.countDown();
+            Throwable notStarted = catchThrowable(() -> takingOver.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted(TIMEOUT).block());
+            storage.readsFail = false;
+            // Time for a cancel that does not wait for the delete in place of the refused subscribe to have completed
+            releaser.schedule(releaseReplacement::countDown, 500, TimeUnit.MILLISECONDS);
+
+            // When
+            cancelled.block(TIMEOUT);
+            String storedOnceTheCancelCompleted = storage.stored();
+            Later later = subscribeAgain(model, feed, caller);
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(notCompletedWhileItReads).as("how waiting a second for the cancel to complete ended, while the subscribe that took its delete over still read its start position")
+                        .isInstanceOf(TimeoutException.class);
+                softly.assertThat(notStarted).as("why the subscribe that took the delete over did not start").hasStackTraceContaining(READ_FAILED);
+                softly.assertThat(storedOnceTheCancelCompleted).as("checkpoint stored once the cancel completed").isEqualTo("-");
+                softly.assertThat(later.delivered()).as("events a later subscribe delivered, of %s written before it", later.writtenBefore())
+                        .containsExactly(later.writtenAfter());
+            });
+        } finally {
+            release.countDown();
+            releaseRead.countDown();
+            releaseWriteBack.countDown();
+            releaseReplacement.countDown();
+            releaser.shutdownNow();
+            readingCaller.shutdownNow();
+            caller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe takes over the delete a cancel of the id started, and is held reading its start position, so it
+     * neither starts nor writes. The tries and the write back of that delete finish. A second cancel of the id then
+     * ends the subscribe and gives the delete back, while the delete of that second cancel is held. That delete goes
+     * ahead in place of the first one, so the first cancel does not complete until it has removed the checkpoint, on
+     * the path that drives the feed and on the one that hands the subscription to a wrapped model.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"drives-the-feed", "handed-over"})
+    void a_cancel_completes_only_once_the_delete_of_a_later_cancel_that_ended_the_subscribe_which_took_its_delete_over_has_removed_the_checkpoint(String path) throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        Feed feed = path.equals("handed-over") ? new NamedFeed() : new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService readingCaller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        CountDownLatch releaseWriteBack = new CountDownLatch(1);
+        CountDownLatch releaseLaterDelete = new CountDownLatch(1);
+        try {
+            Mono<Void> cancelled = cancelWithCheckpointStored(model, storage, feed, release);
+            long stored = feed.present.get();
+            storage.readGate = releaseRead;
+            CompletableFuture<Subscription> takingOver = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>())), readingCaller);
+            assertThat(storage.readEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("read of the subscribe that takes the delete over held").isTrue();
+            storage.heldSave = releaseWriteBack;
+            storage.heldSaveFails = false;
+            release.countDown();
+            assertThat(storage.saveEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("write back of the checkpoint held").isTrue();
+            releaseWriteBack.countDown();
+            assertThat(untilStored(storage, stored)).as("checkpoint written back for the subscribe that took the delete over").isEqualTo(String.valueOf(stored));
+            CompletableFuture<Void> cancelledFuture = cancelled.toFuture();
+            storage.deleteGate = releaseLaterDelete;
+
+            // When
+            CompletableFuture<Void> cancelledLaterFuture = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+            releaseRead.countDown();
+            Throwable notStarted = catchThrowable(() -> takingOver.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted(TIMEOUT).block());
+            Throwable notCompletedWhileTheLaterDeleteIsHeld = catchThrowable(() -> cancelledFuture.get(1, TimeUnit.SECONDS));
+            releaseLaterDelete.countDown();
+            Throwable cancelEnded = catchThrowable(() -> cancelledFuture.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            String storedOnceTheCancelCompleted = storage.stored();
+            Throwable laterCancelEnded = catchThrowable(() -> cancelledLaterFuture.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(notStarted).as("how the subscribe that took the delete over ended").isInstanceOf(CancellationException.class);
+                softly.assertThat(notCompletedWhileTheLaterDeleteIsHeld).as("how waiting a second for the first cancel to complete ended, while the delete of the later cancel was held")
+                        .isInstanceOf(TimeoutException.class);
+                softly.assertThat(cancelEnded).as("how the first cancel ended once the delete of the later cancel was released").isNull();
+                softly.assertThat(storedOnceTheCancelCompleted).as("checkpoint stored once the first cancel completed").isEqualTo("-");
+                softly.assertThat(laterCancelEnded).as("how the later cancel ended").isNull();
+            });
+        } finally {
+            release.countDown();
+            releaseRead.countDown();
+            releaseWriteBack.countDown();
+            releaseLaterDelete.countDown();
+            readingCaller.shutdownNow();
             model.shutdown();
         }
     }
