@@ -346,6 +346,69 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
     }
 
     /**
+     * The wrapped model here can answer a position, holds the subscription and throws without evaluating the start
+     * position.
+     */
+    @Test
+    void an_evaluation_after_a_subscribe_whose_wrapped_model_threw_before_evaluating_gets_no_start_position() {
+        HoldsTheSubscriptionThenThrows wrapped = new HoldsTheSubscriptionThenThrows(false);
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("present");
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        assertThatThrownBy(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        })).hasMessage("the subscribe fails");
+
+        Throwable evaluation = catchThrowable(() -> wrapped.evaluateStartPosition(SUBSCRIPTION_ID));
+
+        assertThat(evaluation).isInstanceOf(IllegalStateException.class).hasMessageContaining("failed before this evaluation got its start position");
+        assertThat(storage.exists(SUBSCRIPTION_ID)).as("whether a checkpoint is stored").isFalse();
+    }
+
+    /**
+     * The wrapped model here holds the subscription and evaluates the start position, which records the position it
+     * answers, before its subscribe throws. The held subscription then delivers an event.
+     */
+    @Test
+    void an_evaluation_after_a_subscribe_whose_wrapped_model_threw_after_evaluating_starts_from_the_checkpoint_the_held_subscription_stored_since() {
+        HoldsTheSubscriptionThenThrows wrapped = new HoldsTheSubscriptionThenThrows(true);
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("present");
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage);
+        assertThatThrownBy(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        })).hasMessage("the subscribe fails");
+        wrapped.deliver(SUBSCRIPTION_ID, new CheckpointAwareCloudEvent(cloudEvent("event-1"), new StringBasedCheckpoint("after event-1")));
+
+        StartAt evaluation = wrapped.evaluateStartPosition(SUBSCRIPTION_ID);
+
+        assertThat(evaluation).as("where the evaluation starts")
+                .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class, startAt -> assertThat(startAt.checkpoint.asString()).isEqualTo("after event-1"));
+        assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("the checkpoint stored").isEqualTo("after event-1");
+    }
+
+    /**
+     * The wrapped model here holds the subscription and evaluates the start position while it can't answer a position,
+     * which gets it the model default, before its subscribe throws. It answers a position afterwards.
+     */
+    @Test
+    void an_evaluation_after_a_subscribe_whose_wrapped_model_threw_after_its_evaluation_recorded_nothing_records_the_position_the_wrapped_model_answers_by_then() {
+        HoldsTheSubscriptionThenThrows wrapped = new HoldsTheSubscriptionThenThrows(true);
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(wrapped, storage,
+                new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true));
+        assertThatThrownBy(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        })).hasMessage("the subscribe fails");
+        assertThat(wrapped.evaluation).as("where the evaluation inside subscribe starts").isInstanceOf(StartAt.Default.class);
+        assertThat(storage.exists(SUBSCRIPTION_ID)).as("whether a checkpoint is stored before the wrapped model answers").isFalse();
+        wrapped.globalCheckpoint = new StringBasedCheckpoint("present");
+
+        StartAt evaluation = wrapped.evaluateStartPosition(SUBSCRIPTION_ID);
+
+        assertThat(evaluation).as("where the later evaluation starts")
+                .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class, startAt -> assertThat(startAt.checkpoint.asString()).isEqualTo("present"));
+        assertThat(storage.read(SUBSCRIPTION_ID).asString()).as("the checkpoint stored").isEqualTo("present");
+    }
+
+    /**
      * The wrapped model here holds the subscription, starts evaluating the start position on a thread of its own, and
      * throws while that evaluation still reads the checkpoint an earlier run stored.
      */
@@ -1046,6 +1109,28 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
             Subscription subscription = super.subscribe(subscriptionId, filter, startAt, action);
             evaluate(startAt);
             return subscription;
+        }
+    }
+
+    /**
+     * Holds the subscription, then throws from {@code subscribe}. Evaluates the start position in between when
+     * {@code evaluatesFirst}, and keeps what it got in {@code evaluation}.
+     */
+    private static final class HoldsTheSubscriptionThenThrows extends HoldsTheStartPositionUnevaluated {
+        private final boolean evaluatesFirst;
+        volatile @Nullable StartAt evaluation;
+
+        HoldsTheSubscriptionThenThrows(boolean evaluatesFirst) {
+            this.evaluatesFirst = evaluatesFirst;
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            super.subscribe(subscriptionId, filter, startAt, action);
+            if (evaluatesFirst) {
+                evaluation = evaluate(startAt);
+            }
+            throw new IllegalStateException("the subscribe fails");
         }
     }
 
