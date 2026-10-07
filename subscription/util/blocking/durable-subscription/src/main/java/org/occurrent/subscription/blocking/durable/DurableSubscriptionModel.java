@@ -90,8 +90,11 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * {@link DuplicateSubscriptionIdException}, because it already holds the id, stores no position.
  * <p>
  * An evaluation that finds no position recorded yet records one itself instead of waiting for {@code subscribe(..)},
- * even while {@code subscribe(..)} is recording one. A subscribe stores at most one first position either way, and the
- * first evaluation starts from it.
+ * even while {@code subscribe(..)} is recording one, and only one of the two writes a position. On a storage that
+ * evaluates write conditions, one first position stays stored. A later evaluation that finds nothing stored and loses
+ * the write starts from the stored position, or from its own when that is earlier and the storage replaced the stored
+ * one with it. The stored position is then never later than the position an evaluation started from, so a restart can
+ * deliver events again but skips none.
  * <p>
  * When a wrapped model's {@code subscribe(..)} throws, this model cancels nothing on the wrapped model, as in 0.33.0,
  * since a subscription the wrapped model holds for the id may belong to another subscribe. A wrapped model of your own
@@ -803,9 +806,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // - An evaluation never waits for the subscribing thread to call the wrapped model, so an evaluation that the
     //   wrapped subscribe waits for can't hang on the subscribing thread. It can wait for a storage write that the
     //   subscribing thread or another evaluation started.
-    // - At most one first position is stored for each subscribe on this node, by whoever takes settling first while
+    // - settle stores at most one first position for each subscribe on this node, by whoever takes settling first while
     //   nothing is settled. Every party after that takes that outcome, and the first evaluation that gets it returns
-    //   what was stored.
+    //   what was stored. A later evaluation that finds nothing stored records outside settling, as two nodes do.
     // - Nothing is stored once the subscribe ended without a settled position, so a subscribe the wrapped model
     //   refuses before evaluating stores nothing, and every evaluation from then on throws.
     // - A failed evaluation settles nothing, so a later evaluation or the subscribing thread records again. A

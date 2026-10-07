@@ -112,8 +112,17 @@ model that evaluates the start position while it holds a reentrant lock, which i
 works as it did in 0.33.0. An evaluation can wait while the caller's thread or another evaluation writes the first
 position to checkpoint storage, and the caller's thread can wait while an evaluation writes it. That write also settles
 which position is kept when another node wrote one first, as ADR 130 describes. Without that wait, a storage that
-doesn't evaluate write conditions could get two first positions from one subscribe, and a crash before the first
-checkpoint could then restart from the later one and skip the events between them.
+doesn't evaluate write conditions could get two first positions from the caller's thread and an evaluation of one
+subscribe, and a crash before the first checkpoint could then restart from the later one and skip the events between
+them.
+
+The wait covers only the first position the caller's thread and the evaluations record together. A later evaluation
+that finds nothing stored, for example after `startWhenNoStartPositionCanBeRecorded(true)` let the subscription start
+without one, writes its position the way another node would. On a storage that evaluates write conditions, one first
+position stays stored, and that evaluation starts from it, or from its own position when that is earlier and the
+storage replaced the stored one with it, as ADR 130 describes. The stored position is then never later than the
+position an evaluation started from, so a restart can deliver events again but skips none. On a storage that doesn't
+evaluate write conditions, the later write is kept, as before this decision.
 
 When the position can't be recorded, the wrapped model held the subscription for a moment before `subscribe(..)`
 cancelled it. The MongoDB models delivered nothing in that moment, since their evaluation throws.
