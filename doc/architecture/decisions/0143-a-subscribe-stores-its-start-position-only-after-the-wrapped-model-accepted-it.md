@@ -166,14 +166,22 @@ nothing stored is refused instead of recording the wrapped model's position. In 
 after the cancel had deleted it, and that evaluation recorded the wrapped model's position, so the next subscribe of
 the id resumed from what they stored. The durable model refers to those subscriptions only weakly, so it keeps each
 one only as long as the wrapped model, or an action of that subscription still running, refers to it. Once such a
-subscription has been garbage collected, the next `subscribe(..)` or `cancelSubscription(..)` of any id drops what the
+subscription has been garbage collected, a later `subscribe(..)` or `cancelSubscription(..)` of any id drops what the
 durable model kept for its id, so failed subscribes of many different ids don't pile up.
 
-A later `subscribe(..)` of the id stops those writes as well, before it hands the wrapped model anything. An action of
-such a subscription that returns after that then can't overwrite a position the later subscribe stored. In 0.33.0 it
-could, and when the action's position was later than the one the later subscribe had stored, a restart while that
-position was stored skipped the events between the two. A later `subscribe(..)` that the wrapped model refuses stops
-them too, so the held subscription then delivers without storing a checkpoint until a cancel of the id. That costs
-replays only, since the
-subscription still delivers and a restart delivers again what it delivered after its last checkpoint. Until a cancel or
-a later `subscribe(..)` of the id, the subscription writes its checkpoints as in 0.33.0.
+A later `subscribe(..)` of the id, before it hands the wrapped model anything, stops the checkpoint an action of such a
+subscription writes and the first position an evaluation of its start position records. An action of such a
+subscription that returns after that then can't overwrite a position the later subscribe stored. In 0.33.0 it could,
+and when the action's position was later than the one the later subscribe had stored, a restart while that position
+was stored skipped the events between the two. A later `subscribe(..)` that the wrapped model refuses stops them too,
+so the held subscription then stores no checkpoint for an event it delivers until a cancel of the id. That costs
+replays, and an evaluation of its start position that finds nothing stored is refused instead of recording the wrapped
+model's position, so the held subscription then gets no start position from it. A restart delivers again what the
+subscription delivered after its last checkpoint. Until a cancel or a later `subscribe(..)` of the id, the
+subscription writes its checkpoints as in 0.33.0.
+
+The durable model stores the position a wrapped `QuietPositionReportingSubscriptions` reports for a quiet subscription,
+and the one a wrapped `HistoryLossReportingSubscriptions` restarts a subscription from after its history was lost, for
+the id rather than for one subscribe. Neither interface tells the durable model which subscription a position belongs
+to. When a wrapped model of your own reports either for the held subscription, the durable model can store it over the
+checkpoint of a later `subscribe(..)` of the id.

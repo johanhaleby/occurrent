@@ -691,9 +691,16 @@ nothing else subscribed the id, `getWrappedSubscriptionModel().cancelSubscriptio
 keeps the checkpoint stored for the id, while `cancelSubscription(..)` on the durable model can delete that checkpoint
 as well. It also stops the checkpoint writes of the held subscription before it deletes anything, so an action that
 returns after the cancel doesn't write its checkpoint back, and an evaluation of its start position records no
-position. A later `subscribe(..)` of the id stops those writes as well, before it hands the wrapped model anything, so
-they don't overwrite a checkpoint that subscribe stores. A later `subscribe(..)` that the wrapped model refuses stops them too, so the held subscription
-then delivers without storing a checkpoint until a cancel of the id.
+position. A later `subscribe(..)` of the id, before it hands the wrapped model anything, stops the checkpoint an action
+of the held subscription writes and the first position an evaluation of its start position records, so neither
+overwrites a checkpoint that subscribe stores. A later `subscribe(..)` that the wrapped model refuses stops them too,
+so the held subscription then stores no checkpoint for an event it delivers until a cancel of the id, and an
+evaluation of its start position that finds nothing stored is refused.
+
+`DurableSubscriptionModel` stores the position a wrapped `QuietPositionReportingSubscriptions` reports for a quiet
+subscription, and the one a wrapped `HistoryLossReportingSubscriptions` restarts a subscription from after its history
+was lost, for the id rather than for one subscribe. When your model reports either for the held subscription, that
+position can replace the checkpoint of a later `subscribe(..)` of the id.
 
 Three ways forward, and the first needs no code change:
 

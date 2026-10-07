@@ -125,10 +125,17 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * and keeps the checkpoint stored for the id, while {@link #cancelSubscription(String)} can delete that checkpoint as
  * well. It also stops the checkpoint writes of the held subscription before it deletes anything, so an action that
  * returns after the cancel doesn't write its checkpoint back, and an evaluation of its start position records no
- * position. A later {@code subscribe(..)} of the id stops those writes as well, before it hands the wrapped model
- * anything, so they don't overwrite a checkpoint that subscribe stores. A later {@code subscribe(..)} that the wrapped
- * model refuses stops them too, so the held subscription then delivers without storing a checkpoint until a cancel of
- * the id. Until a cancel or a later {@code subscribe(..)} of the id, the held subscription writes its checkpoints.
+ * position. A later {@code subscribe(..)} of the id, before it hands the wrapped model anything, stops the checkpoint
+ * an action of the held subscription writes and the first position an evaluation of its start position records, so
+ * neither overwrites a checkpoint that subscribe stores. A later {@code subscribe(..)} that the wrapped model refuses
+ * stops them too, so the held subscription then stores no checkpoint for an event it delivers until a cancel of the
+ * id, and an evaluation of its start position that finds nothing stored is refused. Until a cancel or a later
+ * {@code subscribe(..)} of the id, the held subscription writes its checkpoints.
+ * <p>
+ * This model stores the position a wrapped {@link QuietPositionReportingSubscriptions} reports for a quiet
+ * subscription, and the one a wrapped {@link HistoryLossReportingSubscriptions} restarts a subscription from after its
+ * history was lost, for the id rather than for one subscribe. When a wrapped model of your own reports either for the
+ * held subscription, that position can replace the checkpoint of a later {@code subscribe(..)} of the id.
  * <p>
  * A wrapped model of your own has three requirements that this model doesn't check:
  * <ul>
@@ -184,7 +191,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // that writes through it, so cancelSubscription and the next subscribe of the id stop its writes and remove it.
     // There is at most one per id, since every subscribe of the id removes the one before it. Held weakly, so it is
     // kept only as long as such a run, or an action it is still calling, holds it. Put and removed by id only under
-    // the lock for the id. A collected one is removed by the next subscribe or cancel of any id, which takes no lock
+    // the lock for the id. A collected one is removed by a later subscribe or cancel of any id, which takes no lock
     // of that id and removes the entry only while it still holds that same collected reference
     private final ConcurrentMap<String, UntrackedRegistration> untrackedRegistrations = new ConcurrentHashMap<>();
     private final ReferenceQueue<CheckpointRegistration> collectedUntrackedRegistrations = new ReferenceQueue<>();
@@ -490,8 +497,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     // Runs under the lock for the id, before a subscribe hands the wrapped model anything, so once it has, no
     // registration an earlier subscribe of the id left untracked writes a checkpoint. A subscribe that is then refused
-    // stops them too, which costs replays only. A tracked registration stops once a later subscribe of the id is
-    // tracked or opted out, since the wrapped model may still deliver to it and refuse this subscribe
+    // stops them too, which costs replays and refuses an evaluation of the held run's start position that finds nothing
+    // stored. A tracked registration stops once a later subscribe of the id is tracked or opted out, since the wrapped
+    // model may still deliver to it and refuse this subscribe
     private void stopUntrackedRegistrations(String subscriptionId) {
         removeCollectedUntrackedRegistrations();
         stopWritingOf(untrackedRegistrations.remove(subscriptionId));
