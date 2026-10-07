@@ -44,6 +44,7 @@ import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.net.URI;
 import java.time.Duration;
@@ -284,7 +285,107 @@ class ReactorDurableSubscriptionModelRefusedHandOverTest {
         assertThat(duplicateRefused).as("why the duplicate did not start").isInstanceOf(DuplicateSubscriptionIdException.class);
         assertThat(callsLeft.get()).as("calls left to send once the duplicate was refused").isNegative();
         assertThat(waitingForACallToTheWrappedModel()).as("warnings while 4 calls of 3 seconds each were sent to the wrapped model one after another").first().asString()
-                .startsWith("Subscription " + SUBSCRIPTION_ID + " is still waiting, after 10 seconds, for a call this model made to the wrapped model");
+                .startsWith("Subscription " + SUBSCRIPTION_ID + " is still waiting for a call this model made to the wrapped model")
+                .contains(", 10 seconds after its hand-over to that model started.");
+    }
+
+    // The hand-over checks for a call in flight before it reads the start position and again before it calls the
+    // wrapped model, and here it waits 7 seconds at each check
+    @Test
+    void a_subscribe_that_waits_for_a_call_to_the_wrapped_model_before_and_after_its_start_position_is_read_is_logged_at_warn_counted_from_the_start_of_the_hand_over() throws Exception {
+        // Given
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), cloudEvent -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
+        storage.holdNextRead();
+        storage.releaseRead.complete(null);
+        CountDownLatch pausedByTheWrappedModel = new CountDownLatch(1);
+        AtomicBoolean readBeforeTheSecondCall = new AtomicBoolean();
+        AtomicInteger noCallInFlight = new AtomicInteger();
+        model.runOnceNoWrappedCallIsInFlight(() -> {
+            int found = noCallInFlight.incrementAndGet();
+            try {
+                if (found == 1 && pausedByTheWrappedModel.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                    sendACallTheWrappedModelTakes(Duration.ofSeconds(7));
+                } else if (found == 3) {
+                    readBeforeTheSecondCall.set(storage.heldReadEntered.getCount() == 0);
+                    sendACallTheWrappedModelTakes(Duration.ofSeconds(7));
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        AtomicReference<CompletableFuture<Subscription>> duplicate = new AtomicReference<>();
+        feed.moving = __ -> {
+            duplicate.set(CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.empty()), caller));
+            duplicate.get().join();
+        };
+        feed.pauseSubscription(SUBSCRIPTION_ID);
+        feed.moving = __ -> {
+        };
+
+        // When
+        pausedByTheWrappedModel.countDown();
+        Subscription subscription = duplicate.get().get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        Throwable duplicateRefused = catchThrowable(() -> subscription.waitUntilStarted().block(Duration.ofSeconds(30)));
+
+        // Then
+        assertThat(duplicateRefused).as("why the duplicate did not start").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(noCallInFlight.get()).as("times the hand-over found no call in flight").isEqualTo(4);
+        assertThat(readBeforeTheSecondCall).as("the start position read before the second call was sent").isTrue();
+        assertThat(waitingForACallToTheWrappedModel()).as("warnings while the hand-over waited 7 seconds for a call before the start position was read and 7 seconds for one after").singleElement().asString()
+                .startsWith("Subscription " + SUBSCRIPTION_ID + " is still waiting for a call this model made to the wrapped model")
+                .contains(", 10 seconds after its hand-over to that model started.");
+    }
+
+    // The thread that ends a call to the wrapped model goes on once the hand-over is on its way to a thread of the
+    // model's own. Here that thread waits until the hand-over has found the next call and started to wait again.
+    @Test
+    void a_subscribe_that_waits_again_before_the_thread_that_ended_the_call_before_has_gone_on_is_logged_at_warn() throws Exception {
+        // Given
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), cloudEvent -> Mono.empty()).waitUntilStarted().block(TIMEOUT);
+        CompletableFuture<Subscription> duplicate = subscribeFromTheModelDefaultWhileTheWrappedModelPausesTheSubscription();
+        feed.resumeSubscription(SUBSCRIPTION_ID);
+        AtomicReference<@Nullable Thread> endsTheFirstCall = new AtomicReference<>();
+        AtomicBoolean heldBack = new AtomicBoolean();
+        Schedulers.onScheduleHook(SUBSCRIPTION_ID, scheduled -> {
+            if (Thread.currentThread() != endsTheFirstCall.get() || !heldBack.compareAndSet(false, true)) {
+                return scheduled;
+            }
+            Thread elsewhere = new Thread(scheduled);
+            elsewhere.start();
+            try {
+                elsewhere.join(TIMEOUT.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return () -> {
+            };
+        });
+        AtomicInteger noCallInFlight = new AtomicInteger();
+        model.runOnceNoWrappedCallIsInFlight(() -> {
+            int found = noCallInFlight.incrementAndGet();
+            if (found == 1) {
+                endsTheFirstCall.set(sendACallTheWrappedModelTakes(Duration.ofSeconds(2)));
+            } else if (found == 2) {
+                sendACallTheWrappedModelTakes(Duration.ofSeconds(12));
+            }
+        });
+
+        // When
+        Throwable duplicateRefused;
+        try {
+            storage.releaseRead.complete(null);
+            Subscription subscription = duplicate.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            duplicateRefused = catchThrowable(() -> subscription.waitUntilStarted().block(Duration.ofSeconds(30)));
+        } finally {
+            Schedulers.resetOnScheduleHook(SUBSCRIPTION_ID);
+        }
+
+        // Then
+        assertThat(duplicateRefused).as("why the duplicate did not start").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(heldBack).as("the thread that ended the first call held back until the hand-over waited again").isTrue();
+        assertThat(waitingForACallToTheWrappedModel()).as("warnings while the hand-over waited 12 seconds for the second call").first().asString()
+                .startsWith("Subscription " + SUBSCRIPTION_ID + " is still waiting for a call this model made to the wrapped model")
+                .contains(", 10 seconds after its hand-over to that model started.");
     }
 
     @Test
@@ -371,10 +472,12 @@ class ReactorDurableSubscriptionModelRefusedHandOverTest {
     }
 
     // A pause, or a resume of a paused subscription, made on another thread, that the wrapped model takes for as long as
-    // given. Returns once the wrapped model has the call.
-    private void sendACallTheWrappedModelTakes(Duration taking) {
+    // given. Returns, once the wrapped model has the call, the thread that makes it, which also ends it.
+    private Thread sendACallTheWrappedModelTakes(Duration taking) {
         CountDownLatch taken = new CountDownLatch(1);
+        AtomicReference<Thread> making = new AtomicReference<>();
         feed.moving = __ -> {
+            making.set(Thread.currentThread());
             taken.countDown();
             try {
                 Thread.sleep(taking.toMillis());
@@ -395,6 +498,7 @@ class ReactorDurableSubscriptionModelRefusedHandOverTest {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        return making.get();
     }
 
     private List<String> waitingForACallToTheWrappedModel() {
