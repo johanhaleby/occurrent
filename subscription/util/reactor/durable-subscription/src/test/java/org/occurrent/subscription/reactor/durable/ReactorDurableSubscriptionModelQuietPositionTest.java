@@ -228,7 +228,7 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         HoldableStorage storage = new HoldableStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(wrapped, storage,
                 new ReactorDurableSubscriptionModelConfig(__ -> false).saveQuietPositionEvery(SHORTER_THAN_ANY_WAIT));
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted(TIMEOUT).block();
 
         // When
         Function<Checkpoint, Mono<Void>> offeredBeforeAnyEvent = wrapped.beforeReading(SUBSCRIPTION_ID);
@@ -311,10 +311,11 @@ class ReactorDurableSubscriptionModelQuietPositionTest {
         return new ReactorDurableSubscriptionModelConfig(persistPositionForEveryNCloudEvent).saveQuietPositionEvery(SHORTER_THAN_ANY_WAIT);
     }
 
-    // A subscribe from the model default that finds STARTS_AT stored, as after an earlier run stored a position
+    // A subscribe from the model default that finds STARTS_AT stored, as after an earlier run stored a position, and
+    // returns once the subscription is handed to the wrapped model, since the subscribe returns before it reads storage
     private static void subscribeFromTheStoredStart(ReactorDurableSubscriptionModel model, CheckpointStorage storage) {
         storage.save(SUBSCRIPTION_ID, STARTS_AT).block(TIMEOUT);
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted(TIMEOUT).block();
     }
 
     // What a wrapped model does with the function offered for a read that returned nothing

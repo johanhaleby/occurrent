@@ -694,6 +694,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             storage.storedElsewhereBeforeIfAbsent = new StringBasedCheckpoint(String.valueOf(storedElsewhere));
             storage.resolvesRaceByPosition = true;
             Subscription subscription = subscribeOn(caller, model, delivered);
+            untilHandedOver(feed);
             feed.write();
             feed.write();
             Function<Checkpoint, Mono<Void>> saveQuietPosition = feed.quietPositionSaverFor(SUBSCRIPTION_ID);
