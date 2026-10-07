@@ -1694,8 +1694,8 @@ resumes from the position of the cancelled subscription. So the model tries the 
 `subscribe(..)` of the id takes it over or the model is shut down. The wait before a try starts at 100 milliseconds and about doubles after each
 failure, never past 5 seconds, with some randomness so that deletes failing together are not tried again together.
 Every failure is logged as a warning. A store that fails for a few seconds should not keep a stale position stored, and
-a caller that ignores the `Mono` would never learn that the delete has to be made again. Until a try succeeds or a
-`subscribe(..)` of the id takes the delete over, the cancel's `Mono` doesn't complete. It fails earlier only when the
+a caller that ignores the `Mono` would never learn that the delete has to be made again. Until a try succeeds, a
+`subscribe(..)` of the id takes the delete over or the model is shut down, the cancel's `Mono` doesn't complete. It fails earlier only when the
 cancel in the model it wraps fails, and the delete is still tried again after that.
 
 A `shutdown()` stops the model's own tries, also one waiting to be tried again. A try already under way runs to its end,

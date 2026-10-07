@@ -2043,8 +2043,8 @@ answers, and one that starts from a stored checkpoint handles no event before th
 A delete that fails is tried again until it succeeds, a subscribe of the id takes it over, or the model is shut down,
 and each failure is logged as a warning.
 The wait before a try starts at 100 milliseconds and about doubles after each failure, never past 5 seconds, with some
-randomness so that deletes failing together are not tried again together. Until a try succeeds or a subscribe takes
-the delete over, the cancel's `Mono` doesn't complete. It fails earlier only when the cancel in the model it wraps
+randomness so that deletes failing together are not tried again together. Until a try succeeds, a subscribe takes
+the delete over, or the model is shut down, the cancel's `Mono` doesn't complete. It fails earlier only when the cancel in the model it wraps
 fails, and the delete is still tried again after that. A `shutdown()` stops the tries, also one waiting to be tried
 again. A try already under way runs to its end, and otherwise the `Mono` fails with the error of the last try. A store can retry within one try, as `ReactorCheckpointStorage` for MongoDB does by default,
 so such a try can still reach the store after the `shutdown()`. When the checkpoint stays stored, call
