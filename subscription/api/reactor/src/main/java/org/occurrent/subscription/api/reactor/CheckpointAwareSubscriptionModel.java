@@ -58,8 +58,10 @@ public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel,
      * just before the call. A model that overrides this method should fail the {@code Mono} when it can't answer for
      * the moment of the call, rather than answer with a later position.
      * <p>
-     * The default implementation returns {@link #globalCheckpoint()}, which works out the position when it's subscribed
-     * to, so events written between the call and the subscription can be skipped.
+     * The default implementation returns {@link #globalCheckpoint()}, which works out the position when that read runs,
+     * so events written between the call and the moment the position is worked out can be skipped. A
+     * {@code globalCheckpoint()} that answers asynchronously can work it out after the returned {@code Mono} is
+     * subscribed to, so subscribing to it at the call doesn't keep those events from being skipped.
      * <p>
      * An implementation should not block when the returned {@code Mono} is subscribed to. For some start positions, the
      * subscription-model default for one, {@code ReactorDurableSubscriptionModel} subscribes to it on the thread that

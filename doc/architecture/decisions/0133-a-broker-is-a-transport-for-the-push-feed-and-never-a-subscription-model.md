@@ -1901,13 +1901,18 @@ default, on a durable model that wraps a model that manages named subscriptions,
 caller's thread. 0.33.0 read there, so a `subscribe(..)` on a thread where Reactor refuses to block threw, and one on a
 Netty event loop thread of the MongoDB driver could wait for good for a read that needed that thread. Now the call
 doesn't wait for storage, and the subscription is handed to the wrapped model once the read answers. The read of where
-the feed is starts at the call, so with nothing stored the subscription starts from where the feed was then and skips
-nothing the caller writes after the return. That read is subscribed to on the caller's thread, so the call returns at
-once only where the wrapped model's `globalCheckpointAsOfNow()` doesn't block when subscribed to, which holds for
+the feed is starts at the call. Where the wrapped model overrides `globalCheckpointAsOfNow()` to answer with where its
+feed was when it was called, a subscription with nothing stored starts from there and skips nothing the caller writes
+after the return. `ReactorMongoSubscriptionModel` answers for the call within the limits that section 21 of the 0.34.0
+upgrade guide describes. Over a wrapped model that keeps the default, the subscription can skip what the caller writes
+until the read answers, also after the return, where 0.33.0 waited for the read. I kept the call from waiting and
+documented that as a break in section 25 of that guide, since every reactor model Occurrent ships overrides the method
+or asks the model it wraps. That read is subscribed to on the caller's thread, so the call returns at once only where
+the wrapped model's `globalCheckpointAsOfNow()` doesn't block when subscribed to, which holds for
 `ReactorMongoSubscriptionModel`. The start position is stored only once the wrapped model has taken the subscribe, so a
-subscribe it refuses, as a duplicate or over a filter it doesn't support, stores nothing for the id. Such a refusal fails
-`waitUntilStarted()` and is logged as an error, since the call has returned by then. A duplicate that the wrapped model
-reports as running or paused at the call is still refused there.
+subscribe it refuses, as a duplicate or over a filter it doesn't support, stores nothing for the id. Such a refusal
+fails `waitUntilStarted()` and is logged as an error, since the call has returned by then. A duplicate that the wrapped
+model reports as running or paused at the call is still refused there.
 
 When the durable model drives the subscription itself, no lifecycle call holds its monitor while it calls the storage,
 the wrapped model or a function the caller supplies, or while it cancels the feed of a subscription. Each call decides
@@ -1942,9 +1947,9 @@ path only a cancel and a shutdown retire a generation, since the wrapped model k
 
 A `subscribe(..)` with an id already in use is refused under the monitor, before its function runs. `start(true)` starts
 the paused subscriptions one after another on the calling thread, so a slow function delays the ones after it in that
-call. One whose function waits for a write back is asked after `start(true)` returned, delays none of them, and counts
-as running meanwhile. One whose function throws stays paused while the others start, and `start(true)` throws the first
-error once it has tried them all.
+call. A function whose subscription waits for a write back is asked after `start(true)` returned, delays none of them,
+and its subscription counts as running meanwhile. One whose function throws stays paused while the others start, and
+`start(true)` throws the first error once it has tried them all.
 
 A reactor catch-up model that is cancelled before its replay handed the id over to the wrapped model now passes the
 cancel on to the wrapped model too, the way the blocking `StreamCatchupSubscriptionModel` always has, since the wrapped

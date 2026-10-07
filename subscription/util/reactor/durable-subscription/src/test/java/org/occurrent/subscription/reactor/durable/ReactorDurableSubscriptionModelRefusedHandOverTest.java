@@ -286,7 +286,7 @@ class ReactorDurableSubscriptionModelRefusedHandOverTest {
         assertThat(callsLeft.get()).as("calls left to send once the duplicate was refused").isNegative();
         assertThat(waitingForACallToTheWrappedModel()).as("warnings while 4 calls of 3 seconds each were sent to the wrapped model one after another").first().asString()
                 .startsWith("Subscription " + SUBSCRIPTION_ID + " is still waiting for a call this model made to the wrapped model")
-                .contains(", 10 seconds after its hand-over to that model started.");
+                .contains(", 10 seconds after it first checked for such a call.");
     }
 
     // The hand-over checks for a call in flight before it reads the start position and again before it calls the
@@ -333,7 +333,7 @@ class ReactorDurableSubscriptionModelRefusedHandOverTest {
         assertThat(readBeforeTheSecondCall).as("the start position read before the second call was sent").isTrue();
         assertThat(waitingForACallToTheWrappedModel()).as("warnings while the hand-over waited 7 seconds for a call before the start position was read and 7 seconds for one after").singleElement().asString()
                 .startsWith("Subscription " + SUBSCRIPTION_ID + " is still waiting for a call this model made to the wrapped model")
-                .contains(", 10 seconds after its hand-over to that model started.");
+                .contains(", 10 seconds after it first checked for such a call.");
     }
 
     // The thread that ends a call to the wrapped model goes on once the hand-over is on its way to a thread of the
@@ -385,7 +385,7 @@ class ReactorDurableSubscriptionModelRefusedHandOverTest {
         assertThat(heldBack).as("the thread that ended the first call held back until the hand-over waited again").isTrue();
         assertThat(waitingForACallToTheWrappedModel()).as("warnings while the hand-over waited 12 seconds for the second call").first().asString()
                 .startsWith("Subscription " + SUBSCRIPTION_ID + " is still waiting for a call this model made to the wrapped model")
-                .contains(", 10 seconds after its hand-over to that model started.");
+                .contains(", 10 seconds after it first checked for such a call.");
     }
 
     @Test
