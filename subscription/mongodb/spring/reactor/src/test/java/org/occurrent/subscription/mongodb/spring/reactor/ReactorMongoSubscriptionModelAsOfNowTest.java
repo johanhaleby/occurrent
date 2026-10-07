@@ -21,6 +21,7 @@ import com.mongodb.MongoCommandException;
 import com.mongodb.ServerAddress;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
+import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.BsonDocument;
@@ -405,6 +406,19 @@ class ReactorMongoSubscriptionModelAsOfNowTest {
                 return command.containsKey("hello") && hellos.incrementAndGet() > 1 ? reply.delayElement(Duration.ofSeconds(1)) : reply;
             }
 
+            // A subscription with an id opens its change stream from the collection
+            @Override
+            public Mono<MongoCollection<Document>> getCollection(String collectionName) {
+                if (changeStreams.incrementAndGet() == 1) {
+                    return Mono.defer(() -> {
+                        historyLost.countDown();
+                        return Mono.error(changeStreamHistoryLost());
+                    });
+                }
+                return super.getCollection(collectionName);
+            }
+
+            // And through changeStream(..) when the model can't read the driver's cursor
             @Override
             public <T> Flux<ChangeStreamEvent<T>> changeStream(String database, String collectionName, ChangeStreamOptions options, Class<T> targetType) {
                 if (changeStreams.incrementAndGet() == 1) {

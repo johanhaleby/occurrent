@@ -774,17 +774,31 @@ class CompetingConsumerSubscriptionModelStartAndResumeTest {
         List<String> deliveredToX = new CopyOnWriteArrayList<>();
         List<String> warnings = new CopyOnWriteArrayList<>();
         List<String> held = new CopyOnWriteArrayList<>();
+        CountDownLatch stopReturned = new CountDownLatch(1);
+        AtomicBoolean stopReturnedBeforeTheWaitRanOut = new AtomicBoolean();
         AppenderBase<ILoggingEvent> appender = recording(warnings, held);
         try {
-            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), cloudEvent -> deliveredToX.add(cloudEvent.getId()));
+            overInMemory.subscribe(SUBSCRIBER_ID, "x", null, StartAt.now(), cloudEvent -> {
+                deliveredToX.add(cloudEvent.getId());
+                if (cloudEvent.getId().equals("e1")) {
+                    try {
+                        stopReturnedBeforeTheWaitRanOut.set(stopReturned.await(5, SECONDS));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            });
             wrapped.start();
             wrapped.accept(List.of(event("e1"), event("e2")));
             await().atMost(5, SECONDS).untilAsserted(() -> assertThat(held).as("events of x held").hasSize(1));
 
-            // Lets e1 through, after which e2 is held
+            // Each call stop() makes into the wrapped model lets the events waiting for the lease through, e1 among them.
+            // The action for e1 waits until stop() has returned, so e2 comes after those calls and is held.
             overInMemory.stop();
+            stopReturned.countDown();
 
             await().atMost(5, SECONDS).untilAsserted(() -> assertThat(held).as("events of x held").hasSize(2));
+            assertThat(stopReturnedBeforeTheWaitRanOut).as("the action for e1 saw stop() return before its 5 second wait ran out").isTrue();
             assertThat(deliveredToX).as("events delivered to x").containsExactly("e1");
             assertThat(warnings).as("warnings").singleElement().asString()
                     .contains("Call start() on the CompetingConsumerSubscriptionModel, not on the subscription model it wraps")

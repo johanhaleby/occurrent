@@ -35,8 +35,13 @@ import org.occurrent.subscription.mongodb.internal.DcbSubscriptionFilterConverte
 import org.occurrent.subscription.mongodb.internal.DocumentAdapter;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.AggregationOperationContext;
+import org.springframework.data.mongodb.core.aggregation.PrefixingDelegatingAggregationOperationContext;
 import org.springframework.data.mongodb.core.query.Criteria;
 
+import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter.convertFilterToCriteria;
@@ -46,6 +51,24 @@ import static org.springframework.data.mongodb.core.aggregation.Aggregation.newA
 
 @NullMarked
 public class ApplyFilterToChangeStreamOptionsBuilder {
+
+    // The change stream fields that a filter on the event already names in full, so they get no fullDocument prefix
+    private static final Set<String> CHANGE_STREAM_FIELDS = Set.of("operationType", "fullDocument", "documentKey", "updateDescription", "ns");
+
+    // The stages Spring Data puts after $changeStream for the same filter, where a field of the event gets the fullDocument
+    // prefix and context maps the values
+    @SuppressWarnings("unchecked")
+    public static List<Document> changeStreamPipeline(TimeRepresentation timeRepresentation, @Nullable SubscriptionFilter filter, AggregationOperationContext context) {
+        Object changeStreamFilter = applyFilter(timeRepresentation, filter, ChangeStreamOptions.builder()).getFilter().orElse(null);
+        if (changeStreamFilter == null) {
+            return List.of();
+        } else if (changeStreamFilter instanceof Aggregation aggregation) {
+            return List.copyOf(aggregation.toPipeline(new PrefixingDelegatingAggregationOperationContext(context, "fullDocument", CHANGE_STREAM_FIELDS)));
+        } else if (changeStreamFilter instanceof List<?> stages) {
+            return List.copyOf((List<Document>) stages);
+        }
+        throw new IllegalArgumentException("Cannot turn " + changeStreamFilter.getClass().getName() + " into a change stream pipeline");
+    }
 
     public static ChangeStreamOptions applyFilter(TimeRepresentation timeRepresentation, @Nullable SubscriptionFilter filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
         final ChangeStreamOptions changeStreamOptions;
