@@ -1814,7 +1814,7 @@ the id throws, any `subscribe(..)` of the id throws what it threw, at the call, 
 subscribe. Only an `UnknownSubscriptionException` from `isRunning(..)` or `isPaused(..)` counts as the wrapped model
 not holding the id. So where a wrapped model of your own throws from `subscriptionIds()`, or, where it doesn't list
 its ids, throws anything else from `isRunning(..)` or `isPaused(..)` for an id it doesn't hold, a durable
-`subscribe(..)` of that id throws. Make `subscriptionIds()` answer, and answer `false` from `isRunning(..)` and
+`subscribe(..)` that asks it throws. Make `subscriptionIds()` answer, and answer `false` from `isRunning(..)` and
 `isPaused(..)` for an id you don't hold, as `SubscriptionModelLifeCycle` documents.
 [Section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted) describes
 the last two.
@@ -1978,10 +1978,11 @@ can reach `waitUntilStarted()` instead of the subscribe, as described below and 
 
 When a subscribe fails once it has taken the delete over, as one that Reactor refuses on a thread that may not block
 does, the delete still removes the checkpoint, as in 0.33.0, unless another subscription of the id is starting or
-registered by then. The same goes for a subscription that took the delete over and ends before it started without
-writing a checkpoint, for instance because its start position cannot be read. A subscription that a pause ended before
-it started keeps the delete taken over until you resume it. When a later cancel of the id has started a delete by then,
-that delete removes the checkpoint instead.
+registered by then, or a subscription of the id that took the delete over has started or written a checkpoint. The same
+goes for a subscription that took the delete over and ends before it started without writing a checkpoint, for instance
+because its start position cannot be read. A subscription that a pause ended before it started keeps the delete taken
+over until you resume it. When a later cancel of the id has started a delete by then, that delete removes the checkpoint
+instead.
 
 So the cancel's `Mono` waits, once the delete's tries and the write back have ended, until every subscribe, resume or
 `start(..)` that took the delete over has failed, or its subscription has ended before it started, started, or written

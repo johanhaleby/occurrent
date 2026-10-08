@@ -456,9 +456,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             return startReserved(reservation, storedAtTheCall);
         } catch (RuntimeException | Error e) {
             // A dynamic start position that throws gives the id back, so subscribing again under it is not refused as
-            // a duplicate
+            // a duplicate. That also gives back the takeover of this call, unless a pause or a cancel moved the
+            // subscription meanwhile, see releaseReservation.
             releaseReservation(reservation);
-            giveBackPositionDelete(subscriptionId, takenOverAtTheCall, null);
             throw e;
         }
     }
@@ -1827,7 +1827,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // Gives back the deletes of the id that a generation which ended before it started took over, and those the
     // generations before it in its run took over, see takenOverBefore, as a subscribe that throws does. No
     // subscription needs the checkpoint those deletes were to remove then. A generation that wrote its start position
-    // keeps them, so that position stays stored.
+    // gives none back. Giving back one that an earlier generation of its run kept for good, by a position write that
+    // ended after a resume handed it on, changes nothing, see giveBackPositionDelete, so that position stays stored.
     private void giveBackUnlessWritten(String subscriptionId, InternalSubscription generation) {
         if (!wrotePosition(generation.writer)) {
             giveBackTakeOvers(subscriptionId, generation);
@@ -1861,24 +1862,34 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // Gives back what reserveInternalSubscription took when the dynamic start position threw, unless a pause, a cancel
     // or a shutdown already moved or removed it. A resume puts back what it took out of the paused subscriptions, so
     // the subscription stays paused rather than being dropped from both maps. Either way the generation that threw is
-    // retired, and gives back the delete it took over. A subscription dropped here ends its read of where the feed was.
+    // retired. A subscription dropped here ends its read of where the feed was.
+    //
+    // The generation gives back what it took over only when it is taken out here. It then gives back its own takeover,
+    // and a subscribe that is dropped also the one it took at the call. A replaced generation put back holds the rest.
+    // Otherwise whatever moved the generation holds them all. A pause keeps them with the paused generation, a resume
+    // then hands them to the generation that replaces it, see stillTakenOver, a cancel gives them back, and a shutdown
+    // ends the wait for them.
     private void releaseReservation(Reservation reservation) {
         String subscriptionId = reservation.subscriptionId();
         @Nullable InternalSubscription replaced = reservation.replaced();
-        final boolean dropped;
+        final boolean removed;
         synchronized (this) {
-            boolean removed = runningSubscriptions.remove(subscriptionId, reservation.subscription());
+            removed = runningSubscriptions.remove(subscriptionId, reservation.subscription());
             if (removed && replaced != null) {
                 pausedSubscriptions.put(subscriptionId, replaced);
             }
-            dropped = removed && replaced == null;
             retire(subscriptionId, reservation.subscription());
         }
-        if (dropped) {
-            endPresentRead(reservation.subscription());
+        if (!removed) {
+            return;
         }
-        PositionWriter writer = reservation.subscription().writer;
-        giveBackPositionDelete(subscriptionId, writer.takeOver, writer);
+        InternalSubscription released = reservation.subscription();
+        if (replaced == null) {
+            endPresentRead(released);
+            giveBackTakeOvers(subscriptionId, released);
+        } else {
+            giveBackPositionDelete(subscriptionId, released.writer.takeOver, released.writer);
+        }
     }
 
     // A shutdown ends waitUntilStarted() of a subscription that had not started by then. One that started, or that was
@@ -1901,9 +1912,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         return Flux.defer(() -> retired(writer)
                 ? Flux.<Void>never()
                 : subscription.subscribe(filter, startAt)
+                // A generation retired by then has not started. What retired it ends its waitUntilStarted(), as for a
+                // pause or a cancel before the feed was subscribed to
                 .doOnSubscribe(__ -> {
-                    keepTakeOversUnlessRetired(writer);
-                    startedSink.tryEmitEmpty();
+                    if (keepTakeOversUnlessRetired(writer)) {
+                        startedSink.tryEmitEmpty();
+                    }
                 })
                 .concatMap(delivery));
     }
@@ -2557,14 +2571,15 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * {@link StartAt#now()}, the read of where the feed was, which has no time limit.
      * <p>
      * When a subscribe, a resume or a start of the id fails once it has taken the delete over, as a subscribe whose
-     * dynamic start position throws does, no subscription needs the checkpoint any more. The same goes
-     * for a subscription that took the delete over and ends before it started without writing a checkpoint, as one
-     * whose start position cannot be read does. The delete then goes ahead and removes the checkpoint, unless another
-     * subscription of the id is starting or registered by then, a later cancel of the id has started a delete of its
-     * own, or the model is shut down. A subscription that a pause
-     * ended before it started keeps the delete taken over until it is resumed, and the delete goes ahead when the
-     * resumed one ends that way. With a storage that evaluates no condition on a delete, the checkpoint a try under way
-     * read is then not written back, when the call failed or the subscription ended before that try ended.
+     * dynamic start position throws does, that call no longer needs the checkpoint. The same goes for a subscription
+     * that took the delete over and ends before it started without writing a checkpoint, as one whose start position
+     * cannot be read does. The delete then goes ahead and removes the checkpoint, unless a subscription of the id that
+     * took it over has started or written a checkpoint, another subscription of the id is starting or registered by
+     * then, a later cancel of the id has started a delete of its own, or the model is shut down. A subscription that a
+     * pause ended before it started keeps the delete taken over until it is resumed, and when the resumed one ends that
+     * way, the delete goes ahead on the same terms. With a storage that evaluates no condition on a delete, the
+     * checkpoint a try under way read is then not written back, when the call failed or the subscription ended before
+     * that try ended.
      * <p>
      * So the returned {@code Mono} waits, once the tries and the write back have ended, until every subscribe, resume
      * or start that took the delete over has failed, or its subscription has ended before it started, started, or
@@ -2928,7 +2943,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private static Mono<Void> warnWhileUndecided(String subscriptionId, Mono<Void> undecided) {
         return Mono.defer(() -> {
             Disposable warnings = Flux.interval(STILL_WAITING_FOR_A_POSITION_READ_EVERY, STILL_WAITING_FOR_A_POSITION_READ_EVERY)
-                    .subscribe(tick -> log.warn("The cancel of subscription {} is still waiting, after {} seconds, for a subscribe, a resume or a start of the id that took its delete over and has neither started, written a checkpoint nor failed. A paused one ends the wait once it is resumed or cancelled.",
+                    .subscribe(tick -> log.warn("The cancel of subscription {} is still waiting, after {} seconds, for a subscribe, a resume or a start of the id that took its delete over and has neither started nor written a checkpoint. One that a pause or a stop() set aside holds the wait until it is resumed, started or cancelled.",
                             subscriptionId, (tick + 1) * STILL_WAITING_FOR_A_POSITION_READ_EVERY.toSeconds()));
             return undecided.doFinally(__ -> warnings.dispose());
         });
@@ -2948,11 +2963,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // A generation keeps the deletes of the id it took over for good once it subscribed to the feed before it was
-    // retired, see keepTakeOversUnlessRetired, or wrote a position, and so do the generations before it in its run, see
-    // giveBackUnlessWritten. A subscription handed to
-    // the wrapped model keeps them once it is registered there and recorded what it starts from, see endUnsettled.
-    // From then on only a cancel of the id or a shutdown gives them back, neither of which lets a delete go ahead in
-    // their place, so the cancel that started them no longer waits for that call, see onceDecided.
+    // retired, see keepTakeOversUnlessRetired, or wrote a position, also one that ends after it was retired, and keeps
+    // those the generations before it in its run took over with them, see takenOverBefore. A subscription handed to the wrapped model keeps them once it is
+    // registered there and recorded what it starts from, see endUnsettled. From then on a give back of them changes
+    // nothing until a delete of the id made after them is the latest, as a cancel of the id makes one, or the model is
+    // shut down, and neither lets a delete go ahead in their place, see giveBackPositionDelete. So the cancel that
+    // started them no longer waits for that call, see onceDecided.
     private void keepTakeOvers(PositionWriter writer) {
         List<Sinks.Empty<Void>> decided = new ArrayList<>();
         synchronized (positionLock) {
@@ -2964,14 +2980,18 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // As keepTakeOvers, for a generation this model drives that subscribed to the feed, unless it was retired by then.
     // What retired it gives back what it took over, or the generation stays paused with it until a resume or a start
     // hands it to the generation that replaces it, see stillTakenOver, which then keeps it once that one subscribes.
-    private void keepTakeOversUnlessRetired(PositionWriter writer) {
+    // Answers whether the generation was still live, and so counts as started.
+    private boolean keepTakeOversUnlessRetired(PositionWriter writer) {
         List<Sinks.Empty<Void>> decided = new ArrayList<>();
+        final boolean live;
         synchronized (positionLock) {
-            if (!writer.retired) {
+            live = !writer.retired;
+            if (live) {
                 keepTakeOvers(writer, decided);
             }
         }
         decided.forEach(Sinks.Empty::tryEmitEmpty);
+        return live;
     }
 
     // Called under positionLock. Adds what to emit once the lock is released to decided.
@@ -3204,9 +3224,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // deletes taken over, and after the position writes in flight. Each of those deletes whose cancel still waits ends
     // only once the new one has, and where a delete of the id made after the takeover is what goes ahead, only once
     // that one has, see onceDecided. Where the write back waits for the try under way, it is not made once every call
-    // has given the delete back by the time the try ends. The new delete is not started while another call counted against
-    // those deletes has not given them back, while a newer delete of the id runs, while a writer of the id is
-    // registered or starting, or once the model is shut down. refused is the writer of the call that threw, which is
+    // has given the delete back by the time the try ends. The new delete is not started for a takeover kept for good,
+    // while another call counted against those deletes has not given them back, while a newer delete of the id runs,
+    // while a writer of the id is registered or starting, or once the model is shut down. refused is the writer of the call that threw, which is
     // retired here when that call took a delete over, so nothing it still has under way writes a position, or null.
     private void giveBackPositionDelete(String subscriptionId, TakeOver takeOver, @Nullable PositionWriter refused) {
         if (takeOver.counted.isEmpty()) {
@@ -3223,12 +3243,18 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             if (takeOver.givenBack) {
                 return;
             }
+            @Nullable PositionDelete latest = positionDeletes.get(subscriptionId);
+            // A takeover kept for good stands for a checkpoint a subscription of the id wrote or starts from, so it
+            // keeps counting against the deletes until a delete of the id made after it is the latest, as a cancel of
+            // the id makes one before it gives back, or the model is shut down. Neither lets a delete go ahead here.
+            if (takeOver.kept && !shutdown && (latest == null || takeOver.counted.contains(latest))) {
+                return;
+            }
             takeOver.givenBack = true;
             takeOver.counted.forEach(counted -> counted.takers--);
             if (!takeOver.kept) {
                 countDecided(takeOver, decided);
             }
-            @Nullable PositionDelete latest = positionDeletes.get(subscriptionId);
             boolean stillNeeded = shutdown
                     || (latest != null && !takeOver.counted.contains(latest))
                     || takeOver.counted.stream().anyMatch(counted -> counted.takers > 0)

@@ -48,6 +48,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
@@ -89,6 +90,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
     private static final String READ_FAILED = "The storage cannot read right now";
     private static final String DELETE_FAILED = "The storage lost the answer to the delete";
     private static final String START_FAILED = "The wrapped model could not start the subscription";
+    private static final String START_POSITION_FAILED = "The start position could not be chosen right now";
 
     /**
      * The subscription from the model default starts where it would with no delete running, and the subscribe returns
@@ -1529,7 +1531,11 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             release.countDown();
 
             // When
-            await().atMost(Duration.ofSeconds(15)).until(() -> !waitingForATakeOver(logged).isEmpty());
+            try {
+                await().atMost(Duration.ofSeconds(15)).until(() -> !waitingForATakeOver(logged).isEmpty());
+            } catch (ConditionTimeoutException noWarningCame) {
+                // What was logged instead is asserted next
+            }
             List<String> warnedWhileItWaited = waitingForATakeOver(logged);
             boolean completedWhileItWaited = cancelled.isDone();
             model.start(true);
@@ -1540,7 +1546,7 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             // Then
             SoftAssertions.assertSoftly(softly -> {
                 softly.assertThat(pausedAfterTheCall).as("whether the subscribe registered the subscription paused").isTrue();
-                softly.assertThat(warnedWhileItWaited).as("warnings while the cancel waited for the paused subscribe").first().asString()
+                softly.assertThat(warnedWhileItWaited.stream().findFirst().orElse("no warning was logged")).as("first warning while the cancel waited for the paused subscribe")
                         .startsWith("The cancel of subscription " + SUBSCRIPTION_ID + " is still waiting, after 10 seconds, for a subscribe, a resume or a start of the id that took its delete over");
                 softly.assertThat(completedWhileItWaited).as("whether the cancel completed while it was warned about").isFalse();
                 softly.assertThat(cancelEnded).as("how the cancel ended once the subscription that took its delete over was started").isNull();
@@ -1643,6 +1649,314 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
         }
     }
 
+    /**
+     * Two subscribes of the id hand a subscription to a wrapped model, take over the delete a cancel of the id started,
+     * and are each held in the function of their start position. A second cancel of the id overtakes both, and the first
+     * subscribe is refused, naming the delete of the second cancel as the one that goes ahead in place of the first
+     * cancel's, before the delete of the first cancel is retired. The wait of the first cancel then begins with that
+     * delete named while the second subscribe has not decided, so the first cancel completes only once the second
+     * subscribe has been released.
+     */
+    @Test
+    void a_cancel_whose_wait_begins_with_a_delete_already_named_to_go_ahead_in_its_place_still_waits_for_a_subscribe_that_took_its_delete_over_and_has_not_decided() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        NamedFeed feed = new NamedFeed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService firstCaller = Executors.newSingleThreadExecutor();
+        ExecutorService secondCaller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch beforeRetired = new CountDownLatch(1);
+        CountDownLatch retire = new CountDownLatch(1);
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch secondAsked = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch releaseSecond = new CountDownLatch(1);
+        CountDownLatch releaseLaterDelete = new CountDownLatch(1);
+        AtomicInteger heldAt = new AtomicInteger();
+        model.runBeforeADeleteIsRetired(() -> {
+            if (heldAt.getAndIncrement() == 0) {
+                beforeRetired.countDown();
+                awaitLatch(retire);
+            }
+        });
+        try {
+            CompletableFuture<Void> cancelled = cancelWithCheckpointStored(model, storage, feed, release).toFuture();
+            storage.deleteGate = releaseLaterDelete;
+            release.countDown();
+            assertThat(beforeRetired.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete of the first cancel held before it is retired").isTrue();
+            CompletableFuture<Subscription> first = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, startPositionHeldUntil(firstAsked, releaseFirst), action(new CopyOnWriteArrayList<>())), firstCaller);
+            assertThat(firstAsked.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start position of the first subscribe asked").isTrue();
+            CompletableFuture<Subscription> second = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, startPositionHeldUntil(secondAsked, releaseSecond), action(new CopyOnWriteArrayList<>())), secondCaller);
+            assertThat(secondAsked.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start position of the second subscribe asked").isTrue();
+            CompletableFuture<Void> cancelledLater = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+
+            // When
+            releaseFirst.countDown();
+            Subscription firstRefused = first.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            Throwable firstEnded = catchThrowable(() -> firstRefused.waitUntilStarted(TIMEOUT).block());
+            retire.countDown();
+            releaseLaterDelete.countDown();
+            Throwable laterCancelEnded = catchThrowable(() -> cancelledLater.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            Throwable notCompletedWhileTheSecondSubscribeIsHeld = catchThrowable(() -> cancelled.get(1, TimeUnit.SECONDS));
+            releaseSecond.countDown();
+            Throwable cancelEnded = catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(firstEnded).as("how the first subscribe ended").isInstanceOf(CancellationException.class);
+                softly.assertThat(laterCancelEnded).as("how the later cancel ended").isNull();
+                softly.assertThat(notCompletedWhileTheSecondSubscribeIsHeld).as("how waiting a second for the first cancel to complete ended, while the second subscribe that took its delete over was held")
+                        .isInstanceOf(TimeoutException.class);
+                softly.assertThat(cancelEnded).as("how the first cancel ended once the second subscribe was released").isNull();
+            });
+        } finally {
+            release.countDown();
+            retire.countDown();
+            releaseFirst.countDown();
+            releaseSecond.countDown();
+            releaseLaterDelete.countDown();
+            firstCaller.shutdownNow();
+            secondCaller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * Two events are written, a subscription of the id is running, and a cancel of it is held at its delete. A subscribe
+     * of the id takes the delete over, and its first position write is held. A pause and a resume hand the takeover on
+     * to the next generation, which is held in reading storage, and the held write then reaches the store, which keeps
+     * the takeover for good, so the cancel completes. The resumed generation then fails to read storage before it
+     * starts. Giving back a takeover that was kept for good changes nothing, so no delete goes ahead in place of the
+     * cancel's after the cancel completed, and the checkpoint the paused generation wrote stays stored.
+     */
+    @Test
+    void a_takeover_that_a_paused_generation_kept_by_a_position_write_is_not_given_back_when_the_resumed_generation_fails_before_it_starts_so_no_delete_runs_after_the_cancel_completed() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        Feed feed = new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService resumingCaller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch releasePin = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        CountDownLatch releaseNewDelete = new CountDownLatch(1);
+        try {
+            feed.write();
+            feed.write();
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), action(new CopyOnWriteArrayList<>())).waitUntilStarted(TIMEOUT).block();
+            storage.deleteGate = release;
+            CompletableFuture<Void> cancelled = model.cancelSubscription(SUBSCRIPTION_ID).toFuture();
+            assertThat(storage.deleteEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete held").isTrue();
+            storage.ifAbsentGate = releasePin;
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>()));
+            release.countDown();
+            assertThat(storage.ifAbsentEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("first position write of the subscribe that took the delete over held").isTrue();
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            storage.nextReadHeldOnItsThread = releaseRead;
+            CompletableFuture<Subscription> resumed = CompletableFuture.supplyAsync(() -> model.resumeSubscription(SUBSCRIPTION_ID), resumingCaller);
+            assertThat(storage.readHeldOnItsThread.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("read of the resume held").isTrue();
+            boolean cancelCompletedWhileTheWriteIsHeld = cancelled.isDone();
+
+            // When
+            releasePin.countDown();
+            Throwable cancelEnded = catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            String storedWhenTheCancelCompleted = storage.stored();
+            storage.deleteGate = releaseNewDelete;
+            storage.readsFail = true;
+            releaseRead.countDown();
+            Throwable resumedEnded = catchThrowable(() -> resumed.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted(TIMEOUT).block());
+            storage.readsFail = false;
+            boolean aDeleteRanAfterTheCancelCompleted;
+            try {
+                await().atMost(Duration.ofSeconds(3)).until(() -> storage.deletesHeld.get() == 2);
+                aDeleteRanAfterTheCancelCompleted = true;
+            } catch (ConditionTimeoutException noDeleteRan) {
+                aDeleteRanAfterTheCancelCompleted = false;
+            }
+            releaseNewDelete.countDown();
+            // A delete that went ahead has removed the checkpoint within this moment
+            Thread.sleep(500);
+            String storedInTheEnd = storage.stored();
+
+            // Then
+            boolean deleteRan = aDeleteRanAfterTheCancelCompleted;
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(cancelCompletedWhileTheWriteIsHeld).as("whether the cancel completed while the position write that keeps the takeover was held").isFalse();
+                softly.assertThat(cancelEnded).as("how the cancel ended once the position write of the paused generation kept the takeover").isNull();
+                softly.assertThat(storedWhenTheCancelCompleted).as("checkpoint stored when the cancel completed").isEqualTo("2");
+                softly.assertThat(resumedEnded).as("how the resumed generation ended, having failed to read storage before it started").isNotNull();
+                softly.assertThat(deleteRan).as("whether a delete in place of the cancel's delete ran after the cancel's Mono completed").isFalse();
+                softly.assertThat(storedInTheEnd).as("checkpoint stored once the resumed generation had ended").isEqualTo("2");
+            });
+        } finally {
+            release.countDown();
+            releasePin.countDown();
+            releaseRead.countDown();
+            releaseNewDelete.countDown();
+            resumingCaller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A subscribe of the id takes over the delete a cancel of the id started, and its subscription to the feed is held
+     * before it signals. A pause retires that generation and a resume hands the takeover on to the next one, whose
+     * subscription to the feed is held too. The paused generation then subscribes to the feed late. It was retired, so
+     * that does not decide the takeover the resume handed on, and the cancel keeps waiting. It completes once the
+     * resumed generation subscribes.
+     */
+    @Test
+    void a_late_feed_subscription_of_a_paused_generation_does_not_decide_the_takeovers_the_resume_handed_to_the_next_generation_so_the_cancel_completes_only_once_that_one_subscribes() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        HoldingFeed feed = new HoldingFeed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        CountDownLatch release = new CountDownLatch(1);
+        Hold first = new Hold(new CountDownLatch(1), new CountDownLatch(1), new CountDownLatch(1));
+        Hold second = new Hold(new CountDownLatch(1), new CountDownLatch(1), new CountDownLatch(1));
+        try {
+            CompletableFuture<Void> cancelled = cancelWithCheckpointStored(model, storage, feed, release).toFuture();
+            feed.holdNext = first;
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), action(new CopyOnWriteArrayList<>()));
+            release.countDown();
+            assertThat(first.entered().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("subscription of the first generation to the feed held").isTrue();
+            Thread.sleep(1000);
+            boolean cancelCompletedBeforeThePause = cancelled.isDone();
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            feed.holdNext = second;
+            model.resumeSubscription(SUBSCRIPTION_ID);
+            assertThat(second.entered().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("subscription of the resumed generation to the feed held").isTrue();
+            boolean cancelCompletedBeforeTheLateSubscription = cancelled.isDone();
+
+            // When
+            first.release().countDown();
+            boolean pausedGenerationSubscribed = first.subscribed().await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            Thread.sleep(1000);
+            boolean cancelCompletedOnceThePausedGenerationSubscribedLate = cancelled.isDone();
+            second.release().countDown();
+            Throwable cancelEnded = catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(cancelCompletedBeforeThePause).as("whether the cancel completed while the first generation had not subscribed to the feed").isFalse();
+                softly.assertThat(cancelCompletedBeforeTheLateSubscription).as("whether the cancel completed once the resume handed the takeovers on").isFalse();
+                softly.assertThat(pausedGenerationSubscribed).as("whether the paused generation subscribed to the feed late").isTrue();
+                softly.assertThat(cancelCompletedOnceThePausedGenerationSubscribedLate).as("whether the cancel completed once the paused generation subscribed to the feed late, while the resumed one had not subscribed").isFalse();
+                softly.assertThat(cancelEnded).as("how the cancel ended once the resumed generation subscribed").isNull();
+            });
+        } finally {
+            release.countDown();
+            first.release().countDown();
+            second.release().countDown();
+            model.shutdown();
+        }
+    }
+
+    /**
+     * A cancel of the id is held before its delete is retired, and a subscribe of the id takes the delete over. Its
+     * start position is a function that is asked on the caller's thread and held, and then throws. A pause retires the
+     * generation while the function is held, the delete is retired, and a resume hands the takeover on to the next
+     * generation, which asks the function again and holds it. The first function then throws, so the subscribe fails to
+     * its caller. That generation was replaced, so it gives nothing back, and the cancel keeps waiting for the resumed
+     * generation, which holds the takeover. The cancel completes once the resumed generation subscribes.
+     */
+    @Test
+    void a_start_position_that_throws_after_a_pause_and_a_resume_handed_the_takeovers_on_gives_none_back_so_the_cancel_waits_for_the_resumed_generation() throws Exception {
+        // Given
+        GatedStorage storage = new GatedStorage(false);
+        Feed feed = new Feed();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(feed, storage);
+        ExecutorService subscribingCaller = Executors.newSingleThreadExecutor();
+        ExecutorService resumingCaller = Executors.newSingleThreadExecutor();
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch beforeRetired = new CountDownLatch(1);
+        CountDownLatch retire = new CountDownLatch(1);
+        CountDownLatch firstAsked = new CountDownLatch(1);
+        CountDownLatch secondAsked = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch releaseSecond = new CountDownLatch(1);
+        AtomicInteger asked = new AtomicInteger();
+        StartAt throwsFirstAndThenAnswersNow = StartAt.dynamic(() -> {
+            if (asked.getAndIncrement() == 0) {
+                firstAsked.countDown();
+                awaitLatch(releaseFirst);
+                throw new IllegalStateException(START_POSITION_FAILED);
+            }
+            secondAsked.countDown();
+            awaitLatch(releaseSecond);
+            return StartAt.now();
+        });
+        model.runBeforeADeleteIsRetired(() -> {
+            beforeRetired.countDown();
+            awaitLatch(retire);
+        });
+        try {
+            CompletableFuture<Void> cancelled = cancelWithCheckpointStored(model, storage, feed, release).toFuture();
+            release.countDown();
+            assertThat(beforeRetired.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete of the cancel held before it is retired").isTrue();
+            // Takes the delete over at the call and again once reserved, and a start position that does not wait for the write back is asked at the call
+            CompletableFuture<Subscription> subscribed = CompletableFuture.supplyAsync(() -> model.subscribe(SUBSCRIPTION_ID, null, throwsFirstAndThenAnswersNow, action(new CopyOnWriteArrayList<>())), subscribingCaller);
+            assertThat(firstAsked.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start position of the subscribe asked").isTrue();
+            model.pauseSubscription(SUBSCRIPTION_ID);
+            retire.countDown();
+            await().atMost(TIMEOUT).until(() -> !holdsADeleteOfTheId(model));
+
+            // When
+            CompletableFuture<Subscription> resumed = CompletableFuture.supplyAsync(() -> model.resumeSubscription(SUBSCRIPTION_ID), resumingCaller);
+            assertThat(secondAsked.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("start position of the resume asked").isTrue();
+            releaseFirst.countDown();
+            Throwable subscribeEnded = catchThrowable(() -> subscribed.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+            Throwable notCompletedWhileTheResumedGenerationIsHeld = catchThrowable(() -> cancelled.get(1, TimeUnit.SECONDS));
+            releaseSecond.countDown();
+            Throwable resumeEnded = catchThrowable(() -> resumed.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).waitUntilStarted(TIMEOUT).block());
+            Throwable cancelEnded = catchThrowable(() -> cancelled.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS));
+
+            // Then
+            SoftAssertions.assertSoftly(softly -> {
+                softly.assertThat(subscribeEnded).as("how the subscribe whose start position threw ended").hasCauseInstanceOf(IllegalStateException.class).hasRootCauseMessage(START_POSITION_FAILED);
+                softly.assertThat(notCompletedWhileTheResumedGenerationIsHeld).as("how waiting a second for the cancel to complete ended, while the resumed generation that held the takeovers had not subscribed")
+                        .isInstanceOf(TimeoutException.class);
+                softly.assertThat(resumeEnded).as("how the resumed generation ended").isNull();
+                softly.assertThat(cancelEnded).as("how the cancel ended once the resumed generation subscribed").isNull();
+            });
+        } finally {
+            release.countDown();
+            retire.countDown();
+            releaseFirst.countDown();
+            releaseSecond.countDown();
+            subscribingCaller.shutdownNow();
+            resumingCaller.shutdownNow();
+            model.shutdown();
+        }
+    }
+
+    // The latches of a held subscription to the feed, counted down when it is entered and when it has subscribed, and
+    // waited for until release opens
+    private record Hold(CountDownLatch release, CountDownLatch entered, CountDownLatch subscribed) {
+    }
+
+    // A feed whose next subscribe signals onSubscribe only once its hold opens, on a thread of its own
+    private static final class HoldingFeed extends Feed {
+        private volatile @Nullable Hold holdNext;
+
+        @Override
+        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            @Nullable Hold hold = holdNext;
+            if (hold == null) {
+                return super.subscribe(filter, startAt);
+            }
+            holdNext = null;
+            Flux<CloudEvent> real = super.subscribe(filter, startAt);
+            return Flux.from(subscriber -> new Thread(() -> {
+                hold.entered().countDown();
+                awaitLatch(hold.release());
+                real.subscribe(subscriber);
+                hold.subscribed().countDown();
+            }).start());
+        }
+    }
+
     // A start position whose function says it was asked and then waits until release opens, and answers StartAt.now()
     private static StartAt startPositionHeldUntil(CountDownLatch asked, CountDownLatch release) {
         return StartAt.dynamic(() -> {
@@ -1650,6 +1964,24 @@ class ReactorDurableSubscriptionModelDeleteTakenOverTest {
             awaitLatch(release);
             return StartAt.now();
         });
+    }
+
+    // Whether the model still holds a delete of the id that a cancel started, read under the lock the model retires a
+    // delete under, so a delete answered as gone has been retired
+    private static boolean holdsADeleteOfTheId(ReactorDurableSubscriptionModel model) {
+        synchronized (field(model, "positionLock")) {
+            return ((Map<?, ?>) field(model, "positionDeletes")).containsKey(SUBSCRIPTION_ID);
+        }
+    }
+
+    private static Object field(ReactorDurableSubscriptionModel model, String name) {
+        try {
+            Field field = ReactorDurableSubscriptionModel.class.getDeclaredField(name);
+            field.setAccessible(true);
+            return field.get(model);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     // The warnings that a cancel still waits for a subscribe, a resume or a start of the id that took its delete over
