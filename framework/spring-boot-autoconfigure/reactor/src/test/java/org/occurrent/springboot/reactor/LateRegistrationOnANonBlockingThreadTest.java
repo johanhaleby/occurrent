@@ -111,9 +111,11 @@ import static org.mockito.Mockito.withSettings;
  * A bean built after startup registers its annotations on whichever thread asks for it. Asked for from a Reactor
  * parallel thread, a WebFlux handler or a {@code Schedulers.parallel()} task for example, the registration must not
  * call {@code block()}, which throws there, so the bean resolves and its projection, snapshot or subscription receives
- * events. {@code ReactorDurableSubscriptionModel} calls {@code block()} inside {@code subscribe} itself, so there a
- * registration that starts at the beginning subscribes on another thread, and one with a {@code DEFAULT} start fails
- * the bean with a message saying how to register it.
+ * events. A registration that starts at the beginning subscribes on another thread. One with a {@code DEFAULT} start
+ * subscribes on the calling thread, and where the subscription model blocks inside {@code subscribe} it fails the bean
+ * with a message saying how to register it. {@code ReactorDurableSubscriptionModel} subscribes to the model it wraps on
+ * a thread of its own, and the read of where that model's feed was, which it subscribes to on the calling thread,
+ * doesn't block here, so there a {@code DEFAULT} start resolves as well.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(30)
@@ -246,9 +248,8 @@ class LateRegistrationOnANonBlockingThreadTest {
         });
     }
 
-    // ReactorDurableSubscriptionModel, the model the reactive MongoDB starter registers, calls block() inside subscribe.
-    // A start that does not depend on when the subscribe runs lets the subscribe run on another thread after the bean
-    // is returned.
+    // ReactorDurableSubscriptionModel is the model the reactive MongoDB starter registers. A start that does not depend
+    // on when the subscribe runs is subscribed on another thread after the bean is returned.
     @Test
     void a_lazy_projection_starting_at_the_beginning_on_the_durable_model_resolved_on_a_parallel_thread_folds_the_events_it_is_delivered() {
         runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, LazyBeginningProjectionConfiguration.class).run(context -> {
@@ -293,39 +294,100 @@ class LateRegistrationOnANonBlockingThreadTest {
         });
     }
 
-    // A DEFAULT start is wherever the feed has reached when the subscribe runs. Subscribing on another thread could skip
-    // what the caller writes after getting the bean, so the bean fails, and built where blocking is allowed it registers.
     @Test
-    void a_lazy_projection_with_a_default_start_on_the_durable_model_is_refused_on_a_parallel_thread_and_registers_when_built_off_it() {
+    void a_lazy_projection_with_a_default_start_on_the_durable_model_resolved_on_a_parallel_thread_folds_the_events_it_is_delivered() {
         runner.withUserConfiguration(DurableModelConfiguration.class, LazyEventStoreProjectionConfiguration.class).run(context -> {
             assertThat(context).hasNotFailed();
             RecordingDelegate delegate = delegate(context);
 
+            assertThat(resolvedOnAParallelThread(context, "eventStoreProjectionHolder")).isInstanceOf(EventStoreProjectionHolder.class);
+            awaitUntil(() -> delegate.isSubscribed("late-event-store-projection"));
+            delegate.deliver("late-event-store-projection", cloudEvent("1", "stream", 1));
+
+            assertThat(delegate.startedAt.get("late-event-store-projection")).hasToString(GlobalCheckpoint.of(1).asString());
+            assertThat(readModel(context).get("k")).isEqualTo(1);
+        });
+    }
+
+    @Test
+    void a_lazy_subscription_with_a_default_start_on_the_durable_model_resolved_on_a_parallel_thread_subscribes() {
+        runner.withUserConfiguration(DurableModelConfiguration.class, LazyDefaultStartSubscriptionConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            RecordingDelegate delegate = delegate(context);
+
+            assertThat(resolvedOnAParallelThread(context, "defaultStartSubscriptionHolder")).isInstanceOf(DefaultStartSubscriptionHolder.class);
+            awaitUntil(() -> delegate.isSubscribed("late-default-start-subscription"));
+
+            assertThat(delegate.startedAt.get("late-default-start-subscription")).hasToString(GlobalCheckpoint.of(1).asString());
+        });
+    }
+
+    @Test
+    void a_lazy_bean_with_a_beginning_and_a_default_subscription_on_the_durable_model_resolved_on_a_parallel_thread_subscribes_both() {
+        runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, LazyStartPositionsConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            RecordingDelegate delegate = delegate(context);
+
+            assertThat(resolvedOnAParallelThread(context, "beginningAndDefaultHolder")).isInstanceOf(BeginningAndDefaultHolder.class);
+
+            awaitUntil(() -> delegate.isSubscribed("late-mixed-default") && delegate.isSubscribed("late-mixed-default-beginning"));
+        });
+    }
+
+    // A DEFAULT start is wherever the feed has reached when the subscribe runs. Subscribing on another thread could skip
+    // what the caller writes after getting the bean, so on a model that blocks inside subscribe the bean fails, and
+    // built where blocking is allowed it registers.
+    @Test
+    void a_lazy_projection_with_a_default_start_on_a_model_that_blocks_inside_subscribe_is_refused_on_a_parallel_thread_and_registers_when_built_off_it() {
+        runner.withUserConfiguration(BlockingModelConfiguration.class, LazyEventStoreProjectionConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            BlockingModel model = context.getBean(BlockingModel.class);
+
             assertThat(failureResolvingOnAParallelThread(context, "eventStoreProjectionHolder"))
                     .hasStackTraceContaining("@Projection 'late-event-store-projection' may start from wherever the event feed has reached when it subscribes")
                     .hasStackTraceContaining("Mono.fromCallable(...).subscribeOn(Schedulers.boundedElastic())");
-            assertThat(delegate.isSubscribed("late-event-store-projection")).isFalse();
+            assertThat(model.isSubscribed("late-event-store-projection")).isFalse();
 
             context.getBean("eventStoreProjectionHolder");
 
-            assertThat(delegate.isSubscribed("late-event-store-projection")).isTrue();
+            assertThat(model.isSubscribed("late-event-store-projection")).isTrue();
         });
     }
 
     // Also shows the handler and id the refused bean claimed are given back, since building it again registers.
     @Test
-    void a_lazy_subscription_with_a_default_start_on_the_durable_model_is_refused_on_a_parallel_thread_and_registers_when_built_off_it() {
-        runner.withUserConfiguration(DurableModelConfiguration.class, LazyDefaultStartSubscriptionConfiguration.class).run(context -> {
+    void a_lazy_subscription_with_a_default_start_on_a_model_that_blocks_inside_subscribe_is_refused_on_a_parallel_thread_and_registers_when_built_off_it() {
+        runner.withUserConfiguration(BlockingModelConfiguration.class, LazyDefaultStartSubscriptionConfiguration.class).run(context -> {
             assertThat(context).hasNotFailed();
-            RecordingDelegate delegate = delegate(context);
+            BlockingModel model = context.getBean(BlockingModel.class);
 
             assertThat(failureResolvingOnAParallelThread(context, "defaultStartSubscriptionHolder"))
                     .hasStackTraceContaining("the handler 'late-default-start-subscription' on " + DefaultStartSubscriptionHolder.class.getName() + "#on may start from wherever the event feed has reached");
-            assertThat(delegate.isSubscribed("late-default-start-subscription")).isFalse();
+            assertThat(model.isSubscribed("late-default-start-subscription")).isFalse();
 
             context.getBean("defaultStartSubscriptionHolder");
 
-            assertThat(delegate.isSubscribed("late-default-start-subscription")).isTrue();
+            assertThat(model.isSubscribed("late-default-start-subscription")).isTrue();
+        });
+    }
+
+    // The DEFAULT handler subscribes on the calling thread before the BEGINNING handler is handed to the scheduler,
+    // so when it is refused, the BEGINNING handler has not subscribed and what both claimed is given back.
+    @Test
+    void a_lazy_bean_with_a_beginning_and_a_default_subscription_on_a_model_that_blocks_inside_subscribe_is_refused_for_its_default_handler_and_registers_both_when_built_off_it() {
+        runner.withUserConfiguration(BlockingModelConfiguration.class, PositionWritingEventStoreConfiguration.class, LazyStartPositionsConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            BlockingModel model = context.getBean(BlockingModel.class);
+
+            assertThat(failureResolvingOnAParallelThread(context, "beginningAndDefaultHolder"))
+                    .hasStackTraceContaining("the handler 'late-mixed-default' on " + BeginningAndDefaultHolder.class.getName() + "#fromWhereItStopped may start from wherever the event feed has reached");
+            assertThat(model.isSubscribed("late-mixed-default")).isFalse();
+            assertThat(model.isSubscribed("late-mixed-default-beginning")).isFalse();
+
+            context.getBean("beginningAndDefaultHolder");
+
+            assertThat(model.isSubscribed("late-mixed-default")).isTrue();
+            assertThat(model.isSubscribed("late-mixed-default-beginning")).isTrue();
         });
     }
 
@@ -341,26 +403,6 @@ class LateRegistrationOnANonBlockingThreadTest {
 
             assertThat(delegate.isSubscribed("late-mixed-now")).describedAs("the NOW handler subscribed before the bean was returned").isTrue();
             awaitUntil(() -> delegate.isSubscribed("late-mixed-beginning"));
-        });
-    }
-
-    // The DEFAULT handler subscribes on the calling thread before the BEGINNING handler is handed to the scheduler,
-    // so when it is refused, the BEGINNING handler has not subscribed and what both claimed is given back.
-    @Test
-    void a_lazy_bean_with_a_beginning_and_a_default_subscription_on_the_durable_model_is_refused_for_its_default_handler_and_registers_both_when_built_off_it() {
-        runner.withUserConfiguration(DurableModelConfiguration.class, PositionWritingEventStoreConfiguration.class, LazyStartPositionsConfiguration.class).run(context -> {
-            assertThat(context).hasNotFailed();
-            RecordingDelegate delegate = delegate(context);
-
-            assertThat(failureResolvingOnAParallelThread(context, "beginningAndDefaultHolder"))
-                    .hasStackTraceContaining("the handler 'late-mixed-default' on " + BeginningAndDefaultHolder.class.getName() + "#fromWhereItStopped may start from wherever the event feed has reached");
-            assertThat(delegate.isSubscribed("late-mixed-default")).isFalse();
-            assertThat(delegate.isSubscribed("late-mixed-default-beginning")).isFalse();
-
-            context.getBean("beginningAndDefaultHolder");
-
-            assertThat(delegate.isSubscribed("late-mixed-default")).isTrue();
-            assertThat(delegate.isSubscribed("late-mixed-default-beginning")).isTrue();
         });
     }
 
@@ -407,7 +449,7 @@ class LateRegistrationOnANonBlockingThreadTest {
         });
     }
 
-    // NOW needs no stored position, so the durable model does not block and the subscribe runs on the calling thread.
+    // A NOW start subscribes on the calling thread, and the durable model hands it to the wrapped model before it returns.
     @Test
     void a_lazy_subscription_starting_now_on_the_durable_model_resolved_on_a_parallel_thread_subscribes_before_the_bean_is_returned() {
         runner.withUserConfiguration(DurableModelConfiguration.class, LazyStartPositionsConfiguration.class).run(context -> {
@@ -1240,7 +1282,7 @@ class LateRegistrationOnANonBlockingThreadTest {
     }
 
     // Stands in for the model ReactorDurableSubscriptionModel wraps. Its position read is deferred rather than a plain
-    // Mono.just, so the durable model's block() on it checks the thread it runs on.
+    // Mono.just, so a block() on it checks the thread it runs on.
     static class RecordingDelegate implements SubscriptionModel, CheckpointAwareSubscriptionModel {
         final Map<String, Function<CloudEvent, Mono<Void>>> actions = new ConcurrentHashMap<>();
         final CountDownLatch shutDown = new CountDownLatch(1);
@@ -1280,6 +1322,12 @@ class LateRegistrationOnANonBlockingThreadTest {
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
             return Mono.defer(() -> Mono.just(GlobalCheckpoint.of(1)));
+        }
+
+        @Override
+        // The position never moves, so it is the one at the call
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return globalCheckpoint();
         }
 
         @Override
@@ -1347,6 +1395,34 @@ class LateRegistrationOnANonBlockingThreadTest {
                     return Mono.defer(Mono::empty);
                 }
             };
+        }
+    }
+
+    // A model that blocks inside subscribe, as one that reads where to start with block() does. Unlike the durable
+    // model's delegate it is a bean of its own, since nothing wraps it.
+    @Configuration(proxyBeanMethods = false)
+    static class BlockingModelConfiguration {
+        @Bean
+        BlockingModel blockingModel() {
+            return new BlockingModel();
+        }
+
+        @Bean
+        Subscriptions<TestEvent> subscriptions(BlockingModel model, CloudEventConverter<TestEvent> converter) {
+            return new Subscriptions<>(model, converter);
+        }
+
+        @Bean
+        List<String> handled() {
+            return new CopyOnWriteArrayList<>();
+        }
+    }
+
+    static class BlockingModel extends RecordingDelegate {
+        @Override
+        public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            globalCheckpoint().block(Duration.ofSeconds(5));
+            return super.subscribe(subscriptionId, filter, startAt, action);
         }
     }
 

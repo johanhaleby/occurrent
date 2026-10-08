@@ -256,9 +256,11 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             SubscriptionFilter unrecognised = new SubscriptionFilter() {
             };
 
-            assertThatThrownBy(() -> subscriptionModel().subscribe(subscriptionId(), unrecognised, StartAt.subscriptionModelDefault(), new RecordedEvents()))
+            assertThatThrownBy(() -> subscriptionModel().subscribe(subscriptionId(), unrecognised, StartAt.subscriptionModelDefault(), new RecordedEvents())
+                    .waitUntilStarted(deliveryTimeout()))
                     .as("a filter a model cannot apply must be refused, since accepting it and ignoring it would "
-                            + "deliver events the caller asked not to receive")
+                            + "deliver events the caller asked not to receive. Thrown from subscribe(..) or from "
+                            + "waitUntilStarted(..) of the subscription it returns, either is a refusal")
                     .isInstanceOf(UnsupportedSubscriptionFilterException.class);
         }
     }

@@ -49,22 +49,29 @@ public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel,
     Mono<Checkpoint> globalCheckpoint();
 
     /**
-     * The global checkpoint at the moment this method is called. Unlike most {@link Mono}s, the one returned doesn't wait for
-     * a subscriber before it does its work. The moment is taken when the method is called, and the returned {@code Mono}
-     * works out the position for that moment later, when it's subscribed to. A subscription started from the answer
-     * receives every event written after the call, even when the {@code Mono} is subscribed to long after it.
+     * The global checkpoint at the moment this method is called. An implementation answers with a position no later
+     * than where its feed was when this method was called, however late the returned {@code Mono} is subscribed to or
+     * answers, within the limits it documents. A subscription started from such an answer receives every event written
+     * after the call. Unlike most {@link Mono}s, the one returned doesn't wait for a subscriber before it fixes the
+     * moment it answers for.
      * <p>
      * The answer may be earlier than the call, so a subscription started from it can also receive some events written
-     * just before the call. A model that overrides this method should fail the {@code Mono} when it can't answer for
-     * the moment of the call, rather than answer with a later position.
+     * just before the call. When an implementation knows it can't work out the position at the call, it fails the
+     * {@code Mono} rather than answer with a later position.
      * <p>
-     * The default implementation returns {@link #globalCheckpoint()}, which works out the position when it's subscribed
-     * to, so events written between the call and the subscription can be skipped.
+     * An implementation that answers with a later position, for example by returning {@link #globalCheckpoint()} where
+     * that works out where the feed is only when it runs, makes {@code ReactorDurableSubscriptionModel} skip the events
+     * written after its {@code subscribe(..)} returned and before that position. A model that wraps another one passes
+     * the call on to the model it wraps.
+     * <p>
+     * An implementation should not block when the returned {@code Mono} is subscribed to. For some start positions, the
+     * subscription-model default for one, {@code ReactorDurableSubscriptionModel} subscribes to it on the thread that
+     * calls its {@code subscribe(..)}. A {@code Mono} that blocks when subscribed to then blocks that call, also on a
+     * thread that must not block, such as a Netty event loop thread.
      *
-     * @return A {@link Mono} that emits the global checkpoint as of the call, fails when the position can't be
-     * worked out, or, for a model that doesn't override this method, behaves like {@link #globalCheckpoint()}.
+     * @return A {@link Mono} that emits a position no later than where the feed was at the call, within the limits the
+     * implementation documents, fails when the implementation knows it can't work out that position, or completes
+     * empty for a problem it can't resolve, as {@link #globalCheckpoint()} does.
      */
-    default Mono<Checkpoint> globalCheckpointAsOfNow() {
-        return globalCheckpoint();
-    }
+    Mono<Checkpoint> globalCheckpointAsOfNow();
 }

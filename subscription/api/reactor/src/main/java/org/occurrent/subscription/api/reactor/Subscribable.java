@@ -56,7 +56,15 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @param startAt        The position to start the subscription from
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException       If {@code subscriptionId} is already in use on this subscription model instance.
+     *                                                A model that hands the subscription to a wrapped model once the
+     *                                                call has returned, as {@code ReactorDurableSubscriptionModel} does
+     *                                                from the subscription-model default, reports a duplicate it finds
+     *                                                only then through {@link Subscription#waitUntilStarted()} instead.
      * @throws UnsupportedSubscriptionFilterException If this model cannot apply a filter of that shape.
+     *                                               A model that hands the subscription to a wrapped model once the call has
+     *                                               returned, as {@code ReactorDurableSubscriptionModel} does from the
+     *                                               subscription-model default, reports it through {@link Subscription#waitUntilStarted()}
+     *                                               instead.
      * @throws UnsupportedStartAtException            If this model does not accept that start position.
      */
     default Subscription subscribe(String subscriptionId, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
@@ -70,7 +78,15 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @param filter         The filter to use to limit which events that are of interest from the EventStore.
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException       If {@code subscriptionId} is already in use on this subscription model instance.
+     *                                                A model that hands the subscription to a wrapped model once the
+     *                                                call has returned, as {@code ReactorDurableSubscriptionModel} does
+     *                                                from the subscription-model default, reports a duplicate it finds
+     *                                                only then through {@link Subscription#waitUntilStarted()} instead.
      * @throws UnsupportedSubscriptionFilterException If this model cannot apply a filter of that shape.
+     *                                               A model that hands the subscription to a wrapped model once the call has
+     *                                               returned, as {@code ReactorDurableSubscriptionModel} does from the
+     *                                               subscription-model default, reports it through {@link Subscription#waitUntilStarted()}
+     *                                               instead.
      */
     default Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, Function<CloudEvent, Mono<Void>> action) {
         return subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);
@@ -82,6 +98,10 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @param subscriptionId The id of the subscription, must be unique!
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException If {@code subscriptionId} is already in use on this subscription model instance.
+     *                                          A model that hands the subscription to a wrapped model once the call has
+     *                                          returned, as {@code ReactorDurableSubscriptionModel} does from the
+     *                                          subscription-model default, reports a duplicate it finds only then
+     *                                          through {@link Subscription#waitUntilStarted()} instead.
      */
     default Subscription subscribe(String subscriptionId, Function<CloudEvent, Mono<Void>> action) {
         return subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), action);

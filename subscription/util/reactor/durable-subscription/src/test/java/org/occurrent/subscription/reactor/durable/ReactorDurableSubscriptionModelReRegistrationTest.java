@@ -160,5 +160,11 @@ class ReactorDurableSubscriptionModelReRegistrationTest {
         public Mono<Checkpoint> globalCheckpoint() {
             return Mono.defer(() -> globalCheckpointCalls.getAndIncrement() == 0 ? firstRead : Mono.just(subsequentCheckpoint));
         }
+
+        @Override
+        // Answers as globalCheckpoint() does, which the test controls
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return globalCheckpoint();
+        }
     }
 }

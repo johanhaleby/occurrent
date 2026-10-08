@@ -328,6 +328,12 @@ class ReactorStreamCatchupSubscriptionModelTest {
         }
 
         @Override
+        // No position, as globalCheckpoint() answers
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return Mono.empty();
+        }
+
+        @Override
         public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
             return Flux.empty();
         }
@@ -409,6 +415,12 @@ class ReactorStreamCatchupSubscriptionModelTest {
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
             return Mono.just(new StringBasedCheckpoint("token"));
+        }
+
+        @Override
+        // The position never moves, so it is the one at the call
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return globalCheckpoint();
         }
 
         @Override
@@ -513,6 +525,12 @@ class ReactorStreamCatchupSubscriptionModelTest {
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
             return Mono.just(new StringBasedCheckpoint("token"));
+        }
+
+        @Override
+        // The position never moves, so it is the one at the call
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return globalCheckpoint();
         }
 
         @Override

@@ -30,7 +30,12 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @param startAt        The position to start the subscription from
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException       If {@code subscriptionId} is already in use on this subscription model instance.
+     *                                                A model that finds the duplicate only once the call has returned
+     *                                                reports it through
+     *                                                {@link Subscription#waitUntilStarted(java.time.Duration)} instead.
      * @throws UnsupportedSubscriptionFilterException If this model cannot apply a filter of that shape.
+     *                                               A model that hears of the refusal only once the call has returned reports it
+     *                                               through {@link Subscription#waitUntilStarted(java.time.Duration)} instead.
      * @throws UnsupportedStartAtException            If this model does not accept that start position.
      */
     Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action);
@@ -42,6 +47,9 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @param startAt        The position to start the subscription from
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException If {@code subscriptionId} is already in use on this subscription model instance.
+     *                                          A model that finds the duplicate only once the call has returned reports
+     *                                          it through {@link Subscription#waitUntilStarted(java.time.Duration)}
+     *                                          instead.
      * @throws UnsupportedStartAtException      If this model does not accept that start position.
      */
     default Subscription subscribe(String subscriptionId, StartAt startAt, Consumer<CloudEvent> action) {
@@ -55,7 +63,12 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @param filter         The filter to use to limit which events that are of interest from the EventStore.
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException       If {@code subscriptionId} is already in use on this subscription model instance.
+     *                                                A model that finds the duplicate only once the call has returned
+     *                                                reports it through
+     *                                                {@link Subscription#waitUntilStarted(java.time.Duration)} instead.
      * @throws UnsupportedSubscriptionFilterException If this model cannot apply a filter of that shape.
+     *                                               A model that hears of the refusal only once the call has returned reports it
+     *                                               through {@link Subscription#waitUntilStarted(java.time.Duration)} instead.
      */
     default Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);
@@ -67,6 +80,9 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @param subscriptionId The id of the subscription, must be unique!
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException If {@code subscriptionId} is already in use on this subscription model instance.
+     *                                          A model that finds the duplicate only once the call has returned reports
+     *                                          it through {@link Subscription#waitUntilStarted(java.time.Duration)}
+     *                                          instead.
      */
     default Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), action);

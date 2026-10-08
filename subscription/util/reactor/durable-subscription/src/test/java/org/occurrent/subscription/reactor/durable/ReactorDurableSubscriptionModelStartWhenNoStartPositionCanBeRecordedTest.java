@@ -63,7 +63,8 @@ class ReactorDurableSubscriptionModelStartWhenNoStartPositionCanBeRecordedTest {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage, overrideOn());
 
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        subscription.waitUntilStarted().block(TIMEOUT);
 
         assertThat(delegate.startedAt).hasSize(1);
         assertThat(delegate.startedAt.getFirst().isDefault()).isTrue();

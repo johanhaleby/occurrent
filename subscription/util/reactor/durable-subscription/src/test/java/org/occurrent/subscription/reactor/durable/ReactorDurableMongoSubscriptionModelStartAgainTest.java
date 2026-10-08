@@ -892,6 +892,8 @@ class ReactorDurableMongoSubscriptionModelStartAgainTest {
         assertThat(storage.deleteEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).as("delete held").isTrue();
         storage.storedElsewhereBeforeIfAbsent = checkpoints.getFirst();
         Subscription startedAgain = subscribe(new CopyOnWriteArrayList<>());
+        // The subscribe returns before it reads storage, so the delete is let go only once it is handed over
+        await().atMost(TIMEOUT).until(() -> mongoModel.subscribes.get() >= 2);
         storage.deleteLetGo.countDown();
         return startedAgain;
     }
