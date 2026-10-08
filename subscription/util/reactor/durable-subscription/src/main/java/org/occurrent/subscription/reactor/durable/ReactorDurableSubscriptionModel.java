@@ -456,8 +456,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             return startReserved(reservation, storedAtTheCall);
         } catch (RuntimeException | Error e) {
             // A dynamic start position that throws gives the id back, so subscribing again under it is not refused as
-            // a duplicate. That also gives back the takeover of this call, unless a pause or a cancel moved the
-            // subscription meanwhile, see releaseReservation.
+            // a duplicate. That also gives back the takeover of this call, unless a pause, a stop(), a cancel or a
+            // shutdown moved the subscription meanwhile, see releaseReservation.
             releaseReservation(reservation);
             throw e;
         }
@@ -1828,7 +1828,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // generations before it in its run took over, see takenOverBefore, as a subscribe that throws does. No
     // subscription needs the checkpoint those deletes were to remove then. A generation that wrote its start position
     // gives none back. Giving back one that an earlier generation of its run kept for good, by a position write that
-    // ended after a resume handed it on, changes nothing, see giveBackPositionDelete, so that position stays stored.
+    // ended after a resume handed it on, lets no delete go ahead, see giveBackPositionDelete, so that position stays
+    // stored.
     private void giveBackUnlessWritten(String subscriptionId, InternalSubscription generation) {
         if (!wrotePosition(generation.writer)) {
             giveBackTakeOvers(subscriptionId, generation);
@@ -1859,16 +1860,16 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
     }
 
-    // Gives back what reserveInternalSubscription took when the dynamic start position threw, unless a pause, a cancel
-    // or a shutdown already moved or removed it. A resume puts back what it took out of the paused subscriptions, so
-    // the subscription stays paused rather than being dropped from both maps. Either way the generation that threw is
-    // retired. A subscription dropped here ends its read of where the feed was.
+    // Gives back what reserveInternalSubscription took when the dynamic start position threw, unless a pause, a stop(),
+    // a cancel or a shutdown already moved or removed it. A resume puts back what it took out of the paused
+    // subscriptions, so the subscription stays paused rather than being dropped from both maps. Either way the
+    // generation that threw is retired. A subscription dropped here ends its read of where the feed was.
     //
     // The generation gives back what it took over only when it is taken out here. It then gives back its own takeover,
     // and a subscribe that is dropped also the one it took at the call. A replaced generation put back holds the rest.
-    // Otherwise whatever moved the generation holds them all. A pause keeps them with the paused generation, a resume
-    // then hands them to the generation that replaces it, see stillTakenOver, a cancel gives them back, and a shutdown
-    // ends the wait for them.
+    // Otherwise whatever moved the generation holds them all. A pause or a stop() keeps them with the paused
+    // generation, a resume or a start then hands them to the generation that replaces it, see stillTakenOver, a cancel
+    // gives them back, and a shutdown ends the wait for them.
     private void releaseReservation(Reservation reservation) {
         String subscriptionId = reservation.subscriptionId();
         @Nullable InternalSubscription replaced = reservation.replaced();
@@ -2966,7 +2967,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // retired, see keepTakeOversUnlessRetired, or wrote a position, also one that ends after it was retired, and keeps
     // those the generations before it in its run took over with them, see takenOverBefore. A subscription handed to
     // the wrapped model keeps them once it is registered there and recorded what it starts from, see endUnsettled.
-    // From then on a give back of them changes nothing until a delete of the id made after them is the latest, as a
+    // From then on a give back of them changes nothing unless a delete of the id made after them is the latest, as a
     // cancel of the id makes one, or the model is shut down, and neither lets a delete go ahead in their place, see
     // giveBackPositionDelete. So the cancel that started them no longer waits for that call, see onceDecided.
     private void keepTakeOvers(PositionWriter writer) {
@@ -3245,9 +3246,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                 return;
             }
             @Nullable PositionDelete latest = positionDeletes.get(subscriptionId);
-            // A takeover kept for good stands for a checkpoint a subscription of the id wrote or starts from, so it
-            // keeps counting against the deletes until a delete of the id made after it is the latest, as a cancel of
-            // the id makes one before it gives back, or the model is shut down. Neither lets a delete go ahead here.
+            // A takeover kept for good stands for a checkpoint a subscription of the id wrote or starts from, so a give
+            // back of it changes nothing unless a delete of the id made after it is the latest, as a cancel of the id
+            // makes one before it gives back, or the model is shut down. Neither lets a delete go ahead here.
             if (takeOver.kept && !shutdown && (latest == null || takeOver.counted.contains(latest))) {
                 return;
             }
