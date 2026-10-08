@@ -2964,11 +2964,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     // A generation keeps the deletes of the id it took over for good once it subscribed to the feed before it was
     // retired, see keepTakeOversUnlessRetired, or wrote a position, also one that ends after it was retired, and keeps
-    // those the generations before it in its run took over with them, see takenOverBefore. A subscription handed to the wrapped model keeps them once it is
-    // registered there and recorded what it starts from, see endUnsettled. From then on a give back of them changes
-    // nothing until a delete of the id made after them is the latest, as a cancel of the id makes one, or the model is
-    // shut down, and neither lets a delete go ahead in their place, see giveBackPositionDelete. So the cancel that
-    // started them no longer waits for that call, see onceDecided.
+    // those the generations before it in its run took over with them, see takenOverBefore. A subscription handed to
+    // the wrapped model keeps them once it is registered there and recorded what it starts from, see endUnsettled.
+    // From then on a give back of them changes nothing until a delete of the id made after them is the latest, as a
+    // cancel of the id makes one, or the model is shut down, and neither lets a delete go ahead in their place, see
+    // giveBackPositionDelete. So the cancel that started them no longer waits for that call, see onceDecided.
     private void keepTakeOvers(PositionWriter writer) {
         List<Sinks.Empty<Void>> decided = new ArrayList<>();
         synchronized (positionLock) {
@@ -3226,8 +3226,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // that one has, see onceDecided. Where the write back waits for the try under way, it is not made once every call
     // has given the delete back by the time the try ends. The new delete is not started for a takeover kept for good,
     // while another call counted against those deletes has not given them back, while a newer delete of the id runs,
-    // while a writer of the id is registered or starting, or once the model is shut down. refused is the writer of the call that threw, which is
-    // retired here when that call took a delete over, so nothing it still has under way writes a position, or null.
+    // while a writer of the id is registered or starting, or once the model is shut down. refused is the writer of the
+    // call that threw, which is retired here when that call took a delete over, so nothing it still has under way
+    // writes a position, or null.
     private void giveBackPositionDelete(String subscriptionId, TakeOver takeOver, @Nullable PositionWriter refused) {
         if (takeOver.counted.isEmpty()) {
             return;
