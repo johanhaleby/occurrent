@@ -70,8 +70,9 @@ A live start can age out of the change stream history while the subscription is 
 gains `canResumeFrom(Checkpoint)`, `boolean` on the blocking stack and `Mono<Boolean>` on the reactor stack. It
 answers `true` by default. The three MongoDB subscription models open a change stream at the checkpoint with a batch
 size of 1, close it, and answer `false` when MongoDB refuses with error 286, `ChangeStreamHistoryLost`. A test against
-a MongoDB container whose oplog had rolled over confirmed that code. Any other error fails the call. When the answer is
-`false`, the catch-up logs a warning, replays from `replayOrigin` and reads a new live start before that replay.
+a MongoDB container whose oplog had rolled over confirmed that code. Any other error fails the call, and the catch-up
+fails with it, without a retry, whether it asked at a resume or once a replay was done. When the answer is `false`,
+the catch-up logs a warning, replays from `replayOrigin` and reads a new live start before that replay.
 
 A live start can also leave the history while the replay runs, on a first run as much as on a resume. So every
 position catch-up asks `canResumeFrom` again once its replay is done, right before the handover. When the answer is
@@ -79,11 +80,13 @@ position catch-up asks `canResumeFrom` again once its replay is done, right befo
 does, and asks again. It replays again at most 3 times. When the wrapped model still answers `false` after the
 fourth replay, the catch-up fails with an `IllegalStateException` that names the subscription and the number of
 replays, and hands nothing over. On the blocking stack `waitUntilStarted()` throws it, as it throws a failed read of
-the live start, and on the reactor stack the subscription fails with it. So a catch-up goes live only from a live
-start the wrapped model answered `true` for after its last replay, or fails after 4 replays. It never hands over a
-live start the wrapped model answered `false` for, and never replays without end. A blocking replay that is launched
-again after a failed start runs the same check, since it runs the same replay. A replay launched again after a stop
-runs it too, on either stack, and counts its replays from 0.
+the live start, and the model logs it at `ERROR`, as it now logs every replay that fails. That log is there for a
+caller that never waits, such as the Spring Boot starter by default for a subscription that replays history. On the
+reactor stack the subscription fails with it, and a named catch-up logs it at `ERROR` too. So a catch-up goes live
+only from a live start the wrapped model answered `true` for after its last replay, or fails after 4 replays. It
+never hands over a live start the wrapped model answered `false` for, and never replays without end. A blocking
+replay that is launched again after a failed start runs the same check, since it runs the same replay. A replay
+launched again after a stop runs it too, on either stack, and counts its replays from 0.
 [ADR 28](0028-dcb-catch-up-captures-resume-token-before-replay.md) and [ADR 38](0038-reactive-dcb-catch-up.md)
 expected such a handover to fail loudly. With `restartSubscriptionsOnChangeStreamHistoryLost` true,
 `SpringMongoSubscriptionModel` and `ReactorMongoSubscriptionModel` went live from the present instead and skipped
@@ -137,8 +140,8 @@ at least once already, and a handler that tolerates a repeat needs no change.
 
 A live start the oplog no longer has, at a resume or once the replay is done, makes the catch-up replay from the
 origin again, which delivers everything between the origin and where the earlier replay had got to a second time. A
-catch-up whose replay loses the live start 4 times in a row fails instead of replaying a fifth time, after it has
-delivered the history from the origin 4 times. So size the oplog for the longest rebuild.
+catch-up fails instead of replaying a fifth time once 4 replays in a row lost the live start, and the last 3 of those
+replays each delivered the history from the origin. So size the oplog for the longest rebuild.
 
 The check and the handover are two calls. A live start that leaves the history between them is still handed over,
 and what happens then is up to the wrapped model's handling of lost history.
