@@ -778,14 +778,16 @@ public final class ReactiveHandover<T, K> {
      * Stop a handover that has not gone live, has no {@link #catchUp(Source)} running and is not failing, as a replay
      * stopped before going live does. Every payload waiting for a catch-up is answered as not applied, so
      * {@link #accept(Object)} errors and {@link #acceptReportingDelivery(Object)} completes {@code false} for it, and so
-     * is every payload fed after the stop, until the next {@link #catchUp(Source)}. Without this, a payload fed before
-     * any catch-up started would wait for one that a shutting-down application never runs.
+     * is every payload fed after the stop, until the next {@link #catchUp(Source)}. A catch-up started after the stop
+     * does not deliver those payloads, so their callers offer them again. Without this, a payload fed before any
+     * catch-up started would wait for one that a shutting-down application never runs.
      * <p>
-     * A catch-up counts as running from the {@link #catchUp(Source)} call until it goes live, is stopped or fails, also
-     * while it waits for another replay to end. Does nothing while one runs, since that catch-up answers the waiting
-     * payloads itself. It delivers them once it goes live, answers them as not applied when its replay is stopped
-     * through {@link Source#keepReplaying()}, and errors them with its failure when it fails. Does nothing to a live
-     * handover either, or to one that is failing, which answers them with its failure.
+     * A catch-up counts as running from the {@link #catchUp(Source)} call until it goes live, its replay is stopped
+     * through {@link Source#keepReplaying()}, or it fails, also while it waits for another replay to end. Does nothing
+     * while one runs, since that catch-up answers the waiting payloads itself. It delivers them once it goes live,
+     * answers them as not applied when its replay is stopped through {@link Source#keepReplaying()}, and errors them
+     * with its failure when it fails. Does nothing to a live handover either, or to one that is failing, which answers
+     * them with its failure.
      */
     public void stopIfNotCatchingUp() {
         List<LiveAck> dropped;
@@ -866,6 +868,26 @@ public final class ReactiveHandover<T, K> {
         if (current != null && failedForGoodBefore == null) {
             return Mono.error(refusal(current.cause()));
         }
+        // Counted from here until it goes live, is stopped or fails, so stopIfNotCatchingUp() lets this catch-up
+        // answer the payloads waiting now. Taken before the source is asked anything, since asking it can take as long
+        // as the source likes, and given back here when building or subscribing the pipeline throws, since no way that
+        // pipeline ends can give it back then.
+        AtomicBoolean counted = new AtomicBoolean(true);
+        synchronized (catchUpsGuard) {
+            catchUpsInProgress++;
+            // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying
+            // again rather than only by building a new one.
+            stopped = false;
+        }
+        try {
+            return startCountedCatchUp(source, failedForGoodBefore, counted);
+        } catch (RuntimeException | Error e) {
+            catchUpEnded(counted);
+            throw e;
+        }
+    }
+
+    private Mono<Boolean> startCountedCatchUp(Source<T> source, Throwable failedForGoodBefore, AtomicBoolean counted) {
         Sinks.One<Boolean> catchupDone = Sinks.one();
 
         // Evaluate the marker once and reuse it, so the replay and the "record marker" step agree, and the marker is
@@ -998,16 +1020,6 @@ public final class ReactiveHandover<T, K> {
             }));
         });
 
-        // Counted from here until it goes live, is stopped or fails, so stopIfNotCatchingUp() lets this catch-up
-        // answer the payloads waiting now. Taken right before the pipeline is subscribed, since nothing after this
-        // point throws before that subscription, and every way that pipeline ends gives the count back.
-        AtomicBoolean counted = new AtomicBoolean(true);
-        synchronized (catchUpsGuard) {
-            catchUpsInProgress++;
-            // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying
-            // again rather than only by building a new one.
-            stopped = false;
-        }
         replayFolded
                 // Before the marker, before the catch-up signal and before the drain, on every path into it,
                 // including the already-caught-up one that skipped the replay entirely. Ahead of the signal

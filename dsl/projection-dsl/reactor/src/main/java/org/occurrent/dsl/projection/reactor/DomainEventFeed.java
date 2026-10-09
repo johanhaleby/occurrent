@@ -407,11 +407,17 @@ public final class DomainEventFeed<E> {
      * Stop a catch-up replay that is still in flight, so a shutting-down application does not leave one folding into
      * a store that is closing with it. The replay notices at its next event and unwinds without recording the
      * completion marker, so the next start replays the whole history again. The {@link Mono} {@link #accept(Object)}
-     * returned for an event waiting on a replay that started before the feed went live errors rather than completing,
-     * so its listener does not acknowledge the event, and so does one waiting on a catch-up that has not started yet.
-     * One waiting on a replay started after {@link #goLive(String)}
-     * completes once the event is folded, since the feed still applies the events that arrived while that replay
-     * ran.
+     * returned for an event waiting on a replay that started before the feed went live errors rather than completing
+     * when that replay notices the stop, so its listener does not acknowledge the event. A replay with no event left
+     * to hand to the projection does not notice it, see {@link CatchupProjectionFeed#stopCatchUp()}, and the feed goes
+     * live and folds the event. One waiting on a replay started after {@link #goLive(String)} completes once the event
+     * is folded, since the feed still applies the events that arrived while that replay ran.
+     * <p>
+     * A feed with no catch-up running that has not gone live stops too. The {@link Mono} {@link #accept(Object)}
+     * returned for an event fed before the stop, or after it and before the next catch-up or {@link #goLive(String)},
+     * errors, and a catch-up started after the stop does not fold that event. A catch-up counts as running from the
+     * subscription to the {@link Mono} that {@link #catchUpAll()}, {@link #catchUp(String)} or {@link #goLive(String)}
+     * returned, not from the call, until the feed goes live, its replay notices a stop, or it fails.
      * <p>
      * Stopping is what a caller cannot do for itself. Backgrounding is not, since the returned {@link Mono} from
      * {@link #catchUpAll()} is the caller's to compose or not.

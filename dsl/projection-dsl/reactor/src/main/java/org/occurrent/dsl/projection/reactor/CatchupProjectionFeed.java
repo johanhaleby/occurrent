@@ -192,9 +192,9 @@ public final class CatchupProjectionFeed<E> {
      * <p>
      * It errors with an {@link IllegalStateException} instead when the event was not folded, because the catch-up was
      * stopped before the feed went live, {@link #stopCatchUp()} was called while the feed had not gone live and no
-     * catch-up ran, the event was fed after either of those stops and before the next {@link #catchUp()}, the feed is
-     * failing or has failed, or the live buffer is full. The listener must not acknowledge it, and the broker delivers
-     * it again.
+     * catch-up was running, the event was fed after either of those stops and before the next {@link #catchUp()} or
+     * {@link #goLive()}, the feed is failing or has failed, or the live buffer is full. The listener must not
+     * acknowledge it, and the broker delivers it again.
      * <p>
      * Called from inside this feed's fold, it completes once the event is queued instead, since this feed folds one
      * event at a time and the event cannot be folded before that fold returns. The fold's call is recognized when the
@@ -401,10 +401,12 @@ public final class CatchupProjectionFeed<E> {
      * delivers what it held while the replay ran and goes on delivering, since those events were accepted by a feed
      * that was already live.
      * <p>
-     * A feed with no catch-up running that has not gone live stops the same way, so the {@link Mono}
-     * {@link #accept(Object)} returned for an event fed before a catch-up that a shutting-down application never starts
-     * errors rather than waiting for it. A catch-up counts as running from the {@link #catchUp()} call until the feed
-     * goes live, the catch-up is stopped or it fails.
+     * A feed with no catch-up running that has not gone live stops the same way. The {@link Mono}
+     * {@link #accept(Object)} returned for an event fed before the stop, or after it and before the next
+     * {@link #catchUp()} or {@link #goLive()}, errors, so a shutting-down application that never starts a catch-up does
+     * not leave it waiting. A catch-up started after the stop does not fold that event, and the broker delivers it
+     * again. A catch-up counts as running from the {@link #catchUp()} or {@link #goLive()} call until the feed goes
+     * live, its replay notices a stop, or it fails.
      * <p>
      * A view that buffers during a replay discards that buffer on a stop, so after a {@link #goLive()} the live copy
      * of an event the stopped replay delivered is delivered again rather than skipped as a duplicate. A view that
