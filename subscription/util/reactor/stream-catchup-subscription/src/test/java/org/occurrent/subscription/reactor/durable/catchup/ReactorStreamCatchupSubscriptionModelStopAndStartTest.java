@@ -31,6 +31,7 @@ import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.MonoSink;
 import reactor.core.publisher.Sinks;
 
 import java.net.URI;
@@ -41,6 +42,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.LongStream;
 
@@ -246,6 +248,98 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
         assertThat(outcomeOf(subscription)).isEqualTo("complete");
     }
 
+    @Test
+    void a_resume_whose_start_of_the_model_throws_keeps_the_model_stopped_so_the_next_resume_starts_it_before_the_replay() {
+        WrappedModel wrapped = new WrappedModel();
+        GatedReader reader = new GatedReader();
+        reader.release();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        catchup.stop();
+        Subscription subscription = subscribe(catchup, delivered);
+        wrapped.failNextStart = true;
+
+        assertThatThrownBy(() -> catchup.resumeSubscription(SUBSCRIPTION_ID)).hasMessage(WrappedModel.START_FAILED);
+        assertThat(delivered).isEmpty();
+        assertThat(catchup.isPaused(SUBSCRIPTION_ID)).isTrue();
+
+        catchup.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(wrapped.subscribedWhileStopped).as("handovers to a wrapped model that was not started").isEmpty();
+        assertThat(wrapped.startCalls).as("starts of the wrapped model that went through").containsExactly(false);
+        assertThat(delivered).containsExactly("e1", "e2", "e3");
+        assertThat(wrapped.subscribeCalls).containsExactly(SUBSCRIPTION_ID);
+        assertThat(outcomeOf(subscription)).isEqualTo("complete");
+    }
+
+    @Test
+    void resuming_a_handed_over_subscription_while_the_model_is_stopped_starts_the_model_so_a_subscription_made_then_runs() {
+        WrappedModel wrapped = new WrappedModel();
+        GatedReader reader = new GatedReader();
+        reader.release();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        subscribe(catchup, "a", delivered);
+        catchup.stop();
+
+        catchup.resumeSubscription("a");
+        subscribe(catchup, "b", delivered);
+
+        assertThat(delivered).as("delivered once a was resumed and b subscribed").containsExactly("a:e1", "a:e2", "a:e3", "b:e1", "b:e2", "b:e3");
+        assertThat(wrapped.startCalls).containsExactly(false);
+        assertThat(wrapped.subscribeCalls).containsExactly("a", "b");
+        assertThat(catchup.isPaused("a")).isFalse();
+        assertThat(catchup.isPaused("b")).isFalse();
+    }
+
+    // The stop comes before the replay reads anything, so the replay delivers nothing and goes straight to the
+    // handover on another thread. There it waits for the subscription's lock, which the subscribe on this thread holds
+    // until the start(false) has run.
+    @Test
+    void a_replay_that_stop_cut_short_does_not_hand_over_when_start_false_runs_before_it_reaches_the_handover() throws InterruptedException {
+        WrappedModel wrapped = new WrappedModel();
+        GatedReader reader = new GatedReader();
+        reader.release();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        AtomicReference<Thread> replaying = replayOnAnotherThread(wrapped, catchup::stop, () -> catchup.start(false));
+
+        Subscription subscription = subscribe(catchup, delivered);
+        replaying.get().join(5_000);
+
+        assertThat(wrapped.subscribeCalls).as("handovers after stop and start(false)").isEmpty();
+        assertThat(replaying.get().isAlive()).isFalse();
+        assertThat(delivered).isEmpty();
+        assertThat(catchup.isPaused(SUBSCRIPTION_ID)).isTrue();
+        assertThat(outcomeOf(subscription)).isEqualTo("waiting");
+
+        catchup.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delivered).containsExactly("e1", "e2", "e3");
+        assertThat(wrapped.subscribeCalls).containsExactly(SUBSCRIPTION_ID);
+        assertThat(outcomeOf(subscription)).isEqualTo("complete");
+    }
+
+    // As above, but start(true) runs the replay again on this thread, and that run hands over
+    @Test
+    void a_replay_that_stop_cut_short_leaves_the_handover_to_the_replay_that_start_true_runs_before_it_reaches_the_handover() throws InterruptedException {
+        WrappedModel wrapped = new WrappedModel();
+        GatedReader reader = new GatedReader();
+        reader.release();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        AtomicReference<Thread> replaying = replayOnAnotherThread(wrapped, catchup::stop, () -> catchup.start(true));
+
+        Subscription subscription = subscribe(catchup, delivered);
+        replaying.get().join(5_000);
+
+        assertThat(wrapped.subscribeCalls).as("handovers after stop and start(true)").containsExactly(SUBSCRIPTION_ID);
+        assertThat(replaying.get().isAlive()).isFalse();
+        assertThat(delivered).containsExactly("e1", "e2", "e3");
+        assertThat(catchup.isPaused(SUBSCRIPTION_ID)).isFalse();
+        assertThat(outcomeOf(subscription)).isEqualTo("complete");
+    }
+
     /**
      * Whatever sequence of calls ran before the replay hands over, the subscription is paused exactly when a pause or
      * a stop came after the last {@code start(true)} or resume. It is running exactly when neither did and the model
@@ -278,7 +372,7 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
                 checked++;
             }
         }
-        assertThat(checked).isEqualTo(2 * (1 + 6 + 5 * 6 + 25 * 6 + 125 * 6));
+        assertThat(checked).isEqualTo(2 * (1 + 7 + 6 * 7 + 36 * 7 + 216 * 7));
     }
 
     private static void check(boolean subscribedWhileStopped, List<Call> sequence) {
@@ -312,6 +406,18 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
                         assertThatThrownBy(() -> catchup.resumeSubscription(SUBSCRIPTION_ID)).as(description).isExactlyInstanceOf(SubscriptionAlreadyRunningException.class);
                     }
                 }
+                case RESUME_WHOSE_START_THROWS -> {
+                    wrapped.failNextStart = true;
+                    if (expected.stopped) {
+                        assertThatThrownBy(() -> catchup.resumeSubscription(SUBSCRIPTION_ID)).as(description).hasMessage(WrappedModel.START_FAILED);
+                    } else if (expected.parked || expected.pausePending) {
+                        catchup.resumeSubscription(SUBSCRIPTION_ID);
+                        expected.resume();
+                    } else {
+                        assertThatThrownBy(() -> catchup.resumeSubscription(SUBSCRIPTION_ID)).as(description).isExactlyInstanceOf(SubscriptionAlreadyRunningException.class);
+                    }
+                    wrapped.failNextStart = false;
+                }
                 case STOP -> {
                     catchup.stop();
                     expected.stop();
@@ -342,13 +448,14 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
         } else {
             assertThat(delivered).as("delivered after " + description).containsExactly("e1", "e2", "e3");
             assertThat(wrapped.subscribeCalls).as("handovers after " + description).containsExactly(SUBSCRIPTION_ID);
+            assertThat(wrapped.subscribedWhileStopped).as("handovers to a stopped wrapped model after " + description).isEmpty();
             assertThat(outcomeOf(subscription)).as("started signal after " + description).isEqualTo("complete");
             assertThat(catchup.isPaused(SUBSCRIPTION_ID)).as("isPaused once handed over after " + description).isEqualTo(expected.pausePending);
         }
     }
 
     private enum Call {
-        PAUSE, RESUME, STOP, START_RESUMING, START_WITHOUT_RESUMING, CANCEL
+        PAUSE, RESUME, RESUME_WHOSE_START_THROWS, STOP, START_RESUMING, START_WITHOUT_RESUMING, CANCEL
     }
 
     // What the life-cycle contract says about one subscription whose replay has not handed over
@@ -392,6 +499,27 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
                 cloudEvent -> Mono.fromRunnable(() -> delivered.add(cloudEvent.getId())));
     }
 
+    private static void subscribe(ReactorStreamCatchupSubscriptionModel catchup, String subscriptionId, List<String> delivered) {
+        catchup.subscribe(subscriptionId, StreamSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                cloudEvent -> Mono.fromRunnable(() -> delivered.add(subscriptionId + ":" + cloudEvent.getId())));
+    }
+
+    // The next subscribe runs beforeTheReplay while it holds the subscription's lock, then hands the checkpoint to the
+    // returned thread, which runs the replay up to the handover and waits there for that lock. whileTheReplayWaits
+    // then runs on the subscribing thread, which still holds it.
+    private static AtomicReference<Thread> replayOnAnotherThread(WrappedModel wrapped, Runnable beforeTheReplay, Runnable whileTheReplayWaits) {
+        AtomicReference<Thread> replaying = new AtomicReference<>();
+        wrapped.nextCheckpoint = sink -> {
+            beforeTheReplay.run();
+            Thread thread = new Thread(() -> sink.success(WrappedModel.TOKEN));
+            replaying.set(thread);
+            thread.start();
+            awaitBlocked(thread);
+            whileTheReplayWaits.run();
+        };
+        return replaying;
+    }
+
     // Every step here runs on the calling thread, so the outcome is known once the call that causes it returns
     private static String outcomeOf(Subscription subscription) {
         AtomicReference<String> outcome = new AtomicReference<>("waiting");
@@ -404,7 +532,7 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (thread.getState() != Thread.State.BLOCKED) {
             if (System.nanoTime() > deadline) {
-                throw new AssertionError("the stop never waited for the handover, its thread is " + thread.getState());
+                throw new AssertionError("the thread never waited for the lock, its state is " + thread.getState());
             }
             Thread.onSpinWait();
         }
@@ -444,22 +572,34 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
     // A named subscription model with a resolvable checkpoint. stop() pauses what it runs and start(true) resumes it, as
     // the life-cycle contract says.
     private static final class WrappedModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
+        static final String START_FAILED = "the wrapped model failed to start";
+        static final Checkpoint TOKEN = new StringBasedCheckpoint("token");
         final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
+        // Subscribed while this model was stopped
+        final List<String> subscribedWhileStopped = new CopyOnWriteArrayList<>();
+        // Successful starts only
         final List<Boolean> startCalls = new CopyOnWriteArrayList<>();
         final List<String> stopCalls = new CopyOnWriteArrayList<>();
         final Set<String> paused = ConcurrentHashMap.newKeySet();
+        volatile boolean running = true;
+        // The next start(..) throws before it starts anything
+        volatile boolean failNextStart = false;
+        // Completes the next checkpoint asked for, instead of answering at once
+        volatile @Nullable Consumer<MonoSink<Checkpoint>> nextCheckpoint = null;
         volatile Runnable whileSubscribing = () -> {
         };
 
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
-            return Mono.just(new StringBasedCheckpoint("token"));
+            Consumer<MonoSink<Checkpoint>> completion = nextCheckpoint;
+            nextCheckpoint = null;
+            return completion == null ? Mono.just(TOKEN) : Mono.create(completion);
         }
 
         @Override
         // The position never moves, so it is the one at the call
         public Mono<Checkpoint> globalCheckpointAsOfNow() {
-            return globalCheckpoint();
+            return Mono.just(TOKEN);
         }
 
         @Override
@@ -471,6 +611,9 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
             whileSubscribing.run();
             subscribeCalls.add(subscriptionId);
+            if (!running) {
+                subscribedWhileStopped.add(subscriptionId);
+            }
             return handle(subscriptionId);
         }
 
@@ -484,12 +627,18 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
         @Override
         public void stop() {
             stopCalls.add("stop");
+            running = false;
             paused.addAll(subscribeCalls);
         }
 
         @Override
         public void start(boolean resumeSubscriptionsAutomatically) {
+            if (failNextStart) {
+                failNextStart = false;
+                throw new IllegalStateException(START_FAILED);
+            }
             startCalls.add(resumeSubscriptionsAutomatically);
+            running = true;
             if (resumeSubscriptionsAutomatically) {
                 paused.clear();
             }
@@ -497,7 +646,7 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
 
         @Override
         public boolean isRunning() {
-            return true;
+            return running;
         }
 
         @Override
