@@ -27,6 +27,7 @@ import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
@@ -85,27 +86,30 @@ class NativeMongoCheckpointStorageConformanceTest extends CheckpointStorageConfo
         }
 
         /**
-         * This storage writes its own two checkpoint types into fields it recognises and rebuilds them on the way out.
-         * Anything else is stored as the string it reports, so it comes back a {@link StringBasedCheckpoint}: a
-         * {@code GlobalCheckpoint} saved here is read back as one of those, which is why
+         * This storage writes its own two checkpoint types into fields it recognises and rebuilds them on the way out,
+         * and so is a {@code GlobalCheckpoint} that has a live start, whose live start goes in fields of its own.
+         * Anything else is stored as the string it reports, so it comes back a {@link StringBasedCheckpoint}. A
+         * {@code GlobalCheckpoint} without a live start saved here is read back as one of those, which is why
          * {@code GlobalCheckpoint.isGlobalCheckpoint} has to recognise both forms.
          */
         @Override
         public boolean preservesCheckpointType(Checkpoint checkpoint) {
             return checkpoint instanceof MongoResumeTokenCheckpoint
                     || checkpoint instanceof MongoOperationTimeCheckpoint
-                    || checkpoint instanceof StringBasedCheckpoint;
+                    || checkpoint instanceof StringBasedCheckpoint
+                    || checkpoint instanceof GlobalCheckpoint global && global.liveFrom().isPresent();
         }
 
         /**
-         * The two checkpoints a MongoDB change stream actually hands this storage. A resume token is only ever read
-         * back through its {@code _data} field, which is why the token declared here carries that and nothing else.
+         * The two checkpoints a MongoDB change stream actually hands this storage, alone and as the live start a
+         * catch-up stores next to its position. A resume token is only ever read back through its {@code _data} field,
+         * which is why the token declared here carries that and nothing else.
          */
         @Override
         public List<Checkpoint> additionalCheckpoints() {
-            return List.of(
-                    new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("82ABCDEF"))),
-                    new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1)));
+            MongoResumeTokenCheckpoint resumeToken = new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("82ABCDEF")));
+            MongoOperationTimeCheckpoint operationTime = new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1));
+            return List.of(resumeToken, operationTime, GlobalCheckpoint.of(42, resumeToken, 7, 40), GlobalCheckpoint.of(42, operationTime, 7, 40));
         }
 
         @Override

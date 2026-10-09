@@ -127,12 +127,14 @@ public abstract class CheckpointStorageConformance {
     }
 
     /**
-     * The two checkpoints every storage owes an answer for, plus whatever the fixture added.
+     * The checkpoints every storage owes an answer for, plus whatever the fixture added. A {@code GlobalCheckpoint}
+     * comes both as a plain position and with the live start a catch-up stores alongside it.
      */
     private List<Checkpoint> checkpointsToRoundTrip() {
         List<Checkpoint> checkpoints = new ArrayList<>();
         checkpoints.add(new StringBasedCheckpoint("a-checkpoint-value"));
         checkpoints.add(GlobalCheckpoint.of(42));
+        checkpoints.add(GlobalCheckpoint.of(42, new StringBasedCheckpoint("a-live-start"), 7, 40));
         checkpoints.addAll(fixture().additionalCheckpoints());
         return checkpoints;
     }
@@ -198,6 +200,19 @@ public abstract class CheckpointStorageConformance {
                     .as("an unknown subscription id has no checkpoint, which is how a subscription starting for the "
                             + "first time is told to ask the model for a global checkpoint instead")
                     .isNull();
+        }
+
+        @Test
+        void a_position_without_a_live_start_replaces_one_with_a_live_start() {
+            String id = subscriptionId();
+            checkpointStorage().save(id, GlobalCheckpoint.of(42, new StringBasedCheckpoint("a-live-start"), 7, 40)).block();
+
+            checkpointStorage().save(id, GlobalCheckpoint.of(50)).block();
+
+            assertThat(requireNonNull(checkpointStorage().read(id).block()).asString())
+                    .as("a storage that keeps the live start apart from the position has to clear it, or a catch-up "
+                            + "resumes live from a start that belongs to an earlier replay")
+                    .isEqualTo("position:50");
         }
 
         @Test
