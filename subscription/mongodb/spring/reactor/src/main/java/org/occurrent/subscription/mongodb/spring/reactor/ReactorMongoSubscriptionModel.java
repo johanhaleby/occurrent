@@ -609,6 +609,24 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 .map(MongoOperationTimeCheckpoint::new);
     }
 
+    /**
+     * Opens a change stream at {@code checkpoint} and closes it again. Emits {@code false} when MongoDB refuses to
+     * open it because the oplog no longer reaches back to {@code checkpoint}.
+     */
+    @Override
+    public Mono<Boolean> canResumeFrom(Checkpoint checkpoint) {
+        requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
+        return Mono.defer(() -> MongoCommons.changeStreamHistoryProbe(eventCollection, checkpoint)
+                .map(probe -> mongo.executeCommand(probe)
+                        .flatMap(reply -> MongoCommons.killChangeStreamHistoryProbeCursor(eventCollection, reply)
+                                // The server closes an idle cursor on its own after a while
+                                .map(killCursors -> mongo.executeCommand(killCursors).onErrorResume(__ -> Mono.empty()).then())
+                                .orElse(Mono.empty())
+                                .thenReturn(true))
+                        .onErrorResume(MongoCommons::isChangeStreamHistoryLost, __ -> Mono.just(false)))
+                .orElseGet(() -> Mono.just(true)));
+    }
+
     @Override
     public void addQuietPositionListener(QuietPositionListener listener) {
         quietPositionListeners.add(requireNonNull(listener, QuietPositionListener.class.getSimpleName() + " cannot be null"));

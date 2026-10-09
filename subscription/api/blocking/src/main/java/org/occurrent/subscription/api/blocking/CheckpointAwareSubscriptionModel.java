@@ -39,4 +39,21 @@ public interface CheckpointAwareSubscriptionModel extends SubscriptionModel, Glo
      */
     @Override
     @Nullable Checkpoint globalCheckpoint();
+
+    /**
+     * Whether a subscription started from {@code checkpoint} would get every event written after it. It would not when
+     * the feed no longer has the history back to {@code checkpoint}, for example when it is a MongoDB change-stream
+     * position older than the oldest entry left in the oplog. A catch-up subscription asks this before it goes live from
+     * a position it stored before a restart, and replays history again instead when the answer is {@code false}.
+     * <p>
+     * The default answers {@code true}, which is right for a model whose feed never drops history. A model that wraps
+     * another one passes the call on to the model it wraps.
+     *
+     * @param checkpoint A position this model, or the model it wraps, returned from {@link #globalCheckpoint()} or
+     *                   attached to an event it delivered
+     * @return {@code false} if the feed no longer has the history back to {@code checkpoint}, otherwise {@code true}
+     */
+    default boolean canResumeFrom(Checkpoint checkpoint) {
+        return true;
+    }
 }

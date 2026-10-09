@@ -16,11 +16,13 @@
 
 package org.occurrent.subscription.mongodb.internal;
 
+import com.mongodb.MongoCommandException;
 import org.bson.*;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StartAt;
@@ -39,6 +41,7 @@ import java.util.OptionalLong;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static java.util.Arrays.asList;
@@ -60,6 +63,18 @@ public class MongoCommons {
      * The field a {@link CheckpointWriteCondition} is evaluated against and recorded into. See ADR 116.
      */
     public static final String WRITE_VERSION = "version";
+    /**
+     * The field a catch-up's live start is stored in next to {@link #GENERIC_CHECKPOINT}, see {@link GlobalCheckpoint#liveFrom()}.
+     */
+    public static final String CATCHUP_LIVE_FROM = "catchupLiveFrom";
+    /**
+     * The field a catch-up's replay origin is stored in next to {@link #GENERIC_CHECKPOINT}, see {@link GlobalCheckpoint#replayOrigin()}.
+     */
+    public static final String CATCHUP_REPLAY_ORIGIN = "catchupReplayOrigin";
+    /**
+     * The field a catch-up's replay end is stored in next to {@link #GENERIC_CHECKPOINT}, see {@link GlobalCheckpoint#replayTo()}.
+     */
+    public static final String CATCHUP_REPLAY_TO = "catchupReplayTo";
 
     public static Document generateResumeTokenStreamPositionDocument(String subscriptionId, BsonValue resumeToken) {
         Map<String, Object> data = new HashMap<>();
@@ -93,9 +108,134 @@ public class MongoCommons {
         } else if (checkpoint instanceof MongoOperationTimeCheckpoint mongoOperationTimeCheckpoint) {
             document = generateOperationTimeStreamPositionDocument(subscriptionId, mongoOperationTimeCheckpoint.operationTime);
         } else {
-            document = generateGenericCheckpointDocument(subscriptionId, checkpoint.asString());
+            GlobalCheckpoint withLiveStart = globalCheckpointWithLiveStart(checkpoint);
+            if (withLiveStart == null) {
+                document = generateGenericCheckpointDocument(subscriptionId, checkpoint.asString());
+            } else {
+                // The live start goes in fields of its own, so a version that knows only the plain position reads
+                // "checkpoint" as before and ignores them. A live start at the top level would be read as the
+                // subscription's own change-stream position and skip the rest of the replay.
+                Checkpoint liveFrom = withLiveStart.liveFrom().orElseThrow();
+                Document liveFromDocument = generateCheckpointDocument(subscriptionId, typedLiveStart(liveFrom));
+                liveFromDocument.remove(MongoCloudEventsToJsonDeserializer.ID);
+                document = generateGenericCheckpointDocument(subscriptionId, GlobalCheckpoint.of(withLiveStart.position()).asString());
+                document.put(CATCHUP_LIVE_FROM, liveFromDocument);
+                document.put(CATCHUP_REPLAY_ORIGIN, withLiveStart.replayOrigin().orElseThrow());
+                document.put(CATCHUP_REPLAY_TO, withLiveStart.replayTo().orElseThrow());
+            }
         }
         return document;
+    }
+
+    private static @Nullable GlobalCheckpoint globalCheckpointWithLiveStart(Checkpoint checkpoint) {
+        if (!GlobalCheckpoint.isGlobalCheckpoint(checkpoint)) {
+            return null;
+        }
+        final GlobalCheckpoint global;
+        try {
+            global = GlobalCheckpoint.parse(checkpoint);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+        return global.liveFrom().isPresent() ? global : null;
+    }
+
+    // A live start read back from a storage that keeps strings is a StringBasedCheckpoint holding the JSON a
+    // MongoResumeTokenCheckpoint or a MongoOperationTimeCheckpoint writes
+    private static Checkpoint typedLiveStart(Checkpoint liveFrom) {
+        if (liveFrom instanceof MongoResumeTokenCheckpoint || liveFrom instanceof MongoOperationTimeCheckpoint) {
+            return liveFrom;
+        }
+        String value = liveFrom.asString();
+        try {
+            if (value.contains(RESUME_TOKEN)) {
+                return new MongoResumeTokenCheckpoint(BsonDocument.parse(value).getDocument(RESUME_TOKEN));
+            } else if (value.contains(OPERATION_TIME)) {
+                BsonTimestamp operationTime = Document.parse(value).get(OPERATION_TIME, BsonTimestamp.class);
+                if (operationTime != null) {
+                    return new MongoOperationTimeCheckpoint(operationTime);
+                }
+            }
+        } catch (RuntimeException e) {
+            return liveFrom;
+        }
+        return liveFrom;
+    }
+
+    /**
+     * The {@code aggregate} command that opens a change stream on {@code collectionName} at {@code checkpoint} and
+     * returns at most one change, for a subscription model's {@code canResumeFrom(..)}. MongoDB answers it with
+     * {@link #CHANGE_STREAM_HISTORY_LOST_ERROR_CODE} when the oplog no longer reaches back to {@code checkpoint}, once
+     * the oplog has been truncated past it. Empty when {@code checkpoint} holds neither a resume token nor an operation
+     * time, since a change stream then opens at the present and needs no history.
+     */
+    public static Optional<Document> changeStreamHistoryProbe(String collectionName, Checkpoint checkpoint) {
+        Document changeStream = applyResolvedStartPosition(new Document(),
+                (document, resumeToken) -> new Document("startAfter", resumeToken),
+                (document, operationTime) -> new Document("startAtOperationTime", operationTime),
+                StartAt.checkpoint(checkpoint));
+        if (changeStream.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new Document("aggregate", collectionName)
+                .append("pipeline", List.of(new Document("$changeStream", changeStream)))
+                .append("cursor", new Document("batchSize", 1)));
+    }
+
+    /**
+     * The {@code killCursors} command for the cursor {@code reply}, the reply to a
+     * {@link #changeStreamHistoryProbe(String, Checkpoint)}, left open, or empty when the reply left none open.
+     */
+    public static Optional<Document> killChangeStreamHistoryProbeCursor(String collectionName, Document reply) {
+        Document cursor = reply.get("cursor", Document.class);
+        Number cursorId = cursor == null ? null : cursor.get("id", Number.class);
+        if (cursorId == null || cursorId.longValue() == 0) {
+            return Optional.empty();
+        }
+        return Optional.of(new Document("killCursors", collectionName).append("cursors", List.of(cursorId.longValue())));
+    }
+
+    /**
+     * Whether {@code throwable} is MongoDB saying that a change stream cannot open at the position it was asked to,
+     * because the oplog no longer reaches back to it.
+     */
+    public static boolean isChangeStreamHistoryLost(Throwable throwable) {
+        // Spring translates the driver's exception into one of its own and keeps the driver's as the cause
+        for (Throwable cause = throwable; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof MongoCommandException mongoCommandException && mongoCommandException.getErrorCode() == CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * A blocking subscription model's {@code canResumeFrom(..)}. Runs {@link #changeStreamHistoryProbe(String, Checkpoint)}
+     * through {@code runCommand} and answers {@code false} only when MongoDB refuses it because the oplog no longer
+     * reaches back to {@code checkpoint}. Any other failure is thrown.
+     */
+    public static boolean canResumeFrom(String collectionName, Checkpoint checkpoint, Function<Document, Document> runCommand) {
+        Optional<Document> probe = changeStreamHistoryProbe(collectionName, checkpoint);
+        if (probe.isEmpty()) {
+            return true;
+        }
+        final Document reply;
+        try {
+            reply = runCommand.apply(probe.get());
+        } catch (RuntimeException e) {
+            if (isChangeStreamHistoryLost(e)) {
+                return false;
+            }
+            throw e;
+        }
+        killChangeStreamHistoryProbeCursor(collectionName, reply).ifPresent(killCursors -> {
+            try {
+                runCommand.apply(killCursors);
+            } catch (RuntimeException ignored) {
+                // The server closes an idle cursor on its own after a while
+            }
+        });
+        return true;
     }
 
     /**
@@ -361,6 +501,9 @@ public class MongoCommons {
             withStartPositionApplied = applyResumeToken.apply(t, resumeToken);
         } else if (changeStreamPosition instanceof MongoOperationTimeCheckpoint mongoOperationTimeCheckpoint) {
             withStartPositionApplied = applyOperationTime.apply(t, mongoOperationTimeCheckpoint.operationTime);
+        } else if (GlobalCheckpoint.isGlobalCheckpoint(changeStreamPosition)) {
+            // A catch-up's position, whose live start would otherwise match below and fail to parse as a whole
+            return t;
         } else {
             String changeStreamPositionString = changeStreamPosition.asString();
             if (changeStreamPositionString.contains(RESUME_TOKEN)) {
@@ -544,7 +687,16 @@ public class MongoCommons {
             changeStreamPosition = new MongoOperationTimeCheckpoint(lastOperationTime);
         } else if (checkpointDocument.containsKey(MongoCommons.GENERIC_CHECKPOINT)) {
             String value = checkpointDocument.getString(MongoCommons.GENERIC_CHECKPOINT);
-            changeStreamPosition = new StringBasedCheckpoint(value);
+            Document liveFrom = checkpointDocument.get(CATCHUP_LIVE_FROM, Document.class);
+            Number replayOrigin = checkpointDocument.get(CATCHUP_REPLAY_ORIGIN, Number.class);
+            Number replayTo = checkpointDocument.get(CATCHUP_REPLAY_TO, Number.class);
+            // Without the replay end the live start is ignored, and the catch-up resumes as from a plain position
+            if (liveFrom != null && replayOrigin != null && replayTo != null && GlobalCheckpoint.isGlobalCheckpoint(new StringBasedCheckpoint(value))) {
+                changeStreamPosition = GlobalCheckpoint.of(GlobalCheckpoint.positionOf(new StringBasedCheckpoint(value)),
+                        calculateCheckpointFromMongoStreamPositionDocument(liveFrom), replayOrigin.longValue(), replayTo.longValue());
+            } else {
+                changeStreamPosition = new StringBasedCheckpoint(value);
+            }
         } else if (checkpointDocument.containsKey(MongoCommons.LEGACY_GENERIC_CHECKPOINT)) {
             // One-time backward-compatible read: documents written before the SubscriptionPosition -> Checkpoint
             // rename stored the generic checkpoint value under the legacy "subscriptionPosition" field. Fall back
