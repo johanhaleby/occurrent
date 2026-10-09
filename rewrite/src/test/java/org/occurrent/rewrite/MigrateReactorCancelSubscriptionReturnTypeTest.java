@@ -2047,7 +2047,7 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
                         class Model implements CancellableSubscriptions {
                             private final Set<String> ids = new HashSet<>();
 
-                            @SuppressWarnings
+                            @SuppressWarnings("unchecked")
                             public void cancelSubscription(String subscriptionId) {
                                 if (ids.remove(subscriptionId)) {
                                     ids.clear();
@@ -2068,7 +2068,7 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
                         class Model implements CancellableSubscriptions {
                             private final Set<String> ids = new HashSet<>();
 
-                            @SuppressWarnings
+                            @SuppressWarnings("unchecked")
                             public Mono<Void> cancelSubscription(String subscriptionId) {
                                 doCancelSubscription(subscriptionId);
                                 return Mono.empty();
