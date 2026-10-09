@@ -20,8 +20,10 @@ this module is a catalog, not an application.
 
 ## The five vignettes here
 
-- **`uniqueusername`** - global uniqueness with a retention period. The boundary is a single tag, the
-  username itself. A closed account's name stays reserved for 30 days before it can be reclaimed.
+- **`uniqueusername`** - global uniqueness with a retention period. Closing an account and changing its
+  username read the username tag, which is enough to tell which account holds the name. Registering also
+  reads the account tag, so an account registers once and holds one username. A closed account's name stays
+  reserved for 30 days before it can be reclaimed.
 - **`idempotency`** - prevent record duplication. The boundary is an idempotency token, and replaying the
   same command is a no-op (`decide` returns no events) instead of an error.
 - **`dynamicproductprice`** - a price change grace period. An order is accepted at the current price, or at

@@ -126,4 +126,102 @@ class UniqueUsernameTest {
         assertThat(failure).isInstanceOfAny(IllegalArgumentException::class.java, DcbAppendConditionNotFulfilledException::class.java)
         assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(1)
     }
+
+    @Test
+    fun `closing a username with an account that does not hold it is rejected and appends nothing`() {
+        val holder = UUID.randomUUID()
+        val now = Instant.parse("2026-01-01T00:00:00Z")
+        applicationService.execute(UsernameCommand.RegisterAccount(holder, "johan", now), usernameDcbDecider)
+
+        assertThatThrownBy {
+            applicationService.execute(UsernameCommand.CloseAccount(UUID.randomUUID(), "johan", now.plusSeconds(60)), usernameDcbDecider)
+        }.isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("held by another account")
+        assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(1)
+    }
+
+    @Test
+    fun `renaming a username with an account that does not hold it is rejected and the holder keeps the name`() {
+        val holder = UUID.randomUUID()
+        val now = Instant.parse("2026-01-01T00:00:00Z")
+        applicationService.execute(UsernameCommand.RegisterAccount(holder, "johan", now), usernameDcbDecider)
+
+        assertThatThrownBy {
+            applicationService.execute(UsernameCommand.ChangeUsername(UUID.randomUUID(), "johan", "johan2", now.plusSeconds(60)), usernameDcbDecider)
+        }.isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("held by another account")
+        assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(1)
+        applicationService.execute(UsernameCommand.CloseAccount(holder, "johan", now.plusSeconds(120)), usernameDcbDecider)
+        assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(2)
+    }
+
+    @Test
+    fun `the holder can close its username`() {
+        val holder = UUID.randomUUID()
+        val now = Instant.parse("2026-01-01T00:00:00Z")
+        applicationService.execute(UsernameCommand.RegisterAccount(holder, "johan", now), usernameDcbDecider)
+
+        applicationService.execute(UsernameCommand.CloseAccount(holder, "johan", now.plusSeconds(60)), usernameDcbDecider)
+
+        assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(2)
+    }
+
+    @Test
+    fun `the holder can rename its username and then holds the new name instead of the old one`() {
+        val holder = UUID.randomUUID()
+        val now = Instant.parse("2026-01-01T00:00:00Z")
+        applicationService.execute(UsernameCommand.RegisterAccount(holder, "johan", now), usernameDcbDecider)
+        applicationService.execute(UsernameCommand.ChangeUsername(holder, "johan", "johan2", now.plusSeconds(60)), usernameDcbDecider)
+
+        assertThatThrownBy {
+            applicationService.execute(UsernameCommand.CloseAccount(holder, "johan", now.plusSeconds(120)), usernameDcbDecider)
+        }.isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("not registered")
+        applicationService.execute(UsernameCommand.CloseAccount(holder, "johan2", now.plusSeconds(120)), usernameDcbDecider)
+
+        assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(3)
+    }
+
+    @Test
+    fun `registering an account that has already registered is rejected even with a different username`() {
+        val accountId = UUID.randomUUID()
+        val now = Instant.parse("2026-01-01T00:00:00Z")
+        applicationService.execute(UsernameCommand.RegisterAccount(accountId, "johan", now), usernameDcbDecider)
+
+        assertThatThrownBy {
+            applicationService.execute(UsernameCommand.RegisterAccount(accountId, "johan2", now.plusSeconds(1)), usernameDcbDecider)
+        }.isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("already registered")
+        assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(1)
+    }
+
+    @Test
+    fun `concurrent registration of one account under two usernames - only one wins`() {
+        val now = Instant.parse("2026-01-01T00:00:00Z")
+        val accountId = UUID.randomUUID()
+        val racingService: DcbApplicationService<UsernameEvent> = GenericDcbApplicationService(eventStore, converter, RetryStrategy.none())
+        val barrier = CyclicBarrier(2)
+        val executor = Executors.newFixedThreadPool(2)
+
+        val results = try {
+            listOf("johan", "johan2").map { username ->
+                executor.submit<Throwable?> {
+                    barrier.await(10, TimeUnit.SECONDS)
+                    try {
+                        racingService.execute(UsernameCommand.RegisterAccount(accountId, username, now), usernameDcbDecider)
+                        null
+                    } catch (e: Throwable) {
+                        e
+                    }
+                }
+            }.map { it.get(10, TimeUnit.SECONDS) }
+        } finally {
+            executor.shutdownNow()
+        }
+
+        assertThat(results.count { it == null }).isEqualTo(1)
+        val failure = results.single { it != null }!!
+        assertThat(failure).isInstanceOfAny(IllegalArgumentException::class.java, DcbAppendConditionNotFulfilledException::class.java)
+        assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(1)
+    }
 }
