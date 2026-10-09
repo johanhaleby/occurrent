@@ -316,9 +316,10 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         innerModels().forEach(inner -> inner.start(resumeSubscriptionsAutomatically));
     }
 
+    // Not running while any inner model is stopped, since a subscription routed to it would be paused
     @Override
     public boolean isRunning() {
-        return anyInnerModel().isRunning();
+        return !anyInnerModelStopped() && anyInnerModel().isRunning();
     }
 
     @Override
@@ -333,7 +334,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
 
     // Resuming one subscription starts a stopped model without resuming the others, as the life-cycle contract says.
     // Started here rather than by the owner, which would start only its own inner model and keep a subscription routed
-    // to another one paused although isRunning() answers true.
+    // to another one paused.
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         SubscriptionModel owner = ownerOf(subscriptionId);

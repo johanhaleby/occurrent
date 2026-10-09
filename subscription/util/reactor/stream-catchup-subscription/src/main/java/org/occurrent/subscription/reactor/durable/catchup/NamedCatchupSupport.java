@@ -347,6 +347,14 @@ final class NamedCatchupSupport {
         if (!managesNamedSubscriptions()) {
             return;
         }
+        if (resumeSubscriptionsAutomatically) {
+            // Before the wrapped model starts, since a replay can hand over while it starts and would apply the pause
+            catchingUp.values().forEach(state -> {
+                synchronized (state) {
+                    state.pendingPause.set(false);
+                }
+            });
+        }
         // Cleared only once the wrapped model has started, so a start that throws keeps this model stopped and a
         // parked replay waits for the next start or resume.
         named.start(resumeSubscriptionsAutomatically);
@@ -356,7 +364,6 @@ final class NamedCatchupSupport {
         }
         catchingUp.values().forEach(state -> {
             synchronized (state) {
-                state.pendingPause.set(false);
                 runIfParked(state);
             }
         });
@@ -380,8 +387,10 @@ final class NamedCatchupSupport {
         }
     }
 
+    // Not running until start(..) has cleared stopped, even when the wrapped model already runs, since a subscribe
+    // before that is paused
     boolean isRunning() {
-        return managesNamedSubscriptions() && named.isRunning();
+        return managesNamedSubscriptions() && !stopped && named.isRunning();
     }
 
     boolean isRunning(String subscriptionId) {

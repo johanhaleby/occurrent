@@ -47,6 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorCatchupSubscriptionModelStopAndStartTest {
@@ -69,6 +70,22 @@ class ReactorCatchupSubscriptionModelStopAndStartTest {
         assertThat(catchup.isRunning("d")).isTrue();
         assertThat(delivered).containsExactly("s:e1");
         assertThat(wrapped.startCalls).containsExactly(false, false, false);
+    }
+
+    @Test
+    void a_start_that_throws_after_the_stream_catch_up_started_keeps_isRunning_false_and_a_dcb_subscription_paused() {
+        WrappedModel wrapped = new WrappedModel();
+        DcbStoreThatNeverAnswers dcbStore = new DcbStoreThatNeverAnswers();
+        ReactorCatchupSubscriptionModel catchup = new ReactorCatchupSubscriptionModel(wrapped, new OneEventReader(), dcbStore, DcbCriteria.all(), Filter.all(), 100, 100);
+        catchup.stop();
+        // The stream catch-up starts the wrapped model first, the DCB catch-up's start then throws
+        wrapped.failingStart = 2;
+
+        assertThatThrownBy(() -> catchup.start(false)).hasMessage(WrappedModel.START_FAILED);
+
+        assertThat(catchup.isRunning()).as("isRunning() after a start(false) that the DCB catch-up's start threw from").isFalse();
+        catchup.subscribe("d", DcbSubscriptionFilter.filter(DcbCriteria.all()), StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        assertThat(catchup.isPaused("d")).isTrue();
     }
 
     private static final class OneEventReader implements PositionOrderedReader {
@@ -115,7 +132,11 @@ class ReactorCatchupSubscriptionModelStopAndStartTest {
     private static final class WrappedModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
         final Set<String> subscribed = ConcurrentHashMap.newKeySet();
         final Set<String> paused = ConcurrentHashMap.newKeySet();
+        static final String START_FAILED = "start failed";
         final List<Boolean> startCalls = new CopyOnWriteArrayList<>();
+        final AtomicInteger starts = new AtomicInteger();
+        // Which start call throws after setting this model running, counting from 1, or none when 0
+        volatile int failingStart = 0;
         volatile boolean running = true;
 
         @Override
@@ -157,8 +178,11 @@ class ReactorCatchupSubscriptionModelStopAndStartTest {
 
         @Override
         public void start(boolean resumeSubscriptionsAutomatically) {
-            startCalls.add(resumeSubscriptionsAutomatically);
             running = true;
+            if (starts.incrementAndGet() == failingStart) {
+                throw new IllegalStateException(START_FAILED);
+            }
+            startCalls.add(resumeSubscriptionsAutomatically);
             if (resumeSubscriptionsAutomatically) {
                 paused.clear();
             }

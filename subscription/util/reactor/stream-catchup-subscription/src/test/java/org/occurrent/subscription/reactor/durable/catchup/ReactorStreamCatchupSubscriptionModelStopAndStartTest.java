@@ -41,6 +41,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -340,6 +342,77 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
         assertThat(outcomeOf(subscription)).isEqualTo("complete");
     }
 
+    @Test
+    void start_true_while_a_replay_paused_during_its_run_hands_over_leaves_the_subscription_running() {
+        WrappedModel wrapped = new WrappedModel();
+        GatedReader reader = new GatedReader();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        subscribe(catchup, delivered);
+        catchup.pauseSubscription(SUBSCRIPTION_ID);
+        // The replay hands over inside the wrapped model's start(true), once that start has resumed what it holds
+        wrapped.afterStart = reader::release;
+
+        catchup.start(true);
+
+        assertThat(catchup.isPaused(SUBSCRIPTION_ID)).as("isPaused(sub) after start(true)").isFalse();
+        assertThat(catchup.isRunning(SUBSCRIPTION_ID)).as("isRunning(sub) after start(true)").isTrue();
+        assertThat(wrapped.subscribeCalls).containsExactly(SUBSCRIPTION_ID);
+        assertThat(delivered).containsExactly("e1", "e2", "e3");
+    }
+
+    // A subscription made while the model is stopped is paused, so isRunning() must not answer true before a
+    // subscription made then would run
+    @Test
+    void a_subscription_made_while_the_wrapped_model_starts_is_paused_only_when_isRunning_answered_false() throws InterruptedException {
+        WrappedModel wrapped = new WrappedModel();
+        GatedReader reader = new GatedReader();
+        reader.release();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        catchup.stop();
+        CountDownLatch starting = new CountDownLatch(1);
+        CountDownLatch finishStart = new CountDownLatch(1);
+        wrapped.afterStart = () -> {
+            starting.countDown();
+            await(finishStart);
+        };
+        Thread starter = new Thread(() -> catchup.start(false));
+        starter.start();
+        await(starting);
+
+        boolean runningWhileStarting = catchup.isRunning();
+        subscribe(catchup, new CopyOnWriteArrayList<>());
+        finishStart.countDown();
+        starter.join(5_000);
+
+        assertThat(catchup.isPaused(SUBSCRIPTION_ID)).as("isPaused(sub), made when isRunning() answered " + runningWhileStarting).isEqualTo(!runningWhileStarting);
+        assertThat(starter.isAlive()).isFalse();
+        assertThat(runningWhileStarting).as("isRunning() while the wrapped model's start(false) runs").isFalse();
+        assertThat(catchup.isRunning()).isTrue();
+    }
+
+    @Test
+    void a_start_that_throws_once_the_wrapped_model_runs_keeps_isRunning_false_and_a_new_subscription_paused() {
+        WrappedModel wrapped = new WrappedModel();
+        GatedReader reader = new GatedReader();
+        reader.release();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        catchup.stop();
+        wrapped.afterRunningInStart = () -> {
+            wrapped.afterRunningInStart = () -> {
+            };
+            throw new IllegalStateException(WrappedModel.START_FAILED);
+        };
+
+        assertThatThrownBy(() -> catchup.start(true)).hasMessage(WrappedModel.START_FAILED);
+
+        assertThat(catchup.isRunning()).as("isRunning() after a start(true) that threw once the wrapped model ran").isFalse();
+        subscribe(catchup, delivered);
+        assertThat(catchup.isPaused(SUBSCRIPTION_ID)).isTrue();
+        assertThat(delivered).isEmpty();
+    }
+
     /**
      * Whatever sequence of calls ran before the replay hands over, the subscription is paused exactly when a pause or
      * a stop came after the last {@code start(true)} or resume. It is running exactly when neither did and the model
@@ -528,6 +601,17 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
         return outcome.get();
     }
 
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("the latch was not counted down within 5 seconds");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
+    }
+
     private static void awaitBlocked(Thread thread) {
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (thread.getState() != Thread.State.BLOCKED) {
@@ -584,6 +668,11 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
         volatile boolean running = true;
         // The next start(..) throws before it starts anything
         volatile boolean failNextStart = false;
+        // Run by start(..) once this model runs, and once it has resumed what it holds
+        volatile Runnable afterRunningInStart = () -> {
+        };
+        volatile Runnable afterStart = () -> {
+        };
         // Completes the next checkpoint asked for, instead of answering at once
         volatile @Nullable Consumer<MonoSink<Checkpoint>> nextCheckpoint = null;
         volatile Runnable whileSubscribing = () -> {
@@ -637,11 +726,13 @@ class ReactorStreamCatchupSubscriptionModelStopAndStartTest {
                 failNextStart = false;
                 throw new IllegalStateException(START_FAILED);
             }
-            startCalls.add(resumeSubscriptionsAutomatically);
             running = true;
+            afterRunningInStart.run();
             if (resumeSubscriptionsAutomatically) {
                 paused.clear();
             }
+            startCalls.add(resumeSubscriptionsAutomatically);
+            afterStart.run();
         }
 
         @Override
