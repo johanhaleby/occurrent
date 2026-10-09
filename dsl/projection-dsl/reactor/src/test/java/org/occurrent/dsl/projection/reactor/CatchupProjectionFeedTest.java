@@ -344,6 +344,59 @@ class CatchupProjectionFeedTest {
         }
     }
 
+    @Test
+    void a_stop_during_a_catch_up_whose_marker_read_throws_errors_a_waiting_accept_on_the_thread_whose_catch_up_threw() throws Exception {
+        CountDownLatch asking = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", (Counted e) -> Mono.<Void>empty(),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, markerWhoseReadsThrow(List.of(asking), List.of(release)));
+        CompletableFuture<String> erroredOn = new CompletableFuture<>();
+        feed.accept(new Counted("live")).subscribe(null, error -> erroredOn.complete(Thread.currentThread().getName()));
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newSingleThreadExecutor(task -> new Thread(task, "catch-up-caller"));
+        try {
+            java.util.concurrent.Future<?> catchingUp = executor.submit(() -> feed.catchUp());
+            awaitLatch(asking);
+            feed.stopCatchUp();
+            release.countDown();
+
+            assertThatThrownBy(() -> catchingUp.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+            assertThat(erroredOn.get(5, TimeUnit.SECONDS)).as("the thread the error handling of accept(..) ran on").isEqualTo("catch-up-caller");
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    // A goLive() called before the stop counts as a catch-up and waits for the replay. It has nothing to replay, so it
+    // does not notice the stop, and takes the feed live once the stopped replay has ended.
+    @Test
+    void a_goLive_called_before_a_stop_takes_the_feed_live_once_the_stopped_replay_ends() throws Exception {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", holdingTheReplayAt("1", folded, replaying, releaseReplay, null),
+                Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, null);
+        try {
+            CompletableFuture<Void> catchUp = Mono.defer(feed::catchUp).subscribeOn(Schedulers.boundedElastic()).toFuture();
+            awaitLatch(replaying);
+            CompletableFuture<Void> wentLive = goLiveWaitingForTheReplay(feed);
+            CompletableFuture<Void> fedBeforeTheStop = feed.accept(new Counted("before-stop")).toFuture();
+            feed.stopCatchUp();
+            releaseReplay.countDown();
+
+            catchUp.get(5, TimeUnit.SECONDS);
+            assertThatThrownBy(() -> fedBeforeTheStop.get(5, TimeUnit.SECONDS)).as("what accept(..) of an event fed before the stop errored with")
+                    .cause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
+            wentLive.get(5, TimeUnit.SECONDS);
+            feed.accept(new Counted("after-stop")).block(ofSeconds(5));
+            assertThat(folded).containsExactly("1", "after-stop");
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
     // The stopped replay tells the view it was abandoned before it gives its count back. A catchUp() called in that
     // window clears the stop and throws while the stopped one still counts.
     @Test

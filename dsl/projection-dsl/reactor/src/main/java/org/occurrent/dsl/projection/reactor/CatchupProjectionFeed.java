@@ -390,9 +390,10 @@ public final class CatchupProjectionFeed<E> {
      * A replay notices a stop at the next event it hands to the view, and notices only a stop that came after its own
      * {@link #catchUp()} call. A catch-up asked for before the stop still notices it when another {@link #catchUp()}
      * comes after the stop, from the view or from anywhere else. A catch-up with no event left to hand to the view does
-     * not notice a stop, and finishes as if there had been none, so the feed goes live. That is one whose history is
-     * empty, one that finds the marker already written, and one whose replay has handed its last event to the view, for
-     * example while a view that buffers during a replay writes that buffer in {@code replayCompleted()}.
+     * not notice a stop, and finishes as if there had been none, so the feed goes live. That is a {@link #goLive()},
+     * even one called before the stop and waiting for the stopped replay, one whose history is empty, one that finds
+     * the marker already written, and one whose replay has handed its last event to the view, for example while a view
+     * that buffers during a replay writes that buffer in {@code replayCompleted()}.
      * <p>
      * What a stop the replay notices does with the live events depends on where the feed stood when the replay started.
      * One that had not gone live drains nothing and does not go live, and the {@link Mono} {@link #accept(Object)}
@@ -404,12 +405,14 @@ public final class CatchupProjectionFeed<E> {
      * A feed with no catch-up running that has not gone live stops the same way. The {@link Mono}
      * {@link #accept(Object)} returned for an event fed before the stop, or after it and before the next
      * {@link #catchUp()} or {@link #goLive()}, errors, so a shutting-down application that never starts a catch-up does
-     * not leave it waiting. The error handling of each event still waiting when this method is called runs on the
-     * calling thread, unless the listener's own pipeline moves it. A catch-up started after the stop does not fold
-     * that event, and the broker delivers it again. A catch-up counts as running from the {@link #catchUp()} or
-     * {@link #goLive()} call until the feed goes live, its replay notices a stop, or it fails. A stop that comes during
-     * a {@link #catchUp()} call that then throws, for example because reading the catch-up marker threw, still errors
-     * the {@link Mono} of each waiting event, unless another catch-up takes the feed live and applies that event.
+     * not leave it waiting. When this method finds no catch-up running and stops the feed, the error handling of
+     * each event still waiting runs on the calling thread, unless the listener's own pipeline moves it. A catch-up
+     * started after the stop does not fold that event, and the broker delivers it again. A catch-up counts as running
+     * from the {@link #catchUp()} or {@link #goLive()} call until the feed goes live, its replay notices a stop, or it
+     * fails. A stop that comes during a {@link #catchUp()} call that then throws, for example because reading the
+     * catch-up marker threw, still errors the {@link Mono} of each waiting event, unless another catch-up takes the
+     * feed live and applies that event. That error handling runs where the last of the catch-ups running then ends, on
+     * the thread whose {@link #catchUp()} call threw or on a thread that runs another catch-up.
      * <p>
      * A view that buffers during a replay discards that buffer on a stop, so after a {@link #goLive()} the live copy
      * of an event the stopped replay delivered is delivered again rather than skipped as a duplicate. A view that

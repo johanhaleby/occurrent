@@ -1144,13 +1144,14 @@ than `consumer_timeout`, 30 minutes by default, and delivers the message again. 
 On the reactor stack, `CatchupProjectionFeed.accept(..)` and `DomainEventFeed.accept(..)` already returned a `Mono`
 that completes once the event is applied. That `Mono` now errors with an `IllegalStateException` for an event fed
 while the feed is stopped, after a catch-up was stopped before the feed went live and before the next `catchUp()`
-or `goLive()`.
+or `goLive()`. A `goLive()` called before the stop and waiting for the stopped replay is the exception. It takes the
+feed live once that replay has ended, and the feed applies the events fed after that.
 0.33.0 completed it without applying the event, so the listener acknowledged an event nothing had applied.
 
 A `stopCatchUp()` on a feed that has not gone live and has no catch-up running now stops the feed the same way, fixed
 for [#1209](https://github.com/johanhaleby/occurrent/issues/1209). The `Mono` of an event fed before that stop, or
-after it and before the next `catchUp()` or `goLive()`, errors too. The error handling of each event still waiting
-when you call `stopCatchUp()` runs on the calling thread, unless your own pipeline moves it. In 0.33.0 that `Mono`
+after it and before the next `catchUp()` or `goLive()`, errors too. When that `stopCatchUp()` stops the feed, the
+error handling of each event still waiting runs on the calling thread, unless your own pipeline moves it. In 0.33.0 that `Mono`
 waited. It completed once
 a catch-up started after the stop applied the event, and never completed when no catch-up came, as in an application
 shutting down. A catch-up started after the stop no longer applies those events, so they come back only when the

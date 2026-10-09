@@ -367,9 +367,9 @@ public final class ReactiveHandover<T, K> {
     // from quietly ending the drain early.
     private volatile boolean stopped = false;
     // Held to change the two fields below, and to write the stopped flag where a catch-up starts, where
-    // stopIfNotCatchingUp() sets it, where a catchUp(Source) call that threw sets it again and where a replay stopped
-    // through keepReplaying() sets it. So a stop either comes before a catch-up starts or finds it running and lets it
-    // answer the payloads. The one other write of stopped clears it where a replay starts, while that catch-up is
+    // stopIfNotCatchingUp() sets it, where giveCountBack(..) sets it again for an owed stop, whether the catch-up giving
+    // back the last count threw or ended, and where a replay stopped through keepReplaying() sets it. So a stop either
+    // comes before a catch-up starts or finds it running and lets it answer the payloads. The one other write of stopped clears it where a replay starts, while that catch-up is
     // counted here. That catch-up then goes live, fails, or sets it again when its replay is stopped on a handover
     // that is not live. Nothing runs a source's or a caller's code while holding it.
     private final Object catchUpsGuard = new Object();
