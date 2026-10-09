@@ -648,9 +648,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * <p>
      * So the catch-up goes live only from a live start the wrapped model accepted after the last replay, or throws
      * {@link IllegalStateException} once the replay ran {@value #MAX_REPLAYS_AGAIN} times again and lost the live
-     * start each time. It never hands a lost live start over and never skips an event written after the replay
-     * origin, but delivers the events it replays again more than once. A replay that was stopped, cancelled or taken
-     * over is not asked about, and its start is returned as it is for the handover to deal with.
+     * start each time. It never hands over a live start the wrapped model answered false for, but delivers the events
+     * it replays again more than once. The check and the handover are two calls, so a live start that leaves the
+     * history between them is still handed over, and what happens then is up to the wrapped model's handling of lost
+     * history. A MongoDB model that restarts on lost history skips the events in between. A replay that was stopped,
+     * cancelled or taken over is not asked about, and its start is returned as it is for the handover to deal with.
      * <p>
      * A {@link CatchupListener} is told the catch-up started again before each replay run again, since what that
      * replay delivers is history read again and not events written since the catch-up started. Only meaningful on the
@@ -1015,11 +1017,20 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // Conditional on this attempt still being the current one: an attempt already superseded by a later
                 // resubscribe for the same id must not remove the later attempt's running marker, and by the same
                 // reasoning must not clear a pause request the later attempt's caller may have just made either.
+                boolean failedWhileCurrent;
                 try (HandoverLock ignored = lockHandover(subscriptionId)) {
-                    if (currentAttempt.remove(subscriptionId, attempt)) {
+                    failedWhileCurrent = currentAttempt.remove(subscriptionId, attempt);
+                    if (failedWhileCurrent) {
                         runningCatchupSubscriptions.remove(subscriptionId);
                         pauseRequestedDuringCatchup.remove(subscriptionId);
                     }
+                }
+                // Logged as well as reported, since a caller that never calls waitUntilStarted, such as the Spring
+                // Boot starter by default for a subscription that replays history, would otherwise lose the
+                // subscription without a trace. A parked, cancelled, superseded or shut down attempt is not logged,
+                // since its replay either runs again or was asked to stop.
+                if (failedWhileCurrent && !attempt.abandoned()) {
+                    log.error("The catch-up replay for subscription {} failed, so the subscription did not go live.", subscriptionId, failure);
                 }
                 if (!attempt.parked) {
                     attempt.replay.result.completeExceptionally(failure);

@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
@@ -39,6 +43,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
 import java.net.URI;
@@ -1120,6 +1125,36 @@ class StreamCatchupSubscriptionModelTest {
             assertThat(model.resumeProbes).as("asked once after each replay").hasSize(4);
             assertThat(model.liveStarts).as("nothing handed over").isEmpty();
         } finally {
+            subscription.shutdown();
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    void a_failed_catch_up_nobody_waits_for_is_logged_at_error() {
+        Logger catchupLog = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        catchupLog.addAppender(logged);
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        write(eventStore, nameDefined("event1"));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, new StringBasedCheckpoint("live start read now"));
+        model.losesEveryLiveStart = true;
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore, new CatchupSubscriptionModelConfig(100));
+        try {
+            // Never waited for, as the Spring Boot starter does with a subscription that replays history by default
+            subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), __ -> {
+            });
+
+            await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(logged.list)
+                    .filteredOn(event -> event.getLevel() == Level.ERROR)
+                    .singleElement()
+                    .satisfies(event -> {
+                        assertThat(event.getFormattedMessage()).contains("subscription");
+                        assertThat(event.getThrowableProxy().getClassName()).isEqualTo(IllegalStateException.class.getName());
+                    }));
+        } finally {
+            catchupLog.detachAppender(logged);
             subscription.shutdown();
         }
     }

@@ -134,8 +134,10 @@ final class PositionCatchupPipeline {
      * {@code replaysAgain} is how many times the replay has already run again. Once that is
      * {@value #MAX_REPLAYS_AGAIN} and the token is lost once more, this fails with {@link IllegalStateException}
      * instead. So a catch-up goes live only from a token the wrapped model accepted after the last replay, or fails
-     * after {@value #MAX_REPLAYS_AGAIN} replays run again. It never hands a lost token over and never skips an event
-     * written after the replay origin, but delivers the events it replays again more than once.
+     * after {@value #MAX_REPLAYS_AGAIN} replays run again. It never hands over a token the wrapped model answered false
+     * for, but delivers the events it replays again more than once. The check and the handover are two calls, so a
+     * token that leaves the history between them is still handed over, and what happens then is up to the wrapped
+     * model's handling of lost history. A MongoDB model that restarts on lost history skips the events in between.
      * {@code subscriptionId} only names the subscription in the warning and the failure, and may be null.
      */
     Mono<ReplayStart> liveStartAfterReplay(CheckpointAwareSubscriptionModel subscriptionModel, ReplayStart replayed, @Nullable String subscriptionId, int replaysAgain) {

@@ -53,7 +53,8 @@ import java.util.stream.Stream;
  * <p>
  * Delivery is at-least-once, with the same catch-up-to-live handover guarantee documented on the dispatcher: the live
  * resume token is read before the bulk replay. A replay longer than the change stream history runs again from its
- * origin instead of handing the lost token over, and the catch-up fails loudly when 4 replays in a row lose it.
+ * origin instead of handing the lost token over. When 4 replays in a row lose it, the catch-up fails with an
+ * {@code IllegalStateException}, which {@code waitUntilStarted()} throws and the model logs at {@code ERROR}.
  */
 @NullMarked
 class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
