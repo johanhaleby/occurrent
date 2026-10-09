@@ -32,7 +32,9 @@ import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.function.Consumer;
@@ -294,18 +296,21 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         getWrappedSubscriptionModel().stop();
     }
 
-    // resumeReplay() for the same reason stop() uses stopReplay(). The parked replays run again only once the live
-    // delegate is started, so each hands over to a delegate that runs, and only when resuming automatically, as the
-    // delegate itself resumes only then. When the delegate's start throws, a child that was stopped stays stopped, or
-    // the next resume would skip the start and hand its replay over to a delegate that is not running.
+    // beginStart() rather than a child's own start(), for the same reason stop() uses stopReplay(). The parked replays
+    // run again only once the live delegate is started, so each hands over to a delegate that runs, and only when
+    // resuming automatically, as the delegate itself resumes only then. A child that was stopped stops again when the
+    // delegate's start throws and the delegate is not running afterwards, so the next resume of a paused subscription
+    // starts the delegate.
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        List<AbstractCatchupSubscriptionModel> stoppedModels = presentCatchupModels().filter(model -> model.stopped).toList();
-        presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::resumeReplay);
+        Map<AbstractCatchupSubscriptionModel, AbstractCatchupSubscriptionModel.StartAttempt> attempts = new LinkedHashMap<>();
+        presentCatchupModels().forEach(model -> attempts.put(model, model.beginStart()));
         try {
             getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
         } catch (Throwable e) {
-            stoppedModels.forEach(AbstractCatchupSubscriptionModel::stopReplay);
+            if (!getWrappedSubscriptionModel().isRunning()) {
+                attempts.forEach(AbstractCatchupSubscriptionModel::undoStart);
+            }
             throw e;
         }
         if (resumeSubscriptionsAutomatically) {
@@ -366,7 +371,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
-        if (presentCatchupModels().anyMatch(model -> model.stopped) && isPaused(subscriptionId)) {
+        // Every child records the resume, so none of them stops again when a start running at the same time fails
+        List<Boolean> stopped = presentCatchupModels().map(AbstractCatchupSubscriptionModel::beginResume).toList();
+        if (stopped.contains(true) && isPaused(subscriptionId)) {
             start(false);
         }
         AbstractCatchupSubscriptionModel parkedIn = presentCatchupModels().filter(model -> model.hasParkedReplay(subscriptionId)).findFirst().orElse(null);
