@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -154,14 +155,15 @@ final class NamedCatchupSupport {
     }
 
     /**
-     * Subscribes with a catch-up phase. It replays from {@code startPosition} through {@code reader}, applies the
+     * Subscribes with a catch-up phase. It replays from {@code start} through {@code reader}, applies the
      * caller's {@code action} to each replayed event without retry, then hands the live half to the wrapped model's
-     * named {@code subscribe(..)} resuming from a token captured before the replay, deduped against the ids the
+     * named {@code subscribe(..)} resuming from a token captured before the replay, or the one {@code start} holds
+     * while the wrapped model still has the history from it, deduped against the ids the
      * reconciliation read emitted. The history ids are deliberately not among them, so a write that was still in
      * flight when the head was read is delivered again live and can be recorded there.
      */
     Subscription subscribeWithCatchup(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
-                                      CatchupReader reader, long windowSize, int handoverCacheSize, long startPosition,
+                                      CatchupReader reader, long windowSize, int handoverCacheSize, GlobalCheckpoint start,
                                       Function<CloudEvent, Mono<Void>> action) {
         SubscriptionModel delegate = requireNamed();
         requireNotShutdown();
@@ -179,8 +181,8 @@ final class NamedCatchupSupport {
                 livePredicate.test(cloudEvent) && !cache.contains(CatchupEventKey.of(cloudEvent)) ? action.apply(cloudEvent) : Mono.empty();
 
         // The replay is relaunchable. stop() aborts and parks it, and start(true) or a resume runs this again from the
-        // same start position. Re-adding ids to the cache is a no-op, and delivering replayed events again is
-        // at-least-once.
+        // same start position and resolves its live token again. Re-adding ids to the cache is a no-op, and
+        // delivering replayed events again is at-least-once.
         state.launcher = () -> {
             // A relaunch reads the history again from the same start position, so it is a different catch-up and
             // announces itself as one. Sent before the subscribe below, so it precedes anything this launch
@@ -202,8 +204,8 @@ final class NamedCatchupSupport {
                 return owner;
             });
             // Token before replay, replay through the caller's action (no retry, failure is loud), then delegate live.
-            Disposable replaying = pipeline.captureLiveToken(wrapped)
-                    .flatMapMany(liveToken -> pipeline.replayApplying(startPosition, cache,
+            Disposable replaying = pipeline.resolveStart(wrapped, start, subscriptionId)
+                    .flatMapMany(replayStart -> pipeline.replayApplying(replayStart, cache,
                                     // A stop between dispose landing and this event truncates here, before the action runs.
                                     () -> !stopped && isCurrent(state, launched), action,
                                     () -> {
@@ -216,7 +218,7 @@ final class NamedCatchupSupport {
                                         }
                                     })
                             .thenMany(Flux.defer(() -> {
-                                handOver(subscriptionId, state, launched, delegate, liveSubscriptionFilter, StartAt.checkpoint(liveToken), liveAction);
+                                handOver(subscriptionId, state, launched, delegate, liveSubscriptionFilter, StartAt.checkpoint(replayStart.liveFrom()), liveAction);
                                 return Flux.empty();
                             })))
                     .subscribe(unused -> {

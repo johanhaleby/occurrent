@@ -96,6 +96,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         if (startAt.isDefault()) {
             // Resume from the stored position if there is one, otherwise subscribe live (with the DCB query post-filter).
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
+            warnIfStoredWithoutLiveStart(subscriptionId, checkpoint);
             if (checkpoint == null) {
                 return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action, holdPaused);
             } else {
@@ -158,14 +159,18 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
         StartAt nextStartAt = firstStartAt.get(generateSubscriptionModelContext());
         Checkpoint checkpoint = ((StartAtCheckpoint) Objects.requireNonNull(nextStartAt)).checkpoint;
-        long startPosition = GlobalCheckpoint.positionOf(checkpoint);
 
-        // Capture the live resume token before the bulk replay so an event committed during the replay is still
-        // delivered live. On a replay longer than the change stream history the token ages out, or the delegate
-        // reports none at all, and the handover fails loudly instead of dropping the event (captureLiveResumeCheckpoint).
+        // The live start is read before the bulk replay, or kept from the attempt that stored the checkpoint, so an
+        // event committed during the replay is still delivered live. When the delegate reports no live start at all
+        // the catch-up fails (captureLiveResumeCheckpoint). A live start that ages out of the change stream history
+        // during a long replay does not fail here. What the handover does with it is up to the delegate, and a Mongo
+        // model that restarts on lost history, the Spring Boot starter's default, goes live from the present and
+        // skips the events in between.
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        final Checkpoint globalCheckpoint = captureLiveResumeCheckpoint(delegatedStartAt);
+        PositionReplayStart replayStart = positionReplayStart(subscriptionId, checkpoint, delegatedStartAt);
+        long startPosition = replayStart.replayFrom();
+        final Checkpoint globalCheckpoint = replayStart.liveFrom();
 
         // Page through the DCB sequence from the resume position to the head seen at start, in windows so a large
         // rebuild does not load the whole matched set at once, then reconcile until the head stops advancing.
@@ -185,8 +190,13 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             }
         };
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(dcbReader, windowSize);
-        pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId),
-                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup), catchupPhaseCache,
+        // A resume from a stored live start replays only up to the head the attempt that read it read next. Every
+        // event above that head was written after the live start and arrives live, so replaying it too would deliver
+        // it twice.
+        Long storedReplayTo = replayStart.replayTo();
+        long replayTo = storedReplayTo == null ? dcbReader.currentHead() : storedReplayTo;
+        pipeline.replay(startPosition, replayTo, storedReplayTo == null, () -> shouldKeepReplaying(subscriptionId),
+                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup, replayStart, replayTo), catchupPhaseCache,
                 () -> historyRead(subscriptionId));
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
@@ -249,7 +259,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
      * subscription position for events matching {@code persistDuringCatchup}, the attempt's own predicate, so its count
      * runs on across windows.
      */
-    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache, Predicate<CloudEvent> persistDuringCatchup) {
+    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache, Predicate<CloudEvent> persistDuringCatchup, PositionReplayStart replayStart, long replayTo) {
         // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
         // resource-backed read does not leak its cursor.
         try (cloudEvents) {
@@ -269,7 +279,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                     .filter(e -> isSafeToPersistFor(subscriptionId))
                     .filter(persistDuringCatchup)
                     .forEach(e -> doIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class,
-                            cfg -> saveCatchupCheckpoint(subscriptionId, cfg, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e)))));
+                            cfg -> saveCatchupCheckpoint(subscriptionId, cfg, replayStart.checkpointAt(OccurrentCloudEventExtension.getPosition(e), replayTo))));
         }
     }
 

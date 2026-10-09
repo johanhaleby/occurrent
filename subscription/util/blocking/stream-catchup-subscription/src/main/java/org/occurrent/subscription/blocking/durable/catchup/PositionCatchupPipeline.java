@@ -81,7 +81,15 @@ final class PositionCatchupPipeline {
      *                          reads anything.
      */
     long replay(long startPosition, BooleanSupplier keepRunning, BiConsumer<Stream<CloudEvent>, @Nullable BoundedIdCache<CatchupEventKey>> deliver, BoundedIdCache<CatchupEventKey> cache, Runnable reconcileStarting) {
-        long bulkHead = reader.currentHead();
+        return replay(startPosition, reader.currentHead(), true, keepRunning, deliver, cache, reconcileStarting);
+    }
+
+    /**
+     * The same replay up to {@code bulkHead}, a head the caller read itself. Without {@code reconcile} it stops at
+     * {@code bulkHead}, for a resume whose live delivery starts from before {@code bulkHead} was read and so
+     * delivers every event above it.
+     */
+    long replay(long startPosition, long bulkHead, boolean reconcile, BooleanSupplier keepRunning, BiConsumer<Stream<CloudEvent>, @Nullable BoundedIdCache<CatchupEventKey>> deliver, BoundedIdCache<CatchupEventKey> cache, Runnable reconcileStarting) {
         long cursor = windows(startPosition, bulkHead, keepRunning, deliver, null);
 
         // Run after the history windows rather than before them, so a caller that tracks which part of the catch-up
@@ -92,6 +100,9 @@ final class PositionCatchupPipeline {
             return cursor;
         }
         reconcileStarting.run();
+        if (!reconcile) {
+            return cursor;
+        }
 
         // Snapshot the head once and reconcile up to it. Re-reading a moving head would advance forever under
         // sustained writes and never hand over to live (livelock). Anything after the snapshot is covered by the

@@ -35,6 +35,7 @@ import java.net.URI;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -56,6 +57,7 @@ class PositionCatchupPipelineTest {
 
     private static final SubscriptionFilter LIVE_FILTER = StreamSubscriptionFilter.filter(Filter.all());
     private static final Predicate<CloudEvent> DELIVER_EVERYTHING = __ -> true;
+    private static final PositionCatchupPipeline.ReplayStart FROM_THE_BEGINNING = new PositionCatchupPipeline.ReplayStart(0, new StringBasedCheckpoint("token"), 0, null);
 
     @Test
     void a_low_position_event_that_commits_after_the_handover_advanced_past_it_is_still_delivered_exactly_once() {
@@ -69,7 +71,7 @@ class PositionCatchupPipelineTest {
         FakeLiveSource live = new FakeLiveSource(events("e2"));
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
 
-        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, 0).map(CloudEvent::getId))
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(0)).map(CloudEvent::getId))
                 .expectNext("e1", "e3", "e4", "e5", "e2")
                 .verifyComplete();
     }
@@ -85,7 +87,7 @@ class PositionCatchupPipelineTest {
         FakeLiveSource live = new FakeLiveSource(events("e5"));
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
 
-        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, 0).map(CloudEvent::getId))
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(0)).map(CloudEvent::getId))
                 .expectNext("e1", "e2", "e3", "e4", "e5", "e5")
                 .verifyComplete();
     }
@@ -101,7 +103,7 @@ class PositionCatchupPipelineTest {
         FakeLiveSource live = new FakeLiveSource(List.of(fromB));
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
 
-        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, 0).map(ce -> ce.getId() + "@" + ce.getSource()))
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(0)).map(ce -> ce.getId() + "@" + ce.getSource()))
                 .expectNext("e1@urn:test", "e1@urn:producer:b")
                 .verifyComplete();
     }
@@ -115,7 +117,7 @@ class PositionCatchupPipelineTest {
         BoundedIdCache<CatchupEventKey> cache = new BoundedIdCache<>(1000);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
 
-        StepVerifier.create(pipeline.replayApplying(0, cache, () -> true, event -> Mono.empty(), () -> {
+        StepVerifier.create(pipeline.replayApplying(FROM_THE_BEGINNING, cache, () -> true, event -> Mono.empty(), () -> {
         })).verifyComplete();
 
         assertThat(cache.contains(key("e1"))).as("read by a history window").isFalse();
@@ -134,7 +136,7 @@ class PositionCatchupPipelineTest {
         FakeLiveSource live = new FakeLiveSource(eventsInRange(501, 2000));
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 5000);
 
-        List<String> delivered = pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, 0).map(CloudEvent::getId).collectList().block();
+        List<String> delivered = pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(0)).map(CloudEvent::getId).collectList().block();
 
         assertThat(delivered).hasSize(2000);
         assertThat(delivered).doesNotHaveDuplicates();
@@ -151,7 +153,7 @@ class PositionCatchupPipelineTest {
         FakeLiveSource live = new FakeLiveSource(eventsInRange(1, 500));
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 100);
 
-        List<String> delivered = pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, 0).map(CloudEvent::getId).collectList().block();
+        List<String> delivered = pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(0)).map(CloudEvent::getId).collectList().block();
 
         assertThat(Set.copyOf(delivered)).isEqualTo(idsInRange(1, 500));
         assertThat(delivered.size()).isGreaterThan(500); // duplicates occurred, which is allowed
@@ -168,7 +170,7 @@ class PositionCatchupPipelineTest {
         FakeLiveSource live = new FakeLiveSource(events("live-1"));
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
 
-        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, 0).map(CloudEvent::getId))
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(0)).map(CloudEvent::getId))
                 .expectNextSequence(idsInRangeList(1, 20))
                 .expectNext("live-1")
                 .verifyComplete();
@@ -226,7 +228,7 @@ class PositionCatchupPipelineTest {
         AtomicInteger handled = new AtomicInteger();
         AtomicInteger handledWhenAnnounced = new AtomicInteger(-1);
 
-        StepVerifier.create(pipeline.replayApplying(0, new BoundedIdCache<>(1000), () -> true,
+        StepVerifier.create(pipeline.replayApplying(FROM_THE_BEGINNING, new BoundedIdCache<>(1000), () -> true,
                         event -> Mono.<Void>fromRunnable(handled::incrementAndGet).subscribeOn(Schedulers.single()),
                         () -> handledWhenAnnounced.set(handled.get())))
                 .verifyComplete();
@@ -244,7 +246,7 @@ class PositionCatchupPipelineTest {
         AtomicBoolean keepReplaying = new AtomicBoolean(true);
         AtomicBoolean announced = new AtomicBoolean(false);
 
-        StepVerifier.create(pipeline.replayApplying(0, new BoundedIdCache<>(1000), keepReplaying::get,
+        StepVerifier.create(pipeline.replayApplying(FROM_THE_BEGINNING, new BoundedIdCache<>(1000), keepReplaying::get,
                         event -> Mono.fromRunnable(() -> keepReplaying.set(false)),
                         () -> announced.set(true)))
                 .verifyComplete();
@@ -262,7 +264,7 @@ class PositionCatchupPipelineTest {
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
         AtomicBoolean keepReplaying = new AtomicBoolean(true);
 
-        StepVerifier.create(pipeline.replayApplying(0, new BoundedIdCache<>(1000), keepReplaying::get,
+        StepVerifier.create(pipeline.replayApplying(FROM_THE_BEGINNING, new BoundedIdCache<>(1000), keepReplaying::get,
                         event -> Mono.fromRunnable(() -> keepReplaying.set(false)),
                         () -> {
                         }))
@@ -272,9 +274,74 @@ class PositionCatchupPipelineTest {
         assertThat(headReads).hasValue(1);
     }
 
+    @Test
+    void a_stored_live_start_the_model_still_has_is_kept_and_every_replayed_checkpoint_carries_it() {
+        FakeReader reader = FakeReader.withEventsInRange(1, 4).head(4).taggedWithTheirPosition();
+        Checkpoint storedLiveStart = new StringBasedCheckpoint("stored live start");
+        RecordingLiveSource live = new RecordingLiveSource(true);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(2, storedLiveStart, 0, 4)).map(PositionCatchupPipelineTest::checkpointOf))
+                .expectNext(GlobalCheckpoint.of(3, storedLiveStart, 0, 4), GlobalCheckpoint.of(4, storedLiveStart, 0, 4))
+                .verifyComplete();
+        assertThat(live.resumeProbes).containsExactly(storedLiveStart);
+        assertThat(live.liveStarts).containsExactly(StartAt.checkpoint(storedLiveStart).toString());
+    }
+
+    @Test
+    void a_resume_from_a_stored_live_start_replays_no_further_than_the_stored_replay_end_and_reads_no_head() {
+        AtomicLong headReads = new AtomicLong();
+        FakeReader reader = FakeReader.withEventsInRange(1, 5).headSupplier(() -> {
+            headReads.incrementAndGet();
+            return 5L;
+        }).taggedWithTheirPosition();
+        Checkpoint storedLiveStart = new StringBasedCheckpoint("stored live start");
+        RecordingLiveSource live = new RecordingLiveSource(true);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(2, storedLiveStart, 0, 3)).map(PositionCatchupPipelineTest::checkpointOf))
+                .expectNext(GlobalCheckpoint.of(3, storedLiveStart, 0, 3))
+                .verifyComplete();
+        // Positions 4 and 5 lie above the stored end, so they were committed after the stored live start and arrive live
+        assertThat(headReads).hasValue(0);
+        assertThat(live.liveStarts).containsExactly(StartAt.checkpoint(storedLiveStart).toString());
+    }
+
+    @Test
+    void a_stored_live_start_the_model_no_longer_has_replays_again_from_the_origin_and_goes_live_from_a_start_read_now() {
+        FakeReader reader = FakeReader.withEventsInRange(1, 4).head(4).taggedWithTheirPosition();
+        Checkpoint agedOut = new StringBasedCheckpoint("aged out live start");
+        RecordingLiveSource live = new RecordingLiveSource(false);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(3, agedOut, 1, 3)).map(PositionCatchupPipelineTest::checkpointOf))
+                .expectNext(GlobalCheckpoint.of(2, RecordingLiveSource.READ_NOW, 1, 4), GlobalCheckpoint.of(3, RecordingLiveSource.READ_NOW, 1, 4), GlobalCheckpoint.of(4, RecordingLiveSource.READ_NOW, 1, 4))
+                .verifyComplete();
+        assertThat(live.resumeProbes).containsExactly(agedOut);
+        assertThat(live.liveStarts).containsExactly(StartAt.checkpoint(RecordingLiveSource.READ_NOW).toString());
+    }
+
+    @Test
+    void a_start_without_a_live_start_reads_one_now_without_asking_the_model() {
+        FakeReader reader = FakeReader.withEventsInRange(1, 3).head(3).taggedWithTheirPosition();
+        RecordingLiveSource live = new RecordingLiveSource(true);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(1)).map(PositionCatchupPipelineTest::checkpointOf))
+                .expectNext(GlobalCheckpoint.of(2, RecordingLiveSource.READ_NOW, 1, 3), GlobalCheckpoint.of(3, RecordingLiveSource.READ_NOW, 1, 3))
+                .verifyComplete();
+        assertThat(live.resumeProbes).isEmpty();
+        assertThat(live.liveStarts).containsExactly(StartAt.checkpoint(RecordingLiveSource.READ_NOW).toString());
+    }
+
+    private static Checkpoint checkpointOf(CloudEvent cloudEvent) {
+        return ((CheckpointAwareCloudEvent) cloudEvent).getCheckpoint();
+    }
+
     private static final class FakeReader implements CatchupReader {
         private final TreeMap<Long, CloudEvent> byPosition = new TreeMap<>();
         private LongSupplier head = () -> 0L;
+        private boolean taggedWithTheirPosition;
 
         static FakeReader withEventsAt(long... positions) {
             FakeReader reader = new FakeReader();
@@ -300,9 +367,16 @@ class PositionCatchupPipelineTest {
             return this;
         }
 
+        // Wraps each event with its position the way the Mongo readers do
+        FakeReader taggedWithTheirPosition() {
+            this.taggedWithTheirPosition = true;
+            return this;
+        }
+
         @Override
         public Flux<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
-            return Flux.fromIterable(byPosition.subMap(fromExclusive, false, toInclusive, true).values());
+            return Flux.fromIterable(byPosition.subMap(fromExclusive, false, toInclusive, true).entrySet())
+                    .map(entry -> taggedWithTheirPosition ? new CheckpointAwareCloudEvent(entry.getValue(), GlobalCheckpoint.of(entry.getKey())) : entry.getValue());
         }
 
         @Override
@@ -328,6 +402,43 @@ class PositionCatchupPipelineTest {
         @Override
         public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
             return Flux.fromIterable(live);
+        }
+    }
+
+    // A live source with nothing to deliver that answers canResumeFrom with a fixed value and records what it was
+    // asked and where it was subscribed from
+    private static final class RecordingLiveSource implements CheckpointAwareSubscriptionModel {
+        static final Checkpoint READ_NOW = new StringBasedCheckpoint("live start read now");
+        private final boolean canResume;
+        private final List<Checkpoint> resumeProbes = new CopyOnWriteArrayList<>();
+        private final List<String> liveStarts = new CopyOnWriteArrayList<>();
+
+        RecordingLiveSource(boolean canResume) {
+            this.canResume = canResume;
+        }
+
+        @Override
+        public Mono<Checkpoint> globalCheckpoint() {
+            return Mono.just(READ_NOW);
+        }
+
+        @Override
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return globalCheckpoint();
+        }
+
+        @Override
+        public Mono<Boolean> canResumeFrom(Checkpoint checkpoint) {
+            return Mono.fromSupplier(() -> {
+                resumeProbes.add(checkpoint);
+                return canResume;
+            });
+        }
+
+        @Override
+        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            liveStarts.add(startAt.toString());
+            return Flux.empty();
         }
     }
 }

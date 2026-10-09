@@ -280,7 +280,8 @@ public class OccurrentMongoAutoConfiguration<E> {
                 .andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1000));
         // DCB catch-up replays by position over the DCB event store. The DcbCriteria.all() is shared by every
         // DcbSubscriptions subscription, which each narrow to their own DcbCriteria in the consumer, so a single
-        // all-matching catch-up is correct. Stream catch-up replays by event time over the stream query API.
+        // all-matching catch-up is correct. Stream catch-up replays by position when the store writes stream
+        // positions, and by event time when it does not or when the start is a specific time.
         boolean stream = eventStoreProperties.getCapabilities().contains(STREAM);
         DcbEventStore dcbStore = eventStoreProperties.getCapabilities().contains(DCB) ? dcbEventStore.getIfAvailable() : null;
         SubscriptionModel subscriptionModel;

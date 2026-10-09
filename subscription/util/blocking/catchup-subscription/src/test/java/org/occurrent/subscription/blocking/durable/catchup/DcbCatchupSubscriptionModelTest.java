@@ -513,7 +513,53 @@ class DcbCatchupSubscriptionModelTest {
         subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
 
         await().untilAsserted(() -> assertThat(received).hasSize(6));
-        assertThat(saved).as("every third event of six, read in windows of two").contains(GlobalCheckpoint.of(3).asString(), GlobalCheckpoint.of(6).asString());
+        // The stored checkpoints also hold the live start, so only their positions are compared
+        assertThat(saved.stream().map(StringBasedCheckpoint::new).filter(GlobalCheckpoint::isGlobalCheckpoint).map(GlobalCheckpoint::positionOf))
+                .as("every third event of six, read in windows of two").contains(3L, 6L);
+    }
+
+    @Test
+    void a_stored_live_start_the_model_no_longer_has_replays_again_from_the_origin_and_goes_live_from_a_start_read_now() {
+        List<NameDefined> history = List.of(nameDefined("e1"), nameDefined("e2"), nameDefined("e3"), nameDefined("e4"));
+        history.forEach(event -> appendTagged("name:1", event));
+        StringBasedCheckpoint agedOut = new StringBasedCheckpoint("aged out live start");
+        CopyOnWriteArrayList<Checkpoint> resumeProbes = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> liveStarts = new CopyOnWriteArrayList<>();
+        CheckpointAwareSubscriptionModel lostHistory = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel) {
+            @Override
+            public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+                StartAt resolved = startAt.get(new StartAt.SubscriptionModelContext(InMemorySubscriptionModel.class));
+                liveStarts.add(String.valueOf(resolved));
+                return super.subscribe(subscriptionId, filter, resolved == null ? startAt : resolved, action);
+            }
+
+            @Override
+            public boolean canResumeFrom(Checkpoint checkpoint) {
+                resumeProbes.add(checkpoint);
+                return false;
+            }
+        };
+        CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
+        CheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                saved.add(checkpoint.asString());
+                return super.save(subscriptionId, checkpoint, condition);
+            }
+        };
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(lostHistory, eventStore, DcbCriteria.tags(Tag.parse("name:1")),
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(3, agedOut, 1, 3)), toDomainEvents(received)).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history.subList(1, 4)));
+        StringBasedCheckpoint liveStartReadNow = new StringBasedCheckpoint("in-memory-global-position");
+        assertThat(resumeProbes).containsExactly(agedOut);
+        assertThat(liveStarts).containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
+        assertThat(saved.stream().map(StringBasedCheckpoint::new).filter(GlobalCheckpoint::isGlobalCheckpoint).map(GlobalCheckpoint::parse))
+                .as("the checkpoints the replay stores carry the new live start and the same origin")
+                .containsExactly(GlobalCheckpoint.of(2, liveStartReadNow, 1, 4), GlobalCheckpoint.of(3, liveStartReadNow, 1, 4), GlobalCheckpoint.of(4, liveStartReadNow, 1, 4));
     }
 
     @Test

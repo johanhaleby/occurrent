@@ -22,6 +22,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -32,6 +33,8 @@ import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -50,6 +53,8 @@ import java.util.function.Function;
  */
 @NullMarked
 abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions {
+
+    private static final Logger log = LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
 
     protected final CheckpointAwareSubscriptionModel subscriptionModel;
     protected final CatchupSubscriptionModelConfig config;
@@ -532,6 +537,68 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             throw new IllegalStateException("Cannot run a catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.");
         }
         return checkpoint;
+    }
+
+    /**
+     * Where a position replay starts, where live delivery picks up after it, and what the replay stores on the way.
+     *
+     * @param replayFrom   The global sequence position the replay reads after
+     * @param liveFrom     The live start handed over to live delivery, or null when the catch-up owns the position
+     *                     entirely and nothing goes live after it
+     * @param replayOrigin The global sequence position the first attempt at this replay started from
+     * @param replayTo     The head of the global sequence an earlier attempt read after it read {@code liveFrom}, or
+     *                     null when this attempt reads the head itself
+     */
+    protected record PositionReplayStart(long replayFrom, @Nullable Checkpoint liveFrom, long replayOrigin, @Nullable Long replayTo) {
+
+        /**
+         * The checkpoint stored once the replay has delivered through {@code position}, for a replay whose head was
+         * {@code replayTo}. It holds the live start, so a resume goes live from where this replay would have, not
+         * from a live start read after the restart.
+         */
+        GlobalCheckpoint checkpointAt(long position, long replayTo) {
+            return liveFrom == null ? GlobalCheckpoint.of(position) : GlobalCheckpoint.of(position, liveFrom, replayOrigin, replayTo);
+        }
+    }
+
+    /**
+     * Resolves where a position replay starting at {@code start} reads from and goes live from.
+     * <p>
+     * A {@code start} that has a live start, stored by an earlier attempt at this replay, keeps it and the head that
+     * attempt read, so an event whose position was reserved below the stored position but written after that attempt
+     * read past it is delivered live. When the wrapped model no longer has the history from that live start, the
+     * replay starts over from the position the first attempt started from, with a live start read now, and
+     * redelivers what it already delivered. A {@code start} without a live start gets one read now, before the
+     * replay, as in earlier versions.
+     */
+    protected PositionReplayStart positionReplayStart(String subscriptionId, Checkpoint start, @Nullable StartAt delegatedStartAt) {
+        GlobalCheckpoint global = GlobalCheckpoint.parse(start);
+        if (delegatedStartAt == null) {
+            return new PositionReplayStart(global.position(), null, global.position(), null);
+        }
+        Checkpoint storedLiveFrom = global.liveFrom().orElse(null);
+        if (storedLiveFrom == null) {
+            return new PositionReplayStart(global.position(), captureLiveResumeCheckpoint(delegatedStartAt), global.position(), null);
+        }
+        long replayOrigin = global.replayOrigin().orElse(global.position());
+        if (subscriptionModel.canResumeFrom(storedLiveFrom)) {
+            return new PositionReplayStart(global.position(), storedLiveFrom, replayOrigin, global.replayTo().orElseThrow());
+        }
+        log.warn("The subscription model no longer has the history from the live start stored for catch-up subscription {}, so the catch-up replays again from position {} instead of {} and redelivers the events in between. Live start: {}",
+                subscriptionId, replayOrigin, global.position(), storedLiveFrom.asString());
+        return new PositionReplayStart(replayOrigin, captureLiveResumeCheckpoint(delegatedStartAt), replayOrigin, null);
+    }
+
+    /**
+     * Logs a warning when {@code stored} is a global position without a live start, which a catch-up stored before
+     * the live start was kept. The resume replays from it and goes live from a live start read now, which can miss an
+     * event whose position was reserved below the stored position but written after the earlier replay read past it.
+     */
+    protected static void warnIfStoredWithoutLiveStart(String subscriptionId, @Nullable Checkpoint stored) {
+        if (stored != null && GlobalCheckpoint.isGlobalCheckpoint(stored) && GlobalCheckpoint.parse(stored).liveFrom().isEmpty()) {
+            log.warn("Catch-up subscription {} resumes from stored checkpoint \"{}\", which has no live start. An event written to a position below it after the earlier replay read past that position is not delivered. See the 0.34.0 upgrade guide.",
+                    subscriptionId, stored.asString());
+        }
     }
 
     /**
