@@ -2350,24 +2350,38 @@ checkpoint storages keep `checkpoint: "position:N"` as before and put the other 
 ```
 
 A storage that keeps strings, `SpringRedisCheckpointStorage` for one, stores
-`position:4200;origin:0;replayTo:4310;liveFrom:{"operationTime": ...}`. The live subscription's checkpoint replaces all of it, on
-the blocking stack when the catch-up reaches live delivery, and on the reactor stack when the durable model stores the
-checkpoint of the first live event.
+`position:4200;origin:0;replayTo:4310;liveFrom:{"operationTime": ...}`. The live subscription's checkpoint replaces
+all of it, on the blocking stack when the catch-up reaches live delivery, and on the reactor stack when the durable
+model stores the position of a live event or saves a quiet position.
 
-Three things behave differently.
+Four things behave differently.
 
 A resume can deliver some events a second time. Any resume from a checkpoint delivers again what the earlier run
-delivered after its last stored checkpoint. Apart from those, an event can arrive twice only when it committed after
-the stored live start and has a position at or below the replay end. The replay delivers it, before or after the
-restart, and live delivery delivers it again. A catch-up that is never restarted delivers such an event twice too.
+delivered after its last stored checkpoint. Apart from those, live delivery after a resume starts from the stored live
+start, so any event committed after the live start and delivered before the stored checkpoint can come again. An
+event that committed after the live start and that the resumed replay delivers can come again too. A catch-up that is
+never restarted delivers that last kind twice as well.
 
-Catch-up delivery has always been at-least-once, so a handler that is safe to run twice on the same event needs no change. If yours is not,
-one that increments a counter for example, key the work by the CloudEvent id before upgrading.
+Catch-up delivery has always been at-least-once, so a handler that is safe to run twice on the same event needs no
+change. If yours is not, one that increments a counter for example, key the work by the CloudEvent id before
+upgrading.
 
-A stored live start that MongoDB no longer has in its oplog, after a long stop for example, makes the catch-up replay
-again from the position the replay first started from, with a new live start, and log a warning that names the
-subscription. That delivers everything between that position and the stored one a second time. Size the oplog for
-the longest time a catch-up can be stopped in the middle of a replay if you want to avoid it.
+A live start that MongoDB no longer has in its oplog makes the catch-up replay again from the position the replay
+first started from, with a new live start, and log a warning that names the subscription. The catch-up checks the
+stored live start when it resumes, after a long stop for example, and checks the live start again once the replay is
+done, before it goes live, since a long replay can outlast the oplog too. Replaying again delivers everything between
+that first position and where the earlier replay had got to a second time, and a replay that outlasts the oplog every
+time replays again every time. Size the oplog for the longest rebuild, and for the longest time a catch-up can be
+stopped in the middle of a replay, if you want to avoid it.
+
+On the reactor stack the checkpoint stored during the replay stays stored after the catch-up reaches live delivery,
+until `ReactorDurableSubscriptionModel` stores the position of a live event or saves the subscription's quiet
+position. It saves the quiet position every minute by default, never with `neverSaveQuietPosition()`, and not while
+the last event the subscription delivered is one its persist predicate declined, which can be the last replayed
+event. Until then a restart resumes from that checkpoint. It replays up to the replay end again and goes live from the
+stored live start, which delivers everything since that live start a second time. After a stop longer than the oplog
+reaches back, the stored live start is gone and the catch-up replays the history again from the position its replay
+first started from.
 
 A `position:N` stored by 0.33.0 has no live start, and none can be worked out afterwards. It resumes as in 0.33.0, with
 a live start read after the restart, and logs a warning that names the subscription and the stored value. An event
@@ -2379,9 +2393,11 @@ starter's default collection:
 db.subscriptions.find({ checkpoint: /^position:/ })
 ```
 
-With `SpringRedisCheckpointStorage`, the checkpoint is the plain string stored at the subscription id's key. A match is
-a catch-up that has not reached live delivery yet. Let it get there before you upgrade, or accept the 0.33.0 behaviour
-for that one subscription.
+With `SpringRedisCheckpointStorage`, the checkpoint is the plain string stored at the subscription id's key. On the
+blocking stack a match is a catch-up that has not reached live delivery yet. On the reactor stack it can also be a
+catch-up that reached live delivery, since 0.33.0 replaces the stored position only once
+`ReactorDurableSubscriptionModel` stores the position of a live event. Let the catch-up get that far before you
+upgrade, or accept the 0.33.0 behaviour for that one subscription.
 
 A rollback to 0.33.0 reads the MongoDB document as `position:N`, ignores the three new fields, and behaves as 0.33.0. A
 string storage is different, because 0.33.0 cannot read `position:N;origin:...` and the subscription fails to start
@@ -2395,8 +2411,8 @@ instead.
 `CheckpointAwareSubscriptionModel` gains `canResumeFrom(Checkpoint)`, `boolean` on the blocking stack and
 `Mono<Boolean>` on the reactor stack. It answers `true` by default, so a model of your own still compiles. The MongoDB
 models answer `false` when MongoDB refuses to open a change stream at the checkpoint because its history is gone. If
-your model's checkpoints can age out too, implement it, or a catch-up resumes from a live start your model no longer
-has.
+your model's checkpoints can age out too, implement it, or a catch-up resumes or goes live from a live start your
+model no longer has.
 
 There is no recipe for this change. What is stored and when a resume delivers again is runtime behavior that a rewrite
 of the source cannot see.

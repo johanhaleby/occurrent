@@ -73,6 +73,16 @@ size of 1, close it, and answer `false` when MongoDB refuses with error 286, `Ch
 a MongoDB container whose oplog had rolled over confirmed that code. Any other error fails the call. When the answer is
 `false`, the catch-up logs a warning, replays from `replayOrigin` and reads a new live start before that replay.
 
+A live start can also leave the history while the replay runs, on a first run as much as on a resume. So every
+position catch-up asks `canResumeFrom` again once its replay is done, right before the handover. When the answer is
+`false` then, it logs a warning, reads a new live start, replays again from `replayOrigin` the way a first run
+does, and asks again. It goes live only from a live start the wrapped model answered `true` for. A blocking
+replay that is launched again after a failed start runs the same check, since it runs the same replay.
+[ADR 28](0028-dcb-catch-up-captures-resume-token-before-replay.md) and [ADR 38](0038-reactive-dcb-catch-up.md)
+expected such a handover to fail loudly. With `restartSubscriptionsOnChangeStreamHistoryLost` true,
+`SpringMongoSubscriptionModel` and `ReactorMongoSubscriptionModel` went live from the present instead and skipped
+the events in between.
+
 A stored `position:N` without a live start, written by 0.33.0 or by a catch-up interrupted before this change,
 resumes as in 0.33.0, with a live start read after the restart, and the catch-up logs a warning that names the
 subscription and the stored value. A live start stored without a replay end is read back as a plain `position:N` and
@@ -83,7 +93,8 @@ resumes the same way. No released version writes one.
 - **A contiguous or committed watermark.** Rejected in ADR 62 and ADR 122, since MongoDB cannot say which reserved
   positions are still uncommitted.
 - **Store nothing during the replay.** Every restart would replay from the original start. It removes the loss but
-  makes `PersistCheckpointDuringCatchupPhase` meaningless, and a long rebuild restarted near its end does all of it again.
+  makes `PersistCheckpointDuringCatchupPhase` meaningless, and a long rebuild restarted near its end does all of it
+  again.
 - **The string form on MongoDB too.** One format everywhere, but a 0.33.0 node or a rollback would read
   `position:N;origin:...` and fail with `NumberFormatException` in `GlobalCheckpoint.positionOf`. With the nested
   fields a 0.33.0 node reads `position:N` and behaves exactly as 0.33.0.
@@ -104,22 +115,27 @@ resumes the same way. No released version writes one.
 ## Consequences
 
 A resume delivers again what the earlier attempt delivered after the last checkpoint it stored, as any resume from a
-checkpoint does. Apart from those, a resume from a stored live start can deliver an event twice only when the event
-committed after that live start and has a position at or below the replay end. The replay delivers it, before or after
-the restart, and live delivery delivers it again. Such an event cannot be told apart from the late commit this
-decision is about, since both committed after the live start. A catch-up that never restarts also delivers such an
-event twice, see [ADR 135](0135-the-reactive-handover-dedup-is-fed-only-by-the-reconciliation-read.md). Durable
-subscriptions deliver at least once already, and a handler that tolerates a repeat needs no change.
+checkpoint does. Apart from those, live delivery after a resume starts from the stored live start, so any event
+committed after the live start and delivered before the stored checkpoint can come again. That includes an event the
+earlier attempt's reconciliation read delivered, whose position is above the replay end. An event that committed
+after the live start with a position at or below the replay end can come again too, since the resumed replay delivers
+it and so does live delivery. Such an event cannot be told apart from the late commit this decision is about, since
+both committed after the live start. A catch-up that never restarts also delivers that last kind twice, see
+[ADR 135](0135-the-reactive-handover-dedup-is-fed-only-by-the-reconciliation-read.md). Durable subscriptions deliver
+at least once already, and a handler that tolerates a repeat needs no change.
 
-A live start the oplog no longer has makes the catch-up replay from the origin again, which delivers everything
-between the origin and the stored position a second time.
+A live start the oplog no longer has, at a resume or once the replay is done, makes the catch-up replay from the
+origin again, which delivers everything between the origin and where the earlier replay had got to a second time. A
+replay that always takes longer than the oplog keeps its history replays again every time, so size the oplog for the
+longest rebuild.
 
-The probe and the resume are two calls. A live start that ages out between them fails as it did in 0.33.0, through
-the wrapped model's handling of lost history.
+The check and the handover are two calls. A live start that leaves the history between them is still handed over,
+and what happens then is up to the wrapped model's handling of lost history.
 
 When a `canResumeFrom` of your own answers `true` for a live start it can no longer resume from, the catch-up goes
-live from it anyway, and what happens then is up to the wrapped model's handling of lost history. A `globalCheckpoint()` whose answer is meaningless in another process
-makes the stored live start meaningless too, and the default `canResumeFrom` does not detect that.
+live from it anyway, and what happens then is up to the wrapped model's handling of lost history. A
+`globalCheckpoint()` whose answer is meaningless in another process makes the stored live start meaningless too, and
+the default `canResumeFrom` does not detect that.
 
 A blocking catch-up whose `StartAt` answers `null` for the wrapped model reads no live start before its replay, so
 it still stores a plain `position:N`, a resume logs the warning, and it behaves as in 0.33.0.
