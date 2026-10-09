@@ -298,8 +298,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // beginStart() rather than a child's own start(), for the same reason stop() uses stopReplay(). The parked replays
     // run again only once the live delegate is started, so each hands over to a delegate that runs, and only when
     // resuming automatically, as the delegate itself resumes only then. When the delegate's start throws, each child
-    // that was stopped stops again, unless the delegate runs or another start or stop of that child came in the
-    // meantime, so the next resume of a paused subscription starts the delegate.
+    // that was stopped stops again, unless the delegate runs, or another start or stop of that child, or a resume of
+    // the delegate, came in the meantime. The delegate is asked whether it runs once, before any child takes its lock.
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
         Map<AbstractCatchupSubscriptionModel, AbstractCatchupSubscriptionModel.StartAttempt> attempts = new LinkedHashMap<>();
@@ -307,7 +307,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         try {
             getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
         } catch (Throwable e) {
-            attempts.forEach(AbstractCatchupSubscriptionModel::undoStart);
+            boolean liveDelegateRuns = attempts.values().stream().anyMatch(AbstractCatchupSubscriptionModel.StartAttempt::wasStopped)
+                    && AbstractCatchupSubscriptionModel.runsAfterFailedStart(getWrappedSubscriptionModel(), e);
+            attempts.forEach((model, attempt) -> model.undoStart(attempt, liveDelegateRuns));
             throw e;
         }
         if (resumeSubscriptionsAutomatically) {
@@ -384,19 +386,23 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     }
 
     /**
-     * A plain forward to whichever {@link RepositionableSubscriptions} the wrapped model resolves to, exactly
-     * as the one-argument {@link #resumeSubscription(String)} above already forwards unconditionally rather than
-     * routing through a catch-up child. Catch-up is therefore never re-triggered by a resume at an explicit
-     * position either. It stays what it already was, a one-time replay driven from {@code subscribe}, not something
-     * a lease regain can turn back on.
+     * Forwards to whichever {@link RepositionableSubscriptions} the wrapped model resolves to. Unlike
+     * {@link #resumeSubscription(String)}, it doesn't start this model first or run a parked replay. Catch-up is never
+     * re-triggered by a resume at an explicit position. It stays what it already was, a one-time replay driven from
+     * {@code subscribe}, not something a lease regain can turn back on.
+     * <p>
+     * Once the wrapped model returns from the resume, this model is started again if a start whose live delegate threw
+     * stopped it, so a subscription made afterwards replays at once. After {@link #stop()} it stays stopped.
      *
      * @throws UnsupportedOperationException if the wrapped model is not itself repositionable.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
-        return RepositionableSubscriptions.findIn(getWrappedSubscriptionModel())
+        Subscription resumed = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel())
                 .orElseThrow(() -> new UnsupportedOperationException(getWrappedSubscriptionModel().getClass().getSimpleName() + " is not repositionable"))
                 .resumeSubscription(subscriptionId, startAt);
+        presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
+        return resumed;
     }
 
     @Override
