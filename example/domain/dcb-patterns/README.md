@@ -22,8 +22,8 @@ this module is a catalog, not an application.
 
 - **`uniqueusername`** - global uniqueness with a retention period. Closing an account and changing its
   username read the username tag, which is enough to tell which account holds the name. Registering also
-  reads the account tag, so an account registers once and holds one username. A closed account's name stays
-  reserved for 30 days before it can be reclaimed.
+  reads the account tag, so an account registers once and holds one username. A username released by closing
+  the account or by changing to another username stays reserved for 30 days before it can be reclaimed.
 - **`idempotency`** - prevent record duplication. The boundary is an idempotency token, and replaying the
   same command is a no-op (`decide` returns no events) instead of an error.
 - **`dynamicproductprice`** - a price change grace period. An order is accepted at the current price, or at
@@ -45,7 +45,7 @@ the read. `uniqueusername` and `idempotency` are the same mechanism applied to t
 uniqueness (a name, a request).
 
 **Time-based decisions are timestamp-in-payload, now-in-command.** `AccountClosed.closedAt`,
-`ProductPriceChanged.changedAt` and `SignUpInitiated.initiatedAt` are plain `Instant` fields on the domain
+`UsernameChanged.changedAt`, `ProductPriceChanged.changedAt` and `SignUpInitiated.initiatedAt` are plain `Instant` fields on the domain
 event. `RegisterAccount.now`, `PlacePriceOrder.orderedAt` and `ConfirmSignUp.confirmedAt` are plain `Instant`
 fields on the command. A `DcbDecider`'s `decide`/`evolve` never sees CloudEvent metadata (when the event was
 actually stored), only these domain fields, so the same command replayed against the same events always

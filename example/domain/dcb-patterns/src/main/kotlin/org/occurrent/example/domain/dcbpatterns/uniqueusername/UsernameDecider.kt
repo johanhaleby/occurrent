@@ -26,8 +26,8 @@ import java.util.*
 
 /**
  * Pattern: global uniqueness with a retention period. A username can only be held by one account at a time, and once
- * released it stays reserved for [UsernamePolicy.RETENTION] after the account closes, so nobody can immediately grab a
- * name someone else just gave up.
+ * released it stays reserved for [UsernamePolicy.RETENTION], so nobody can immediately grab a name someone else just
+ * gave up. A username is released when its account closes or when the account changes to another username.
  * <p>
  * Every event is tagged with the username it mentions and with the account it belongs to (see [tags]).
  * [UsernameChanged] carries both the old and the new name and is tagged with both, so a rename shows up whichever of
@@ -43,8 +43,8 @@ import java.util.*
  * condition covers both tags, so registering one account under two usernames at the same time conflicts the same way
  * two accounts registering one username does.
  * <p>
- * Time-in-payload, now-in-command: [AccountClosed.closedAt] and [RegisterAccount.now] are both plain [Instant]
- * fields on the domain event/command, never read from CloudEvent metadata. The decider's [evolve]/[decide] only ever
+ * Time-in-payload, now-in-command: [AccountClosed.closedAt], [UsernameChanged.changedAt] and [RegisterAccount.now] are
+ * plain [Instant] fields on the domain event/command, never read from CloudEvent metadata. The decider's [evolve]/[decide] only ever
  * see domain payloads, so the same decision is reproducible from the events alone, independent of when they happen to
  * be replayed.
  */
@@ -89,7 +89,7 @@ sealed interface UsernameEvent {
 
 data class AccountRegistered(override val eventId: UUID, override val occurredAt: Instant, val accountId: UUID, val username: String) : UsernameEvent
 data class AccountClosed(override val eventId: UUID, override val occurredAt: Instant, val accountId: UUID, val username: String, val closedAt: Instant) : UsernameEvent
-data class UsernameChanged(override val eventId: UUID, override val occurredAt: Instant, val accountId: UUID, val oldUsername: String, val newUsername: String) : UsernameEvent
+data class UsernameChanged(override val eventId: UUID, override val occurredAt: Instant, val accountId: UUID, val oldUsername: String, val newUsername: String, val changedAt: Instant) : UsernameEvent
 
 /**
  * The shape is maps and a set (like [org.occurrent.example.domain.courseenrollment.features.enrollment.model.EnrollmentState])
@@ -99,7 +99,7 @@ data class UsernameChanged(override val eventId: UUID, override val occurredAt: 
  */
 data class UsernameState(
     val holders: Map<String, UUID> = emptyMap(),
-    val closedAt: Map<String, Instant> = emptyMap(),
+    val releasedAt: Map<String, Instant> = emptyMap(),
     val registeredAccounts: Set<UUID> = emptySet()
 )
 
@@ -118,7 +118,7 @@ private fun decide(command: UsernameCommand, state: UsernameState): List<Usernam
     is UsernameCommand.ChangeUsername -> {
         requireHeldBy(state, command.oldUsername, command.accountId)
         requireAvailable(state, command.newUsername, command.now)
-        listOf(UsernameChanged(UUID.randomUUID(), command.now, command.accountId, command.oldUsername, command.newUsername))
+        listOf(UsernameChanged(UUID.randomUUID(), command.now, command.accountId, command.oldUsername, command.newUsername, command.now))
     }
 }
 
@@ -129,25 +129,25 @@ private fun requireHeldBy(state: UsernameState, username: String, accountId: UUI
 
 private fun requireAvailable(state: UsernameState, username: String, now: Instant) {
     require(username !in state.holders) { "Username $username is already taken" }
-    val closedAt = state.closedAt[username] ?: return
-    val availableFrom = closedAt.plus(UsernamePolicy.RETENTION)
-    require(!now.isBefore(availableFrom)) { "Username $username is reserved until $availableFrom (closed at $closedAt)" }
+    val releasedAt = state.releasedAt[username] ?: return
+    val availableFrom = releasedAt.plus(UsernamePolicy.RETENTION)
+    require(!now.isBefore(availableFrom)) { "Username $username is reserved until $availableFrom (released at $releasedAt)" }
 }
 
 private fun evolve(state: UsernameState, event: UsernameEvent): UsernameState = when (event) {
     is AccountRegistered -> state.copy(
         holders = state.holders + (event.username to event.accountId),
-        closedAt = state.closedAt - event.username,
+        releasedAt = state.releasedAt - event.username,
         registeredAccounts = state.registeredAccounts + event.accountId
     )
 
     is AccountClosed -> state.copy(
         holders = state.holders - event.username,
-        closedAt = state.closedAt + (event.username to event.closedAt)
+        releasedAt = state.releasedAt + (event.username to event.closedAt)
     )
 
     is UsernameChanged -> state.copy(
         holders = state.holders - event.oldUsername + (event.newUsername to event.accountId),
-        closedAt = state.closedAt - event.oldUsername
+        releasedAt = state.releasedAt - event.newUsername + (event.oldUsername to event.changedAt)
     )
 }

@@ -96,6 +96,54 @@ class UniqueUsernameTest {
     }
 
     @Test
+    fun `registering the old username of a rename after the retention window is allowed`() {
+        val accountId = UUID.randomUUID()
+        val registeredAt = Instant.parse("2026-01-01T00:00:00Z")
+        val changedAt = registeredAt.plusSeconds(60)
+        applicationService.execute(UsernameCommand.RegisterAccount(accountId, "johan", registeredAt), usernameDcbDecider)
+        applicationService.execute(UsernameCommand.ChangeUsername(accountId, "johan", "johan2", changedAt), usernameDcbDecider)
+
+        val afterRetention = changedAt.plus(UsernamePolicy.RETENTION).plusSeconds(1)
+        applicationService.execute(UsernameCommand.RegisterAccount(UUID.randomUUID(), "johan", afterRetention), usernameDcbDecider)
+
+        assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(3)
+    }
+
+    @Test
+    fun `registering the old username of a rename within the retention window is rejected`() {
+        val accountId = UUID.randomUUID()
+        val registeredAt = Instant.parse("2026-01-01T00:00:00Z")
+        val changedAt = registeredAt.plusSeconds(60)
+        applicationService.execute(UsernameCommand.RegisterAccount(accountId, "johan", registeredAt), usernameDcbDecider)
+        applicationService.execute(UsernameCommand.ChangeUsername(accountId, "johan", "johan2", changedAt), usernameDcbDecider)
+
+        val withinRetention = changedAt.plus(UsernamePolicy.RETENTION).minusSeconds(1)
+        assertThatThrownBy {
+            applicationService.execute(UsernameCommand.RegisterAccount(UUID.randomUUID(), "johan", withinRetention), usernameDcbDecider)
+        }.isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("reserved")
+        assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(2)
+    }
+
+    @Test
+    fun `renaming into the old username of another rename within the retention window is rejected`() {
+        val renamer = UUID.randomUUID()
+        val other = UUID.randomUUID()
+        val registeredAt = Instant.parse("2026-01-01T00:00:00Z")
+        val changedAt = registeredAt.plusSeconds(60)
+        applicationService.execute(UsernameCommand.RegisterAccount(renamer, "johan", registeredAt), usernameDcbDecider)
+        applicationService.execute(UsernameCommand.RegisterAccount(other, "bob", registeredAt.plusSeconds(1)), usernameDcbDecider)
+        applicationService.execute(UsernameCommand.ChangeUsername(renamer, "johan", "johan2", changedAt), usernameDcbDecider)
+
+        val withinRetention = changedAt.plus(UsernamePolicy.RETENTION).minusSeconds(1)
+        assertThatThrownBy {
+            applicationService.execute(UsernameCommand.ChangeUsername(other, "bob", "johan", withinRetention), usernameDcbDecider)
+        }.isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("reserved")
+        assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(3)
+    }
+
+    @Test
     fun `concurrent double registration - only one wins`() {
         // A genuine race: both threads are released at the same instant (via the barrier) so both read the "free"
         // state before either has appended. Retries are disabled so a losing thread surfaces the raw append-condition
