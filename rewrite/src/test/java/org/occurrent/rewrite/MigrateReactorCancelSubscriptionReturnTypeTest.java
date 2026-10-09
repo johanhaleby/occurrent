@@ -2085,8 +2085,9 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
         );
     }
 
+    // A SneakyThrows of the same package comes before one of an import on demand, and the parser cannot see either
     @Test
-    void givesTheVoidMethodASneakyThrowsTheParserCannotSeeWhenLombokIsImportedOnDemand() {
+    void keepsASneakyThrowsTheParserCannotSeeOnlyOnTheMethodWhoseBodyMovesWhenLombokIsImportedOnDemand() {
         String after = """
                 package com.example;
 
@@ -2106,7 +2107,6 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
                         return Mono.empty();
                     }
 
-                    @SneakyThrows
                     private void doCancelSubscription(String subscriptionId) {
                         if (ids.remove(subscriptionId)) {
                             ids.clear();
@@ -2141,6 +2141,67 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
                 )
         );
         assertCompiles(after, SNEAKY_THROWS);
+    }
+
+    @Test
+    void keepsASneakyThrowsNestedInTheClassOnlyOnTheMethodWhoseBodyMovesWhenLombokIsImportedOnDemand() {
+        rewriteRun(
+                spec -> spec.typeValidationOptions(TypeValidation.none()),
+                java(
+                        """
+                        package com.example;
+
+                        import lombok.*;
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                        import java.util.HashSet;
+                        import java.util.Set;
+
+                        class Model implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @interface SneakyThrows {
+                            }
+
+                            @SneakyThrows
+                            public void cancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    ids.clear();
+                                }
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import lombok.*;
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                        import reactor.core.publisher.Mono;
+
+                        import java.util.HashSet;
+                        import java.util.Set;
+
+                        class Model implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @interface SneakyThrows {
+                            }
+
+                            @SneakyThrows
+                            public Mono<Void> cancelSubscription(String subscriptionId) {
+                                doCancelSubscription(subscriptionId);
+                                return Mono.empty();
+                            }
+
+                            private void doCancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    ids.clear();
+                                }
+                            }
+                        }
+                        """
+                )
+        );
     }
 
     @Test

@@ -47,7 +47,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Stream;
 
 /**
  * Changes a Java {@code void cancelSubscription(String)} that implements the reactor {@code CancellableSubscriptions}
@@ -69,9 +68,11 @@ import java.util.stream.Stream;
  *     a public {@code doCancelSubscription(String)} that nothing in the class calls, and a private method of the same
  *     name and parameters would not compile. The method keeps all its annotations, and the new method gets only
  *     Lombok's {@code @SneakyThrows} and Java's {@code @SuppressWarnings} of them, which the body can need to compile.
- *     When the parser cannot see an annotation's type, the recipe tells which one it is from the file's imports. Any
- *     other annotation could take effect on both methods, one Spring reads at run time such as
- *     {@code @EventListener}, or one an annotation processor reads.</li>
+ *     Any other annotation could take effect on both methods, one Spring reads at run time such as
+ *     {@code @EventListener}, or one an annotation processor reads. When the parser cannot see Lombok and the file
+ *     imports it with {@code import lombok.*;}, the recipe cannot tell Lombok's {@code @SneakyThrows} from one of the
+ *     same package, so only the original method has it. A moved body that needs it then fails to compile until you
+ *     add {@code @SneakyThrows} to the new method.</li>
  * </ul>
  * A body ending in a {@code return} or a {@code throw} stays in place too. Each {@code return;} of a body that stays in
  * place becomes {@code return Mono.empty();}. A declaration with no body, abstract or in an interface that extends
@@ -471,8 +472,8 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
             }
 
             // A single-type import of the name decides which type it is, ahead of the parser, which attributes the name
-            // to java.lang when it cannot see the imported type. Without one, the parser's type decides, since a type
-            // of the same package or a nested one comes first. Without that, an import on demand or java.lang does.
+            // to java.lang when it cannot see the imported type. Without one, only the parser's type is certain, since a
+            // type of the same package comes before an import on demand and the parser may not see that type either.
             private String typeNamed(String simpleName, @Nullable JavaType attributed, List<J.Import> imports) {
                 for (J.Import anImport : imports) {
                     if (anImport.getQualid().getSimpleName().equals(simpleName)) {
@@ -480,17 +481,7 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                     }
                 }
                 JavaType.FullyQualified type = TypeUtils.asFullyQualified(attributed);
-                if (type != null) {
-                    return type.getFullyQualifiedName();
-                }
-                Stream<String> onDemand = imports.stream()
-                        .filter(anImport -> anImport.getQualid().getSimpleName().equals("*"))
-                        .map(anImport -> qualifiedName(anImport.getQualid().getTarget()));
-                return Stream.concat(onDemand, Stream.of("java.lang"))
-                        .map(container -> container + "." + simpleName)
-                        .filter(FOR_THE_BODY::contains)
-                        .findFirst()
-                        .orElse(simpleName);
+                return type == null ? simpleName : type.getFullyQualifiedName();
             }
 
             private String qualifiedName(J name) {
