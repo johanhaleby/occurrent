@@ -59,8 +59,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // Applied via applyPendingPauseIfAny once the live delegate subscription exists.
     protected final ConcurrentMap<String, Boolean> pauseRequestedDuringCatchup = new ConcurrentHashMap<>();
     protected volatile boolean shuttingDown = false;
-    // Set by stop(), cleared by start(...). Checked by the replay loops so stop() interrupts an in-flight
-    // replay, not just the delegate the replay has not registered with yet. Written only under lifecycleLock.
+    // Set by stop(), and by a start whose live delegate failed on a stopped model. Cleared by start(...), and by a
+    // resume of the live delegate after such a failed start. Checked by the replay loops so stop() interrupts an
+    // in-flight replay, not just the delegate the replay has not registered with yet. Written only under lifecycleLock.
     protected volatile boolean stopped = false;
     // A leaf lock, held only to read or write stopped and the fields below, so no method is called and no other lock
     // is taken while it is held
@@ -452,9 +453,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * cancelled attempt is only ended, since nothing is to run it again. Called with the handover lock held, so a
      * finishing attempt either hands over before this or finds itself parked.
      * <p>
-     * A start can allow replays to run again between the stop this parks for and the park itself, and then run what
-     * was parked before this replay was. So this asks whether the model is stopped once more after parking, and runs
-     * the replay again when it is not, without resuming a pause asked for while it ran.
+     * A start can allow replays to run again between the stop this parks for and the park itself, and start(true) then
+     * runs what was parked before this replay was. So this asks whether the model is stopped once more after parking,
+     * and runs the replay again when it is not, without resuming a pause asked for while it ran. Anything else that
+     * allows replays in that window runs it again too, start(false) included.
      */
     private void parkIfStillCurrent(String subscriptionId, CatchupAttempt attempt) {
         if (currentAttempt.remove(subscriptionId, attempt)) {
@@ -663,7 +665,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     /**
      * Allows the next replay on this model to run, without touching the shared live delegate. Does not run a replay
-     * {@link #stopReplay()} parked, which {@link #relaunchParkedReplays()} does.
+     * {@link #stopReplay()} parked, which {@link #relaunchParkedReplays()} does, apart from one whose replay thread is
+     * still parking it.
      */
     public void resumeReplay() {
         synchronized (lifecycleLock) {
