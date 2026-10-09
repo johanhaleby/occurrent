@@ -24,7 +24,6 @@ import org.bson.BsonTimestamp;
 import org.bson.Document;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.stream.IntStream;
 
 /**
@@ -36,11 +35,21 @@ import java.util.stream.IntStream;
  * error 286 ({@code ChangeStreamHistoryLost}). {@link #container()} starts a replica set with the smallest oplog size
  * MongoDB accepts, one megabyte, and {@link #dropHistoryFrom} writes until MongoDB has truncated the oplog past the
  * operation time.
+ * <p>
+ * MongoDB took about a minute to truncate the oplog in these tests, however much was written. Writing filler for that
+ * whole minute grew mongod past five gigabytes on a second drop in the same container, and the kernel killed it for
+ * running out of memory. With the filler bounded and no write after it, MongoDB did not truncate the oplog at all
+ * within three minutes. So {@link #dropHistoryFrom} writes ten megabytes of filler, then one small document every
+ * hundred milliseconds until the oplog is truncated.
  */
 public final class ChangeStreamHistory {
 
     private static final Duration TIMEOUT = Duration.ofMinutes(3);
     private static final String FILLER = "x".repeat(100_000);
+    private static final int BATCH_SIZE = 20;
+    // Ten times the oplog size
+    private static final int MAX_BATCHES = 5;
+    private static final Duration PAUSE = Duration.ofMillis(100);
 
     private ChangeStreamHistory() {
     }
@@ -66,14 +75,29 @@ public final class ChangeStreamHistory {
             MongoCollection<Document> filler = db.getCollection("change-stream-history-filler");
             MongoCollection<Document> oplog = client.getDatabase("local").getCollection("oplog.rs");
             long deadline = System.nanoTime() + TIMEOUT.toNanos();
+            int batches = 0;
             while (oldestOplogEntry(oplog).compareTo(operationTime) <= 0) {
                 if (System.nanoTime() > deadline) {
                     throw new AssertionError("The oplog still reaches back to " + operationTime + " after " + TIMEOUT);
                 }
-                List<Document> batch = IntStream.range(0, 20).mapToObj(__ -> new Document("filler", FILLER)).toList();
-                filler.insertMany(batch);
+                if (batches < MAX_BATCHES) {
+                    filler.insertMany(IntStream.range(0, BATCH_SIZE).mapToObj(__ -> new Document("filler", FILLER)).toList());
+                    batches++;
+                } else {
+                    filler.insertOne(new Document("filler", "x"));
+                }
+                pause();
             }
             filler.drop();
+        }
+    }
+
+    private static void pause() {
+        try {
+            Thread.sleep(PAUSE.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Interrupted while waiting for MongoDB to truncate the oplog", e);
         }
     }
 
