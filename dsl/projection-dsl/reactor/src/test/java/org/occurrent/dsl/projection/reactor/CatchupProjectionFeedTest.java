@@ -344,6 +344,70 @@ class CatchupProjectionFeedTest {
         }
     }
 
+    // The stopped replay tells the view it was abandoned before it gives its count back. A catchUp() called in that
+    // window clears the stop and throws while the stopped one still counts.
+    @Test
+    void a_catch_up_whose_marker_read_throws_while_a_stopped_replay_is_ending_leaves_the_feed_stopped() throws Exception {
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch stopAsked = new CountDownLatch(1);
+        CountDownLatch abandoning = new CountDownLatch(1);
+        CountDownLatch otherThrew = new CountDownLatch(1);
+        final class ViewHeldWhenAbandoned implements java.util.function.BiFunction<EventMetadata, Counted, Mono<Void>>, ReactiveReplayAware {
+            @Override
+            public Mono<Void> apply(EventMetadata metadata, Counted event) {
+                return Mono.fromRunnable(() -> {
+                    if (event.eventId().equals("1")) {
+                        replaying.countDown();
+                        awaitLatch(stopAsked);
+                    }
+                });
+            }
+
+            @Override
+            public void replayStarted() {
+            }
+
+            @Override
+            public Mono<Void> replayCompleted() {
+                return Mono.empty();
+            }
+
+            @Override
+            public void replayAbandoned() {
+                abandoning.countDown();
+                awaitLatch(otherThrew);
+            }
+        }
+        AtomicInteger reads = new AtomicInteger();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", new ViewHeldWhenAbandoned(),
+                Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId,
+                markerReadAs(() -> {
+                    if (reads.getAndIncrement() == 0) {
+                        return Mono.empty();
+                    }
+                    throw new IllegalStateException("marker unreadable");
+                }));
+        CompletableFuture<Void> stoppedCatchUp = feed.catchUp().toFuture();
+        awaitLatch(replaying);
+        feed.stopCatchUp();
+        stopAsked.countDown();
+        awaitLatch(abandoning);
+
+        try {
+            assertThatThrownBy(feed::catchUp).hasMessage("marker unreadable");
+        } finally {
+            otherThrew.countDown();
+        }
+        stoppedCatchUp.get(5, TimeUnit.SECONDS);
+
+        CompletableFuture<Void> accepted = feed.accept(new Counted("live")).toFuture();
+        assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what accept(..) ended with once the stopped replay ended and the other catch-up threw")
+                .isInstanceOf(java.util.concurrent.ExecutionException.class)
+                .cause()
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
+    }
+
     // Returns what the Mono of an event fed before both catch-ups ended with, a TimeoutException when it never ended.
     private Throwable acceptAfterTwoCatchUpsThrewAroundAStop(boolean firstThrowsFirst) throws Exception {
         CountDownLatch askingFirst = new CountDownLatch(1);
@@ -395,13 +459,19 @@ class CatchupProjectionFeedTest {
     // Read number n counts down asking n, waits for release n, then throws instead of returning a Mono.
     private static CheckpointStorage markerWhoseReadsThrow(List<CountDownLatch> asking, List<CountDownLatch> release) {
         AtomicInteger reads = new AtomicInteger();
+        return markerReadAs(() -> {
+            int read = reads.getAndIncrement();
+            asking.get(read).countDown();
+            awaitLatch(release.get(read));
+            throw new IllegalStateException("marker unreadable");
+        });
+    }
+
+    private static CheckpointStorage markerReadAs(java.util.function.Supplier<Mono<org.occurrent.subscription.Checkpoint>> read) {
         return new CheckpointStorage() {
             @Override
             public Mono<org.occurrent.subscription.Checkpoint> read(String subscriptionId) {
-                int read = reads.getAndIncrement();
-                asking.get(read).countDown();
-                awaitLatch(release.get(read));
-                throw new IllegalStateException("marker unreadable");
+                return read.get();
             }
 
             @Override
