@@ -404,7 +404,8 @@ public final class CatchupProjectionFeed<E> {
      * A feed with no catch-up running that has not gone live stops the same way. The {@link Mono}
      * {@link #accept(Object)} returned for an event fed before the stop, or after it and before the next
      * {@link #catchUp()} or {@link #goLive()}, errors, so a shutting-down application that never starts a catch-up does
-     * not leave it waiting. A catch-up started after the stop does not fold that event, and the broker delivers it
+     * not leave it waiting. The error handling of each event fed before the stop runs on the thread that calls this
+     * method. A catch-up started after the stop does not fold that event, and the broker delivers it
      * again. A catch-up counts as running from the {@link #catchUp()} or {@link #goLive()} call until the feed goes
      * live, its replay notices a stop, or it fails.
      * <p>

@@ -366,13 +366,17 @@ public final class ReactiveHandover<T, K> {
     // falsified by a test while the other is in place, and the pair is what keeps a later change to one of them
     // from quietly ending the drain early.
     private volatile boolean stopped = false;
-    // Held to change the field below, and to write the stopped flag where a catch-up starts and where
-    // stopIfNotCatchingUp() sets it, so that stop either comes before the catch-up starts or finds it running and lets
-    // it answer the payloads. Every other write of stopped comes from a catch-up while it is counted here, so none of
-    // them can interleave with that stop.
+    // Held to change the two fields below, and to write the stopped flag where a catch-up starts, where
+    // stopIfNotCatchingUp() sets it and where a catchUp(Source) call that threw sets it again, so that stop either
+    // comes before the catch-up starts or finds it running and lets it answer the payloads. Every other write of
+    // stopped comes from a catch-up while it is counted here, so none of them can interleave with that stop. Nothing
+    // runs a source's or a caller's code while holding it.
     private final Object catchUpsGuard = new Object();
     // Catch-ups from their catchUp(Source) call until they go live, are stopped or fail.
     private int catchUpsInProgress = 0;
+    // Stops that did nothing because a catch-up was running, so a catch-up that throws before its pipeline runs can
+    // tell that a stop left the waiting payloads to it.
+    private long stopsLeftToCatchUps = 0;
     // Set once, right before the buffered live payloads are drained on a successful catch-up, and never cleared
     // afterwards, mirroring BlockingHandover's live field. acceptIfLive(..) reads this to refuse a payload outright,
     // without ever touching liveSink, rather than buffering it the way acceptReportingDelivery(..) does.
@@ -618,19 +622,29 @@ public final class ReactiveHandover<T, K> {
         // Taking a place, stamping the payload with its turn and queueing it are one step. Apart, a payload could
         // take a place and be queued behind one that took its place later, and the drain boundary below counts by
         // turn, so the two have to agree.
+        boolean bufferFull;
         synchronized (admission) {
             if (ack.droppedByStop()) {
                 // A stop answered it between its registration and here, so its caller offers it again.
                 return false;
             }
-            if (liveBacklog.get() >= maxBufferedEvents) {
-                ack.sink().error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents)));
-                return false;
+            bufferFull = liveBacklog.get() >= maxBufferedEvents;
+            if (bufferFull) {
+                // Claimed while admission is held, where a stop claims too, so a stop cannot answer it as well.
+                ack.settle();
+            } else {
+                liveBacklog.incrementAndGet();
+                Item<K> stamped = item.withTurn(admitted.incrementAndGet());
+                ack.admittedAs(stamped.turn());
+                pendingOffers.add(new PendingOffer<>(stamped, ack.sink(), System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
             }
-            liveBacklog.incrementAndGet();
-            Item<K> stamped = item.withTurn(admitted.incrementAndGet());
-            ack.admittedAs(stamped.turn());
-            pendingOffers.add(new PendingOffer<>(stamped, ack.sink(), System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
+        }
+        if (bufferFull) {
+            // Refused for a full buffer, and answered once admission is released, since the answer runs the caller's
+            // own code, which can call back into this handover.
+            pendingLiveAcks.remove(ack);
+            ack.sink().error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents)));
+            return false;
         }
         drainPendingOffers();
         return true;
@@ -780,29 +794,45 @@ public final class ReactiveHandover<T, K> {
      * {@link #accept(Object)} errors and {@link #acceptReportingDelivery(Object)} completes {@code false} for it, and so
      * is every payload fed after the stop, until the next {@link #catchUp(Source)}. A catch-up started after the stop
      * does not deliver those payloads, so their callers offer them again. Without this, a payload fed before any
-     * catch-up started would wait for one that a shutting-down application never runs.
+     * catch-up started would wait for one that a shutting-down application never runs. The waiting payloads are
+     * answered on the thread that calls this, so the code a caller runs on that answer runs on that thread too.
      * <p>
      * A catch-up counts as running from the {@link #catchUp(Source)} call until it goes live, its replay is stopped
      * through {@link Source#keepReplaying()}, or it fails, also while it waits for another replay to end. Does nothing
      * while one runs, since that catch-up answers the waiting payloads itself. It delivers them once it goes live,
      * answers them as not applied when its replay is stopped through {@link Source#keepReplaying()}, and errors them
-     * with its failure when it fails. Does nothing to a live handover either, or to one that is failing, which answers
-     * them with its failure.
+     * with its failure when it fails. A {@link #catchUp(Source)} call that throws instead of returning stops this
+     * handover in this method's place, when this handover was stopped before that call or this method was called
+     * during it, and no other catch-up runs. Does nothing to a live handover either, or to one that is failing, which
+     * answers them with its failure.
      */
     public void stopIfNotCatchingUp() {
-        List<LiveAck> dropped;
+        ClaimedAcks<T> claimed;
         synchronized (catchUpsGuard) {
-            if (live || catchUpsInProgress > 0 || failureStarted.get() != null) {
+            if (live || failureStarted.get() != null) {
                 return;
             }
-            stopped = true;
-            // Taken while catchUpsGuard is held, so a catch-up starting right after this stop cannot have its own
-            // payloads taken here. No drain is registered while the handover is not live and nothing catches up or
-            // fails, so this tells no source anything.
-            dropped = dropPendingLiveAcks();
+            if (catchUpsInProgress > 0) {
+                stopsLeftToCatchUps++;
+                return;
+            }
+            claimed = stopUnderCatchUpsGuard();
         }
-        // Answered after catchUpsGuard is released, since an answer runs the caller's own code.
-        dropped.forEach(ack -> ack.sink().success(Outcome.STOPPED));
+        answerStopped(claimed);
+    }
+
+    // Claimed while catchUpsGuard is held, so a catch-up starting right after this stop cannot have its own payloads
+    // claimed here.
+    private ClaimedAcks<T> stopUnderCatchUpsGuard() {
+        stopped = true;
+        return claimPendingLiveAcks();
+    }
+
+    // Runs with neither catchUpsGuard nor admission held, since telling a source runs its code and an answer runs the
+    // caller's own code, and either can call back into this handover.
+    private void answerStopped(ClaimedAcks<T> claimed) {
+        tellDrainedSources(claimed.exhausted());
+        claimed.acks().forEach(ack -> ack.sink().success(Outcome.STOPPED));
     }
 
     // Gives the count back once per catch-up, whichever way it ends.
@@ -812,6 +842,26 @@ public final class ReactiveHandover<T, K> {
         }
         synchronized (catchUpsGuard) {
             catchUpsInProgress--;
+        }
+    }
+
+    // Gives the count back for a catch-up that threw before its pipeline ran, and stops this handover again when that
+    // catch-up cleared a stop or a stop left the waiting payloads to it, and no other catch-up runs. Otherwise the
+    // payloads fed since would wait for a catch-up that is not coming.
+    private void catchUpThrew(AtomicBoolean counted, boolean stoppedWhenCounted, long stopsWhenCounted) {
+        if (!counted.compareAndSet(true, false)) {
+            return;
+        }
+        ClaimedAcks<T> claimed = null;
+        synchronized (catchUpsGuard) {
+            catchUpsInProgress--;
+            boolean stopOwed = stoppedWhenCounted || stopsLeftToCatchUps != stopsWhenCounted;
+            if (stopOwed && catchUpsInProgress == 0 && !live && failureStarted.get() == null) {
+                claimed = stopUnderCatchUpsGuard();
+            }
+        }
+        if (claimed != null) {
+            answerStopped(claimed);
         }
     }
 
@@ -873,8 +923,12 @@ public final class ReactiveHandover<T, K> {
         // as the source likes, and given back here when building or subscribing the pipeline throws, since no way that
         // pipeline ends can give it back then.
         AtomicBoolean counted = new AtomicBoolean(true);
+        boolean stoppedWhenCounted;
+        long stopsWhenCounted;
         synchronized (catchUpsGuard) {
             catchUpsInProgress++;
+            stoppedWhenCounted = stopped;
+            stopsWhenCounted = stopsLeftToCatchUps;
             // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying
             // again rather than only by building a new one.
             stopped = false;
@@ -882,7 +936,11 @@ public final class ReactiveHandover<T, K> {
         try {
             return startCountedCatchUp(source, failedForGoodBefore, counted);
         } catch (RuntimeException | Error e) {
-            catchUpEnded(counted);
+            try {
+                catchUpThrew(counted, stoppedWhenCounted, stopsWhenCounted);
+            } catch (RuntimeException | Error answering) {
+                e.addSuppressed(answering);
+            }
             throw e;
         }
     }
@@ -1101,10 +1159,13 @@ public final class ReactiveHandover<T, K> {
                         // Answered before the pause is lifted, the same order the failure path below uses, so a
                         // caller offering a payload again cannot have it delivered while the copy it is replacing is
                         // still waiting for an answer.
-                        if (!wasLive) {
-                            dropPendingLiveAcks().forEach(dropped -> dropped.sink().success(Outcome.STOPPED));
+                        try {
+                            if (!wasLive) {
+                                dropPendingLiveAcks().forEach(dropped -> dropped.sink().success(Outcome.STOPPED));
+                            }
+                        } finally {
+                            catchUpEnded(counted);
                         }
-                        catchUpEnded(counted);
                         resumeLiveDelivery(pause);
                         releaseReplayTurn(holdsReplayTurn);
                         // Emitted last, so a caller that reacts to the stop by calling goLive() finds the payloads
@@ -1139,10 +1200,17 @@ public final class ReactiveHandover<T, K> {
         });
     }
 
-    // Claims every acknowledgement nothing has answered yet, so none of those payloads is delivered later. Each one
-    // already admitted gives back its place in the backlog, in the sink's queue and in any drain counting it. The
-    // caller answers them, outside the guard.
+    // Claims every acknowledgement nothing has answered yet, so none of those payloads is delivered later, and tells
+    // each source whose drain the claim ended. The caller answers the acknowledgements, after admission is released.
     private List<LiveAck> dropPendingLiveAcks() {
+        ClaimedAcks<T> claimed = claimPendingLiveAcks();
+        tellDrainedSources(claimed.exhausted());
+        return claimed.acks();
+    }
+
+    // Each payload already admitted gives back its place in the backlog, in the sink's queue and in any drain counting
+    // it. Neither the acknowledgements nor the drains that ended are answered or told here.
+    private ClaimedAcks<T> claimPendingLiveAcks() {
         List<LiveAck> dropped = new ArrayList<>();
         List<Drain<T>> exhausted = new ArrayList<>();
         synchronized (admission) {
@@ -1158,8 +1226,10 @@ public final class ReactiveHandover<T, K> {
             }
             liveBuffer.removeIf(ReactiveHandover::droppedByStop);
         }
-        tellDrainedSources(exhausted);
-        return dropped;
+        return new ClaimedAcks<>(dropped, exhausted);
+    }
+
+    private record ClaimedAcks<T>(List<LiveAck> acks, List<Drain<T>> exhausted) {
     }
 
     // Guarded so that a source's own replayAbandoned() throwing cannot replace the failure (or stop) that made the

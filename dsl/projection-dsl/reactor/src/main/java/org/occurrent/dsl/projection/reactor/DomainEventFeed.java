@@ -415,7 +415,8 @@ public final class DomainEventFeed<E> {
      * <p>
      * A feed with no catch-up running that has not gone live stops too. The {@link Mono} {@link #accept(Object)}
      * returned for an event fed before the stop, or after it and before the next catch-up or {@link #goLive(String)},
-     * errors, and a catch-up started after the stop does not fold that event. A catch-up counts as running from the
+     * errors, and a catch-up started after the stop does not fold that event. The error handling of each event fed
+     * before the stop runs on the thread that calls this method. A catch-up counts as running from the
      * subscription to the {@link Mono} that {@link #catchUpAll()}, {@link #catchUp(String)} or {@link #goLive(String)}
      * returned, not from the call, until the feed goes live, its replay notices a stop, or it fails.
      * <p>
