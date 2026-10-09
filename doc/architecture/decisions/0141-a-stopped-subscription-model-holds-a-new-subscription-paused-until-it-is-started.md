@@ -417,8 +417,8 @@ A replay that `stop()` cut short runs again from the last position it stored, so
 position are delivered again, and the stored position never moves back. For a time position the replay also delivers
 the events stored at that exact time again, since other events can have the same time down to the millisecond.
 
-The blocking catch-up model runs a kept replay again only on `start(true)` or a resume, where the reactor catch-up
-models in ADR 98 run it on any `start(..)`.
+The blocking catch-up model runs a kept replay again only on `start(true)` or a resume, and so do the reactor catch-up
+models in ADR 98, which run it from where it started.
 
 A subscription made on a stopped `CompetingConsumerSubscriptionModel` over a bare `SpringMongoSubscriptionModel`, with
 `StartAt.now()` or the model default, starts at the operation time MongoDB answers with when `subscribe(..)` asks

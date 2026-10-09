@@ -11,7 +11,8 @@ which recorded the shape of the problem but not this answer.
 
 Amended by [ADR 141](0141-a-stopped-subscription-model-holds-a-new-subscription-paused-until-it-is-started.md). The
 blocking catch-up model no longer abandons a replay that `stop()` cuts short. It keeps the replay and runs it again on
-`start(true)` or a resume.
+`start(true)` or a resume. The reactor catch-up models in this ADR now do the same, so `start(false)` no longer runs a
+replay that `stop()` cut short.
 
 ## Context
 

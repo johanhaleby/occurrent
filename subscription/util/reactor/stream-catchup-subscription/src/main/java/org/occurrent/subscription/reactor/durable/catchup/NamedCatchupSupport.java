@@ -67,15 +67,17 @@ import static java.util.Objects.requireNonNull;
  * for a capability it never used.
  * <p>
  * Life-cycle semantics for a subscription still replaying. A pause does not abort the replay, the subscription hands
- * over to the wrapped model paused (blocking parity). A stop aborts the replay WITHOUT handing over, and parks the
- * subscription. {@code start(..)} relaunches the replay from its original start position, so replayed events may be
- * delivered again (the composition is at-least-once anyway). A subscription created while the model is stopped parks
- * the same way and replays only once the model starts. The blocking catch-up model parks both the same way, but runs
- * a parked replay again only on {@code start(true)} or a resume of that subscription, as its live delegate resumes
- * only then. Cancelling or shutting down aborts in-flight replays. Waiting on a subscription that was cancelled, or
- * whose model was shut down, before its handover fails, since that subscription never started and nothing will start
- * it, and the blocking {@code CancelledSubscription} answers {@code false} for the same cases. Model-wide calls
- * forward to the wrapped model, so give each composition its own wrapped model rather than sharing one.
+ * over to the wrapped model paused (blocking parity). A replay that a stop interrupts never hands over, and the
+ * subscription is paused, as is a subscription created while the model is stopped. Such a subscription receives nothing
+ * until {@code start(true)} or {@code resumeSubscription(id)} runs its replay again from its original start position,
+ * so replayed events may be delivered again (the composition is at-least-once anyway). {@code start(false)} keeps it
+ * paused. Resuming a paused subscription while the model is stopped, whether its replay was interrupted or it had
+ * already handed over, runs {@code start(false)} first, so nothing else is resumed. When that start throws, nothing is
+ * resumed and the next resume starts the model again. Cancelling or shutting down aborts in-flight replays.
+ * Waiting on a subscription that was cancelled, or whose model was shut down, before its handover fails, since that
+ * subscription never started and nothing will start it, and the blocking {@code CancelledSubscription} answers
+ * {@code false} for the same cases. Model-wide calls forward to the wrapped model, so give each composition its own
+ * wrapped model rather than sharing one.
  */
 @NullMarked
 final class NamedCatchupSupport {
@@ -176,8 +178,9 @@ final class NamedCatchupSupport {
         Function<CloudEvent, Mono<Void>> liveAction = cloudEvent ->
                 livePredicate.test(cloudEvent) && !cache.contains(CatchupEventKey.of(cloudEvent)) ? action.apply(cloudEvent) : Mono.empty();
 
-        // The replay is relaunchable: stop() aborts and parks it, start(..) runs this again from the same start
-        // position (re-adding ids to the cache is a no-op; re-delivering replayed events is at-least-once).
+        // The replay is relaunchable. stop() aborts and parks it, and start(true) or a resume runs this again from the
+        // same start position. Re-adding ids to the cache is a no-op, and delivering replayed events again is
+        // at-least-once.
         state.launcher = () -> {
             // A relaunch reads the history again from the same start position, so it is a different catch-up and
             // announces itself as one. Sent before the subscribe below, so it precedes anything this launch
@@ -202,7 +205,7 @@ final class NamedCatchupSupport {
             Disposable replaying = pipeline.captureLiveToken(wrapped)
                     .flatMapMany(liveToken -> pipeline.replayApplying(startPosition, cache,
                                     // A stop between dispose landing and this event truncates here, before the action runs.
-                                    () -> !stopped && !state.cancelled.get(), action,
+                                    () -> !stopped && isCurrent(state, launched), action,
                                     () -> {
                                         CatchupListener boundaryListener = catchupListeners.get(subscriptionId);
                                         if (boundaryListener != null) {
@@ -213,7 +216,7 @@ final class NamedCatchupSupport {
                                         }
                                     })
                             .thenMany(Flux.defer(() -> {
-                                handOver(subscriptionId, state, delegate, liveSubscriptionFilter, StartAt.checkpoint(liveToken), liveAction);
+                                handOver(subscriptionId, state, launched, delegate, liveSubscriptionFilter, StartAt.checkpoint(liveToken), liveAction);
                                 return Flux.empty();
                             })))
                     .subscribe(unused -> {
@@ -228,7 +231,13 @@ final class NamedCatchupSupport {
                         catchingUp.remove(subscriptionId, state);
                         state.started.tryEmitError(throwable);
                     });
-            state.replaying.set(replaying);
+            // A stop() or a start(..) called from inside the subscribe above, by the wrapped model, the reader or the
+            // action on this thread, may have parked this launch or run a newer one, which then owns the field.
+            if (isCurrent(state, launched)) {
+                state.replaying.set(replaying);
+            } else {
+                replaying.dispose();
+            }
             // A synchronous replay failure (or instant hand-over) may already have removed the state.
             if (!catchingUp.containsKey(subscriptionId) && !state.handedOver.get()) {
                 replaying.dispose();
@@ -247,10 +256,13 @@ final class NamedCatchupSupport {
         }
         synchronized (state) {
             // A shutdown() since the check above may have cancelled the state.
-            if (!stopped && !state.cancelled.get()) {
-                state.launcher.run();
+            if (!state.cancelled.get()) {
+                if (stopped) {
+                    state.parked.set(true);
+                } else {
+                    state.launcher.run();
+                }
             }
-            // else parked: start(..) launches the replay once the model runs again.
         }
         return new NamedCatchupSubscription(subscriptionId, state.started.asMono());
     }
@@ -269,20 +281,25 @@ final class NamedCatchupSupport {
     }
 
     // Registers the delegated live subscription once the replay has drained. Runs inside the replay pipeline, so a
-    // cancellation that disposed the replay never reaches here. A pause that arrived during the replay is applied to
-    // the delegated subscription immediately after it is created, mirroring the blocking catch-up models. A stop that
-    // truncated the replay parks instead: handing over to a stopped wrapped model would immediately conflict with its
-    // own stop bookkeeping (the pre-fix behavior errored waitUntilStarted with "already paused").
-    private void handOver(String subscriptionId, CatchupState state, SubscriptionModel delegate,
+    // cancellation that disposed the replay before its last check never reaches here. A pause that arrived during the
+    // replay is applied to the delegated subscription immediately after it is created, mirroring the blocking catch-up
+    // models. A stop that truncated the replay parks instead, since handing over to a stopped wrapped model would
+    // immediately conflict with its own stop bookkeeping (the pre-fix behavior errored waitUntilStarted with "already
+    // paused").
+    private void handOver(String subscriptionId, CatchupState state, Object launched, SubscriptionModel delegate,
                           @Nullable SubscriptionFilter liveSubscriptionFilter, StartAt liveStartAt, Function<CloudEvent, Mono<Void>> liveAction) {
         synchronized (state) {
-            if (state.cancelled.get()) {
+            // A stop() that came after this launch's last check parked the subscription, and a start(..) since then
+            // may have cleared stopped or run a newer launch. Either way the subscription is no longer this launch's,
+            // and handing it over would hand over a replay the stop cut short.
+            if (!isCurrent(state, launched)) {
                 return;
             }
             if (stopped) {
-                // Parked. The takeWhile truncated the replay, so this completion is not a finished replay; start(..)
-                // relaunches from the original start position.
+                // The takeWhile truncated the replay, so this completion is not a finished replay. start(true) or a
+                // resume runs it again from the original start position.
                 state.replaying.set(null);
+                state.parked.set(true);
                 return;
             }
             Subscription delegated = delegate.subscribe(subscriptionId, liveSubscriptionFilter, liveStartAt, liveAction);
@@ -314,11 +331,12 @@ final class NamedCatchupSupport {
             // The per-state monitor closes the race with handOver: either the handover completed first (the wrapped
             // model's stop() below covers the live subscription), or the replay is disposed before it can hand over.
             synchronized (state) {
-                if (!state.handedOver.get()) {
+                if (!state.handedOver.get() && !state.cancelled.get()) {
                     Disposable replaying = state.replaying.getAndSet(null);
                     if (replaying != null) {
                         replaying.dispose();
                     }
+                    state.parked.set(true);
                 }
             }
         });
@@ -330,28 +348,55 @@ final class NamedCatchupSupport {
             return;
         }
         if (resumeSubscriptionsAutomatically) {
-            catchingUp.values().forEach(state -> state.pendingPause.set(false));
+            // Before the wrapped model starts, since a replay can hand over while it starts and would apply the pause
+            catchingUp.values().forEach(state -> {
+                synchronized (state) {
+                    state.pendingPause.set(false);
+                }
+            });
         }
-        stopped = false;
+        // Cleared only once the wrapped model has started, so a start that throws keeps this model stopped and a
+        // parked replay waits for the next start or resume.
         named.start(resumeSubscriptionsAutomatically);
-        // Relaunch the parked replays: subscriptions created while stopped, and replays a stop() aborted.
+        stopped = false;
+        if (!resumeSubscriptionsAutomatically) {
+            return;
+        }
         catchingUp.values().forEach(state -> {
             synchronized (state) {
-                if (!state.handedOver.get() && !state.cancelled.get() && state.replaying.get() == null) {
-                    state.launcher.run();
-                }
+                runIfParked(state);
             }
         });
     }
 
+    boolean isStopped() {
+        return stopped;
+    }
+
+    // Whether launched is the replay that owns the subscription right now. A stop() parks the subscription and a
+    // start(true) or resume runs a new launch, so an older launch still running past its last check is not current.
+    private static boolean isCurrent(CatchupState state, Object launched) {
+        return !state.cancelled.get() && !state.parked.get() && state.episode.get() == launched;
+    }
+
+    // Called with the state monitor held. Runs the replay of a subscription that stop() interrupted or that was made
+    // while the model was stopped, from its original start position.
+    private void runIfParked(CatchupState state) {
+        if (!stopped && !state.handedOver.get() && !state.cancelled.get() && state.parked.getAndSet(false)) {
+            state.launcher.run();
+        }
+    }
+
+    // Not running until start(..) has cleared stopped, even when the wrapped model already runs, since a subscribe
+    // before that is paused
     boolean isRunning() {
-        return managesNamedSubscriptions() && named.isRunning();
+        return managesNamedSubscriptions() && !stopped && named.isRunning();
     }
 
     boolean isRunning(String subscriptionId) {
         CatchupState state = catchingUp.get(subscriptionId);
         if (state != null) {
-            return !stopped && !state.pendingPause.get() && !state.cancelled.get();
+            return !stopped && !state.parked.get() && !state.pendingPause.get() && !state.cancelled.get();
         }
         return managesNamedSubscriptions() && named.isRunning(subscriptionId);
     }
@@ -359,7 +404,7 @@ final class NamedCatchupSupport {
     boolean isPaused(String subscriptionId) {
         CatchupState state = catchingUp.get(subscriptionId);
         if (state != null) {
-            return state.pendingPause.get() && !state.cancelled.get();
+            return (state.parked.get() || state.pendingPause.get()) && !state.cancelled.get();
         }
         return managesNamedSubscriptions() && named.isPaused(subscriptionId);
     }
@@ -369,7 +414,7 @@ final class NamedCatchupSupport {
         if (state != null) {
             synchronized (state) {
                 if (!state.handedOver.get()) {
-                    if (state.pendingPause.getAndSet(true)) {
+                    if (state.parked.get() || state.pendingPause.getAndSet(true)) {
                         throw new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " is already paused.");
                     }
                     return;
@@ -383,13 +428,21 @@ final class NamedCatchupSupport {
     }
 
     Subscription resumeSubscription(String subscriptionId) {
+        // Resuming one subscription starts a stopped model without resuming the others, as the life-cycle contract
+        // says, whether its replay is parked or it has handed over. A start that throws resumes nothing.
+        if (stopped && isPaused(subscriptionId)) {
+            start(false);
+        }
         CatchupState state = catchingUp.get(subscriptionId);
         if (state != null) {
             synchronized (state) {
                 if (!state.handedOver.get()) {
-                    if (!state.pendingPause.getAndSet(false)) {
+                    boolean pausedDuringReplay = state.pendingPause.getAndSet(false);
+                    if (!state.parked.get() && !pausedDuringReplay) {
                         throw new SubscriptionAlreadyRunningException(subscriptionId);
                     }
+                    // A stop() since the start above keeps it parked, as a stop right after this resume would
+                    runIfParked(state);
                     return new NamedCatchupSubscription(subscriptionId, state.started.asMono());
                 }
             }
@@ -455,14 +508,17 @@ final class NamedCatchupSupport {
     private static final class CatchupState {
         final AtomicReference<@Nullable Disposable> replaying = new AtomicReference<>();
         final AtomicBoolean pendingPause = new AtomicBoolean(false);
+        // Set while the replay waits for start(true) or a resume, because stop() interrupted it or it was made while
+        // the model was stopped. Such a subscription is paused.
+        final AtomicBoolean parked = new AtomicBoolean(false);
         final AtomicBoolean cancelled = new AtomicBoolean(false);
         final AtomicBoolean handedOver = new AtomicBoolean(false);
         final Sinks.Empty<Void> started = Sinks.empty();
-        // The episode each launch announces. A stop parks this state and a start runs its launcher again, reading
+        // The episode each launch announces. A stop parks this state and a resume runs its launcher again, reading
         // the history from the beginning, which is a different catch-up and gets a value of its own.
         final AtomicReference<Object> episode = new AtomicReference<>(new Object());
         // The replay, relaunchable: assigned once in subscribeWithCatchup before the state is published, run under
-        // the state monitor by the initial subscribe and by start(..) for parked subscriptions.
+        // the state monitor by the initial subscribe, and by start(true) or a resume for a parked subscription.
         volatile Runnable launcher = () -> {
         };
     }
