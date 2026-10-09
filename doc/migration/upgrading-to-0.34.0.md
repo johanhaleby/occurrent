@@ -2370,9 +2370,11 @@ A live start that MongoDB no longer has in its oplog makes the catch-up replay a
 first started from, with a new live start, and log a warning that names the subscription. The catch-up checks the
 stored live start when it resumes, after a long stop for example, and checks the live start again once the replay is
 done, before it goes live, since a long replay can outlast the oplog too. Replaying again delivers everything between
-that first position and where the earlier replay had got to a second time, and a replay that outlasts the oplog every
-time replays again every time. Size the oplog for the longest rebuild, and for the longest time a catch-up can be
-stopped in the middle of a replay, if you want to avoid it.
+that first position and where the earlier replay had got to a second time. When the live start is gone after 4
+replays in a row, the catch-up stops replaying and fails with an `IllegalStateException` that names the subscription
+and tells you to size the oplog. On the blocking stack `waitUntilStarted()` throws it, and on the reactor stack the
+subscription fails with it. Nothing reaches live delivery then. Size the oplog for the longest rebuild, and for the
+longest time a catch-up can be stopped in the middle of a replay, if you want to avoid both.
 
 On the reactor stack the checkpoint stored during the replay stays stored after the catch-up reaches live delivery,
 until `ReactorDurableSubscriptionModel` stores the position of a live event or saves the subscription's quiet
