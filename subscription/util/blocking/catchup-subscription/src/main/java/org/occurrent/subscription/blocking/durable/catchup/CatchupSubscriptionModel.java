@@ -32,6 +32,7 @@ import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.function.Consumer;
@@ -295,11 +296,18 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
 
     // resumeReplay() for the same reason stop() uses stopReplay(). The parked replays run again only once the live
     // delegate is started, so each hands over to a delegate that runs, and only when resuming automatically, as the
-    // delegate itself resumes only then.
+    // delegate itself resumes only then. When the delegate's start throws, a child that was stopped stays stopped, or
+    // the next resume would skip the start and hand its replay over to a delegate that is not running.
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
+        List<AbstractCatchupSubscriptionModel> stoppedModels = presentCatchupModels().filter(model -> model.stopped).toList();
         presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::resumeReplay);
-        getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
+        try {
+            getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
+        } catch (Throwable e) {
+            stoppedModels.forEach(AbstractCatchupSubscriptionModel::stopReplay);
+            throw e;
+        }
         if (resumeSubscriptionsAutomatically) {
             presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::relaunchParkedReplays);
         }
@@ -351,17 +359,18 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     }
 
     /**
-     * Runs a replay a stop parked, or that was subscribed while this model was stopped, starting this model first if
-     * it is stopped, as resuming a subscription starts the live delegate. Any other subscription goes to the live
-     * delegate.
+     * Runs a replay a stop parked, or that was subscribed while this model was stopped, and passes any other
+     * subscription to the live delegate. When this model is stopped and the subscription is paused, this first starts
+     * the model without resuming anything else, as resuming a subscription starts the live delegate, so a subscription
+     * made afterwards replays at once, whichever mode it uses.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
+        if (presentCatchupModels().anyMatch(model -> model.stopped) && isPaused(subscriptionId)) {
+            start(false);
+        }
         AbstractCatchupSubscriptionModel parkedIn = presentCatchupModels().filter(model -> model.hasParkedReplay(subscriptionId)).findFirst().orElse(null);
         if (parkedIn != null) {
-            if (presentCatchupModels().anyMatch(model -> model.stopped)) {
-                start(false);
-            }
             Subscription relaunched = parkedIn.relaunchParkedReplay(subscriptionId);
             if (relaunched != null) {
                 return relaunched;

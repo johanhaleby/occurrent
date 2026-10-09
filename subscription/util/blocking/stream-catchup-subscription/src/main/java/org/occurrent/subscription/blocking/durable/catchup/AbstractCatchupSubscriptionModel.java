@@ -170,11 +170,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * Starts the live delegate and, with {@code resumeSubscriptionsAutomatically}, runs every parked replay again, as
      * the delegate resumes what it holds paused. Without it a parked replay waits for {@link #resumeSubscription(String)}.
+     * When starting the live delegate throws, a model that was stopped stays stopped and runs no replay.
      */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
+        boolean wasStopped = stopped;
         resumeReplay();
-        getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
+        try {
+            getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
+        } catch (Throwable e) {
+            // Otherwise the next resume would skip the start and hand its replay over to a delegate that is not running
+            if (wasStopped) {
+                stopReplay();
+            }
+            throw e;
+        }
         if (resumeSubscriptionsAutomatically) {
             relaunchParkedReplays();
         }
@@ -225,16 +235,17 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * Runs a parked replay again, and starts this model first if it is stopped, as resuming a subscription starts the
-     * live delegate. Any other subscription goes to the live delegate.
+     * Runs a parked replay again and passes any other subscription to the live delegate. When this model is stopped and
+     * the subscription is paused, this first starts the model without resuming anything else, as resuming a
+     * subscription starts the live delegate, so a subscription made afterwards replays at once.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
+        if (stopped && isPaused(subscriptionId)) {
+            start(false);
+        }
         pauseRequestedDuringCatchup.remove(subscriptionId);
         if (hasParkedReplay(subscriptionId)) {
-            if (stopped) {
-                start(false);
-            }
             Subscription relaunched = relaunchParkedReplay(subscriptionId);
             if (relaunched != null) {
                 return relaunched;
