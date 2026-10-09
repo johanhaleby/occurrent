@@ -191,8 +191,10 @@ public final class CatchupProjectionFeed<E> {
      * catch-up are buffered and delivered after the replay, and their {@link Mono} completes only then.
      * <p>
      * It errors with an {@link IllegalStateException} instead when the event was not folded, because the catch-up was
-     * stopped before the feed went live, the feed is stopped, the feed is failing or has failed, or the live buffer is
-     * full. The listener must not acknowledge it, and the broker delivers it again.
+     * stopped before the feed went live, {@link #stopCatchUp()} was called while the feed had not gone live and no
+     * catch-up ran, the event was fed after either of those stops and before the next {@link #catchUp()}, the feed is
+     * failing or has failed, or the live buffer is full. The listener must not acknowledge it, and the broker delivers
+     * it again.
      * <p>
      * Called from inside this feed's fold, it completes once the event is queued instead, since this feed folds one
      * event at a time and the event cannot be folded before that fold returns. The fold's call is recognized when the
@@ -399,12 +401,18 @@ public final class CatchupProjectionFeed<E> {
      * delivers what it held while the replay ran and goes on delivering, since those events were accepted by a feed
      * that was already live.
      * <p>
+     * A feed with no catch-up running that has not gone live stops the same way, so the {@link Mono}
+     * {@link #accept(Object)} returned for an event fed before a catch-up that a shutting-down application never starts
+     * errors rather than waiting for it. A catch-up counts as running from the {@link #catchUp()} call until the feed
+     * goes live, the catch-up is stopped or it fails.
+     * <p>
      * A view that buffers during a replay discards that buffer on a stop, so after a {@link #goLive()} the live copy
      * of an event the stopped replay delivered is delivered again rather than skipped as a duplicate. A view that
      * wrote the event through receives it twice, which at-least-once delivery allows.
      */
     public void stopCatchUp() {
         stops.incrementAndGet();
+        handover.stopIfNotCatchingUp();
     }
 
     // Package-private: lets DomainEventFeed check the id it was given and name the projection it already has.

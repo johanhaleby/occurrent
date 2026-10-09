@@ -366,6 +366,13 @@ public final class ReactiveHandover<T, K> {
     // falsified by a test while the other is in place, and the pair is what keeps a later change to one of them
     // from quietly ending the drain early.
     private volatile boolean stopped = false;
+    // Held to change the field below, and to write the stopped flag where a catch-up starts and where
+    // stopIfNotCatchingUp() sets it, so that stop either comes before the catch-up starts or finds it running and lets
+    // it answer the payloads. Every other write of stopped comes from a catch-up while it is counted here, so none of
+    // them can interleave with that stop.
+    private final Object catchUpsGuard = new Object();
+    // Catch-ups from their catchUp(Source) call until they go live, are stopped or fail.
+    private int catchUpsInProgress = 0;
     // Set once, right before the buffered live payloads are drained on a successful catch-up, and never cleared
     // afterwards, mirroring BlockingHandover's live field. acceptIfLive(..) reads this to refuse a payload outright,
     // without ever touching liveSink, rather than buffering it the way acceptReportingDelivery(..) does.
@@ -411,7 +418,8 @@ public final class ReactiveHandover<T, K> {
      * <p>
      * Errors rather than completing whenever the payload was not folded, since the caller acknowledges on completion
      * and completing would acknowledge a payload nothing handled. That covers a replay stopped before the handover
-     * went live, which errors every payload it held, a payload fed while this handover is stopped, and a failed
+     * went live, which errors every payload it held, a {@link #stopIfNotCatchingUp()} that stopped the handover, which
+     * errors every payload waiting for a catch-up, a payload fed while this handover is stopped, and a failed
      * catch-up, which refuses every payload from then on. Recovery is the caller's to choose, not this engine's
      * (ADR 104), and for a broker listener it means not acknowledging, so the broker delivers the payload again.
      * <p>
@@ -767,6 +775,45 @@ public final class ReactiveHandover<T, K> {
     }
 
     /**
+     * Stop a handover that has not gone live, has no {@link #catchUp(Source)} running and is not failing, as a replay
+     * stopped before going live does. Every payload waiting for a catch-up is answered as not applied, so
+     * {@link #accept(Object)} errors and {@link #acceptReportingDelivery(Object)} completes {@code false} for it, and so
+     * is every payload fed after the stop, until the next {@link #catchUp(Source)}. Without this, a payload fed before
+     * any catch-up started would wait for one that a shutting-down application never runs.
+     * <p>
+     * A catch-up counts as running from the {@link #catchUp(Source)} call until it goes live, is stopped or fails, also
+     * while it waits for another replay to end. Does nothing while one runs, since that catch-up answers the waiting
+     * payloads itself. It delivers them once it goes live, answers them as not applied when its replay is stopped
+     * through {@link Source#keepReplaying()}, and errors them with its failure when it fails. Does nothing to a live
+     * handover either, or to one that is failing, which answers them with its failure.
+     */
+    public void stopIfNotCatchingUp() {
+        List<LiveAck> dropped;
+        synchronized (catchUpsGuard) {
+            if (live || catchUpsInProgress > 0 || failureStarted.get() != null) {
+                return;
+            }
+            stopped = true;
+            // Taken while catchUpsGuard is held, so a catch-up starting right after this stop cannot have its own
+            // payloads taken here. No drain is registered while the handover is not live and nothing catches up or
+            // fails, so this tells no source anything.
+            dropped = dropPendingLiveAcks();
+        }
+        // Answered after catchUpsGuard is released, since an answer runs the caller's own code.
+        dropped.forEach(ack -> ack.sink().success(Outcome.STOPPED));
+    }
+
+    // Gives the count back once per catch-up, whichever way it ends.
+    private void catchUpEnded(AtomicBoolean counted) {
+        if (!counted.compareAndSet(true, false)) {
+            return;
+        }
+        synchronized (catchUpsGuard) {
+            catchUpsInProgress--;
+        }
+    }
+
+    /**
      * Run the one-time catch-up: replay the source's history, record the completion marker, then start delivering the
      * live feed. The returned {@link Mono} completes when the replay and marker are done (see the class javadoc for
      * how that relates to the buffered live payloads), emitting {@code true} when the catch-up finished and
@@ -819,9 +866,6 @@ public final class ReactiveHandover<T, K> {
         if (current != null && failedForGoodBefore == null) {
             return Mono.error(refusal(current.cause()));
         }
-        // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying again
-        // rather than only by building a new one.
-        stopped = false;
         Sinks.One<Boolean> catchupDone = Sinks.one();
 
         // Evaluate the marker once and reuse it, so the replay and the "record marker" step agree, and the marker is
@@ -954,6 +998,16 @@ public final class ReactiveHandover<T, K> {
             }));
         });
 
+        // Counted from here until it goes live, is stopped or fails, so stopIfNotCatchingUp() lets this catch-up
+        // answer the payloads waiting now. Taken right before the pipeline is subscribed, since nothing after this
+        // point throws before that subscription, and every way that pipeline ends gives the count back.
+        AtomicBoolean counted = new AtomicBoolean(true);
+        synchronized (catchUpsGuard) {
+            catchUpsInProgress++;
+            // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying
+            // again rather than only by building a new one.
+            stopped = false;
+        }
         replayFolded
                 // Before the marker, before the catch-up signal and before the drain, on every path into it,
                 // including the already-caught-up one that skipped the replay entirely. Ahead of the signal
@@ -977,6 +1031,9 @@ public final class ReactiveHandover<T, K> {
                     // flips its own live field. A payload acceptIfLive(..) sees after this point is treated as live
                     // even while whatever buffered ahead of it during the replay is still being delivered.
                     live = true;
+                    // After live is set, so a stop that finds no catch-up running finds the handover live instead,
+                    // and lets this drain deliver the payloads it is about to deliver.
+                    catchUpEnded(counted);
                     latestReplayGoneLive.accumulateAndGet(replayNumber.get(), Math::max);
                     // Held here until the marker is written, not from the end of the replay, so a payload a handover
                     // that was already live held back is never delivered and acknowledged while a phase that can still
@@ -1035,6 +1092,7 @@ public final class ReactiveHandover<T, K> {
                         if (!wasLive) {
                             dropPendingLiveAcks().forEach(dropped -> dropped.sink().success(Outcome.STOPPED));
                         }
+                        catchUpEnded(counted);
                         resumeLiveDelivery(pause);
                         releaseReplayTurn(holdsReplayTurn);
                         // Emitted last, so a caller that reacts to the stop by calling goLive() finds the payloads
@@ -1047,8 +1105,14 @@ public final class ReactiveHandover<T, K> {
                         // has already dealt with.
                         return;
                     }
-                    failed(error, source, catchupDone, replayOpen, pause, myDrain, holdsReplayTurn, deliversLive,
-                            refusedForAnotherFailure, markerMayBeWritten);
+                    try {
+                        failed(error, source, catchupDone, replayOpen, pause, myDrain, holdsReplayTurn, deliversLive,
+                                refusedForAnotherFailure, markerMayBeWritten);
+                    } finally {
+                        // After failed(..) has marked this handover failing, so a stop that finds no catch-up running
+                        // lets that failure answer the payloads.
+                        catchUpEnded(counted);
+                    }
                 });
 
         // A call from a fold or a Source callback of this handover answers true without waiting, since the replay or

@@ -263,6 +263,42 @@ class CatchupProjectionFeedTest {
         }
     }
 
+    @Test
+    void stopping_a_feed_whose_catch_up_never_started_errors_a_waiting_accept_and_every_accept_after_it() throws Exception {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                (Counted e) -> Mono.fromRunnable(() -> folded.add(e.eventId())),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        CompletableFuture<Void> accepted = feed.accept(new Counted("live")).toFuture();
+
+        feed.stopCatchUp();
+
+        assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what accept(..) errored with once the feed stopped")
+                .cause()
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
+        CompletableFuture<Void> acceptedAfterTheStop = feed.accept(new Counted("live-after-stop")).toFuture();
+        assertThatThrownBy(() -> acceptedAfterTheStop.get(5, TimeUnit.SECONDS)).as("what accept(..) errored with after the stop")
+                .cause()
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
+        assertThat(folded).isEmpty();
+    }
+
+    @Test
+    void a_catch_up_after_a_stop_before_any_catch_up_takes_the_feed_live() {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                (Counted e) -> Mono.fromRunnable(() -> folded.add(e.eventId())),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        feed.stopCatchUp();
+
+        feed.catchUp().block(ofSeconds(5));
+        feed.accept(new Counted("live")).block(ofSeconds(5));
+
+        assertThat(folded).containsExactly("1", "live");
+    }
+
     // goLive() completing while catchUp() still replayed left the feed refusing live events after the caller was told
     // it is live.
     @Test

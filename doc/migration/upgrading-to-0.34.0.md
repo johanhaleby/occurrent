@@ -43,7 +43,7 @@ Then a projection feed's `accept(..)` no longer reports an event it did not appl
 stack it now waits during a catch-up until the event is applied and throws when it was not, so a call on the same
 thread that later starts the catch-up waits until another thread runs the catch-up, takes the feed live, calls
 `stopCatchUp()` or interrupts it. On the reactor stack its `Mono` now errors for an event fed while the feed is
-stopped. Read
+stopped, and for one fed before a `stopCatchUp()` on a feed no catch-up has started on. Read
 [section 12](#12-a-projection-feeds-accept-waits-until-the-event-is-applied-and-fails-when-it-is-not).
 Then feeding a push model's `accept(..)` is supported only from the in-memory event store's write path, where
 0.33.0 also named a broker listener, a Spring application event and an HTTP endpoint. Read
@@ -1093,8 +1093,8 @@ runtime behavior, not a call site a rewrite could search for.
 ## 12. A projection feed's `accept(..)` waits until the event is applied, and fails when it is not
 
 This covers `CatchupProjectionFeed.accept(..)` and `DomainEventFeed.accept(..)` on both stacks, fixed for
-[#1135](https://github.com/johanhaleby/occurrent/issues/1135). The reactor stack changes in one case only, covered
-after the blocking cases. In 0.33.0 an event fed before the blocking feed went live was
+[#1135](https://github.com/johanhaleby/occurrent/issues/1135). The reactor stack changes only where the feed is
+stopped, covered after the blocking cases. In 0.33.0 an event fed before the blocking feed went live was
 put in a buffer and `accept(..)` returned straight away. A listener acknowledges the message once `accept(..)`
 returns, so the broker discarded an event that was only held in memory, and a stop or a crash before the catch-up
 finished lost it.
@@ -1143,8 +1143,13 @@ than `consumer_timeout`, 30 minutes by default, and delivers the message again. 
 On the reactor stack, `CatchupProjectionFeed.accept(..)` and `DomainEventFeed.accept(..)` already returned a `Mono`
 that completes once the event is applied. That `Mono` now errors with an `IllegalStateException` for an event fed
 while the feed is stopped, after a catch-up was stopped before the feed went live and before the next one starts.
-0.33.0 completed it without applying the event, so the listener acknowledged an event nothing had applied. Do not
-acknowledge the message when the `Mono` errors.
+0.33.0 completed it without applying the event, so the listener acknowledged an event nothing had applied.
+
+A `stopCatchUp()` on a feed that has not gone live and has no catch-up running now stops the feed the same way, fixed
+for [#1209](https://github.com/johanhaleby/occurrent/issues/1209). The `Mono` of an event fed before that stop, or
+after it until the next catch-up starts, errors too, where 0.33.0 kept it waiting for a catch-up that a
+shutting-down application never starts. A catch-up counts as running from the `catchUp()` call until the feed goes
+live, the catch-up is stopped or it fails. Do not acknowledge the message when the `Mono` errors.
 
 `DomainEventFeed.acceptCloudEvent(..)`, which the Kafka and RabbitMQ bridges call, is unchanged.
 

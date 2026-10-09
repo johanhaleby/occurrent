@@ -408,7 +408,8 @@ public final class DomainEventFeed<E> {
      * a store that is closing with it. The replay notices at its next event and unwinds without recording the
      * completion marker, so the next start replays the whole history again. The {@link Mono} {@link #accept(Object)}
      * returned for an event waiting on a replay that started before the feed went live errors rather than completing,
-     * so its listener does not acknowledge the event. One waiting on a replay started after {@link #goLive(String)}
+     * so its listener does not acknowledge the event, and so does one waiting on a catch-up that has not started yet.
+     * One waiting on a replay started after {@link #goLive(String)}
      * completes once the event is folded, since the feed still applies the events that arrived while that replay
      * ran.
      * <p>
