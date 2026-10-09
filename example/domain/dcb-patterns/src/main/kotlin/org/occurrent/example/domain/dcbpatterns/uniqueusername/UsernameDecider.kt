@@ -26,15 +26,25 @@ import java.util.*
 
 /**
  * Pattern: global uniqueness with a retention period. A username can only be held by one account at a time, and once
- * released it stays reserved for [UsernamePolicy.RETENTION] after the account closes, so nobody can immediately grab a
- * name someone else just gave up.
+ * released it stays reserved for [UsernamePolicy.RETENTION], so nobody can immediately grab a name someone else just
+ * gave up. A username is released when its account closes or when the account changes to another username.
  * <p>
- * The DCB boundary is a single tag value, the username itself: [criteria] reads only the events that ever mentioned
- * that exact username, which is enough to know whether it is free. [UsernameChanged] carries both the old and the new
- * name and is tagged with both (see [tags]), so a rename shows up whichever of the two names you query.
+ * Every event is tagged with the username it mentions and with the account it belongs to (see [tags]).
+ * [UsernameChanged] carries both the old and the new name and is tagged with both, so a rename shows up whichever of
+ * the two names you query.
  * <p>
- * Time-in-payload, now-in-command: [AccountClosed.closedAt] and [RegisterAccount.now] are both plain [Instant]
- * fields on the domain event/command, never read from CloudEvent metadata. The decider's [evolve]/[decide] only ever
+ * Closing an account and changing its username read only the username tags (see [criteria]). Every event that changes
+ * which account holds a username is tagged with that username, so those events alone tell who holds it, and only that
+ * account may close it or rename it. Adding the account tag to these reads would change no decision.
+ * <p>
+ * Registering reads the username tag and the account tag as two alternatives. The username tag tells whether the name
+ * is free, and the account tag tells whether this account has registered before. An account registers once, so it
+ * holds at most one username, and a closed account stays closed rather than coming back under a new name. The append
+ * condition covers both tags, so registering one account under two usernames at the same time conflicts the same way
+ * two accounts registering one username does.
+ * <p>
+ * Time-in-payload, now-in-command: [AccountClosed.closedAt], [UsernameChanged.changedAt] and [RegisterAccount.now] are
+ * plain [Instant] fields on the domain event/command, never read from CloudEvent metadata. The decider's [evolve]/[decide] only ever
  * see domain payloads, so the same decision is reproducible from the events alone, independent of when they happen to
  * be replayed.
  */
@@ -47,22 +57,23 @@ val usernameDcbDecider: DcbDecider<UsernameCommand, UsernameState, UsernameEvent
 )
 
 object UsernamePolicy {
-    /** How long a username stays reserved after the account holding it closes. */
+    /** How long a username stays reserved after its account closes or changes to another username. */
     val RETENTION: Duration = Duration.ofDays(30)
 }
 
 private fun usernameTag(username: String): Tag = Tag.of("username", username)
+private fun accountTag(accountId: UUID): Tag = Tag.of("account", accountId.toString())
 
 private fun criteria(command: UsernameCommand): DcbCriteria = when (command) {
-    is UsernameCommand.RegisterAccount -> DcbCriteria.tags(usernameTag(command.username))
+    is UsernameCommand.RegisterAccount -> DcbCriteria.tagsAnyOf(usernameTag(command.username), accountTag(command.accountId))
     is UsernameCommand.CloseAccount -> DcbCriteria.tags(usernameTag(command.username))
     is UsernameCommand.ChangeUsername -> DcbCriteria.tagsAnyOf(usernameTag(command.oldUsername), usernameTag(command.newUsername))
 }
 
 private fun tags(event: UsernameEvent): Set<Tag> = when (event) {
-    is AccountRegistered -> setOf(usernameTag(event.username))
-    is AccountClosed -> setOf(usernameTag(event.username))
-    is UsernameChanged -> setOf(usernameTag(event.oldUsername), usernameTag(event.newUsername))
+    is AccountRegistered -> setOf(usernameTag(event.username), accountTag(event.accountId))
+    is AccountClosed -> setOf(usernameTag(event.username), accountTag(event.accountId))
+    is UsernameChanged -> setOf(usernameTag(event.oldUsername), usernameTag(event.newUsername), accountTag(event.accountId))
 }
 
 sealed interface UsernameCommand {
@@ -78,56 +89,66 @@ sealed interface UsernameEvent {
 
 data class AccountRegistered(override val eventId: UUID, override val occurredAt: Instant, val accountId: UUID, val username: String) : UsernameEvent
 data class AccountClosed(override val eventId: UUID, override val occurredAt: Instant, val accountId: UUID, val username: String, val closedAt: Instant) : UsernameEvent
-data class UsernameChanged(override val eventId: UUID, override val occurredAt: Instant, val accountId: UUID, val oldUsername: String, val newUsername: String) : UsernameEvent
+data class UsernameChanged(override val eventId: UUID, override val occurredAt: Instant, val accountId: UUID, val oldUsername: String, val newUsername: String, val changedAt: Instant) : UsernameEvent
 
 /**
- * Because [criteria] scopes the read to one username's tag, the sets below only ever contain that single value. The
- * shape is a map/set anyway (like [org.occurrent.example.domain.courseenrollment.features.enrollment.model.EnrollmentState])
- * because [evolve] doesn't know which username [decide] is asking about.
+ * The shape is maps and a set (like [org.occurrent.example.domain.courseenrollment.features.enrollment.model.EnrollmentState])
+ * because [evolve] doesn't know which username or account [decide] is asking about. Only the entries [decide] looks at
+ * are complete. Those are the entries for the command's usernames, and for a registration also the entry for its
+ * account. A registration reads the account's events about usernames it held before without other accounts' events
+ * about those names, and a close or a rename never reads the account tag, so every other entry can be partial.
  */
 data class UsernameState(
-    val activeUsernames: Set<String> = emptySet(),
-    val closedAt: Map<String, Instant> = emptyMap()
+    val holders: Map<String, UUID> = emptyMap(),
+    val releasedAt: Map<String, Instant> = emptyMap(),
+    val registeredAccounts: Set<UUID> = emptySet()
 )
 
 private fun decide(command: UsernameCommand, state: UsernameState): List<UsernameEvent> = when (command) {
     is UsernameCommand.RegisterAccount -> {
+        require(command.accountId !in state.registeredAccounts) { "Account ${command.accountId} is already registered" }
         requireAvailable(state, command.username, command.now)
         listOf(AccountRegistered(UUID.randomUUID(), command.now, command.accountId, command.username))
     }
 
     is UsernameCommand.CloseAccount -> {
-        require(command.username in state.activeUsernames) { "Username ${command.username} is not registered" }
+        requireHeldBy(state, command.username, command.accountId)
         listOf(AccountClosed(UUID.randomUUID(), command.closedAt, command.accountId, command.username, command.closedAt))
     }
 
     is UsernameCommand.ChangeUsername -> {
-        require(command.oldUsername in state.activeUsernames) { "Username ${command.oldUsername} is not registered" }
+        requireHeldBy(state, command.oldUsername, command.accountId)
         requireAvailable(state, command.newUsername, command.now)
-        listOf(UsernameChanged(UUID.randomUUID(), command.now, command.accountId, command.oldUsername, command.newUsername))
+        listOf(UsernameChanged(UUID.randomUUID(), command.now, command.accountId, command.oldUsername, command.newUsername, command.now))
     }
 }
 
+private fun requireHeldBy(state: UsernameState, username: String, accountId: UUID) {
+    val holder = requireNotNull(state.holders[username]) { "Username $username is not registered" }
+    require(holder == accountId) { "Username $username is held by another account" }
+}
+
 private fun requireAvailable(state: UsernameState, username: String, now: Instant) {
-    require(username !in state.activeUsernames) { "Username $username is already taken" }
-    val closedAt = state.closedAt[username] ?: return
-    val availableFrom = closedAt.plus(UsernamePolicy.RETENTION)
-    require(!now.isBefore(availableFrom)) { "Username $username is reserved until $availableFrom (closed at $closedAt)" }
+    require(username !in state.holders) { "Username $username is already taken" }
+    val releasedAt = state.releasedAt[username] ?: return
+    val availableFrom = releasedAt.plus(UsernamePolicy.RETENTION)
+    require(!now.isBefore(availableFrom)) { "Username $username is reserved until $availableFrom (released at $releasedAt)" }
 }
 
 private fun evolve(state: UsernameState, event: UsernameEvent): UsernameState = when (event) {
     is AccountRegistered -> state.copy(
-        activeUsernames = state.activeUsernames + event.username,
-        closedAt = state.closedAt - event.username
+        holders = state.holders + (event.username to event.accountId),
+        releasedAt = state.releasedAt - event.username,
+        registeredAccounts = state.registeredAccounts + event.accountId
     )
 
     is AccountClosed -> state.copy(
-        activeUsernames = state.activeUsernames - event.username,
-        closedAt = state.closedAt + (event.username to event.closedAt)
+        holders = state.holders - event.username,
+        releasedAt = state.releasedAt + (event.username to event.closedAt)
     )
 
     is UsernameChanged -> state.copy(
-        activeUsernames = state.activeUsernames - event.oldUsername + event.newUsername,
-        closedAt = state.closedAt - event.oldUsername
+        holders = state.holders - event.oldUsername + (event.newUsername to event.accountId),
+        releasedAt = state.releasedAt - event.newUsername + (event.oldUsername to event.changedAt)
     )
 }
