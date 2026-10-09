@@ -1296,6 +1296,466 @@ class ReactiveHandoverTest {
         }
     }
 
+    @Test
+    void stopping_a_handover_no_catch_up_has_started_errors_a_waiting_accept_and_every_payload_after_it() throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handover(delivered);
+        CompletableFuture<Void> accepted = handover.accept("L1").toFuture();
+
+        handover.stopIfNotCatchingUp();
+
+        assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what accept(..) errored with once the handover stopped")
+                .cause()
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
+        StepVerifier.create(handover.acceptReportingDelivery("L2")).expectNext(false).verifyComplete();
+        StepVerifier.create(handover.accept("L3"))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload")))
+                .verify(Duration.ofSeconds(5));
+        assertThat(handover.refusesPermanently()).isFalse();
+        assertThat(delivered).isEmpty();
+    }
+
+    @Test
+    void a_catch_up_after_a_stop_no_catch_up_preceded_takes_the_handover_live() {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handover(delivered);
+        handover.stopIfNotCatchingUp();
+
+        StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectNext(true).verifyComplete();
+
+        StepVerifier.create(handover.accept("L1")).verifyComplete();
+        assertThat(delivered).containsExactly("R1", "L1");
+    }
+
+    @Test
+    void stopping_a_handover_while_its_catch_up_replays_leaves_a_waiting_accept_to_the_drain() throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        ReactiveHandover<String, String> handover = handoverHoldingItsReplayAt("R1", delivered, replaying, releaseReplay, null);
+        try {
+            CompletableFuture<Boolean> catchUp = handover.catchUp(source(List.of("R1"), false)).toFuture();
+            awaitLatchQuietly(replaying);
+            CompletableFuture<Void> accepted = handover.accept("L1").toFuture();
+
+            handover.stopIfNotCatchingUp();
+            releaseReplay.countDown();
+
+            assertThat(catchUp.get(5, TimeUnit.SECONDS)).isTrue();
+            accepted.get(5, TimeUnit.SECONDS);
+            assertThat(delivered).containsExactly("R1", "L1");
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    // The marker read is still outstanding, so the catch-up has not taken the replay turn yet, and only the count of
+    // running catch-ups tells the stop that one was called.
+    @Test
+    void stopping_a_handover_while_its_catch_up_reads_the_marker_leaves_a_waiting_accept_to_that_catch_up() throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handover(delivered);
+        CompletableFuture<Boolean> markerRead = new CompletableFuture<>();
+        ReactiveHandover.Source<String> source = new ReactiveHandover.Source<>() {
+            @Override
+            public Mono<Boolean> isAlreadyCaughtUp() {
+                return Mono.fromFuture(markerRead);
+            }
+
+            @Override
+            public Flux<String> replay() {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> markCaughtUp() {
+                return Mono.empty();
+            }
+        };
+        CompletableFuture<Boolean> catchUp = handover.catchUp(source).toFuture();
+        CompletableFuture<Void> accepted = handover.accept("L1").toFuture();
+
+        handover.stopIfNotCatchingUp();
+        markerRead.complete(true);
+
+        assertThat(catchUp.get(5, TimeUnit.SECONDS)).isTrue();
+        accepted.get(5, TimeUnit.SECONDS);
+        assertThat(delivered).containsExactly("L1");
+    }
+
+    // The source is asked on the thread that called catchUp(..), before any pipeline exists, and asking it can take
+    // as long as the source likes.
+    @Test
+    void stopping_a_handover_while_its_catch_up_asks_the_source_whether_it_is_caught_up_leaves_a_waiting_accept_to_that_catch_up() throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handover(delivered);
+        CountDownLatch asking = new CountDownLatch(1);
+        CountDownLatch answer = new CountDownLatch(1);
+        ReactiveHandover.Source<String> source = new ReactiveHandover.Source<>() {
+            @Override
+            public Mono<Boolean> isAlreadyCaughtUp() {
+                asking.countDown();
+                awaitLatchQuietly(answer);
+                return Mono.just(true);
+            }
+
+            @Override
+            public Flux<String> replay() {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> markCaughtUp() {
+                return Mono.empty();
+            }
+        };
+        CompletableFuture<Void> accepted = handover.accept("L1").toFuture();
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<CompletableFuture<Boolean>> catchingUp = executor.submit(() -> handover.catchUp(source).toFuture());
+            awaitLatchQuietly(asking);
+
+            handover.stopIfNotCatchingUp();
+            answer.countDown();
+
+            assertThat(catchingUp.get(5, TimeUnit.SECONDS).get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(catchThrowable(() -> accepted.get(5, TimeUnit.SECONDS))).as("what accept(..) failed with").isNull();
+            assertThat(delivered).containsExactly("L1");
+        } finally {
+            answer.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_stop_after_a_catch_up_whose_source_threw_when_asked_whether_it_is_caught_up_errors_a_waiting_accept() {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handover(delivered);
+        ReactiveHandover.Source<String> source = new ReactiveHandover.Source<>() {
+            @Override
+            public Mono<Boolean> isAlreadyCaughtUp() {
+                throw new IllegalStateException("marker unreadable");
+            }
+
+            @Override
+            public Flux<String> replay() {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> markCaughtUp() {
+                return Mono.empty();
+            }
+        };
+        CompletableFuture<Void> accepted = handover.accept("L1").toFuture();
+        assertThatThrownBy(() -> handover.catchUp(source)).hasMessage("marker unreadable");
+
+        handover.stopIfNotCatchingUp();
+
+        assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what accept(..) errored with once the handover stopped")
+                .cause()
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
+        assertThat(delivered).isEmpty();
+    }
+
+    // The catch-up cleared the stop when it was called, and threw before anything could answer a payload fed after it.
+    @Test
+    void a_payload_fed_after_a_stop_and_a_catch_up_whose_source_threw_errors() {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handover(delivered);
+        handover.stopIfNotCatchingUp();
+        ReactiveHandover.Source<String> source = new ReactiveHandover.Source<>() {
+            @Override
+            public Mono<Boolean> isAlreadyCaughtUp() {
+                throw new IllegalStateException("marker unreadable");
+            }
+
+            @Override
+            public Flux<String> replay() {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> markCaughtUp() {
+                return Mono.empty();
+            }
+        };
+        assertThatThrownBy(() -> handover.catchUp(source)).hasMessage("marker unreadable");
+
+        CompletableFuture<Void> accepted = handover.accept("L1").toFuture();
+
+        assertThat(catchThrowable(() -> accepted.get(5, TimeUnit.SECONDS))).as("what accept(..) failed with after the stop")
+                .isInstanceOf(java.util.concurrent.ExecutionException.class)
+                .cause()
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
+        assertThat(delivered).isEmpty();
+    }
+
+    // The stop found the catch-up running and left the waiting payload to it, and the catch-up then threw before
+    // anything could answer that payload.
+    @Test
+    void a_stop_during_a_catch_up_whose_source_then_threw_errors_a_waiting_accept() throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handover(delivered);
+        CountDownLatch asking = new CountDownLatch(1);
+        CountDownLatch answer = new CountDownLatch(1);
+        ReactiveHandover.Source<String> source = new ReactiveHandover.Source<>() {
+            @Override
+            public Mono<Boolean> isAlreadyCaughtUp() {
+                asking.countDown();
+                awaitLatchQuietly(answer);
+                throw new IllegalStateException("marker unreadable");
+            }
+
+            @Override
+            public Flux<String> replay() {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> markCaughtUp() {
+                return Mono.empty();
+            }
+        };
+        CompletableFuture<Void> accepted = handover.accept("L1").toFuture();
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<?> catchingUp = executor.submit(() -> handover.catchUp(source));
+            awaitLatchQuietly(asking);
+
+            handover.stopIfNotCatchingUp();
+            answer.countDown();
+
+            assertThatThrownBy(() -> catchingUp.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+            assertThat(catchThrowable(() -> accepted.get(5, TimeUnit.SECONDS))).as("what accept(..) failed with")
+                    .isInstanceOf(java.util.concurrent.ExecutionException.class)
+                    .cause()
+                    .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                    .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
+            assertThat(delivered).isEmpty();
+        } finally {
+            answer.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    // The stop finds the first catch-up running, and the second one starts after the stop. Both sources throw, the
+    // first one first, so the first finds the second still running and the second finds no stop since it started.
+    @Test
+    void a_stop_between_two_catch_ups_whose_sources_threw_errors_a_waiting_accept() {
+        assertThat(acceptAfterTwoCatchUpsThrewAroundAStop(true)).as("what accept(L1) ended with after a stop and two catch-ups that threw")
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
+    }
+
+    @Test
+    void a_stop_between_two_catch_ups_whose_sources_threw_errors_a_waiting_accept_when_the_later_one_throws_first() {
+        assertThat(acceptAfterTwoCatchUpsThrewAroundAStop(false)).as("what accept(L1) ended with after a stop and two catch-ups that threw")
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
+    }
+
+    // Returns what the Mono of a payload fed before both catch-ups ended with, a TimeoutException when it never ended.
+    private static Throwable acceptAfterTwoCatchUpsThrewAroundAStop(boolean firstThrowsFirst) {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handover(delivered);
+        CountDownLatch askingFirst = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch askingSecond = new CountDownLatch(1);
+        CountDownLatch releaseSecond = new CountDownLatch(1);
+        CompletableFuture<Void> accepted = handover.accept("L1").toFuture();
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<?> first = executor.submit(() -> handover.catchUp(sourceThatThrowsWhenAsked(askingFirst, releaseFirst)));
+            awaitLatchQuietly(askingFirst);
+            handover.stopIfNotCatchingUp();
+            java.util.concurrent.Future<?> second = executor.submit(() -> handover.catchUp(sourceThatThrowsWhenAsked(askingSecond, releaseSecond)));
+            awaitLatchQuietly(askingSecond);
+
+            if (firstThrowsFirst) {
+                releaseFirst.countDown();
+                assertThatThrownBy(() -> first.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+                releaseSecond.countDown();
+                assertThatThrownBy(() -> second.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+            } else {
+                releaseSecond.countDown();
+                assertThatThrownBy(() -> second.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+                releaseFirst.countDown();
+                assertThatThrownBy(() -> first.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+            }
+
+            assertThat(delivered).isEmpty();
+            try {
+                accepted.get(5, TimeUnit.SECONDS);
+                return null;
+            } catch (java.util.concurrent.ExecutionException e) {
+                return e.getCause();
+            } catch (java.util.concurrent.TimeoutException | InterruptedException e) {
+                return e;
+            }
+        } finally {
+            releaseFirst.countDown();
+            releaseSecond.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    private static ReactiveHandover.Source<String> sourceThatThrowsWhenAsked(CountDownLatch asking, CountDownLatch release) {
+        return new ReactiveHandover.Source<>() {
+            @Override
+            public Mono<Boolean> isAlreadyCaughtUp() {
+                asking.countDown();
+                awaitLatchQuietly(release);
+                throw new IllegalStateException("marker unreadable");
+            }
+
+            @Override
+            public Flux<String> replay() {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> markCaughtUp() {
+                return Mono.empty();
+            }
+        };
+    }
+
+    // The refusal of a payload the full buffer has no room for runs its caller's code, here a stop, while another
+    // thread is stopping the handover too.
+    @Test
+    void a_stop_from_the_refusal_of_a_payload_the_buffer_has_no_room_for_does_not_deadlock_with_another_stop() throws Exception {
+        ReactiveHandover<String, String> handover = ReactiveHandover.create(payload -> Mono.empty(), payload -> payload,
+                new CatchupThenLiveOptions(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE, 1), "test payload");
+        handover.accept("L1").subscribe(ignored -> {
+        }, ignored -> {
+        });
+        CountDownLatch refused = new CountDownLatch(1);
+        CountDownLatch refusingDone = new CountDownLatch(1);
+        CountDownLatch stoppingDone = new CountDownLatch(1);
+        Thread stopping = new Thread(() -> {
+            awaitLatchQuietly(refused);
+            handover.stopIfNotCatchingUp();
+            stoppingDone.countDown();
+        }, "stopping");
+        Thread refusing = new Thread(() -> {
+            handover.accept("L2").subscribe(ignored -> {
+            }, error -> {
+                refused.countDown();
+                await().atMost(Duration.ofSeconds(5)).until(() -> stopping.getState() == Thread.State.BLOCKED
+                        || stopping.getState() == Thread.State.TERMINATED);
+                handover.stopIfNotCatchingUp();
+            });
+            refusingDone.countDown();
+        }, "refusing");
+        stopping.setDaemon(true);
+        refusing.setDaemon(true);
+        stopping.start();
+        refusing.start();
+
+        boolean finished = refusingDone.await(5, TimeUnit.SECONDS) && stoppingDone.await(5, TimeUnit.SECONDS);
+
+        assertThat(java.lang.management.ManagementFactory.getThreadMXBean().findDeadlockedThreads()).as("deadlocked threads").isNull();
+        assertThat(finished).as("both threads finished").isTrue();
+    }
+
+    // No catch-up runs, so the stop alone has to answer every payload, including one that joins the waiting payloads
+    // while the stop is answering them.
+    @Test
+    void an_accept_racing_a_stop_with_no_catch_up_errors() throws Exception {
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 2000; round++) {
+                List<String> delivered = new CopyOnWriteArrayList<>();
+                ReactiveHandover<String, String> handover = handover(delivered);
+                CountDownLatch start = new CountDownLatch(1);
+                java.util.concurrent.Future<CompletableFuture<Void>> accepting = executor.submit(() -> {
+                    start.await();
+                    return handover.accept("L1").toFuture();
+                });
+                java.util.concurrent.Future<?> stopping = executor.submit(() -> {
+                    start.await();
+                    handover.stopIfNotCatchingUp();
+                    return null;
+                });
+                start.countDown();
+
+                stopping.get(5, TimeUnit.SECONDS);
+                CompletableFuture<Void> accepted = accepting.get(5, TimeUnit.SECONDS);
+                assertThat(catchThrowable(() -> accepted.get(5, TimeUnit.SECONDS))).as("what accept(..) failed with in round %d", round)
+                        .isInstanceOf(java.util.concurrent.ExecutionException.class)
+                        .cause()
+                        .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                        .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
+                assertThat(delivered).isEmpty();
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void stopping_a_live_handover_leaves_it_delivering() {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handover(delivered);
+        StepVerifier.create(handover.catchUp(source(List.of("R1"), false))).expectNext(true).verifyComplete();
+
+        handover.stopIfNotCatchingUp();
+
+        StepVerifier.create(handover.accept("L1")).verifyComplete();
+        assertThat(delivered).containsExactly("R1", "L1");
+    }
+
+    // Whichever order the three calls run in, the payload's Mono completes once the payload is delivered, or errors
+    // and the payload is never delivered. It never stays pending after both the stop and the catch-up have returned.
+    @Test
+    void an_accept_racing_a_stop_and_a_catch_up_completes_delivered_or_errors_undelivered() throws Exception {
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(3);
+        try {
+            for (int round = 0; round < 500; round++) {
+                List<String> delivered = new CopyOnWriteArrayList<>();
+                ReactiveHandover<String, String> handover = handover(delivered);
+                CountDownLatch start = new CountDownLatch(1);
+                java.util.concurrent.Future<CompletableFuture<Void>> accepting = executor.submit(() -> {
+                    start.await();
+                    return handover.accept("L1").toFuture();
+                });
+                java.util.concurrent.Future<?> stopping = executor.submit(() -> {
+                    start.await();
+                    handover.stopIfNotCatchingUp();
+                    return null;
+                });
+                java.util.concurrent.Future<CompletableFuture<Boolean>> catchingUp = executor.submit(() -> {
+                    start.await();
+                    return handover.catchUp(source(List.of("R1"), false)).toFuture();
+                });
+                start.countDown();
+
+                stopping.get(5, TimeUnit.SECONDS);
+                assertThat(catchingUp.get(5, TimeUnit.SECONDS).get(5, TimeUnit.SECONDS)).as("catch-up in round %d", round).isTrue();
+                CompletableFuture<Void> accepted = accepting.get(5, TimeUnit.SECONDS);
+                Throwable failure = catchThrowable(() -> accepted.get(5, TimeUnit.SECONDS));
+                if (failure == null) {
+                    assertThat(delivered).as("delivered in round %d, where accept(..) completed", round).containsExactly("R1", "L1");
+                } else {
+                    assertThat(failure).as("what accept(..) errored with in round %d", round)
+                            .isInstanceOf(java.util.concurrent.ExecutionException.class)
+                            .cause()
+                            .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                            .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
+                    assertThat(delivered).as("delivered in round %d, where accept(..) errored", round).containsExactly("R1");
+                }
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
     private static ReactiveHandover<String, String> handoverHoldingItsReplayAt(String held, List<String> delivered, CountDownLatch reached,
                                                                                CountDownLatch release, RuntimeException failure) {
         return ReactiveHandover.create(payload -> Mono.fromRunnable(() -> {

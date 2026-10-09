@@ -34,6 +34,7 @@ import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.UnreadableLiveFilterException;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
+import org.occurrent.subscription.internal.HandoverMessages;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -333,6 +334,24 @@ class DomainEventFeedTest {
 
         feed.accept(new Counted("3")).block();
         assertThat(repo.get("counter")).isEqualTo(3);
+    }
+
+    @Test
+    void stopping_a_feed_whose_catch_up_never_started_errors_a_waiting_accept_and_a_later_catch_up_does_not_fold_its_event() {
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1", "2"), countedConverter(), Counted::eventId);
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        CompletableFuture<Void> accepted = feed.accept(new Counted("3")).toFuture();
+
+        feed.stopCatchUp();
+        feed.catchUpAll().block(Duration.ofSeconds(5));
+
+        assertThat(catchThrowable(() -> accepted.get(5, TimeUnit.SECONDS))).as("what accept(..) failed with once the feed stopped")
+                .isInstanceOf(java.util.concurrent.ExecutionException.class)
+                .cause()
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
+        assertThat(repo.get("counter")).isEqualTo(2);
     }
 
     private static void awaitUninterruptibly(CountDownLatch latch) {
