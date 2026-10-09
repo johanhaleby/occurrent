@@ -21,6 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
@@ -292,6 +293,58 @@ class ReactorStreamCatchupSubscriptionModelTest {
         assertThat(received).containsExactly("e1@urn:test", "e1@urn:producer:b");
     }
 
+    @Test
+    @Timeout(30)
+    void a_named_catch_up_whose_token_the_model_loses_during_every_replay_fails_after_four_replays_instead_of_replaying_forever() {
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        wrapped.losesEveryToken = true;
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new ThreeEventReader());
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        try {
+            Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                    StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorSatisfies(throwable -> assertThat(throwable)
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("sub")
+                            .hasMessageContaining("4 replays")
+                            .hasMessageContaining("oplog"))
+                    .verify(Duration.ofSeconds(20));
+            assertThat(received).as("the whole history once for each of the 4 replays")
+                    .containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e1", "e2", "e3", "e1", "e2", "e3");
+            assertThat(wrapped.resumeProbes).as("asked once after each replay").hasSize(4);
+            assertThat(wrapped.subscribeCalls).as("nothing handed over").isEmpty();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    // Three events at positions 1 to 3, and a head that stays at 3
+    private static final class ThreeEventReader implements PositionOrderedReader {
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            long from = range.afterPosition().orElse(0L) + 1;
+            long to = range.upToPosition().orElse(0L);
+            return Flux.fromStream(java.util.stream.LongStream.rangeClosed(from, to).boxed()
+                    .map(position -> io.cloudevents.core.builder.CloudEventBuilder.v1()
+                            .withId("e" + position)
+                            .withSource(java.net.URI.create("urn:test"))
+                            .withType("type")
+                            .build()));
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return Mono.just(3L);
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return true;
+        }
+    }
+
     // One event already there and one more written while the history is being read, so the catch-up has a history to
     // read and something to deliver afterwards. The head grows on the second read, which is what the reconciliation
     // sees.
@@ -408,13 +461,23 @@ class ReactorStreamCatchupSubscriptionModelTest {
     private static final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
         final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
         final List<String> cancelCalls = new CopyOnWriteArrayList<>();
+        final List<Checkpoint> resumeProbes = new CopyOnWriteArrayList<>();
         volatile Runnable whenAskedWhetherRunning = () -> {
         };
         volatile Mono<Void> startedSignal = Mono.empty();
+        volatile boolean losesEveryToken = false;
 
         @Override
         public Mono<Checkpoint> globalCheckpoint() {
             return Mono.just(new StringBasedCheckpoint("token"));
+        }
+
+        @Override
+        public Mono<Boolean> canResumeFrom(Checkpoint checkpoint) {
+            return Mono.fromSupplier(() -> {
+                resumeProbes.add(checkpoint);
+                return !losesEveryToken;
+            });
         }
 
         @Override

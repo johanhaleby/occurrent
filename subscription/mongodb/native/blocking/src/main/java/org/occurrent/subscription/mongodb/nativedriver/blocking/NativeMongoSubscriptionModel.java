@@ -374,6 +374,15 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         return new MongoOperationTimeCheckpoint(currentOperationTime);
     }
 
+    /**
+     * Opens a change stream at {@code checkpoint} and closes it again. Answers {@code false} when MongoDB refuses to
+     * open it because the oplog no longer reaches back to {@code checkpoint}.
+     */
+    @Override
+    public boolean canResumeFrom(Checkpoint checkpoint) {
+        return MongoCommons.canResumeFrom(eventCollection.getNamespace().getCollectionName(), checkpoint, database::runCommand);
+    }
+
 
     // Takes the monitor itself while it pauses, and waits for the running actions without it
     @Override

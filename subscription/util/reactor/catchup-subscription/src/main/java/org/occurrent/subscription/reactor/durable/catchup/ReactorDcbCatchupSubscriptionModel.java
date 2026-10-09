@@ -52,10 +52,20 @@ import static java.util.Objects.requireNonNull;
  * keep it from handing over. The handover seam is deduplicated with a bounded cache keyed by each event's id and
  * source together, so a reconciliation event the live subscription also sees is delivered once.
  * <p>
- * Trade-off: if the replay runs longer than the change stream history (the MongoDB oplog window), the captured token
- * ages out and the live resume fails loudly rather than silently dropping an event. Size the oplog for very large
- * rebuilds. If the model cannot report a resume token at all (for example an empty oplog or a restricted cluster), the
- * subscription fails loudly for the same reason, rather than replaying without a guaranteed handover to live.
+ * Each replayed event has a {@link GlobalCheckpoint} that also holds the live token, the position the replay started
+ * from and the head the replay read. A durable model layered on top stores it, and a resume from it replays up to that
+ * head and goes live from that same token, so a DCB event whose position was reserved below the stored position but
+ * written after the earlier replay read past it is still delivered. When the wrapped model no longer has the history
+ * from the stored token, the replay starts over from the position the first attempt started from and redelivers the
+ * events in between.
+ * <p>
+ * If the model cannot report a resume token at all (for example an empty oplog or a restricted cluster), the
+ * subscription fails rather than replaying without a handover to live. If the replay runs longer than the change
+ * stream history (the MongoDB oplog window), the token leaves that history before the handover. The token is checked
+ * again once the replay is done, and one the wrapped model no longer has the history from is not handed over. The
+ * replay runs again from the position the first attempt started from, with a token read then, and redelivers the
+ * events in between. When the token leaves the history during 4 replays in a row, the subscription fails with an
+ * {@code IllegalStateException} instead of replaying a fifth time, so size the oplog for very large rebuilds.
  * <p>
  * This is the DCB path only. Stream time-based catch-up is not provided here, and this model does not persist
  * subscription positions, so layer a durable model on top (for example {@code ReactorDurableSubscriptionModel}) if
@@ -194,9 +204,9 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             return namedSubscriptions.subscribeStraightToLive(subscriptionId, liveFilter, livePredicate, resolved == null ? startAt : resolved, action);
         }
-        long startPosition = GlobalCheckpoint.positionOf(position.checkpoint);
+        GlobalCheckpoint start = GlobalCheckpoint.parse(position.checkpoint);
         CatchupReader reader = new DcbCatchupReader(dcbEventStore, criteria);
-        return namedSubscriptions.subscribeWithCatchup(subscriptionId, liveFilter, livePredicate, reader, windowSize, handoverCacheSize, startPosition, action);
+        return namedSubscriptions.subscribeWithCatchup(subscriptionId, liveFilter, livePredicate, reader, windowSize, handoverCacheSize, start, action);
     }
 
     // --- The life cycle forwards to the wrapped model, with bookkeeping for subscriptions still replaying.
@@ -271,6 +281,11 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
         return subscriptionModel.globalCheckpointAsOfNow();
     }
 
+    @Override
+    public Mono<Boolean> canResumeFrom(Checkpoint checkpoint) {
+        return subscriptionModel.canResumeFrom(checkpoint);
+    }
+
     /**
      * Subscribe to DCB events matching {@code criteria}. A {@link DcbStartAt} that carries a {@code position} (for
      * example {@link DcbStartAt#beginning()} or {@link DcbStartAt#afterPosition(long)}) replays history from that
@@ -295,11 +310,10 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
                     .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria));
         }
 
-        long startPosition = GlobalCheckpoint.positionOf(position.checkpoint);
         CatchupReader reader = new DcbCatchupReader(dcbEventStore, criteria);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
         Predicate<CloudEvent> livePredicate = cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria);
-        return pipeline.catchup(subscriptionModel, DcbSubscriptionFilter.filter(criteria), livePredicate, startPosition);
+        return pipeline.catchup(subscriptionModel, DcbSubscriptionFilter.filter(criteria), livePredicate, position.checkpoint);
     }
 
     // Reads DCB events in position order through the DcbEventStore, wrapping each with its position so a durable

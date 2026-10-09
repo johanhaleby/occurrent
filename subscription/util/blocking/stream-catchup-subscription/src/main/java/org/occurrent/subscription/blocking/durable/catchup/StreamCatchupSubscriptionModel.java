@@ -159,29 +159,32 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             throw new UnsupportedSubscriptionFilterException(filter.getClass(), "Only StreamSubscriptionFilter or AgnosticSubscriptionFilter is supported!");
         }
         boolean positionMode = streamStoreWritesPosition();
-        final StartAt firstStartAt;
-        if (startAt.isDefault()) {
-            // Resume from a stored position if there is one, otherwise delegate to the parent subscription model.
-            Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
-            if (checkpoint == null) {
-                // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
-                // the handover would, keeping DCB events out.
-                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), startAt, action, holdPaused);
-            } else {
-                // A time position stored by a replay that did not finish resumes that replay, also on a store that
-                // writes position, where it runs through the time-ordered catch-up
-                firstStartAt = StartAt.checkpoint(checkpoint);
-            }
-        } else if (startAt.isDynamic()) {
+        // A dynamic start that resolves to the model default takes the same resume decision as the default itself,
+        // so a replay that stopped in the middle resumes from the position it stored instead of going live
+        StartAt requestedStartAt = startAt;
+        if (startAt.isDynamic()) {
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
                 // Not allowed to start this subscription model, defer to parent
                 return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), startAt, action, holdPaused);
-            } else {
-                firstStartAt = startAtGeneratedByDynamic;
             }
+            requestedStartAt = startAtGeneratedByDynamic;
+        }
+        final StartAt firstStartAt;
+        if (requestedStartAt.isDefault()) {
+            // Resume from a stored position if there is one, otherwise delegate to the parent subscription model.
+            Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
+            warnIfStoredWithoutLiveStart(subscriptionId, checkpoint);
+            if (checkpoint == null) {
+                // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
+                // the handover would, keeping DCB events out.
+                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), requestedStartAt, action, holdPaused);
+            }
+            // A time position stored by a replay that did not finish resumes that replay, also on a store that
+            // writes position, where it runs through the time-ordered catch-up
+            firstStartAt = StartAt.checkpoint(checkpoint);
         } else {
-            firstStartAt = startAt;
+            firstStartAt = requestedStartAt;
         }
 
         StreamStart streamStart = classifyStreamStart(firstStartAt, subscriptionModelContextType);
@@ -419,14 +422,14 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
 
         StartAt nextStartAt = firstStartAt.get(generateSubscriptionModelContext());
         Checkpoint checkpoint = ((StartAtCheckpoint) Objects.requireNonNull(nextStartAt)).checkpoint;
-        long startPosition = GlobalCheckpoint.positionOf(checkpoint);
 
-        // Capture the live resume token before the bulk replay so an event committed during the replay is still
-        // delivered live, like the DCB handover. Fails loudly instead of falling back to "now" when the delegate
-        // reports no resume token (captureLiveResumeCheckpoint).
+        // The live start is read before the bulk replay, or kept from the attempt that stored the checkpoint, so an
+        // event committed during the replay is still delivered live, like the DCB handover. Fails loudly instead of
+        // falling back to "now" when the delegate reports no resume token (captureLiveResumeCheckpoint). A live start
+        // that leaves the change stream history during a long replay is not handed over (replayUntilLiveStartHolds).
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        final Checkpoint globalCheckpoint = captureLiveResumeCheckpoint(delegatedStartAt);
+        PositionReplayStart replayStart = positionReplayStart(subscriptionId, checkpoint, delegatedStartAt);
 
         // Page through the position sequence from the resume position to the head seen at the start, in windows so a
         // large rebuild does not load the whole matched set at once, then reconcile until the head stops advancing.
@@ -445,9 +448,9 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             }
         };
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(streamReader, windowSize);
-        pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId),
-                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup, e -> GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e))),
-                catchupPhaseCache, () -> historyRead(subscriptionId));
+        PositionReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, replayStart, delegatedStartAt,
+                start -> replayPositions(subscriptionId, action, pipeline, streamReader, start, catchupPhaseCache, persistDuringCatchup));
+        final Checkpoint globalCheckpoint = handoverStart.liveFrom();
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
         // time-based path above. An unlocked gap here is observable two ways, a lost cancellation, or a fresh
@@ -493,6 +496,19 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             };
             return startDelegatedSubscription(subscriptionId, filter, subscriptionsWasCancelledOrShutdown, startAtToUse, liveConsumer);
         }
+    }
+
+    // One pass of the position replay from replayStart
+    private void replayPositions(String subscriptionId, Consumer<CloudEvent> action, PositionCatchupPipeline pipeline, PositionCatchupPipeline.Reader reader,
+                                 PositionReplayStart replayStart, BoundedIdCache<CatchupEventKey> catchupPhaseCache, Predicate<CloudEvent> persistDuringCatchup) {
+        // A resume from a stored live start replays only up to the head the attempt that read it read next. Every
+        // event above that head was written after the live start and arrives live, so replaying it too would deliver
+        // it twice.
+        Long storedReplayTo = replayStart.replayTo();
+        long replayTo = storedReplayTo == null ? reader.currentHead() : storedReplayTo;
+        pipeline.replay(replayStart.replayFrom(), replayTo, storedReplayTo == null, () -> shouldKeepReplaying(subscriptionId),
+                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup, e -> replayStart.checkpointAt(OccurrentCloudEventExtension.getPosition(e), replayTo)),
+                catchupPhaseCache, () -> historyRead(subscriptionId));
     }
 
     private Filter deriveFilterToUseDuringCatchupPhase(@Nullable SubscriptionFilter filter, Checkpoint checkpoint) {

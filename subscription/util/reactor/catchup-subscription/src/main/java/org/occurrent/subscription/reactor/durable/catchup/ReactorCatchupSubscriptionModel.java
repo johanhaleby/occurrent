@@ -197,6 +197,13 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
                 : requireNonNull(streamCatchupSubscriptionModel).globalCheckpointAsOfNow();
     }
 
+    @Override
+    public Mono<Boolean> canResumeFrom(Checkpoint checkpoint) {
+        return dcbCatchupSubscriptionModel != null
+                ? dcbCatchupSubscriptionModel.canResumeFrom(checkpoint)
+                : requireNonNull(streamCatchupSubscriptionModel).canResumeFrom(checkpoint);
+    }
+
     /**
      * The named subscription entry point (issues #547 and #550): routes exactly like the cold
      * {@link #subscribe(SubscriptionFilter, StartAt)} and hands the subscription to the routed inner model, which

@@ -847,6 +847,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     @Override
+    public boolean canResumeFrom(Checkpoint checkpoint) {
+        return subscriptionModel.canResumeFrom(checkpoint);
+    }
+
+    @Override
     public CheckpointAwareSubscriptionModel getWrappedSubscriptionModel() {
         return subscriptionModel;
     }

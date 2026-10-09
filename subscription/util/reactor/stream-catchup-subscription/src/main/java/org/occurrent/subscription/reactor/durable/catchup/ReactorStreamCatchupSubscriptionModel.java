@@ -73,10 +73,20 @@ import static java.util.Objects.requireNonNull;
  * subscription see. The history windows fill nothing, so an event a history window read is delivered again if the
  * live subscription also sees it.
  * <p>
- * If the replay runs longer than the change stream history (the MongoDB oplog window), the captured token ages out
- * and the live resume fails loudly rather than silently dropping an event. Size the oplog for very large rebuilds.
+ * Each replayed event has a {@link GlobalCheckpoint} that also holds the live token, the position the replay started
+ * from and the head the replay read. A durable model layered on top stores it, and a resume from it replays up to that
+ * head and goes live from that same token, so an event whose position was reserved below the stored position but
+ * written after the earlier replay read past it is still delivered. When the wrapped model no longer has the history
+ * from the stored token, the replay starts over from the position the first attempt started from and redelivers the
+ * events in between.
+ * <p>
  * If the model reports no resume token at all (for example an empty oplog or a restricted cluster), the subscription
- * fails loudly for the same reason.
+ * fails. If the replay runs longer than the change stream history (the MongoDB oplog window), the token leaves that
+ * history before the handover. The token is checked again once the replay is done, and one the wrapped model no
+ * longer has the history from is not handed over. The replay runs again from the position the first attempt started
+ * from, with a token read then, and redelivers the events in between. When the token leaves the history during 4
+ * replays in a row, the subscription fails with an {@code IllegalStateException} instead of replaying a fifth time,
+ * so size the oplog for very large rebuilds.
  * <p>
  * This model does not persist subscription positions, so layer a durable model on top (for example
  * {@code ReactorDurableSubscriptionModel}) if resume across restarts is needed.
@@ -262,9 +272,9 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             return namedSubscriptions.subscribeStraightToLive(subscriptionId, liveFilter, livePredicate, resolved == null ? startAt : resolved, action);
         }
-        long startPosition = GlobalCheckpoint.positionOf(position.checkpoint);
+        GlobalCheckpoint start = GlobalCheckpoint.parse(position.checkpoint);
         CatchupReader reader = new StreamCatchupReader(positionOrderedReader, scoped);
-        return namedSubscriptions.subscribeWithCatchup(subscriptionId, liveFilter, livePredicate, reader, windowSize, handoverCacheSize, startPosition, action);
+        return namedSubscriptions.subscribeWithCatchup(subscriptionId, liveFilter, livePredicate, reader, windowSize, handoverCacheSize, start, action);
     }
 
     // --- The life cycle forwards to the wrapped model, with bookkeeping for subscriptions still replaying.
@@ -339,6 +349,11 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         return subscriptionModel.globalCheckpointAsOfNow();
     }
 
+    @Override
+    public Mono<Boolean> canResumeFrom(Checkpoint checkpoint) {
+        return subscriptionModel.canResumeFrom(checkpoint);
+    }
+
     /**
      * Subscribe to stream events matching {@code filter}, starting from a {@code position}-based
      * {@link StartAt#checkpoint(Checkpoint)} built from {@link GlobalCheckpoint} (for
@@ -367,11 +382,10 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
                     .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && matchesLocally.test(cloudEvent));
         }
 
-        long startPosition = GlobalCheckpoint.positionOf(position.checkpoint);
         CatchupReader reader = new StreamCatchupReader(positionOrderedReader, filter);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
         Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && matchesLocally.test(cloudEvent);
-        return pipeline.catchup(subscriptionModel, StreamSubscriptionFilter.filter(filter), livePredicate, startPosition);
+        return pipeline.catchup(subscriptionModel, StreamSubscriptionFilter.filter(filter), livePredicate, position.checkpoint);
     }
 
     // ANDs the capability scope onto the caller's filter. When the scope is null (a capability-agnostic subscription)

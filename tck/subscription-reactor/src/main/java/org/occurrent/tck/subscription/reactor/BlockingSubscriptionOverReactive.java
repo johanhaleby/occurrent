@@ -131,6 +131,11 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
             // to the blocking null rather than to an error.
             return checkpointAware.globalCheckpoint().blockOptional(CHECKPOINT_TIMEOUT).orElse(null);
         }
+
+        @Override
+        public boolean canResumeFrom(Checkpoint checkpoint) {
+            return Boolean.TRUE.equals(checkpointAware.canResumeFrom(checkpoint).block(CHECKPOINT_TIMEOUT));
+        }
     }
 
     // Subscribable

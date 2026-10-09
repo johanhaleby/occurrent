@@ -24,6 +24,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
@@ -270,6 +271,65 @@ class MongoCommonsTest {
         StartAt secondOpening = MongoCommons.resolveOpeningPosition(currentStartAt, CONTEXT, () -> new BsonTimestamp(1_800_000_000, 1));
 
         assertThat(checkpointOf(secondOpening)).isEqualTo(checkpointOf(firstOpening));
+    }
+
+    @Test
+    void a_catch_up_position_keeps_its_live_start_out_of_the_fields_a_change_stream_position_is_read_from() {
+        MongoOperationTimeCheckpoint liveStart = new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1));
+        GlobalCheckpoint checkpoint = GlobalCheckpoint.of(42, liveStart, 7, 40);
+
+        Document document = MongoCommons.generateCheckpointDocument("subscription-1", checkpoint);
+
+        assertThat(document.getString(MongoCommons.GENERIC_CHECKPOINT)).isEqualTo("position:42");
+        assertThat(document).doesNotContainKeys(MongoCommons.OPERATION_TIME, MongoCommons.RESUME_TOKEN);
+        assertThat(document.get(MongoCommons.CATCHUP_LIVE_FROM, Document.class)).isEqualTo(new Document(MongoCommons.OPERATION_TIME, liveStart.operationTime));
+        assertThat(document.get(MongoCommons.CATCHUP_REPLAY_ORIGIN)).isEqualTo(7L);
+        assertThat(document.get(MongoCommons.CATCHUP_REPLAY_TO)).isEqualTo(40L);
+        assertThat(MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document))).isEqualTo(checkpoint);
+    }
+
+    @Test
+    void a_catch_up_position_stored_with_a_live_start_but_no_replay_end_is_read_back_as_a_plain_position() {
+        Document document = MongoCommons.generateCheckpointDocument("subscription-1", GlobalCheckpoint.of(42, new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1)), 7, 40));
+        document.remove(MongoCommons.CATCHUP_REPLAY_TO);
+
+        assertThat(MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document))).isEqualTo(new StringBasedCheckpoint("position:42"));
+    }
+
+    @Test
+    void a_catch_up_position_read_back_as_a_string_is_stored_the_same_way() {
+        MongoResumeTokenCheckpoint liveStart = new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("82ABCDEF")));
+        GlobalCheckpoint checkpoint = GlobalCheckpoint.of(42, liveStart, 7, 40);
+
+        Document document = MongoCommons.generateCheckpointDocument("subscription-1", new StringBasedCheckpoint(checkpoint.asString()));
+
+        assertThat(document).doesNotContainKeys(MongoCommons.OPERATION_TIME, MongoCommons.RESUME_TOKEN);
+        Checkpoint readBack = MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document));
+        assertThat(readBack).isEqualTo(checkpoint);
+        assertThat(((GlobalCheckpoint) readBack).liveFrom()).containsInstanceOf(MongoResumeTokenCheckpoint.class);
+    }
+
+    @Test
+    void a_catch_up_position_without_a_live_start_is_stored_as_before() {
+        Document document = MongoCommons.generateCheckpointDocument("subscription-1", GlobalCheckpoint.of(42));
+
+        assertThat(document.getString(MongoCommons.GENERIC_CHECKPOINT)).isEqualTo("position:42");
+        assertThat(document).doesNotContainKeys(MongoCommons.CATCHUP_LIVE_FROM, MongoCommons.CATCHUP_REPLAY_ORIGIN, MongoCommons.CATCHUP_REPLAY_TO);
+        assertThat(MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document))).isEqualTo(new StringBasedCheckpoint("position:42"));
+    }
+
+    @Test
+    void a_change_stream_given_a_catch_up_position_opens_at_the_present_whether_or_not_it_has_a_live_start() {
+        GlobalCheckpoint withLiveStart = GlobalCheckpoint.of(42, new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1)), 7, 40);
+
+        assertThat(MongoCommons.opensAtThePresent(StartAt.checkpoint(GlobalCheckpoint.of(42)))).isTrue();
+        assertThat(MongoCommons.opensAtThePresent(StartAt.checkpoint(withLiveStart))).isTrue();
+        assertThat(MongoCommons.opensAtThePresent(StartAt.checkpoint(new StringBasedCheckpoint(withLiveStart.asString())))).isTrue();
+    }
+
+    // What a storage reads back once MongoDB has the document, where a nested BsonDocument comes back as a Document
+    private static Document asStored(Document document) {
+        return Document.parse(document.toJson());
     }
 
     private static Checkpoint checkpointOf(StartAt startAt) {

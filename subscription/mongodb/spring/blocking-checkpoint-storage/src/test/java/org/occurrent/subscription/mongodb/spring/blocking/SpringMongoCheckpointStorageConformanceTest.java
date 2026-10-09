@@ -24,6 +24,7 @@ import org.bson.BsonTimestamp;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
@@ -91,25 +92,27 @@ class SpringMongoCheckpointStorageConformanceTest extends CheckpointStorageConfo
 
         /**
          * Same encoding as the native driver's storage, and deliberately asserted separately: the two adapters write
-         * the same three shapes of document through different APIs, {@code upsert} against {@code replaceOne}, so
+         * the same documents through different APIs, {@code upsert} against {@code replaceOne}, so
          * "they agree" is a claim worth pinning rather than assuming.
          */
         @Override
         public boolean preservesCheckpointType(Checkpoint checkpoint) {
             return checkpoint instanceof MongoResumeTokenCheckpoint
                     || checkpoint instanceof MongoOperationTimeCheckpoint
-                    || checkpoint instanceof StringBasedCheckpoint;
+                    || checkpoint instanceof StringBasedCheckpoint
+                    || checkpoint instanceof GlobalCheckpoint global && global.liveFrom().isPresent();
         }
 
         /**
-         * The two checkpoints a MongoDB change stream actually hands this storage. A resume token is only ever read
-         * back through its {@code _data} field, which is why the token declared here carries that and nothing else.
+         * The two checkpoints a MongoDB change stream actually hands this storage, alone and as the live start a
+         * catch-up stores next to its position. A resume token is only ever read back through its {@code _data} field,
+         * which is why the token declared here carries that and nothing else.
          */
         @Override
         public List<Checkpoint> additionalCheckpoints() {
-            return List.of(
-                    new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("82ABCDEF"))),
-                    new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1)));
+            MongoResumeTokenCheckpoint resumeToken = new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("82ABCDEF")));
+            MongoOperationTimeCheckpoint operationTime = new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1));
+            return List.of(resumeToken, operationTime, GlobalCheckpoint.of(42, resumeToken, 7, 40), GlobalCheckpoint.of(42, operationTime, 7, 40));
         }
 
         @Override

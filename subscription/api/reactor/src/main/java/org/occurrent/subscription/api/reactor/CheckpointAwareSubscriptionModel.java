@@ -74,4 +74,24 @@ public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel,
      * empty for a problem it can't resolve, as {@link #globalCheckpoint()} does.
      */
     Mono<Checkpoint> globalCheckpointAsOfNow();
+
+    /**
+     * Whether a subscription started from {@code checkpoint} would get every event written after it. It would not when
+     * the feed no longer has the history back to {@code checkpoint}, for example when it is a MongoDB change-stream
+     * position older than the oldest entry left in the oplog. A position catch-up subscription asks this when it resumes
+     * from a position it stored before a restart, and again after every replay, before it goes live from the position it
+     * read before that replay. It replays history again instead when the answer is {@code false}, fails when the answer
+     * is {@code false} after 4 replays in a row, and fails when this fails.
+     * <p>
+     * The default answers {@code true}, which is right for a model whose feed never drops history. A model that wraps
+     * another one passes the call on to the model it wraps.
+     *
+     * @param checkpoint A position this model, or the model it wraps, returned from {@link #globalCheckpoint()} or
+     *                   attached to an event it delivered
+     * @return A {@link Mono} that emits {@code false} if the feed no longer has the history back to {@code checkpoint},
+     * otherwise {@code true}, or fails if the model could not find out
+     */
+    default Mono<Boolean> canResumeFrom(Checkpoint checkpoint) {
+        return Mono.just(true);
+    }
 }

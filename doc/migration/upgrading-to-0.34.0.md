@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-The guide has twenty-five sections, six of them about compile-time breaks. At compile time, if you use the flow saga's
+The guide has twenty-six sections, six of them about compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -95,12 +95,17 @@ that implements it. Read
 Then a `CompetingConsumerSubscriptionModel` whose wrapped model throws from its own `shutdown()` no longer keeps its
 leases, and stops delivering once they may have expired. Read
 [section 24](#24-a-competing-consumer-whose-wrapped-model-fails-to-shut-down-lets-its-leases-expire).
-Finally, `ReactorDurableSubscriptionModel` over a model that manages named subscriptions returns from a `subscribe(..)`
+Then `ReactorDurableSubscriptionModel` over a model that manages named subscriptions returns from a `subscribe(..)`
 from the subscription-model default without waiting for storage. A duplicate id it finds at the call still comes out of
 the call. So does what a `StartAt.dynamic(..)` function throws, unless a checkpoint of the id waits to be written back
 and the function runs later. A refusal it finds only at the hand-over, once storage has answered, and a failure of
 a function that runs later, fail `waitUntilStarted()` instead of being thrown. Read
 [section 25](#25-a-durable-reactor-subscribe-from-the-model-default-returns-without-waiting-for-storage).
+Finally, a position catch-up now stores the live start it read before its replay next to the position, so a restart in
+the middle of the replay no longer misses an event that committed late below the stored position. A resume delivers
+some events a second time, and a checkpoint stored by 0.33.0 in the middle of a replay still resumes as in 0.33.0, with
+a warning. Read
+[section 26](#26-a-position-catch-up-stores-the-live-start-it-read-before-the-replay).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -2314,3 +2319,108 @@ it from a thread that may block.
 
 There is no recipe for this change. Where a refusal is reported is runtime behavior that a rewrite of the source cannot
 see.
+
+## 26. A position catch-up stores the live start it read before the replay
+
+This covers the position catch-ups, `StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel` behind
+`CatchupSubscriptionModel` on the blocking stack, and `ReactorStreamCatchupSubscriptionModel` and
+`ReactorDcbCatchupSubscriptionModel` behind `ReactorCatchupSubscriptionModel` under `ReactorDurableSubscriptionModel`
+on the reactor stack. It applies to a catch-up that stores its position while it replays, which the blocking MongoDB
+Spring Boot starter does every 1000 events.
+
+A MongoDB event store reserves an event's position before the transaction that writes it commits, so an event at
+position 1 can commit after the event at position 2. In 0.33.0 a catch-up that stored `position:2` and was then
+restarted, before it reached live delivery, replayed from position 3 and read a new live start, the change-stream
+position live delivery picks up from, after the restart. An event at position 1 that committed in between was in
+neither, and was never delivered. [#1217](https://github.com/johanhaleby/occurrent/issues/1217) has the details, and
+the reasoning is in
+[ADR 144](../architecture/decisions/0144-a-catch-up-checkpoint-keeps-the-live-start-it-read-before-the-replay.md).
+
+Now the checkpoint stored during the replay also holds three more values. The first is the live start the catch-up
+read before the replay. The second is the position the replay first started from. The third is the replay end, the
+event store's head position as the catch-up read it right after the live start. Every event with a position above
+the replay end committed after the live start.
+
+A resume replays from the stored position up to the replay end and goes live from the stored live start. The MongoDB
+checkpoint storages keep `checkpoint: "position:N"` as before and put the other three in `catchupLiveFrom`,
+`catchupReplayOrigin` and `catchupReplayTo`:
+
+```javascript
+{ _id: "orders", checkpoint: "position:4200", catchupLiveFrom: { operationTime: Timestamp(1760000000, 1) }, catchupReplayOrigin: 0, catchupReplayTo: 4310 }
+```
+
+A storage that keeps strings, `SpringRedisCheckpointStorage` for one, stores
+`position:4200;origin:0;replayTo:4310;liveFrom:{"operationTime": ...}`. The live subscription's checkpoint replaces
+all of it, on the blocking stack when the catch-up reaches live delivery, and on the reactor stack when the durable
+model stores the position of a live event or saves a quiet position.
+
+Four things behave differently.
+
+A resume can deliver some events a second time. Any resume from a checkpoint delivers again what the earlier run
+delivered after its last stored checkpoint. Apart from those, live delivery after a resume starts from the stored live
+start, so any event committed after the live start and delivered before the stored checkpoint can come again. An
+event that committed after the live start and that the resumed replay delivers can come again too. A catch-up that is
+never restarted delivers that last kind twice as well.
+
+Catch-up delivery has always been at-least-once, so a handler that is safe to run twice on the same event needs no
+change. If yours is not, one that increments a counter for example, key the work by the CloudEvent id before
+upgrading.
+
+A live start that MongoDB no longer has in its oplog makes the catch-up replay again from the position the replay
+first started from, with a new live start, and log a warning that names the subscription. The catch-up checks the
+stored live start when it resumes, after a long stop for example, and checks the live start again once the replay is
+done, before it goes live, since a long replay can outlast the oplog too. Replaying again delivers everything between
+that first position and where the earlier replay had got to a second time. When the live start is gone after 4
+replays in a row, the catch-up stops replaying and fails with an `IllegalStateException` that names the subscription
+and tells you to size the oplog. On the blocking stack `waitUntilStarted()` throws it and the catch-up logs it at
+`ERROR`, and on the reactor stack the subscription fails with it. Nothing reaches live delivery then. Size the oplog
+for the longest rebuild, and for the longest time a catch-up can be stopped in the middle of a replay, if you want to
+avoid both.
+
+The check once the replay is done and the change stream that live delivery opens are two calls. A live start the
+oplog drops between them is still handed over, and with `occurrent.subscription.mongodb.restart-on-change-stream-history-lost`
+true, the Spring Boot starter's default, the MongoDB model then goes live from the present and skips the events in
+between. A larger oplog makes that less likely too.
+
+On the reactor stack the checkpoint stored during the replay stays stored after the catch-up reaches live delivery,
+until `ReactorDurableSubscriptionModel` stores the position of a live event or saves the subscription's quiet
+position. It saves the quiet position every minute by default, never with `neverSaveQuietPosition()`, and not while
+the last event the subscription delivered is one its persist predicate declined, which can be the last replayed
+event. Until then a restart resumes from that checkpoint. It replays up to the replay end again and goes live from the
+stored live start, which delivers everything since that live start a second time. After a stop longer than the oplog
+reaches back, the stored live start is gone and the catch-up replays the history again from the position its replay
+first started from.
+
+A `position:N` stored by 0.33.0 has no live start, and none can be worked out afterwards. It resumes as in 0.33.0, with
+a live start read after the restart, and logs a warning that names the subscription and the stored value. An event
+that committed late below that position can still be missed there, once, until that catch-up reaches live delivery.
+To find such checkpoints before you upgrade, look for a stored value that starts with `position:`. With the MongoDB
+starter's default collection:
+
+```javascript
+db.subscriptions.find({ checkpoint: /^position:/ })
+```
+
+With `SpringRedisCheckpointStorage`, the checkpoint is the plain string stored at the subscription id's key. On the
+blocking stack a match is a catch-up that has not reached live delivery yet. On the reactor stack it can also be a
+catch-up that reached live delivery, since 0.33.0 replaces the stored position only once
+`ReactorDurableSubscriptionModel` stores the position of a live event. Let the catch-up get that far before you
+upgrade, or accept the 0.33.0 behaviour for that one subscription.
+
+A rollback to 0.33.0 reads the MongoDB document as `position:N`, ignores the three new fields, and behaves as 0.33.0. A
+string storage is different, because 0.33.0 cannot read `position:N;origin:...` and the subscription fails to start
+with `NumberFormatException`. The same goes for a 0.33.0 node that takes over the lease of such a subscription during a
+rolling upgrade. Let the catch-ups reach live delivery before rolling back, or set the value to `position:N` by hand.
+
+A `CheckpointStorage` of your own that stores `asString()` and returns a `StringBasedCheckpoint` needs no change. One
+that reads `position:` itself with `Long.parseLong` fails on the new form, so read it with `GlobalCheckpoint.parse(..)`
+instead.
+
+`CheckpointAwareSubscriptionModel` gains `canResumeFrom(Checkpoint)`, `boolean` on the blocking stack and
+`Mono<Boolean>` on the reactor stack. It answers `true` by default, so a model of your own still compiles. The MongoDB
+models answer `false` when MongoDB refuses to open a change stream at the checkpoint because its history is gone. If
+your model's checkpoints can age out too, implement it, or a catch-up resumes or goes live from a live start your
+model no longer has.
+
+There is no recipe for this change. What is stored and when a resume delivers again is runtime behavior that a rewrite
+of the source cannot see.
