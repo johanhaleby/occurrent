@@ -144,6 +144,22 @@ class UniqueUsernameTest {
     }
 
     @Test
+    fun `renaming back to its own old username within the retention window is rejected`() {
+        val accountId = UUID.randomUUID()
+        val registeredAt = Instant.parse("2026-01-01T00:00:00Z")
+        val changedAt = registeredAt.plusSeconds(60)
+        applicationService.execute(UsernameCommand.RegisterAccount(accountId, "johan", registeredAt), usernameDcbDecider)
+        applicationService.execute(UsernameCommand.ChangeUsername(accountId, "johan", "johan2", changedAt), usernameDcbDecider)
+
+        val withinRetention = changedAt.plus(UsernamePolicy.RETENTION).minusSeconds(1)
+        assertThatThrownBy {
+            applicationService.execute(UsernameCommand.ChangeUsername(accountId, "johan2", "johan", withinRetention), usernameDcbDecider)
+        }.isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("reserved")
+        assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(2)
+    }
+
+    @Test
     fun `concurrent double registration - only one wins`() {
         // A genuine race: both threads are released at the same instant (via the barrier) so both read the "free"
         // state before either has appended. Retries are disabled so a losing thread surfaces the raw append-condition
@@ -241,6 +257,22 @@ class UniqueUsernameTest {
         }.isInstanceOf(IllegalArgumentException::class.java)
             .hasMessageContaining("already registered")
         assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(1)
+    }
+
+    @Test
+    fun `registering an account that has registered and then closed is rejected even with a different username after the retention window`() {
+        val accountId = UUID.randomUUID()
+        val registeredAt = Instant.parse("2026-01-01T00:00:00Z")
+        val closedAt = registeredAt.plusSeconds(60)
+        applicationService.execute(UsernameCommand.RegisterAccount(accountId, "johan", registeredAt), usernameDcbDecider)
+        applicationService.execute(UsernameCommand.CloseAccount(accountId, "johan", closedAt), usernameDcbDecider)
+
+        val afterRetention = closedAt.plus(UsernamePolicy.RETENTION).plusSeconds(1)
+        assertThatThrownBy {
+            applicationService.execute(UsernameCommand.RegisterAccount(accountId, "johan2", afterRetention), usernameDcbDecider)
+        }.isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("already registered")
+        assertThat(eventStore.read(DcbCriteria.all()).events()).hasSize(2)
     }
 
     @Test

@@ -38,8 +38,8 @@ import java.util.*
  * account may close it or rename it. Adding the account tag to these reads would change no decision.
  * <p>
  * Registering reads the username tag and the account tag as two alternatives. The username tag tells whether the name
- * is free, and the account tag tells whether this account has registered before. An account registers once, because
- * an account that registered twice would hold two usernames and closing it would release only one of them. The append
+ * is free, and the account tag tells whether this account has registered before. An account registers once, so it
+ * holds at most one username, and a closed account stays closed rather than coming back under a new name. The append
  * condition covers both tags, so registering one account under two usernames at the same time conflicts the same way
  * two accounts registering one username does.
  * <p>
@@ -57,7 +57,7 @@ val usernameDcbDecider: DcbDecider<UsernameCommand, UsernameState, UsernameEvent
 )
 
 object UsernamePolicy {
-    /** How long a username stays reserved after the account holding it closes. */
+    /** How long a username stays reserved after its account closes or changes to another username. */
     val RETENTION: Duration = Duration.ofDays(30)
 }
 
@@ -93,9 +93,10 @@ data class UsernameChanged(override val eventId: UUID, override val occurredAt: 
 
 /**
  * The shape is maps and a set (like [org.occurrent.example.domain.courseenrollment.features.enrollment.model.EnrollmentState])
- * because [evolve] doesn't know which username or account [decide] is asking about. Only the entries for the command's
- * own usernames and account are complete. A registration also reads the account's events about usernames it held
- * before, without other accounts' events about those names, and [decide] never looks at those entries.
+ * because [evolve] doesn't know which username or account [decide] is asking about. Only the entries [decide] looks at
+ * are complete. Those are the entries for the command's usernames, and for a registration also the entry for its
+ * account. A registration reads the account's events about usernames it held before without other accounts' events
+ * about those names, and a close or a rename never reads the account tag, so every other entry can be partial.
  */
 data class UsernameState(
     val holders: Map<String, UUID> = emptyMap(),
