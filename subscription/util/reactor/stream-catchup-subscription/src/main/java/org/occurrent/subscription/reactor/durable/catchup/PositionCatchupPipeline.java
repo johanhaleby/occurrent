@@ -63,9 +63,10 @@ import static java.util.Objects.requireNonNull;
  * events in between.
  * <p>
  * If the model reports no resume token at all (e.g. an empty oplog or a restricted cluster), the catch-up fails. A
- * token that ages out of the change stream history (e.g. the MongoDB oplog window) during a long replay does not fail
- * here. What the handover does with it is up to the wrapped model, and a Mongo model that restarts on lost history,
- * the Spring Boot starter's default, goes live from the present and skips the events in between.
+ * token that leaves the change stream history (e.g. the MongoDB oplog window) during a long replay is not handed
+ * over. The replay runs again from the position the first attempt started from, with a token read now, and
+ * redelivers the events in between. A token that leaves the history after that check and before the wrapped model
+ * opens its change stream is still handed over, and what happens then is up to the wrapped model.
  */
 @NullMarked
 final class PositionCatchupPipeline {
@@ -101,11 +102,39 @@ final class PositionCatchupPipeline {
         GlobalCheckpoint startCheckpoint = GlobalCheckpoint.parse(Objects.requireNonNull(start, "start cannot be null"));
         BoundedIdCache<CatchupEventKey> cache = new BoundedIdCache<>(handoverCacheSize);
         return resolveStart(subscriptionModel, startCheckpoint, null)
-                .flatMapMany(replayStart -> {
-                    Flux<CloudEvent> live = subscriptionModel.subscribe(liveSubscriptionFilter, StartAt.checkpoint(replayStart.liveFrom()))
-                            .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(CatchupEventKey.of(cloudEvent)));
-                    return replay(replayStart, cache).concatWith(live);
-                });
+                .flatMapMany(replayStart -> replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, replayStart, cache));
+    }
+
+    // Replays from replayStart and goes live from its token, or replays again first when the token left the change
+    // stream history during the replay
+    private Flux<CloudEvent> replayThenLive(CheckpointAwareSubscriptionModel subscriptionModel, SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
+                                            ReplayStart replayStart, BoundedIdCache<CatchupEventKey> cache) {
+        return replay(replayStart, cache).concatWith(Flux.defer(() -> liveStartAfterReplay(subscriptionModel, replayStart, null).flatMapMany(next -> {
+            if (next != replayStart) {
+                return replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, next, cache);
+            }
+            return subscriptionModel.subscribe(liveSubscriptionFilter, StartAt.checkpoint(replayStart.liveFrom()))
+                    .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(CatchupEventKey.of(cloudEvent)));
+        })));
+    }
+
+    /**
+     * Checks, after a replay and before its handover, that {@code subscriptionModel} can still resume from the token
+     * {@code replayed} hands over to. Returns {@code replayed} itself when it can. Otherwise the token left the change
+     * stream history during the replay, and the returned start replays again from the position the first attempt
+     * started from, with a token read now. Handing the lost token over instead would leave it to the wrapped model,
+     * and a MongoDB model that restarts on lost history goes live from the present and skips every event between the
+     * token and the restart. {@code subscriptionId} only names the subscription in the warning and may be null.
+     */
+    Mono<ReplayStart> liveStartAfterReplay(CheckpointAwareSubscriptionModel subscriptionModel, ReplayStart replayed, @Nullable String subscriptionId) {
+        return subscriptionModel.canResumeFrom(replayed.liveFrom()).flatMap(canResume -> {
+            if (canResume) {
+                return Mono.just(replayed);
+            }
+            log.warn("The live start of catch-up subscription {} left the subscription model's history during the replay, so the catch-up replays again from position {} and redelivers the events in between. Live start: {}",
+                    subscriptionId == null ? "(unnamed)" : subscriptionId, replayed.replayOrigin(), replayed.liveFrom().asString());
+            return captureLiveToken(subscriptionModel).map(liveToken -> new ReplayStart(replayed.replayOrigin(), liveToken, replayed.replayOrigin(), null));
+        });
     }
 
     /**

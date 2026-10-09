@@ -42,6 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -160,7 +161,9 @@ final class NamedCatchupSupport {
      * named {@code subscribe(..)} resuming from a token captured before the replay, or the one {@code start} holds
      * while the wrapped model still has the history from it, deduped against the ids the
      * reconciliation read emitted. The history ids are deliberately not among them, so a write that was still in
-     * flight when the head was read is delivered again live and can be recorded there.
+     * flight when the head was read is delivered again live and can be recorded there. A token that left the change
+     * stream history during the replay is not handed over. The replay runs again from the position the first attempt
+     * started from, with a token read now, and the listener is told the catch-up started again.
      */
     Subscription subscribeWithCatchup(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
                                       CatchupReader reader, long windowSize, int handoverCacheSize, GlobalCheckpoint start,
@@ -189,38 +192,11 @@ final class NamedCatchupSupport {
             // delivers.
             Object launched = new Object();
             state.episode.set(launched);
-            // Announced inside the map operation that holds this id, which cancelSubscription's own remove also
-            // takes, so a cancel and a fresh subscribe cannot slip between the ownership check and the send. A
-            // launch that no longer owns the id announces nothing, or its start would arrive after its
-            // replacement's and the recorder would adopt a catch-up that is already over. The listener only writes
-            // its own state here, so running it inside the map operation reenters nothing.
-            catchingUp.computeIfPresent(subscriptionId, (id, owner) -> {
-                if (owner == state) {
-                    CatchupListener startListener = catchupListeners.get(subscriptionId);
-                    if (startListener != null) {
-                        startListener.catchupStarted(launched);
-                    }
-                }
-                return owner;
-            });
+            announceCatchupStarted(subscriptionId, state, launched);
             // Token before replay, replay through the caller's action (no retry, failure is loud), then delegate live.
             Disposable replaying = pipeline.resolveStart(wrapped, start, subscriptionId)
-                    .flatMapMany(replayStart -> pipeline.replayApplying(replayStart, cache,
-                                    // A stop between dispose landing and this event truncates here, before the action runs.
-                                    () -> !stopped && isCurrent(state, launched), action,
-                                    () -> {
-                                        CatchupListener boundaryListener = catchupListeners.get(subscriptionId);
-                                        if (boundaryListener != null) {
-                                            // The launch this callback belongs to, not whatever the field holds
-                                            // by the time it runs, so a relaunch cannot end its predecessor's
-                                            // history read for it.
-                                            boundaryListener.historyRead(launched);
-                                        }
-                                    })
-                            .thenMany(Flux.defer(() -> {
-                                handOver(subscriptionId, state, launched, delegate, liveSubscriptionFilter, StartAt.checkpoint(replayStart.liveFrom()), liveAction);
-                                return Flux.empty();
-                            })))
+                    .flatMapMany(replayStart -> replayThenHandOver(subscriptionId, state, launched, delegate, pipeline, replayStart, cache, action,
+                            liveSubscriptionFilter, liveAction))
                     .subscribe(unused -> {
                     }, throwable -> {
                         // A failed replay is a dead subscription, reported to whoever waits AND logged: a caller
@@ -267,6 +243,56 @@ final class NamedCatchupSupport {
             }
         }
         return new NamedCatchupSubscription(subscriptionId, state.started.asMono());
+    }
+
+    // Replays from replayStart through the caller's action, then hands over to its token, or replays again first when
+    // the token left the change stream history during the replay
+    private Flux<Void> replayThenHandOver(String subscriptionId, CatchupState state, Object launched, SubscriptionModel delegate, PositionCatchupPipeline pipeline,
+                                          PositionCatchupPipeline.ReplayStart replayStart, BoundedIdCache<CatchupEventKey> cache, Function<CloudEvent, Mono<Void>> action,
+                                          @Nullable SubscriptionFilter liveSubscriptionFilter, Function<CloudEvent, Mono<Void>> liveAction) {
+        // A stop between dispose landing and this event truncates here, before the action runs.
+        BooleanSupplier keepReplaying = () -> !stopped && isCurrent(state, launched);
+        return pipeline.replayApplying(replayStart, cache, keepReplaying, action,
+                        () -> {
+                            CatchupListener boundaryListener = catchupListeners.get(subscriptionId);
+                            if (boundaryListener != null) {
+                                // The launch this callback belongs to, not whatever the field holds by the time it
+                                // runs, so a relaunch cannot end its predecessor's history read for it.
+                                boundaryListener.historyRead(launched);
+                            }
+                        })
+                .thenMany(Flux.defer(() -> {
+                    // A replay a stop cut short goes to handOver without the check, which parks it or leaves it to
+                    // the launch that replaced it
+                    Mono<PositionCatchupPipeline.ReplayStart> liveStart = keepReplaying.getAsBoolean()
+                            ? pipeline.liveStartAfterReplay(wrapped, replayStart, subscriptionId)
+                            : Mono.just(replayStart);
+                    return liveStart.flatMapMany(next -> {
+                        if (next != replayStart) {
+                            announceCatchupStarted(subscriptionId, state, launched);
+                            return replayThenHandOver(subscriptionId, state, launched, delegate, pipeline, next, cache, action, liveSubscriptionFilter, liveAction);
+                        }
+                        handOver(subscriptionId, state, launched, delegate, liveSubscriptionFilter, StartAt.checkpoint(replayStart.liveFrom()), liveAction);
+                        return Flux.<Void>empty();
+                    });
+                }));
+    }
+
+    // Announced inside the map operation that holds this id, which cancelSubscription's own remove also takes, so a
+    // cancel and a fresh subscribe cannot slip between the ownership check and the send. A launch that no longer owns
+    // the id announces nothing, or its start would arrive after its replacement's and the recorder would adopt a
+    // catch-up that is already over. The listener only writes its own state here, so running it inside the map
+    // operation reenters nothing.
+    private void announceCatchupStarted(String subscriptionId, CatchupState state, Object launched) {
+        catchingUp.computeIfPresent(subscriptionId, (id, owner) -> {
+            if (owner == state && state.episode.get() == launched) {
+                CatchupListener startListener = catchupListeners.get(subscriptionId);
+                if (startListener != null) {
+                    startListener.catchupStarted(launched);
+                }
+            }
+            return owner;
+        });
     }
 
     /**

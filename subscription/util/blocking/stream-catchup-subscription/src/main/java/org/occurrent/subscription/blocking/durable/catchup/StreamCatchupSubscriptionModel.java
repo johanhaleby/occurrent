@@ -429,8 +429,6 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
         PositionReplayStart replayStart = positionReplayStart(subscriptionId, checkpoint, delegatedStartAt);
-        long startPosition = replayStart.replayFrom();
-        final Checkpoint globalCheckpoint = replayStart.liveFrom();
 
         // Page through the position sequence from the resume position to the head seen at the start, in windows so a
         // large rebuild does not load the whole matched set at once, then reconcile until the head stops advancing.
@@ -449,14 +447,15 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             }
         };
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(streamReader, windowSize);
-        // A resume from a stored live start replays only up to the head the attempt that read it read next. Every
-        // event above that head was written after the live start and arrives live, so replaying it too would deliver
-        // it twice.
-        Long storedReplayTo = replayStart.replayTo();
-        long replayTo = storedReplayTo == null ? streamReader.currentHead() : storedReplayTo;
-        pipeline.replay(startPosition, replayTo, storedReplayTo == null, () -> shouldKeepReplaying(subscriptionId),
-                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup, e -> replayStart.checkpointAt(OccurrentCloudEventExtension.getPosition(e), replayTo)),
-                catchupPhaseCache, () -> historyRead(subscriptionId));
+        // A live start that left the change stream history while the replay ran is not handed over. The replay runs
+        // again from its origin with a live start read now instead.
+        PositionReplayStart replayAgain = replayStart;
+        while (replayAgain != null) {
+            replayStart = replayAgain;
+            replayPositions(subscriptionId, action, pipeline, streamReader, replayStart, catchupPhaseCache, persistDuringCatchup);
+            replayAgain = replayAgainIfLiveStartLost(subscriptionId, replayStart, delegatedStartAt);
+        }
+        final Checkpoint globalCheckpoint = replayStart.liveFrom();
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
         // time-based path above. An unlocked gap here is observable two ways, a lost cancellation, or a fresh
@@ -502,6 +501,19 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             };
             return startDelegatedSubscription(subscriptionId, filter, subscriptionsWasCancelledOrShutdown, startAtToUse, liveConsumer);
         }
+    }
+
+    // One pass of the position replay from replayStart
+    private void replayPositions(String subscriptionId, Consumer<CloudEvent> action, PositionCatchupPipeline pipeline, PositionCatchupPipeline.Reader reader,
+                                 PositionReplayStart replayStart, BoundedIdCache<CatchupEventKey> catchupPhaseCache, Predicate<CloudEvent> persistDuringCatchup) {
+        // A resume from a stored live start replays only up to the head the attempt that read it read next. Every
+        // event above that head was written after the live start and arrives live, so replaying it too would deliver
+        // it twice.
+        Long storedReplayTo = replayStart.replayTo();
+        long replayTo = storedReplayTo == null ? reader.currentHead() : storedReplayTo;
+        pipeline.replay(replayStart.replayFrom(), replayTo, storedReplayTo == null, () -> shouldKeepReplaying(subscriptionId),
+                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup, e -> replayStart.checkpointAt(OccurrentCloudEventExtension.getPosition(e), replayTo)),
+                catchupPhaseCache, () -> historyRead(subscriptionId));
     }
 
     private Filter deriveFilterToUseDuringCatchupPhase(@Nullable SubscriptionFilter filter, Checkpoint checkpoint) {

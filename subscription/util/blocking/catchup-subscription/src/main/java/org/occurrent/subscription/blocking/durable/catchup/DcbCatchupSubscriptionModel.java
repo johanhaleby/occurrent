@@ -164,15 +164,11 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
         // The live start is read before the bulk replay, or kept from the attempt that stored the checkpoint, so an
         // event committed during the replay is still delivered live. When the delegate reports no live start at all
-        // the catch-up fails (captureLiveResumeCheckpoint). A live start that ages out of the change stream history
-        // during a long replay does not fail here. What the handover does with it is up to the delegate, and a Mongo
-        // model that restarts on lost history, the Spring Boot starter's default, goes live from the present and
-        // skips the events in between.
+        // the catch-up fails (captureLiveResumeCheckpoint). A live start that leaves the change stream history during
+        // a long replay is not handed over. The replay runs again from its origin with a live start read now.
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
         PositionReplayStart replayStart = positionReplayStart(subscriptionId, checkpoint, delegatedStartAt);
-        long startPosition = replayStart.replayFrom();
-        final Checkpoint globalCheckpoint = replayStart.liveFrom();
 
         // Page through the DCB sequence from the resume position to the head seen at start, in windows so a large
         // rebuild does not load the whole matched set at once, then reconcile until the head stops advancing.
@@ -192,14 +188,13 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             }
         };
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(dcbReader, windowSize);
-        // A resume from a stored live start replays only up to the head the attempt that read it read next. Every
-        // event above that head was written after the live start and arrives live, so replaying it too would deliver
-        // it twice.
-        Long storedReplayTo = replayStart.replayTo();
-        long replayTo = storedReplayTo == null ? dcbReader.currentHead() : storedReplayTo;
-        pipeline.replay(startPosition, replayTo, storedReplayTo == null, () -> shouldKeepReplaying(subscriptionId),
-                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup, replayStart, replayTo), catchupPhaseCache,
-                () -> historyRead(subscriptionId));
+        PositionReplayStart replayAgain = replayStart;
+        while (replayAgain != null) {
+            replayStart = replayAgain;
+            replayPositions(subscriptionId, action, pipeline, dcbReader, replayStart, catchupPhaseCache, persistDuringCatchup);
+            replayAgain = replayAgainIfLiveStartLost(subscriptionId, replayStart, delegatedStartAt);
+        }
+        final Checkpoint globalCheckpoint = replayStart.liveFrom();
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
         // blocking stream catch-up. Unlocked, a cancelSubscription or a fresh subscribe for this id could land in
@@ -254,6 +249,19 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             }
             return subscription;
         }
+    }
+
+    // One pass of the position replay from replayStart
+    private void replayPositions(String subscriptionId, Consumer<CloudEvent> action, PositionCatchupPipeline pipeline, PositionCatchupPipeline.Reader reader,
+                                 PositionReplayStart replayStart, BoundedIdCache<CatchupEventKey> catchupPhaseCache, Predicate<CloudEvent> persistDuringCatchup) {
+        // A resume from a stored live start replays only up to the head the attempt that read it read next. Every
+        // event above that head was written after the live start and arrives live, so replaying it too would deliver
+        // it twice.
+        Long storedReplayTo = replayStart.replayTo();
+        long replayTo = storedReplayTo == null ? reader.currentHead() : storedReplayTo;
+        pipeline.replay(replayStart.replayFrom(), replayTo, storedReplayTo == null, () -> shouldKeepReplaying(subscriptionId),
+                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, persistDuringCatchup, replayStart, replayTo), catchupPhaseCache,
+                () -> historyRead(subscriptionId));
     }
 
     /**

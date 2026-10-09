@@ -82,8 +82,10 @@ import java.util.stream.Stream;
  * <p>
  * During catch-up the live resume token is captured before the bulk replay, so an event committed during the replay
  * is still delivered live. A replay that runs longer than the database change stream history (the MongoDB oplog
- * window) ages the token out, and the handover then fails loudly rather than dropping events. Size the oplog for very
- * large rebuilds.
+ * window) leaves the token behind. The token is checked again once the replay is done, and one the wrapped model no
+ * longer has the history from is not handed over. The replay runs again from the position the first attempt started
+ * from, with a token read then, and redelivers the events in between. A replay that outlasts the history every time
+ * replays again every time, so size the oplog for very large rebuilds.
  * </p>
  * <br>
  * <p>

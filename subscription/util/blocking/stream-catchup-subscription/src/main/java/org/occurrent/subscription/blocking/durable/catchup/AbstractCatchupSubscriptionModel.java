@@ -633,6 +633,40 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
+     * Checks, after a position replay and before its handover, that the wrapped model can still resume from the live
+     * start the replay hands over to. Returns null when it can, or when there is nothing to hand over. Otherwise the
+     * live start left the change stream history during the replay, and the returned start replays again from the
+     * position the first attempt started from, with a live start read now. Handing the lost live start to the wrapped
+     * model instead would leave it to that model, and a MongoDB model that restarts on lost history goes live from
+     * the present and skips every event between the live start and the restart.
+     * <p>
+     * A {@link CatchupListener} is told the catch-up started again, since what the next replay delivers is history it
+     * reads again and not events written since it started. Told under the handover lock and only while this attempt
+     * still owns the id, as on registration, so an attempt that lost the id cannot reset what its replacement told
+     * the listener. Only meaningful on the virtual thread {@link #startCatchupAsync} started for this attempt.
+     */
+    protected @Nullable PositionReplayStart replayAgainIfLiveStartLost(String subscriptionId, PositionReplayStart replayed, @Nullable StartAt delegatedStartAt) {
+        Checkpoint liveFrom = replayed.liveFrom();
+        if (liveFrom == null || !shouldKeepReplaying(subscriptionId) || subscriptionModel.canResumeFrom(liveFrom)) {
+            return null;
+        }
+        log.warn("The live start of catch-up subscription {} left the subscription model's history during the replay, so the catch-up replays again from position {} and redelivers the events in between. Live start: {}",
+                subscriptionId, replayed.replayOrigin(), liveFrom.asString());
+        PositionReplayStart again = new PositionReplayStart(replayed.replayOrigin(), captureLiveResumeCheckpoint(delegatedStartAt), replayed.replayOrigin(), null);
+        CatchupAttempt attempt = CURRENT_ATTEMPT.get();
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            if (currentAttempt.get(subscriptionId) != attempt) {
+                return null;
+            }
+            CatchupListener listener = catchupListeners.get(subscriptionId);
+            if (listener != null) {
+                listener.catchupStarted(attempt);
+            }
+        }
+        return again;
+    }
+
+    /**
      * Logs a warning when {@code stored} is a global position without a live start, which a catch-up stored before
      * the live start was kept. The resume replays from it and goes live from a live start read now, which can miss an
      * event whose position was reserved below the stored position but written after the earlier replay read past it.

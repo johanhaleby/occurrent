@@ -54,16 +54,18 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * Each replayed event has a {@link GlobalCheckpoint} that also holds the live token, the position the replay started
  * from and the head the replay read. A durable model layered on top stores it, and a resume from it replays up to that
- * head and goes live from that same token, so a DCB event whose position was reserved below the stored position but written after the earlier replay read past it
- * is still delivered. When the wrapped model no longer has the history from the stored token, the replay starts over
- * from the position the first attempt started from and redelivers the events in between.
+ * head and goes live from that same token, so a DCB event whose position was reserved below the stored position but
+ * written after the earlier replay read past it is still delivered. When the wrapped model no longer has the history
+ * from the stored token, the replay starts over from the position the first attempt started from and redelivers the
+ * events in between.
  * <p>
  * If the model cannot report a resume token at all (for example an empty oplog or a restricted cluster), the
  * subscription fails rather than replaying without a handover to live. If the replay runs longer than the change
- * stream history (the MongoDB oplog window), the captured token ages out before the handover. What the live resume
- * does then is up to the wrapped model. A Mongo model that restarts on lost history, the Spring Boot starter's
- * default, goes live from the present and skips the events in between, and one that does not restart stops the
- * subscription and logs an error. Size the oplog for very large rebuilds.
+ * stream history (the MongoDB oplog window), the token leaves that history before the handover. The token is checked
+ * again once the replay is done, and one the wrapped model no longer has the history from is not handed over. The
+ * replay runs again from the position the first attempt started from, with a token read then, and redelivers the
+ * events in between. A replay that outlasts the history every time replays again every time, so size the oplog for
+ * very large rebuilds.
  * <p>
  * This is the DCB path only. Stream time-based catch-up is not provided here, and this model does not persist
  * subscription positions, so layer a durable model on top (for example {@code ReactorDurableSubscriptionModel}) if

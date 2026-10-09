@@ -21,6 +21,8 @@ import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import org.bson.BsonTimestamp;
+import org.bson.Document;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -38,9 +40,12 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.ChangeStreamHistory;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
@@ -49,7 +54,6 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
 import java.time.Duration;
@@ -72,9 +76,11 @@ import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStor
  * can become visible after one at a higher position. A DCB catch-up that stored a position past such an event, and
  * then restarted, must still deliver it.
  * <p>
- * An event written while the catch-up was down, after it read its live start, must reach it once after the restart.
+ * An event written while the catch-up was down, after it read its live start, must reach it once after the restart,
+ * also when that live start leaves the change stream history before the replay is done, and also when the catch-up
+ * is started the way the Spring Boot starter starts it.
  */
-@Timeout(120)
+@Timeout(240)
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbCatchupLateCommitMongoTest {
@@ -83,12 +89,14 @@ class DcbCatchupLateCommitMongoTest {
     private static final String HELD_WRITER = "writer-A-held";
     // A has a type and a tag of its own, so B and C share no conflict marker with it and commit while A is held
     private static final DcbCriteria CRITERIA = DcbCriteria.all();
+    private static final String DATABASE = "dcblatecommit";
 
+    // A one megabyte oplog, so a test can make MongoDB drop the change stream history from a live start
     @Container
-    private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
+    private static final ReplicaSetReadyMongoDBContainer mongoDBContainer = ChangeStreamHistory.container();
 
     @RegisterExtension
-    OccurrentMongoFlush flush = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer, "dcblatecommit"));
+    OccurrentMongoFlush flush = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer, DATABASE));
 
     private final CountDownLatch aInCommit = new CountDownLatch(1);
     private final CountDownLatch releaseA = new CountDownLatch(1);
@@ -116,7 +124,7 @@ class DcbCatchupLateCommitMongoTest {
 
     @BeforeEach
     void create_instances() {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("dcblatecommit"));
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(DATABASE));
         mongoClient = MongoClients.create(connectionString);
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager tx = new HoldingTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
@@ -176,7 +184,7 @@ class DcbCatchupLateCommitMongoTest {
         releaseA.countDown();
         writerA.join(20_000);
 
-        // Second process resumes from storage, like @Subscription(startAt = BEGINNING) does on a restart
+        // Second process resumes from the checkpoint in storage, which the model default does
         SpringMongoSubscriptionModel secondLive = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
         CatchupSubscriptionModel second = new CatchupSubscriptionModel(secondLive, eventStore, CRITERIA, config);
         try {
@@ -240,6 +248,107 @@ class DcbCatchupLateCommitMongoTest {
     }
 
     @Test
+    void an_event_written_while_a_catch_up_was_down_is_delivered_when_the_live_start_leaves_the_change_stream_history_during_the_resumed_replay() throws Exception {
+        append(named("A"));
+        append(named("B"));
+        append(named("C"));
+
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "checkpoints");
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+
+        // First process: the replay delivers A, stores position 1, then the process dies while handling B
+        CatchupSubscriptionModel first = new CatchupSubscriptionModel(liveModelThatRestartsOnLostHistory(), eventStore, CRITERIA, config);
+        CountDownLatch handlingB = new CountDownLatch(1);
+        CountDownLatch crashed = new CountDownLatch(1);
+        first.subscribe("sub", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            String name = nameOf(cloudEvent);
+            received.add(name);
+            if (name.equals("B")) {
+                handlingB.countDown();
+                block(crashed);
+            }
+        });
+        assertThat(handlingB.await(20, TimeUnit.SECONDS)).isTrue();
+        assertThat(GlobalCheckpoint.positionOf(requireNonNull(storage.read("sub")))).isEqualTo(1);
+        first.shutdown();
+        crashed.countDown();
+
+        // W commits after the first process read its live start
+        append(named("W"));
+
+        // Second process: the resumed replay checks the stored live start, then MongoDB drops the history from it while
+        // the replay handles the first event it delivers, B or C depending on whether the first process stored B on its
+        // way down
+        CatchupSubscriptionModel second = new CatchupSubscriptionModel(liveModelThatRestartsOnLostHistory(), eventStore, CRITERIA, config);
+        CountDownLatch handlingTheFirstResumedEvent = new CountDownLatch(1);
+        CountDownLatch historyDropped = new CountDownLatch(1);
+        try {
+            Subscription subscription = second.subscribe("sub", StartAt.subscriptionModelDefault(), cloudEvent -> {
+                String name = nameOf(cloudEvent);
+                received.add(name);
+                if (handlingTheFirstResumedEvent.getCount() > 0) {
+                    handlingTheFirstResumedEvent.countDown();
+                    block(historyDropped);
+                }
+            });
+            assertThat(handlingTheFirstResumedEvent.await(20, TimeUnit.SECONDS)).isTrue();
+            dropChangeStreamHistoryUpToNow();
+            historyDropped.countDown();
+            subscription.waitUntilStarted();
+            append(named("D"));
+            await().atMost(AT_MOST).untilAsserted(() -> assertThat(received).as("every committed event reaches the subscription").contains("A", "B", "C", "W", "D"));
+        } finally {
+            second.shutdown();
+        }
+    }
+
+    @Test
+    void a_catch_up_started_the_way_the_spring_boot_starter_starts_it_resumes_a_replay_that_stopped_in_the_middle() throws Exception {
+        append(named("A"));
+        append(named("B"));
+        append(named("C"));
+
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "checkpoints");
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        // The start the starter gives a subscription that starts at the beginning and resumes the default way
+        StartAt startAt = StartAt.dynamic(ctx -> storage.exists("sub") ? StartAt.subscriptionModelDefault() : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+
+        // First process: the replay delivers A, stores position 1, then the process dies while handling B
+        SpringMongoSubscriptionModel firstLive = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        CatchupSubscriptionModel first = new CatchupSubscriptionModel(new DurableSubscriptionModel(firstLive, storage), eventStore, CRITERIA, config);
+        CountDownLatch handlingB = new CountDownLatch(1);
+        CountDownLatch crashed = new CountDownLatch(1);
+        first.subscribe("sub", startAt, cloudEvent -> {
+            String name = nameOf(cloudEvent);
+            received.add(name);
+            if (name.equals("B")) {
+                handlingB.countDown();
+                block(crashed);
+            }
+        });
+        assertThat(handlingB.await(20, TimeUnit.SECONDS)).isTrue();
+        assertThat(GlobalCheckpoint.positionOf(requireNonNull(storage.read("sub")))).isEqualTo(1);
+        first.shutdown();
+        crashed.countDown();
+
+        // W commits while the process is down
+        append(named("W"));
+
+        SpringMongoSubscriptionModel secondLive = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        CatchupSubscriptionModel second = new CatchupSubscriptionModel(new DurableSubscriptionModel(secondLive, storage), eventStore, CRITERIA, config);
+        try {
+            Subscription subscription = second.subscribe("sub", startAt, cloudEvent -> received.add(nameOf(cloudEvent)));
+            subscription.waitUntilStarted();
+            append(named("D"));
+            await().atMost(AT_MOST).untilAsserted(() -> assertThat(received).as("every committed event reaches the subscription").contains("A", "B", "C", "W", "D"));
+        } finally {
+            second.shutdown();
+        }
+    }
+
+    @Test
     void control_without_a_restart_the_live_token_captured_before_the_replay_delivers_the_late_commit() throws Exception {
         Thread writerA = new Thread(() -> append(changedTo("A")), HELD_WRITER);
         writerA.start();
@@ -261,6 +370,24 @@ class DcbCatchupLateCommitMongoTest {
             await().atMost(AT_MOST).untilAsserted(() -> assertThat(received).contains("A", "B", "C"));
         } finally {
             model.shutdown();
+        }
+    }
+
+    // The Spring Boot starter's default
+    private SpringMongoSubscriptionModel liveModelThatRestartsOnLostHistory() {
+        return new SpringMongoSubscriptionModel(mongoTemplate, SpringMongoSubscriptionModelConfig.withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(true));
+    }
+
+    private void dropChangeStreamHistoryUpToNow() {
+        BsonTimestamp now = requireNonNull(mongoClient.getDatabase(DATABASE).runCommand(new Document("hostInfo", 1)).get("operationTime", BsonTimestamp.class));
+        ChangeStreamHistory.dropHistoryFrom(mongoDBContainer, DATABASE, now);
+    }
+
+    private static void block(CountDownLatch latch) {
+        try {
+            latch.await(60, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

@@ -20,6 +20,8 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.BsonTimestamp;
+import org.bson.Document;
 import org.junit.jupiter.api.*;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
@@ -34,9 +36,12 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
+import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModelConfig;
 import org.occurrent.subscription.reactor.durable.catchup.ReactorCatchupSubscriptionModel;
+import org.occurrent.testsupport.mongodb.ChangeStreamHistory;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.ReactiveMongoDatabaseFactory;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
@@ -45,7 +50,6 @@ import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -73,10 +77,12 @@ import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
  * become visible after one at a higher position. A durable catch-up subscription that stored a position past such an
  * event, and then restarted, must still deliver it, on the named path the reactive Spring Boot starter wires.
  * <p>
- * An event written while the catch-up was down, after it read its live start, must reach it once after the restart.
+ * An event written while the catch-up was down, after it read its live start, must reach it once after the restart,
+ * also when MongoDB drops the change stream history from that live start while the resumed replay runs. The container
+ * has a small oplog so a test can push that history out.
  */
 @Testcontainers
-@Timeout(120)
+@Timeout(240)
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 class ReactorCatchupLateCommitMongoTest {
 
@@ -84,7 +90,7 @@ class ReactorCatchupLateCommitMongoTest {
     private static final String DATABASE = "reactorlatecommit";
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
+    private static final ReplicaSetReadyMongoDBContainer mongoDBContainer = ChangeStreamHistory.container();
 
     private static MongoClient mongoClient;
 
@@ -175,6 +181,136 @@ class ReactorCatchupLateCommitMongoTest {
 
         verifyEventWrittenInTheQuietWindowIsDeliveredOnce(append,
                 live -> new ReactorCatchupSubscriptionModel(live, (DcbEventStore) eventStore, DcbCriteria.all()));
+    }
+
+    @Test
+    void a_stream_event_written_while_a_catch_up_was_down_is_delivered_when_the_live_start_leaves_the_change_stream_history_during_the_resumed_replay() {
+        ReactorMongoEventStore eventStore = eventStore(STREAM);
+        Function<CloudEvent, Mono<Void>> append = event -> eventStore.write("stream-" + event.getId(), Flux.just(event)).then();
+
+        verifyEventWrittenWhileDownIsDeliveredWhenTheLiveStartLeavesTheHistory(append,
+                live -> new ReactorCatchupSubscriptionModel(live, eventStore, Filter.all()));
+    }
+
+    @Test
+    void a_dcb_event_written_while_a_catch_up_was_down_is_delivered_when_the_live_start_leaves_the_change_stream_history_during_the_resumed_replay() {
+        ReactorMongoEventStore eventStore = eventStore(STREAM, DCB);
+        Function<CloudEvent, Mono<Void>> append = event -> eventStore.append(List.of(DcbCloudEvents.withTags(event, List.of(Tag.parse("id:" + event.getId()))))).then();
+
+        verifyEventWrittenWhileDownIsDeliveredWhenTheLiveStartLeavesTheHistory(append,
+                live -> new ReactorCatchupSubscriptionModel(live, (DcbEventStore) eventStore, DcbCriteria.all()));
+    }
+
+    @Test
+    void a_stream_catch_up_started_the_way_the_spring_boot_starter_starts_it_resumes_a_replay_that_stopped_in_the_middle() {
+        ReactorMongoEventStore eventStore = eventStore(STREAM);
+        Function<CloudEvent, Mono<Void>> append = event -> eventStore.write("stream-" + event.getId(), Flux.just(event)).then();
+
+        verifyTheStarterShapedStartResumesAReplayThatStoppedInTheMiddle(append,
+                live -> new ReactorCatchupSubscriptionModel(live, eventStore, Filter.all()));
+    }
+
+    @Test
+    void a_dcb_catch_up_started_the_way_the_spring_boot_starter_starts_it_resumes_a_replay_that_stopped_in_the_middle() {
+        ReactorMongoEventStore eventStore = eventStore(STREAM, DCB);
+        Function<CloudEvent, Mono<Void>> append = event -> eventStore.append(List.of(DcbCloudEvents.withTags(event, List.of(Tag.parse("id:" + event.getId()))))).then();
+
+        verifyTheStarterShapedStartResumesAReplayThatStoppedInTheMiddle(append,
+                live -> new ReactorCatchupSubscriptionModel(live, (DcbEventStore) eventStore, DcbCriteria.all()));
+    }
+
+    private void verifyTheStarterShapedStartResumesAReplayThatStoppedInTheMiddle(Function<CloudEvent, Mono<Void>> append,
+                                                                                 Function<ReactorMongoSubscriptionModel, CheckpointAwareSubscriptionModel> catchupOver) {
+        append.apply(event("A")).block(TIMEOUT);
+        append.apply(event("B")).block(TIMEOUT);
+        append.apply(event("C")).block(TIMEOUT);
+
+        ReactorCheckpointStorage storage = new ReactorCheckpointStorage(reactiveMongoTemplate, checkpointCollectionName);
+        // The start the starter gives a subscription that starts at the beginning and resumes the default way
+        StartAt startAt = StartAt.dynamic(ctx -> storage.read("sub").blockOptional().isPresent() ? StartAt.subscriptionModelDefault() : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+        List<String> received = new CopyOnWriteArrayList<>();
+
+        // First process: the replay delivers A, stores position 1, then the process dies while handling B
+        ReactorDurableSubscriptionModel first = new ReactorDurableSubscriptionModel(catchupOver.apply(liveModel()), storage);
+        CountDownLatch handlingB = new CountDownLatch(1);
+        CountDownLatch crashed = new CountDownLatch(1);
+        first.subscribe("sub", null, startAt, cloudEvent -> Mono.fromRunnable(() -> {
+            received.add(cloudEvent.getId());
+            if (cloudEvent.getId().equals("B")) {
+                handlingB.countDown();
+                awaitOrFail(crashed, 60);
+            }
+        }));
+        awaitOrFail(handlingB, 20);
+        assertThat(GlobalCheckpoint.positionOf(requireNonNull(storage.read("sub").block(TIMEOUT)))).isEqualTo(1);
+        first.shutdown();
+        crashed.countDown();
+
+        // W commits after the first process read its live start
+        append.apply(event("W")).block(TIMEOUT);
+
+        ReactorDurableSubscriptionModel second = new ReactorDurableSubscriptionModel(catchupOver.apply(liveModel()), storage);
+        try {
+            second.subscribe("sub", null, startAt, cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())))
+                    .waitUntilStarted().block(TIMEOUT);
+            append.apply(event("D")).block(TIMEOUT);
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(received).as("every committed event reaches the subscription").contains("A", "B", "C", "W", "D"));
+        } finally {
+            second.shutdown();
+        }
+    }
+
+    private void verifyEventWrittenWhileDownIsDeliveredWhenTheLiveStartLeavesTheHistory(Function<CloudEvent, Mono<Void>> append,
+                                                                                         Function<ReactorMongoSubscriptionModel, CheckpointAwareSubscriptionModel> catchupOver) {
+        append.apply(event("A")).block(TIMEOUT);
+        append.apply(event("B")).block(TIMEOUT);
+        append.apply(event("C")).block(TIMEOUT);
+
+        ReactorCheckpointStorage storage = new ReactorCheckpointStorage(reactiveMongoTemplate, checkpointCollectionName);
+        List<String> received = new CopyOnWriteArrayList<>();
+
+        // First process: the replay delivers A, stores position 1, then the process dies while handling B
+        ReactorDurableSubscriptionModel first = new ReactorDurableSubscriptionModel(catchupOver.apply(liveModelThatRestartsOnLostHistory()), storage);
+        CountDownLatch handlingB = new CountDownLatch(1);
+        CountDownLatch crashed = new CountDownLatch(1);
+        first.subscribe("sub", null, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.fromRunnable(() -> {
+            received.add(cloudEvent.getId());
+            if (cloudEvent.getId().equals("B")) {
+                handlingB.countDown();
+                awaitOrFail(crashed, 60);
+            }
+        }));
+        awaitOrFail(handlingB, 20);
+        assertThat(GlobalCheckpoint.positionOf(requireNonNull(storage.read("sub").block(TIMEOUT)))).isEqualTo(1);
+        first.shutdown();
+        crashed.countDown();
+
+        // W commits after the first process read its live start
+        append.apply(event("W")).block(TIMEOUT);
+
+        // Second process: the resumed replay checks the stored live start, then MongoDB drops the history from it while
+        // the replay handles the first event it delivers, B or C depending on whether the first process stored B on its
+        // way down
+        ReactorDurableSubscriptionModel second = new ReactorDurableSubscriptionModel(catchupOver.apply(liveModelThatRestartsOnLostHistory()), storage);
+        CountDownLatch handlingTheFirstResumedEvent = new CountDownLatch(1);
+        CountDownLatch historyDropped = new CountDownLatch(1);
+        try {
+            Subscription subscription = second.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.fromRunnable(() -> {
+                received.add(cloudEvent.getId());
+                if (handlingTheFirstResumedEvent.getCount() > 0) {
+                    handlingTheFirstResumedEvent.countDown();
+                    awaitOrFail(historyDropped, 200);
+                }
+            }));
+            awaitOrFail(handlingTheFirstResumedEvent, 20);
+            dropChangeStreamHistoryUpToNow();
+            historyDropped.countDown();
+            subscription.waitUntilStarted().block(Duration.ofSeconds(60));
+            append.apply(event("D")).block(TIMEOUT);
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(received).as("every committed event reaches the subscription").contains("A", "B", "C", "W", "D"));
+        } finally {
+            second.shutdown();
+        }
     }
 
     private void verifyEventWrittenInTheQuietWindowIsDeliveredOnce(Function<CloudEvent, Mono<Void>> append,
@@ -271,6 +407,16 @@ class ReactorCatchupLateCommitMongoTest {
 
     private ReactorMongoSubscriptionModel liveModel() {
         return new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollectionName, TimeRepresentation.RFC_3339_STRING);
+    }
+
+    private ReactorMongoSubscriptionModel liveModelThatRestartsOnLostHistory() {
+        return new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollectionName, TimeRepresentation.RFC_3339_STRING,
+                ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(true));
+    }
+
+    private void dropChangeStreamHistoryUpToNow() {
+        Document hostInfo = requireNonNull(Mono.from(mongoClient.getDatabase(DATABASE).runCommand(new Document("hostInfo", 1))).block(TIMEOUT));
+        ChangeStreamHistory.dropHistoryFrom(mongoDBContainer, DATABASE, requireNonNull(hostInfo.get("operationTime", BsonTimestamp.class)));
     }
 
     private static CloudEvent event(String id) {
