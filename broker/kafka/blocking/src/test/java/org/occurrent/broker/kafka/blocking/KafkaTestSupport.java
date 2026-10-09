@@ -31,6 +31,7 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.GroupIdNotFoundException;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
@@ -50,6 +51,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -229,11 +231,23 @@ public abstract class KafkaTestSupport {
      * The number of members currently in consumer group {@code groupId}, read through {@link AdminClient#describeConsumerGroups}.
      * Used to prove a bridge's permanent stop leaves the group immediately by closing its own {@code Consumer},
      * rather than waiting to be evicted at {@code max.poll.interval.ms}.
+     * <p>
+     * A group the broker does not know counts as zero members. The broker answers with
+     * {@link GroupIdNotFoundException} for a group nobody has joined yet. Awaitility's {@code untilAsserted} retries
+     * only on an {@link AssertionError}, so without this an await for the first member fails on its first poll
+     * instead of waiting for the consumer to join.
      */
     protected int consumerGroupMemberCount(String groupId) throws Exception {
-        ConsumerGroupDescription description = adminClient.describeConsumerGroups(List.of(groupId))
-                .describedGroups().get(groupId).get(30, TimeUnit.SECONDS);
-        return description.members().size();
+        try {
+            ConsumerGroupDescription description = adminClient.describeConsumerGroups(List.of(groupId))
+                    .describedGroups().get(groupId).get(30, TimeUnit.SECONDS);
+            return description.members().size();
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof GroupIdNotFoundException) {
+                return 0;
+            }
+            throw e;
+        }
     }
 
     /**

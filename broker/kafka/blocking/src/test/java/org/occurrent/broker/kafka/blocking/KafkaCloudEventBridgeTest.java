@@ -737,6 +737,11 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         }
     }
 
+    @Test
+    void a_consumer_group_the_broker_does_not_know_counts_as_zero_members() throws Exception {
+        assertThat(consumerGroupMemberCount("group-never-joined-" + UUID.randomUUID())).isZero();
+    }
+
     /**
      * The CloudEvent-bridge twin of {@code KafkaDomainEventBridgeTest}'s
      * {@code an_unreadable_live_filter_leaves_the_group_immediately_even_under_static_membership}. A permanently
