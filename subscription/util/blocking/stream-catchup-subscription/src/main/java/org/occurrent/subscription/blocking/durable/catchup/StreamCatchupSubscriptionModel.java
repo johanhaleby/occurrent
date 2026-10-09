@@ -159,30 +159,32 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             throw new UnsupportedSubscriptionFilterException(filter.getClass(), "Only StreamSubscriptionFilter or AgnosticSubscriptionFilter is supported!");
         }
         boolean positionMode = streamStoreWritesPosition();
+        // A dynamic start that resolves to the model default takes the same resume decision as the default itself,
+        // so a replay that stopped in the middle resumes from the position it stored instead of going live
+        StartAt requestedStartAt = startAt;
+        if (startAt.isDynamic()) {
+            StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
+            if (startAtGeneratedByDynamic == null) {
+                // Not allowed to start this subscription model, defer to parent
+                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), startAt, action, holdPaused);
+            }
+            requestedStartAt = startAtGeneratedByDynamic;
+        }
         final StartAt firstStartAt;
-        if (startAt.isDefault()) {
+        if (requestedStartAt.isDefault()) {
             // Resume from a stored position if there is one, otherwise delegate to the parent subscription model.
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
             warnIfStoredWithoutLiveStart(subscriptionId, checkpoint);
             if (checkpoint == null) {
                 // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
                 // the handover would, keeping DCB events out.
-                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), startAt, action, holdPaused);
-            } else {
-                // A time position stored by a replay that did not finish resumes that replay, also on a store that
-                // writes position, where it runs through the time-ordered catch-up
-                firstStartAt = StartAt.checkpoint(checkpoint);
+                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), requestedStartAt, action, holdPaused);
             }
-        } else if (startAt.isDynamic()) {
-            StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
-            if (startAtGeneratedByDynamic == null) {
-                // Not allowed to start this subscription model, defer to parent
-                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), startAt, action, holdPaused);
-            } else {
-                firstStartAt = startAtGeneratedByDynamic;
-            }
+            // A time position stored by a replay that did not finish resumes that replay, also on a store that
+            // writes position, where it runs through the time-ordered catch-up
+            firstStartAt = StartAt.checkpoint(checkpoint);
         } else {
-            firstStartAt = startAt;
+            firstStartAt = requestedStartAt;
         }
 
         StreamStart streamStart = classifyStreamStart(firstStartAt, subscriptionModelContextType);

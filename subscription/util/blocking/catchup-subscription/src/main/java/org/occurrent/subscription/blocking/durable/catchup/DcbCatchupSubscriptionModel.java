@@ -92,25 +92,27 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     @Override
     protected Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
+        // A dynamic start that resolves to the model default takes the same resume decision as the default itself,
+        // so a replay that stopped in the middle resumes from the position it stored instead of going live
+        StartAt requestedStartAt = startAt;
+        if (startAt.isDynamic()) {
+            StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
+            if (startAtGeneratedByDynamic == null) {
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action, holdPaused);
+            }
+            requestedStartAt = startAtGeneratedByDynamic;
+        }
         final StartAt firstStartAt;
-        if (startAt.isDefault()) {
+        if (requestedStartAt.isDefault()) {
             // Resume from the stored position if there is one, otherwise subscribe live (with the DCB query post-filter).
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
             warnIfStoredWithoutLiveStart(subscriptionId, checkpoint);
             if (checkpoint == null) {
-                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action, holdPaused);
-            } else {
-                firstStartAt = StartAt.checkpoint(checkpoint);
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, requestedStartAt, action, holdPaused);
             }
-        } else if (startAt.isDynamic()) {
-            StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
-            if (startAtGeneratedByDynamic == null) {
-                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action, holdPaused);
-            } else {
-                firstStartAt = startAtGeneratedByDynamic;
-            }
+            firstStartAt = StartAt.checkpoint(checkpoint);
         } else {
-            firstStartAt = startAt;
+            firstStartAt = requestedStartAt;
         }
 
         // A non-DCB position means the catch-up already handed over and the live subscription stored a change-stream
