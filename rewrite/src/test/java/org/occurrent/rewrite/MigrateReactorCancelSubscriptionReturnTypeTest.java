@@ -65,7 +65,7 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
             }
             """;
 
-    // An annotation the compiler discards that is not Lombok's or the JDK's
+    // An annotation the compiler discards that an annotation processor can still read
     private static final String SOURCE_ONLY = """
             package com.example.processing;
 
@@ -1852,7 +1852,7 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
     }
 
     @Test
-    void givesTheVoidMethodAnyAnnotationTheCompilerDiscards() {
+    void keepsAnAnnotationTheCompilerDiscardsOnlyOnTheMethodWhoseBodyMovesWhenItIsNotSneakyThrowsOrSuppressWarnings() {
         String after = """
                 package com.example;
 
@@ -1873,7 +1873,6 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
                         return Mono.empty();
                     }
 
-                    @SourceOnly
                     private void doCancelSubscription(String subscriptionId) {
                         if (ids.remove(subscriptionId)) {
                             ids.clear();
@@ -1911,7 +1910,7 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
         assertCompiles(after, SOURCE_ONLY);
     }
 
-    // The parser sees neither annotation, so it cannot read whether the compiler discards them
+    // The parser sees neither annotation, so the recipe goes by the names in the source
     @Test
     void givesTheVoidMethodOnlySneakyThrowsOfTheAnnotationsTheParserCannotSee() {
         String after = """
