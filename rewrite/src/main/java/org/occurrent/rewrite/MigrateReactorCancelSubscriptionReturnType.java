@@ -66,9 +66,11 @@ import java.util.UUID;
  *     a qualifier. A class with a supertype the parser cannot see gets
  *     {@code cancelSubscriptionBodyBeforeOccurrent0340} instead, numbered the same way, since that supertype can have
  *     a public {@code doCancelSubscription(String)} that nothing in the class calls, and a private method of the same
- *     name and parameters would not compile. The new method keeps every annotation of the method apart from
- *     {@code @Override}, which a private method cannot have, so an annotation the body needs to compile, such as
- *     Lombok's {@code @SneakyThrows}, stays on it.</li>
+ *     name and parameters would not compile. The method keeps all its annotations, and the new method gets only the
+ *     ones the compiler discards, such as Lombok's {@code @SneakyThrows} and {@code @SuppressWarnings}, apart from
+ *     {@code @Override}. Those can be what lets the body compile, while one a framework reads at run time, such as
+ *     Spring's {@code @EventListener}, would take effect on both methods. An annotation whose type the parser cannot
+ *     see goes on the new method only when it is {@code @SneakyThrows} or {@code @SuppressWarnings}.</li>
  * </ul>
  * A body ending in a {@code return} or a {@code throw} stays in place too. Each {@code return;} of a body that stays in
  * place becomes {@code return Mono.empty();}. A declaration with no body, abstract or in an interface that extends
@@ -97,6 +99,9 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
     private static final String HELPER_NAME = "doCancelSubscription";
     // For an owner with a supertype this parser cannot see, since any method that type declares can then have the name
     private static final String HELPER_NAME_BESIDE_AN_UNSEEN_SUPERTYPE = "cancelSubscriptionBodyBeforeOccurrent0340";
+    // By fully qualified name, or by simple name when the parser cannot see the annotation's type
+    private static final Set<String> OVERRIDE = Set.of("java.lang.Override", "Override");
+    private static final Set<String> SOURCE_ONLY_WHEN_RETENTION_UNKNOWN = Set.of("lombok.SneakyThrows", "SneakyThrows", "java.lang.SuppressWarnings", "SuppressWarnings");
     private static final String RETURN_THE_WRAPPED_CANCEL = " TODO: return the Mono of the cancelSubscription call this method makes, so that the Mono returned here waits for its cleanup";
 
     // Parsed with a stub of Mono because this parser does not see the classpath of the source being migrated
@@ -428,9 +433,9 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                 return seen;
             }
 
-            // The method as it was, with its body, parameters, throws clause and annotations, made private and renamed.
-            // Every annotation but @Override stays, since one can be what lets the body compile, Lombok's @SneakyThrows
-            // for example, and a private method that overrides nothing cannot have @Override.
+            // The method as it was, with its body, parameters and throws clause, made private and renamed. It gets only the
+            // annotations the body can need to compile, Lombok's @SneakyThrows for example. An annotation a framework
+            // reads at run time, such as Spring's @EventListener, would otherwise take effect on both methods.
             private J.MethodDeclaration helper(J.MethodDeclaration method, String name) {
                 J.MethodDeclaration copy = (J.MethodDeclaration) new RandomizeIdVisitor<Integer>().visitNonNull(method, 0);
                 JavaType.Method type = copy.getMethodType() == null ? null : copy.getMethodType().withName(name);
@@ -439,13 +444,13 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                 List<J.Annotation> annotations = new ArrayList<>(copy.getLeadingAnnotations());
                 // An annotation between two modifiers belongs to the second, which the new method does not have
                 copy.getModifiers().forEach(modifier -> annotations.addAll(modifier.getAnnotations()));
-                annotations.removeIf(this::isOverride);
+                annotations.removeIf(annotation -> !forTheBody(annotation));
                 String beforeFirstModifier = copy.getModifiers().isEmpty() ? "" : copy.getModifiers().get(0).getPrefix().getWhitespace();
                 Space beforePrivate = annotations.isEmpty() ? Space.EMPTY : Space.format(beforeFirstModifier.isEmpty() ? "\n" + indent : beforeFirstModifier);
                 J.Modifier privateModifier = new J.Modifier(Tree.randomId(), beforePrivate, Markers.EMPTY, null, J.Modifier.Type.Private, Collections.emptyList());
                 TypeTree returnType = copy.getReturnTypeExpression();
                 if (returnType instanceof J.AnnotatedType annotated) {
-                    List<J.Annotation> onReturnType = ListUtils.map(annotated.getAnnotations(), annotation -> isOverride(annotation) ? null : annotation);
+                    List<J.Annotation> onReturnType = ListUtils.map(annotated.getAnnotations(), annotation -> forTheBody(annotation) ? annotation : null);
                     returnType = onReturnType.isEmpty() ? annotated.getTypeExpression() : annotated.withAnnotations(onReturnType);
                 }
                 return copy.withPrefix(Space.format("\n\n" + indent))
@@ -456,10 +461,28 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                         .withMethodType(type);
             }
 
-            // By name when the parser cannot see the annotation's type
-            private boolean isOverride(J.Annotation annotation) {
+            // An annotation the compiler discards cannot be read by a framework at run time. @Override is one, but a
+            // private method that overrides nothing cannot have it. When the retention cannot be read, only
+            // @SneakyThrows and @SuppressWarnings are kept.
+            private boolean forTheBody(J.Annotation annotation) {
                 JavaType.FullyQualified type = TypeUtils.asFullyQualified(annotation.getType());
-                return type == null ? "Override".equals(annotation.getSimpleName()) : "java.lang.Override".equals(type.getFullyQualifiedName());
+                String name = type == null ? annotation.getSimpleName() : type.getFullyQualifiedName();
+                if (OVERRIDE.contains(name)) {
+                    return false;
+                }
+                String retention = type == null ? null : retention(type);
+                return retention == null ? SOURCE_ONLY_WHEN_RETENTION_UNKNOWN.contains(name) : "SOURCE".equals(retention);
+            }
+
+            private @Nullable String retention(JavaType.FullyQualified annotationType) {
+                for (JavaType.FullyQualified meta : annotationType.getAnnotations()) {
+                    if (meta instanceof JavaType.Annotation retention && "java.lang.annotation.Retention".equals(retention.getFullyQualifiedName())
+                        && !retention.getValues().isEmpty()) {
+                        Object value = retention.getValues().get(0).getValue();
+                        return value instanceof JavaType.Variable constant ? constant.getName() : String.valueOf(value);
+                    }
+                }
+                return null;
             }
 
             private J.MethodInvocation callTo(J.MethodDeclaration helper, J.MethodDeclaration method) {

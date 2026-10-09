@@ -65,6 +65,50 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
             }
             """;
 
+    // An annotation the compiler discards that is not Lombok's or the JDK's
+    private static final String SOURCE_ONLY = """
+            package com.example.processing;
+
+            import java.lang.annotation.ElementType;
+            import java.lang.annotation.Retention;
+            import java.lang.annotation.RetentionPolicy;
+            import java.lang.annotation.Target;
+
+            @Target(ElementType.METHOD)
+            @Retention(RetentionPolicy.SOURCE)
+            public @interface SourceOnly {
+            }
+            """;
+
+    // Spring's annotation, which Spring reads at run time
+    private static final String EVENT_LISTENER = """
+            package org.springframework.context.event;
+
+            import java.lang.annotation.ElementType;
+            import java.lang.annotation.Retention;
+            import java.lang.annotation.RetentionPolicy;
+            import java.lang.annotation.Target;
+
+            @Target(ElementType.METHOD)
+            @Retention(RetentionPolicy.RUNTIME)
+            public @interface EventListener {
+            }
+            """;
+
+    private static final String LISTENS = """
+            package com.example.web;
+
+            import java.lang.annotation.ElementType;
+            import java.lang.annotation.Retention;
+            import java.lang.annotation.RetentionPolicy;
+            import java.lang.annotation.Target;
+
+            @Target(ElementType.METHOD)
+            @Retention(RetentionPolicy.RUNTIME)
+            public @interface Listens {
+            }
+            """;
+
     @Override
     public void defaults(RecipeSpec spec) {
         spec.recipe(new MigrateReactorCancelSubscriptionReturnType())
@@ -1742,6 +1786,259 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
                 )
         );
         assertCompiles(after, SNEAKY_THROWS);
+    }
+
+    // Spring would otherwise call both methods for one event
+    @Test
+    void keepsAnAnnotationReadAtRunTimeOnlyOnTheMethodWhoseBodyMoves() {
+        String after = """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import org.springframework.context.event.EventListener;
+                import reactor.core.publisher.Mono;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                class Model implements CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    @Override
+                    @EventListener
+                    @SuppressWarnings("unused")
+                    public Mono<Void> cancelSubscription(String subscriptionId) {
+                        doCancelSubscription(subscriptionId);
+                        return Mono.empty();
+                    }
+
+                    @SuppressWarnings("unused")
+                    private void doCancelSubscription(String subscriptionId) {
+                        if (ids.remove(subscriptionId)) {
+                            ids.clear();
+                        }
+                    }
+                }
+                """;
+        rewriteRun(
+                spec -> spec.parser(JavaParser.fromJavaVersion().dependsOn(MONO, CANCELLABLE_SUBSCRIPTIONS, DCB_SUBSCRIPTION_MODEL, BLOCKING_CANCELLABLE_SUBSCRIPTIONS, EVENT_LISTENER)),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                        import org.springframework.context.event.EventListener;
+
+                        import java.util.HashSet;
+                        import java.util.Set;
+
+                        class Model implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @Override
+                            @EventListener
+                            @SuppressWarnings("unused")
+                            public void cancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    ids.clear();
+                                }
+                            }
+                        }
+                        """,
+                        after
+                )
+        );
+        assertCompiles(after, EVENT_LISTENER);
+    }
+
+    @Test
+    void givesTheVoidMethodAnyAnnotationTheCompilerDiscards() {
+        String after = """
+                package com.example;
+
+                import com.example.processing.SourceOnly;
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                class Model implements CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    @Override
+                    @SourceOnly
+                    public Mono<Void> cancelSubscription(String subscriptionId) {
+                        doCancelSubscription(subscriptionId);
+                        return Mono.empty();
+                    }
+
+                    @SourceOnly
+                    private void doCancelSubscription(String subscriptionId) {
+                        if (ids.remove(subscriptionId)) {
+                            ids.clear();
+                        }
+                    }
+                }
+                """;
+        rewriteRun(
+                spec -> spec.parser(JavaParser.fromJavaVersion().dependsOn(MONO, CANCELLABLE_SUBSCRIPTIONS, DCB_SUBSCRIPTION_MODEL, BLOCKING_CANCELLABLE_SUBSCRIPTIONS, SOURCE_ONLY)),
+                java(
+                        """
+                        package com.example;
+
+                        import com.example.processing.SourceOnly;
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                        import java.util.HashSet;
+                        import java.util.Set;
+
+                        class Model implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @Override
+                            @SourceOnly
+                            public void cancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    ids.clear();
+                                }
+                            }
+                        }
+                        """,
+                        after
+                )
+        );
+        assertCompiles(after, SOURCE_ONLY);
+    }
+
+    // The parser sees neither annotation, so it cannot read whether the compiler discards them
+    @Test
+    void givesTheVoidMethodOnlySneakyThrowsOfTheAnnotationsTheParserCannotSee() {
+        String after = """
+                package com.example;
+
+                import com.example.web.Listens;
+                import lombok.SneakyThrows;
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                class Model implements CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    @Override
+                    @Listens
+                    @SneakyThrows
+                    public Mono<Void> cancelSubscription(String subscriptionId) {
+                        doCancelSubscription(subscriptionId);
+                        return Mono.empty();
+                    }
+
+                    @SneakyThrows
+                    private void doCancelSubscription(String subscriptionId) {
+                        if (ids.remove(subscriptionId)) {
+                            ids.clear();
+                        }
+                    }
+                }
+                """;
+        rewriteRun(
+                spec -> spec.typeValidationOptions(TypeValidation.none()),
+                java(
+                        """
+                        package com.example;
+
+                        import com.example.web.Listens;
+                        import lombok.SneakyThrows;
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                        import java.util.HashSet;
+                        import java.util.Set;
+
+                        class Model implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @Override
+                            @Listens
+                            @SneakyThrows
+                            public void cancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    ids.clear();
+                                }
+                            }
+                        }
+                        """,
+                        after
+                )
+        );
+        assertCompiles(after, SNEAKY_THROWS, LISTENS);
+    }
+
+    @Test
+    void keepsAnOverrideAfterTheModifiersOfABodyThatStays() {
+        migrates(
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                class Model implements CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    public @Override void cancelSubscription(String subscriptionId) {
+                        ids.remove(subscriptionId);
+                    }
+                }
+                """,
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                class Model implements CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    public @Override Mono<Void> cancelSubscription(String subscriptionId) {
+                        ids.remove(subscriptionId);
+                        return Mono.empty();
+                    }
+                }
+                """
+        );
+    }
+
+    @Test
+    void keepsAnOverrideAfterTheModifiersOfAnAbstractDeclaration() {
+        migrates(
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                abstract class Model implements CancellableSubscriptions {
+                    public abstract @Override void cancelSubscription(String subscriptionId);
+                }
+                """,
+                """
+                package com.example;
+
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                abstract class Model implements CancellableSubscriptions {
+                    public abstract @Override Mono<Void> cancelSubscription(String subscriptionId);
+                }
+                """
+        );
     }
 
     private void migrates(String before, String after) {
