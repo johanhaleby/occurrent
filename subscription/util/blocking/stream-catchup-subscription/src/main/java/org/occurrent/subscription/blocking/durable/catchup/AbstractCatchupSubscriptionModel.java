@@ -62,11 +62,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // Set by stop(), cleared by start(...). Checked by the replay loops so stop() interrupts an in-flight
     // replay, not just the delegate the replay has not registered with yet. Written only under lifecycleLock.
     protected volatile boolean stopped = false;
-    // Held while stopped or lifecycleGeneration changes, and never while the live delegate is called
+    // Held while the fields below or stopped change, and never while the live delegate is started or resumed
     private final Object lifecycleLock = new Object();
-    // Moves on with every start, resume and stop, so a start whose live delegate failed can tell whether another
-    // call came after it
+    // Moves on with every start and stop, so a start whose live delegate failed can tell whether another came after it
     private long lifecycleGeneration = 0;
+    // Whether stopped was set by a start whose live delegate failed, rather than by a stop
+    private boolean stoppedByFailedStart = false;
     // Replays subscribed while this model was stopped, and replays a stop() cut short. The live delegate knows none of
     // them until start(true) or a resume runs the replay again.
     private final ConcurrentMap<String, ParkedReplay> parkedReplays = new ConcurrentHashMap<>();
@@ -176,7 +177,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Starts the live delegate and, with {@code resumeSubscriptionsAutomatically}, runs every parked replay again, as
      * the delegate resumes what it holds paused. Without it a parked replay waits for {@link #resumeSubscription(String)}.
      * When starting the live delegate throws and the delegate is not running afterwards, a model that was stopped stays
-     * stopped and runs no replay, unless another start, resume or stop of this model came in the meantime.
+     * stopped and runs no replay, unless another start or stop of this model came in the meantime, or a resume started
+     * the delegate.
      */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
@@ -184,10 +186,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try {
             getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
         } catch (Throwable e) {
-            // A delegate that runs after all keeps this model started, so a later subscription replays and hands over to it
-            if (!getWrappedSubscriptionModel().isRunning()) {
-                undoStart(attempt);
-            }
+            undoStart(attempt);
             throw e;
         }
         if (resumeSubscriptionsAutomatically) {
@@ -246,7 +245,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
-        if (beginResume() && isPaused(subscriptionId)) {
+        if (stopped && isPaused(subscriptionId)) {
             start(false);
         }
         pauseRequestedDuringCatchup.remove(subscriptionId);
@@ -256,7 +255,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return relaunched;
             }
         }
-        return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
+        Subscription resumed = getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
+        liveDelegateResumed();
+        return resumed;
     }
 
     @Override
@@ -614,6 +615,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     public void stopReplay() {
         synchronized (lifecycleLock) {
             stopped = true;
+            stoppedByFailedStart = false;
             lifecycleGeneration++;
         }
         parkReplaysInFlight();
@@ -640,6 +642,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     public void resumeReplay() {
         synchronized (lifecycleLock) {
             stopped = false;
+            stoppedByFailedStart = false;
             lifecycleGeneration++;
         }
     }
@@ -658,35 +661,43 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         synchronized (lifecycleLock) {
             StartAttempt attempt = new StartAttempt(stopped, ++lifecycleGeneration);
             stopped = false;
+            stoppedByFailedStart = false;
             return attempt;
         }
     }
 
     /**
-     * Stops this model again after starting the live delegate threw and the delegate is not running, when the model
-     * was stopped before and no other start, resume or stop of it came since.
+     * Stops this model again after starting the live delegate threw, when the model was stopped before, no other start
+     * or stop of it came since, and the delegate is not running. A delegate that runs after all keeps this model
+     * started, so a later subscription replays and hands over to it.
      */
     void undoStart(StartAttempt attempt) {
         synchronized (lifecycleLock) {
-            if (!attempt.wasStopped() || attempt.generation() != lifecycleGeneration) {
+            // Asked under the lock, so a resume that starts the delegate either comes first or sees this stop
+            if (!attempt.wasStopped() || attempt.generation() != lifecycleGeneration || getWrappedSubscriptionModel().isRunning()) {
                 return;
             }
             stopped = true;
+            stoppedByFailedStart = true;
             lifecycleGeneration++;
         }
         parkReplaysInFlight();
     }
 
     /**
-     * Records a resume, so a start running at the same time no longer stops this model again when its live delegate
-     * fails, and returns whether this model is stopped.
+     * Allows replays to run again after a resume of the live delegate returned, when a start whose live delegate failed
+     * stopped this model again, as resuming a subscription starts the delegate.
      */
-    boolean beginResume() {
+    void liveDelegateResumed() {
         synchronized (lifecycleLock) {
-            lifecycleGeneration++;
-            return stopped;
+            if (stopped && stoppedByFailedStart) {
+                stopped = false;
+                stoppedByFailedStart = false;
+                lifecycleGeneration++;
+            }
         }
     }
+
 
     /**
      * Delete {@code subscriptionId}'s position from the configured position storage, if any. Exposed so the

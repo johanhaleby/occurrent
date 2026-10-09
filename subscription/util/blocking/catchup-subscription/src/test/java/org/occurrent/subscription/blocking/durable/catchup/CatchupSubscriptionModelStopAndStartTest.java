@@ -47,6 +47,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.BiFunction;
 import java.util.stream.Stream;
@@ -274,7 +275,33 @@ class CatchupSubscriptionModelStopAndStartTest {
 
     @ParameterizedTest
     @MethodSource("models")
-    void a_failing_start_does_not_park_a_replay_that_a_resume_ran_again_while_it_was_starting_the_live_model(BiFunction<FakeLiveModel, EventStoreQueries, SubscriptionModel> modelOver) {
+    void a_resume_that_starts_the_live_model_after_a_failing_start_stopped_the_model_again_starts_the_model(BiFunction<FakeLiveModel, EventStoreQueries, SubscriptionModel> modelOver) {
+        FakeLiveModel live = new FakeLiveModel();
+        SubscriptionModel model = modelOver.apply(live, history());
+        assertThat(model.subscribe("a", StartAtTime.beginningOfTime(), e -> {}).waitUntilStarted(STARTED_WITHIN)).as("a handed over").isTrue();
+        model.stop();
+        CountDownLatch releaseResume = new CountDownLatch(1);
+        live.blockNextResumeUntil = releaseResume;
+        AtomicReference<CompletableFuture<Subscription>> resuming = new AtomicReference<>();
+        failStartWhile(model, live, () -> {
+            // The failing start already allows replays to run, so this resume goes to the live model without a start of its own
+            resuming.set(CompletableFuture.supplyAsync(() -> model.resumeSubscription("a")));
+            awaitWithin(live.resumeEntered);
+        });
+        releaseResume.countDown();
+        assertThat(resuming.get().join().waitUntilStarted(STARTED_WITHIN)).as("a resumed").isTrue();
+        List<String> receivedByB = new CopyOnWriteArrayList<>();
+
+        Subscription b = model.subscribe("b", StartAtTime.beginningOfTime(), e -> receivedByB.add(e.getId()));
+
+        assertThat(b.waitUntilStarted(STARTED_WITHIN)).as("b started after a resume that started the live model").isTrue();
+        live.publish(cloudEvent("3"));
+        assertThat(receivedByB).containsExactly("1", "2", "3");
+    }
+
+    @ParameterizedTest
+    @MethodSource("models")
+    void a_replay_that_a_resume_ran_again_while_a_failing_start_was_starting_the_live_model_waits_for_the_next_resume(BiFunction<FakeLiveModel, EventStoreQueries, SubscriptionModel> modelOver) {
         FakeLiveModel live = new FakeLiveModel();
         GatedHistory history = history();
         SubscriptionModel model = modelOver.apply(live, history);
@@ -283,25 +310,107 @@ class CatchupSubscriptionModelStopAndStartTest {
         model.subscribe("a", StartAtTime.beginningOfTime(), e -> receivedByA.add(e.getId()));
         CountDownLatch gate = new CountDownLatch(1);
         history.gate = gate;
+        failStartWhile(model, live, () -> {
+            // The failing start already allows replays to run, so this resume runs a's replay without a start of its own
+            model.resumeSubscription("a");
+            awaitWithin(history.queried);
+        });
+
+        gate.countDown();
+
+        await().atMost(STARTED_WITHIN).until(() -> model.isPaused("a"));
+        assertThat(receivedByA).as("history replayed to a while the model is stopped").isEmpty();
+        assertThat(model.resumeSubscription("a").waitUntilStarted(STARTED_WITHIN)).as("a resumed").isTrue();
+        assertThat(live.startCalls).as("start calls on the live model").containsExactly(false, false);
+        live.publish(cloudEvent("3"));
+        assertThat(receivedByA).containsExactly("1", "2", "3");
+    }
+
+    @ParameterizedTest
+    @MethodSource("models")
+    void a_resume_of_an_unknown_subscription_while_a_failing_start_was_starting_the_live_model_keeps_the_model_stopped(BiFunction<FakeLiveModel, EventStoreQueries, SubscriptionModel> modelOver) {
+        FakeLiveModel live = new FakeLiveModel();
+        SubscriptionModel model = modelOver.apply(live, history());
+        model.stop();
+        List<String> receivedByA = new CopyOnWriteArrayList<>();
+        model.subscribe("a", StartAtTime.beginningOfTime(), e -> receivedByA.add(e.getId()));
+        failStartWhile(model, live, () -> assertThat(catchThrowable(() -> model.resumeSubscription("unknown"))).isInstanceOf(UnknownSubscriptionException.class));
+
+        Subscription resumed = model.resumeSubscription("a");
+
+        assertThat(resumed.waitUntilStarted(STARTED_WITHIN)).as("a started by its resume").isTrue();
+        live.publish(cloudEvent("3"));
+        assertThat(receivedByA).containsExactly("1", "2", "3");
+    }
+
+    @ParameterizedTest
+    @MethodSource("models")
+    void a_resume_of_a_running_subscription_while_a_failing_start_was_starting_the_live_model_keeps_the_model_stopped(BiFunction<FakeLiveModel, EventStoreQueries, SubscriptionModel> modelOver) {
+        FakeLiveModel live = new FakeLiveModel();
+        SubscriptionModel model = modelOver.apply(live, history());
+        assertThat(model.subscribe("running", StartAtTime.beginningOfTime(), e -> {}).waitUntilStarted(STARTED_WITHIN)).as("running handed over").isTrue();
+        model.stop();
+        // The live model is stopped but says the subscription named running still runs, so resuming it throws
+        live.subscriptions.get("running").started = true;
+        List<String> receivedByA = new CopyOnWriteArrayList<>();
+        model.subscribe("a", StartAtTime.beginningOfTime(), e -> receivedByA.add(e.getId()));
+        failStartWhile(model, live, () -> assertThat(catchThrowable(() -> model.resumeSubscription("running"))).isInstanceOf(SubscriptionAlreadyRunningException.class));
+
+        Subscription resumed = model.resumeSubscription("a");
+
+        assertThat(resumed.waitUntilStarted(STARTED_WITHIN)).as("a started by its resume").isTrue();
+        live.publish(cloudEvent("3"));
+        assertThat(receivedByA).containsExactly("1", "2", "3");
+    }
+
+    @ParameterizedTest
+    @MethodSource("models")
+    void a_subscription_made_after_a_failing_start_that_a_resume_of_an_unknown_subscription_overlapped_stays_paused(BiFunction<FakeLiveModel, EventStoreQueries, SubscriptionModel> modelOver) {
+        FakeLiveModel live = new FakeLiveModel();
+        SubscriptionModel model = modelOver.apply(live, history());
+        model.stop();
+        failStartWhile(model, live, () -> assertThat(catchThrowable(() -> model.resumeSubscription("unknown"))).isInstanceOf(UnknownSubscriptionException.class));
+        List<String> receivedByB = new CopyOnWriteArrayList<>();
+
+        Subscription b = model.subscribe("b", StartAtTime.beginningOfTime(), e -> receivedByB.add(e.getId()));
+
+        assertThat(model.isPaused("b")).as("b paused").isTrue();
+        assertThat(b.waitUntilStarted(Duration.ofMillis(500))).as("b started").isFalse();
+        assertThat(receivedByB).as("history replayed to b").isEmpty();
+    }
+
+    @ParameterizedTest
+    @MethodSource("models")
+    void a_stop_while_a_failing_start_was_starting_the_live_model_keeps_the_model_stopped(BiFunction<FakeLiveModel, EventStoreQueries, SubscriptionModel> modelOver) {
+        FakeLiveModel live = new FakeLiveModel();
+        SubscriptionModel model = modelOver.apply(live, history());
+        model.stop();
+        List<String> receivedByA = new CopyOnWriteArrayList<>();
+        model.subscribe("a", StartAtTime.beginningOfTime(), e -> receivedByA.add(e.getId()));
+        failStartWhile(model, live, model::stop);
+
+        model.subscribe("b", StartAtTime.beginningOfTime(), e -> {});
+
+        assertThat(model.isPaused("b")).as("b paused").isTrue();
+        assertThat(model.resumeSubscription("a").waitUntilStarted(STARTED_WITHIN)).as("a resumed").isTrue();
+        live.publish(cloudEvent("3"));
+        assertThat(receivedByA).containsExactly("1", "2", "3");
+    }
+
+    // Runs start(false) on another thread with a live model whose start fails before it takes effect, and runs
+    // whileStarting after that start has begun and before it throws
+    private static void failStartWhile(SubscriptionModel model, FakeLiveModel live, Runnable whileStarting) {
         CountDownLatch release = new CountDownLatch(1);
         live.blockNextStartUntil = release;
         live.failNextStart = FailMode.BEFORE_EFFECT;
         CompletableFuture<Throwable> failing = CompletableFuture.supplyAsync(() -> catchThrowable(() -> model.start(false)));
         awaitWithin(live.startEntered);
-        // The failing start already allows replays to run, so this resume runs a's replay without a start of its own
-        model.resumeSubscription("a");
-        awaitWithin(history.queried);
-        release.countDown();
-        assertThat(failing.join()).isInstanceOf(IllegalStateException.class);
-
-        gate.countDown();
-
-        await().atMost(STARTED_WITHIN).untilAsserted(() -> assertThat(receivedByA).as("history replayed to a").containsExactly("1", "2"));
-        // The live model is not running, so it holds a until a resume starts it
-        await().atMost(STARTED_WITHIN).until(() -> model.isPaused("a"));
-        assertThat(model.resumeSubscription("a").waitUntilStarted(STARTED_WITHIN)).as("a resumed").isTrue();
-        live.publish(cloudEvent("3"));
-        assertThat(receivedByA).containsExactly("1", "2", "3");
+        try {
+            whileStarting.run();
+        } finally {
+            release.countDown();
+        }
+        assertThat(failing.join()).as("the failing start threw").isInstanceOf(IllegalStateException.class);
     }
 
     private static CloudEvent cloudEvent(String id) {
@@ -363,6 +472,9 @@ class CatchupSubscriptionModelStopAndStartTest {
         // A start that finds this set waits for it before doing anything else, and counts down startEntered
         volatile @Nullable CountDownLatch blockNextStartUntil = null;
         final CountDownLatch startEntered = new CountDownLatch(1);
+        // The same for a resume, which counts down resumeEntered
+        volatile @Nullable CountDownLatch blockNextResumeUntil = null;
+        final CountDownLatch resumeEntered = new CountDownLatch(1);
         final List<Boolean> startCalls = new CopyOnWriteArrayList<>();
         private final Map<String, FakeSubscription> subscriptions = new ConcurrentHashMap<>();
 
@@ -442,17 +554,25 @@ class CatchupSubscriptionModelStopAndStartTest {
         }
 
         @Override
-        public synchronized Subscription resumeSubscription(String subscriptionId) {
-            FakeSubscription subscription = subscriptions.get(subscriptionId);
-            if (subscription == null) {
-                throw new UnknownSubscriptionException(subscriptionId);
+        public Subscription resumeSubscription(String subscriptionId) {
+            CountDownLatch block = blockNextResumeUntil;
+            if (block != null) {
+                blockNextResumeUntil = null;
+                resumeEntered.countDown();
+                awaitWithin(block);
             }
-            if (subscription.started) {
-                throw new SubscriptionAlreadyRunningException(subscriptionId);
+            synchronized (this) {
+                FakeSubscription subscription = subscriptions.get(subscriptionId);
+                if (subscription == null) {
+                    throw new UnknownSubscriptionException(subscriptionId);
+                }
+                if (subscription.started) {
+                    throw new SubscriptionAlreadyRunningException(subscriptionId);
+                }
+                running = true;
+                subscription.go();
+                return subscription;
             }
-            running = true;
-            subscription.go();
-            return subscription;
         }
 
         @Override
