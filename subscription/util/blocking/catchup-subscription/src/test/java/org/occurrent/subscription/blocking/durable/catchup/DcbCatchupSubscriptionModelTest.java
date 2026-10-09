@@ -24,6 +24,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
@@ -536,7 +537,7 @@ class DcbCatchupSubscriptionModelTest {
             @Override
             public boolean canResumeFrom(Checkpoint checkpoint) {
                 resumeProbes.add(checkpoint);
-                return false;
+                return !checkpoint.equals(agedOut);
             }
         };
         CopyOnWriteArrayList<String> saved = new CopyOnWriteArrayList<>();
@@ -555,11 +556,50 @@ class DcbCatchupSubscriptionModelTest {
 
         await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history.subList(1, 4)));
         StringBasedCheckpoint liveStartReadNow = new StringBasedCheckpoint("in-memory-global-position");
-        assertThat(resumeProbes).containsExactly(agedOut);
+        assertThat(resumeProbes).containsExactly(agedOut, liveStartReadNow);
         assertThat(liveStarts).containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
         assertThat(saved.stream().map(StringBasedCheckpoint::new).filter(GlobalCheckpoint::isGlobalCheckpoint).map(GlobalCheckpoint::parse))
                 .as("the checkpoints the replay stores carry the new live start and the same origin")
                 .containsExactly(GlobalCheckpoint.of(2, liveStartReadNow, 1, 4), GlobalCheckpoint.of(3, liveStartReadNow, 1, 4), GlobalCheckpoint.of(4, liveStartReadNow, 1, 4));
+    }
+
+    @Test
+    @Timeout(30)
+    void a_catch_up_whose_live_start_the_model_loses_during_every_replay_fails_after_four_replays_instead_of_replaying_forever() {
+        List<NameDefined> history = List.of(nameDefined("e1"), nameDefined("e2"), nameDefined("e3"));
+        history.forEach(event -> appendTagged("name:1", event));
+        CopyOnWriteArrayList<Checkpoint> resumeProbes = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> liveStarts = new CopyOnWriteArrayList<>();
+        CheckpointAwareSubscriptionModel losesEveryLiveStart = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel) {
+            @Override
+            public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+                liveStarts.add(String.valueOf(startAt));
+                return super.subscribe(subscriptionId, filter, startAt, action);
+            }
+
+            @Override
+            public boolean canResumeFrom(Checkpoint checkpoint) {
+                resumeProbes.add(checkpoint);
+                return false;
+            }
+        };
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        DcbCatchupSubscriptionModel subscription = new DcbCatchupSubscriptionModel(losesEveryLiveStart, eventStore, DcbCriteria.tags(Tag.parse("name:1")), new CatchupSubscriptionModelConfig(100));
+        try {
+            Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
+
+            assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(20)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("subscription")
+                    .hasMessageContaining("4 replays")
+                    .hasMessageContaining("oplog");
+            assertThat(received).as("the whole history once for each of the 4 replays")
+                    .containsExactlyElementsOf(Stream.generate(() -> history).limit(4).flatMap(List::stream).toList());
+            assertThat(resumeProbes).as("asked once after each replay").hasSize(4);
+            assertThat(liveStarts).as("nothing handed over").isEmpty();
+        } finally {
+            subscription.shutdown();
+        }
     }
 
     @Test

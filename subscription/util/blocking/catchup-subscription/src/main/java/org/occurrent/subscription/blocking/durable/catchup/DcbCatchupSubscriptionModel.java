@@ -52,8 +52,8 @@ import java.util.stream.Stream;
  * still needs {@code eventstore-api-dcb} on the classpath.
  * <p>
  * Delivery is at-least-once, with the same catch-up-to-live handover guarantee documented on the dispatcher: the live
- * resume token is captured before the bulk replay, and a replay longer than the change stream history fails loudly at
- * handover instead of silently dropping events.
+ * resume token is read before the bulk replay. A replay longer than the change stream history runs again from its
+ * origin instead of handing the lost token over, and the catch-up fails loudly when 4 replays in a row lose it.
  */
 @NullMarked
 class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
@@ -165,7 +165,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // The live start is read before the bulk replay, or kept from the attempt that stored the checkpoint, so an
         // event committed during the replay is still delivered live. When the delegate reports no live start at all
         // the catch-up fails (captureLiveResumeCheckpoint). A live start that leaves the change stream history during
-        // a long replay is not handed over. The replay runs again from its origin with a live start read now.
+        // a long replay is not handed over (replayUntilLiveStartHolds).
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
         PositionReplayStart replayStart = positionReplayStart(subscriptionId, checkpoint, delegatedStartAt);
@@ -188,13 +188,9 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             }
         };
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(dcbReader, windowSize);
-        PositionReplayStart replayAgain = replayStart;
-        while (replayAgain != null) {
-            replayStart = replayAgain;
-            replayPositions(subscriptionId, action, pipeline, dcbReader, replayStart, catchupPhaseCache, persistDuringCatchup);
-            replayAgain = replayAgainIfLiveStartLost(subscriptionId, replayStart, delegatedStartAt);
-        }
-        final Checkpoint globalCheckpoint = replayStart.liveFrom();
+        PositionReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, replayStart, delegatedStartAt,
+                start -> replayPositions(subscriptionId, action, pipeline, dcbReader, start, catchupPhaseCache, persistDuringCatchup));
+        final Checkpoint globalCheckpoint = handoverStart.liveFrom();
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
         // blocking stream catch-up. Unlocked, a cancelSubscription or a fresh subscribe for this id could land in

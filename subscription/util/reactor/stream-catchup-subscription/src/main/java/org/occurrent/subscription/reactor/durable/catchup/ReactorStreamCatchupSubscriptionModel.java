@@ -84,8 +84,9 @@ import static java.util.Objects.requireNonNull;
  * fails. If the replay runs longer than the change stream history (the MongoDB oplog window), the token leaves that
  * history before the handover. The token is checked again once the replay is done, and one the wrapped model no
  * longer has the history from is not handed over. The replay runs again from the position the first attempt started
- * from, with a token read then, and redelivers the events in between. A replay that outlasts the history every time
- * replays again every time, so size the oplog for very large rebuilds.
+ * from, with a token read then, and redelivers the events in between. When the token leaves the history during 4
+ * replays in a row, the subscription fails with an {@code IllegalStateException} instead of replaying a fifth time,
+ * so size the oplog for very large rebuilds.
  * <p>
  * This model does not persist subscription positions, so layer a durable model on top (for example
  * {@code ReactorDurableSubscriptionModel}) if resume across restarts is needed.

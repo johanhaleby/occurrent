@@ -22,6 +22,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
@@ -32,6 +33,7 @@ import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeMap;
@@ -352,6 +354,27 @@ class PositionCatchupPipelineTest {
                 .verifyComplete();
         assertThat(live.resumeProbes).containsExactly(RecordingLiveSource.READ_NOW);
         assertThat(live.liveStarts).containsExactly(StartAt.checkpoint(RecordingLiveSource.READ_NOW).toString());
+    }
+
+    @Test
+    @Timeout(30)
+    void a_catch_up_whose_live_start_the_model_loses_during_every_replay_fails_after_four_replays_instead_of_replaying_forever() {
+        FakeReader reader = FakeReader.withEventsInRange(1, 3).head(3).taggedWithTheirPosition();
+        // READ_NOW is the only live start the catch-up reads
+        RecordingLiveSource live = new RecordingLiveSource(RecordingLiveSource.READ_NOW);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+        Checkpoint second = GlobalCheckpoint.of(2, RecordingLiveSource.READ_NOW, 1, 3);
+        Checkpoint third = GlobalCheckpoint.of(3, RecordingLiveSource.READ_NOW, 1, 3);
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(1)).map(PositionCatchupPipelineTest::checkpointOf))
+                .expectNext(second, third, second, third, second, third, second, third)
+                .expectErrorSatisfies(throwable -> assertThat(throwable)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("4 replays")
+                        .hasMessageContaining("oplog"))
+                .verify(Duration.ofSeconds(20));
+        assertThat(live.resumeProbes).as("asked once after each replay").hasSize(4);
+        assertThat(live.liveStarts).as("nothing handed over").isEmpty();
     }
 
     private static Checkpoint checkpointOf(CloudEvent cloudEvent) {

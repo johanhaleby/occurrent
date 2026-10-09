@@ -64,8 +64,8 @@ import static java.util.Objects.requireNonNull;
  * stream history (the MongoDB oplog window), the token leaves that history before the handover. The token is checked
  * again once the replay is done, and one the wrapped model no longer has the history from is not handed over. The
  * replay runs again from the position the first attempt started from, with a token read then, and redelivers the
- * events in between. A replay that outlasts the history every time replays again every time, so size the oplog for
- * very large rebuilds.
+ * events in between. When the token leaves the history during 4 replays in a row, the subscription fails with an
+ * {@code IllegalStateException} instead of replaying a fifth time, so size the oplog for very large rebuilds.
  * <p>
  * This is the DCB path only. Stream time-based catch-up is not provided here, and this model does not persist
  * subscription positions, so layer a durable model on top (for example {@code ReactorDurableSubscriptionModel}) if

@@ -84,8 +84,9 @@ import java.util.stream.Stream;
  * is still delivered live. A replay that runs longer than the database change stream history (the MongoDB oplog
  * window) leaves the token behind. The token is checked again once the replay is done, and one the wrapped model no
  * longer has the history from is not handed over. The replay runs again from the position the first attempt started
- * from, with a token read then, and redelivers the events in between. A replay that outlasts the history every time
- * replays again every time, so size the oplog for very large rebuilds.
+ * from, with a token read then, and redelivers the events in between. When the token leaves the history during 4
+ * replays in a row, the subscription fails with an {@code IllegalStateException} instead of replaying a fifth time,
+ * so size the oplog for very large rebuilds.
  * </p>
  * <br>
  * <p>

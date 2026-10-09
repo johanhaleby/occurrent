@@ -91,6 +91,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private static final ThreadLocal<@Nullable CatchupAttempt> CURRENT_ATTEMPT = new ThreadLocal<>();
     // How often a replay run again checks, while an earlier attempt's action still runs, whether it should still wait
     private static final long EARLIER_ATTEMPT_POLL_MILLIS = 100;
+    // How many times a position replay may run again from its origin after the first replay, when the wrapped model
+    // keeps losing the live start while the replay runs
+    private static final int MAX_REPLAYS_AGAIN = 3;
     // Who to tell about each id's catch-up boundaries, registered before the subscription that produces them.
     // Kept until this model shuts down, since the registration outlives any one catch-up: a stop and start, a
     // resume, or a cancel and re-subscribe all run another catch-up for the same id, and a recorder that stopped
@@ -635,26 +638,53 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * Checks, after a position replay and before its handover, that the wrapped model can still resume from the live
-     * start the replay hands over to. Returns null when it can, or when there is nothing to hand over. Otherwise the
-     * live start left the change stream history during the replay, and the returned start replays again from the
-     * position the first attempt started from, with a live start read now. Handing the lost live start to the wrapped
-     * model instead would leave it to that model, and a MongoDB model that restarts on lost history goes live from
-     * the present and skips every event between the live start and the restart.
+     * Runs {@code replay} from {@code first} and returns the start whose live start the catch-up hands over to. After
+     * each replay this asks the wrapped model whether it can still resume from that live start. When it can't, the
+     * live start left the change stream history during the replay, and {@code replay} runs again from the position
+     * the first attempt started from, with a live start read now. Handing the lost live start over instead would leave
+     * it to the wrapped model, and a MongoDB model that restarts on lost history goes live from the present and skips
+     * every event between the live start and the restart. A live start read now is asked about after its own replay
+     * too, since a long replay can lose it as well.
      * <p>
-     * A {@link CatchupListener} is told the catch-up started again, since what the next replay delivers is history it
-     * reads again and not events written since it started. Told under the handover lock and only while this attempt
-     * still owns the id, as on registration, so an attempt that lost the id cannot reset what its replacement told
-     * the listener. Only meaningful on the virtual thread {@link #startCatchupAsync} started for this attempt.
+     * So the catch-up goes live only from a live start the wrapped model accepted after the last replay, or throws
+     * {@link IllegalStateException} once the replay ran {@value #MAX_REPLAYS_AGAIN} times again and lost the live
+     * start each time. It never hands a lost live start over and never skips an event written after the replay
+     * origin, but delivers the events it replays again more than once. A replay that was stopped, cancelled or taken
+     * over is not asked about, and its start is returned as it is for the handover to deal with.
+     * <p>
+     * A {@link CatchupListener} is told the catch-up started again before each replay run again, since what that
+     * replay delivers is history read again and not events written since the catch-up started. Only meaningful on the
+     * virtual thread {@link #startCatchupAsync} started for this attempt.
      */
-    protected @Nullable PositionReplayStart replayAgainIfLiveStartLost(String subscriptionId, PositionReplayStart replayed, @Nullable StartAt delegatedStartAt) {
+    protected PositionReplayStart replayUntilLiveStartHolds(String subscriptionId, PositionReplayStart first, @Nullable StartAt delegatedStartAt,
+                                                            Consumer<PositionReplayStart> replay) {
+        PositionReplayStart replayed = first;
+        replay.accept(replayed);
+        for (int replaysAgain = 0; ; replaysAgain++) {
+            PositionReplayStart again = replayAgainIfLiveStartLost(subscriptionId, replayed, delegatedStartAt, replaysAgain);
+            if (again == null) {
+                return replayed;
+            }
+            replayed = again;
+            replay.accept(replayed);
+        }
+    }
+
+    // Null when the wrapped model can still resume from the live start, or when this attempt should no longer replay
+    private @Nullable PositionReplayStart replayAgainIfLiveStartLost(String subscriptionId, PositionReplayStart replayed, @Nullable StartAt delegatedStartAt, int replaysAgain) {
         Checkpoint liveFrom = replayed.liveFrom();
         if (liveFrom == null || !shouldKeepReplaying(subscriptionId) || subscriptionModel.canResumeFrom(liveFrom)) {
             return null;
         }
+        if (replaysAgain >= MAX_REPLAYS_AGAIN) {
+            throw new IllegalStateException("Cannot hand catch-up subscription " + subscriptionId + " over to live delivery, because the subscription model lost the live start during each of its "
+                    + (replaysAgain + 1) + " replays. Size the change stream history, such as the MongoDB oplog, so that it outlasts the longest replay. Last live start: " + liveFrom.asString());
+        }
         log.warn("The live start of catch-up subscription {} left the subscription model's history during the replay, so the catch-up replays again from position {} and redelivers the events in between. Live start: {}",
                 subscriptionId, replayed.replayOrigin(), liveFrom.asString());
         PositionReplayStart again = new PositionReplayStart(replayed.replayOrigin(), captureLiveResumeCheckpoint(delegatedStartAt), replayed.replayOrigin(), null);
+        // Told only while this attempt still owns the id, as on registration, so an attempt that lost the id cannot
+        // reset what its replacement told the listener
         CatchupAttempt attempt = CURRENT_ATTEMPT.get();
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
             if (currentAttempt.get(subscriptionId) != attempt) {

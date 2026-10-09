@@ -425,7 +425,8 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
 
         // The live start is read before the bulk replay, or kept from the attempt that stored the checkpoint, so an
         // event committed during the replay is still delivered live, like the DCB handover. Fails loudly instead of
-        // falling back to "now" when the delegate reports no resume token (captureLiveResumeCheckpoint).
+        // falling back to "now" when the delegate reports no resume token (captureLiveResumeCheckpoint). A live start
+        // that leaves the change stream history during a long replay is not handed over (replayUntilLiveStartHolds).
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
         PositionReplayStart replayStart = positionReplayStart(subscriptionId, checkpoint, delegatedStartAt);
@@ -447,15 +448,9 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             }
         };
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(streamReader, windowSize);
-        // A live start that left the change stream history while the replay ran is not handed over. The replay runs
-        // again from its origin with a live start read now instead.
-        PositionReplayStart replayAgain = replayStart;
-        while (replayAgain != null) {
-            replayStart = replayAgain;
-            replayPositions(subscriptionId, action, pipeline, streamReader, replayStart, catchupPhaseCache, persistDuringCatchup);
-            replayAgain = replayAgainIfLiveStartLost(subscriptionId, replayStart, delegatedStartAt);
-        }
-        final Checkpoint globalCheckpoint = replayStart.liveFrom();
+        PositionReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, replayStart, delegatedStartAt,
+                start -> replayPositions(subscriptionId, action, pipeline, streamReader, start, catchupPhaseCache, persistDuringCatchup));
+        final Checkpoint globalCheckpoint = handoverStart.liveFrom();
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
         // time-based path above. An unlocked gap here is observable two ways, a lost cancellation, or a fresh

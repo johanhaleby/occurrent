@@ -163,7 +163,8 @@ final class NamedCatchupSupport {
      * reconciliation read emitted. The history ids are deliberately not among them, so a write that was still in
      * flight when the head was read is delivered again live and can be recorded there. A token that left the change
      * stream history during the replay is not handed over. The replay runs again from the position the first attempt
-     * started from, with a token read now, and the listener is told the catch-up started again.
+     * started from, with a token read now, and the listener is told the catch-up started again. A catch-up whose
+     * replay loses the token 4 times in a row fails like any other failed replay.
      */
     Subscription subscribeWithCatchup(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
                                       CatchupReader reader, long windowSize, int handoverCacheSize, GlobalCheckpoint start,
@@ -196,7 +197,7 @@ final class NamedCatchupSupport {
             // Token before replay, replay through the caller's action (no retry, failure is loud), then delegate live.
             Disposable replaying = pipeline.resolveStart(wrapped, start, subscriptionId)
                     .flatMapMany(replayStart -> replayThenHandOver(subscriptionId, state, launched, delegate, pipeline, replayStart, cache, action,
-                            liveSubscriptionFilter, liveAction))
+                            liveSubscriptionFilter, liveAction, 0))
                     .subscribe(unused -> {
                     }, throwable -> {
                         // A failed replay is a dead subscription, reported to whoever waits AND logged: a caller
@@ -246,10 +247,11 @@ final class NamedCatchupSupport {
     }
 
     // Replays from replayStart through the caller's action, then hands over to its token, or replays again first when
-    // the token left the change stream history during the replay
+    // the token left the change stream history during the replay. replaysAgain is how many times the replay already
+    // ran again.
     private Flux<Void> replayThenHandOver(String subscriptionId, CatchupState state, Object launched, SubscriptionModel delegate, PositionCatchupPipeline pipeline,
                                           PositionCatchupPipeline.ReplayStart replayStart, BoundedIdCache<CatchupEventKey> cache, Function<CloudEvent, Mono<Void>> action,
-                                          @Nullable SubscriptionFilter liveSubscriptionFilter, Function<CloudEvent, Mono<Void>> liveAction) {
+                                          @Nullable SubscriptionFilter liveSubscriptionFilter, Function<CloudEvent, Mono<Void>> liveAction, int replaysAgain) {
         // A stop between dispose landing and this event truncates here, before the action runs.
         BooleanSupplier keepReplaying = () -> !stopped && isCurrent(state, launched);
         return pipeline.replayApplying(replayStart, cache, keepReplaying, action,
@@ -265,12 +267,13 @@ final class NamedCatchupSupport {
                     // A replay a stop cut short goes to handOver without the check, which parks it or leaves it to
                     // the launch that replaced it
                     Mono<PositionCatchupPipeline.ReplayStart> liveStart = keepReplaying.getAsBoolean()
-                            ? pipeline.liveStartAfterReplay(wrapped, replayStart, subscriptionId)
+                            ? pipeline.liveStartAfterReplay(wrapped, replayStart, subscriptionId, replaysAgain)
                             : Mono.just(replayStart);
                     return liveStart.flatMapMany(next -> {
                         if (next != replayStart) {
                             announceCatchupStarted(subscriptionId, state, launched);
-                            return replayThenHandOver(subscriptionId, state, launched, delegate, pipeline, next, cache, action, liveSubscriptionFilter, liveAction);
+                            return replayThenHandOver(subscriptionId, state, launched, delegate, pipeline, next, cache, action, liveSubscriptionFilter, liveAction,
+                                    replaysAgain + 1);
                         }
                         handOver(subscriptionId, state, launched, delegate, liveSubscriptionFilter, StartAt.checkpoint(replayStart.liveFrom()), liveAction);
                         return Flux.<Void>empty();
