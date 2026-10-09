@@ -299,6 +299,129 @@ class CatchupProjectionFeedTest {
         assertThat(folded).containsExactly("1", "live");
     }
 
+    // The stop comes while the first catch-up reads the marker, and the second catch-up starts after the stop. Both
+    // reads throw, the first one first.
+    @Test
+    void a_stop_between_two_catch_ups_whose_marker_reads_throw_errors_a_waiting_accept() throws Exception {
+        assertThat(acceptAfterTwoCatchUpsThrewAroundAStop(true)).as("what accept(..) ended with after stopCatchUp() and two catch-ups that threw")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
+    }
+
+    @Test
+    void a_stop_between_two_catch_ups_whose_marker_reads_throw_errors_a_waiting_accept_when_the_later_one_throws_first() throws Exception {
+        assertThat(acceptAfterTwoCatchUpsThrewAroundAStop(false)).as("what accept(..) ended with after stopCatchUp() and two catch-ups that threw")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
+    }
+
+    @Test
+    void a_stop_during_a_catch_up_whose_marker_read_throws_errors_a_waiting_accept() throws Exception {
+        CountDownLatch asking = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                (Counted e) -> Mono.fromRunnable(() -> folded.add(e.eventId())),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, markerWhoseReadsThrow(List.of(asking), List.of(release)));
+        CompletableFuture<Void> accepted = feed.accept(new Counted("live")).toFuture();
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<?> catchingUp = executor.submit(() -> feed.catchUp());
+            awaitLatch(asking);
+            feed.stopCatchUp();
+            release.countDown();
+
+            assertThatThrownBy(() -> catchingUp.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+            assertThatThrownBy(() -> accepted.get(5, TimeUnit.SECONDS)).as("what accept(..) ended with")
+                    .isInstanceOf(java.util.concurrent.ExecutionException.class)
+                    .cause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage(HandoverMessages.stoppedBeforeApplied("projection feed"));
+            assertThat(folded).isEmpty();
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    // Returns what the Mono of an event fed before both catch-ups ended with, a TimeoutException when it never ended.
+    private Throwable acceptAfterTwoCatchUpsThrewAroundAStop(boolean firstThrowsFirst) throws Exception {
+        CountDownLatch askingFirst = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch askingSecond = new CountDownLatch(1);
+        CountDownLatch releaseSecond = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter",
+                (Counted e) -> Mono.fromRunnable(() -> folded.add(e.eventId())),
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId,
+                markerWhoseReadsThrow(List.of(askingFirst, askingSecond), List.of(releaseFirst, releaseSecond)));
+        CompletableFuture<Void> accepted = feed.accept(new Counted("live")).toFuture();
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<?> first = executor.submit(() -> feed.catchUp());
+            awaitLatch(askingFirst);
+            feed.stopCatchUp();
+            java.util.concurrent.Future<?> second = executor.submit(() -> feed.catchUp());
+            awaitLatch(askingSecond);
+
+            if (firstThrowsFirst) {
+                releaseFirst.countDown();
+                assertThatThrownBy(() -> first.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+                releaseSecond.countDown();
+                assertThatThrownBy(() -> second.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+            } else {
+                releaseSecond.countDown();
+                assertThatThrownBy(() -> second.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+                releaseFirst.countDown();
+                assertThatThrownBy(() -> first.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+            }
+
+            assertThat(folded).isEmpty();
+            try {
+                accepted.get(5, TimeUnit.SECONDS);
+                return null;
+            } catch (java.util.concurrent.ExecutionException e) {
+                return e.getCause();
+            } catch (java.util.concurrent.TimeoutException e) {
+                return e;
+            }
+        } finally {
+            releaseFirst.countDown();
+            releaseSecond.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    // Read number n counts down asking n, waits for release n, then throws instead of returning a Mono.
+    private static CheckpointStorage markerWhoseReadsThrow(List<CountDownLatch> asking, List<CountDownLatch> release) {
+        AtomicInteger reads = new AtomicInteger();
+        return new CheckpointStorage() {
+            @Override
+            public Mono<org.occurrent.subscription.Checkpoint> read(String subscriptionId) {
+                int read = reads.getAndIncrement();
+                asking.get(read).countDown();
+                awaitLatch(release.get(read));
+                throw new IllegalStateException("marker unreadable");
+            }
+
+            @Override
+            public Mono<org.occurrent.subscription.Checkpoint> save(String subscriptionId, org.occurrent.subscription.Checkpoint checkpoint,
+                                                                   org.occurrent.subscription.CheckpointWriteCondition condition) {
+                return Mono.error(new UnsupportedOperationException("save"));
+            }
+
+            @Override
+            public Mono<Long> writeVersion(String subscriptionId) {
+                return Mono.error(new UnsupportedOperationException("writeVersion"));
+            }
+
+            @Override
+            public Mono<Void> delete(String subscriptionId) {
+                return Mono.error(new UnsupportedOperationException("delete"));
+            }
+        };
+    }
+
     // goLive() completing while catchUp() still replayed left the feed refusing live events after the caller was told
     // it is live.
     @Test

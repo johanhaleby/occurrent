@@ -1544,6 +1544,88 @@ class ReactiveHandoverTest {
         }
     }
 
+    // The stop finds the first catch-up running, and the second one starts after the stop. Both sources throw, the
+    // first one first, so the first finds the second still running and the second finds no stop since it started.
+    @Test
+    void a_stop_between_two_catch_ups_whose_sources_threw_errors_a_waiting_accept() {
+        assertThat(acceptAfterTwoCatchUpsThrewAroundAStop(true)).as("what accept(L1) ended with after a stop and two catch-ups that threw")
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
+    }
+
+    @Test
+    void a_stop_between_two_catch_ups_whose_sources_threw_errors_a_waiting_accept_when_the_later_one_throws_first() {
+        assertThat(acceptAfterTwoCatchUpsThrewAroundAStop(false)).as("what accept(L1) ended with after a stop and two catch-ups that threw")
+                .isInstanceOf(ReactiveHandover.PreDispatchRefusalException.class)
+                .hasMessage(HandoverMessages.stoppedBeforeApplied("test payload"));
+    }
+
+    // Returns what the Mono of a payload fed before both catch-ups ended with, a TimeoutException when it never ended.
+    private static Throwable acceptAfterTwoCatchUpsThrewAroundAStop(boolean firstThrowsFirst) {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String, String> handover = handover(delivered);
+        CountDownLatch askingFirst = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch askingSecond = new CountDownLatch(1);
+        CountDownLatch releaseSecond = new CountDownLatch(1);
+        CompletableFuture<Void> accepted = handover.accept("L1").toFuture();
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<?> first = executor.submit(() -> handover.catchUp(sourceThatThrowsWhenAsked(askingFirst, releaseFirst)));
+            awaitLatchQuietly(askingFirst);
+            handover.stopIfNotCatchingUp();
+            java.util.concurrent.Future<?> second = executor.submit(() -> handover.catchUp(sourceThatThrowsWhenAsked(askingSecond, releaseSecond)));
+            awaitLatchQuietly(askingSecond);
+
+            if (firstThrowsFirst) {
+                releaseFirst.countDown();
+                assertThatThrownBy(() -> first.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+                releaseSecond.countDown();
+                assertThatThrownBy(() -> second.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+            } else {
+                releaseSecond.countDown();
+                assertThatThrownBy(() -> second.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+                releaseFirst.countDown();
+                assertThatThrownBy(() -> first.get(5, TimeUnit.SECONDS)).cause().hasMessage("marker unreadable");
+            }
+
+            assertThat(delivered).isEmpty();
+            try {
+                accepted.get(5, TimeUnit.SECONDS);
+                return null;
+            } catch (java.util.concurrent.ExecutionException e) {
+                return e.getCause();
+            } catch (java.util.concurrent.TimeoutException | InterruptedException e) {
+                return e;
+            }
+        } finally {
+            releaseFirst.countDown();
+            releaseSecond.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    private static ReactiveHandover.Source<String> sourceThatThrowsWhenAsked(CountDownLatch asking, CountDownLatch release) {
+        return new ReactiveHandover.Source<>() {
+            @Override
+            public Mono<Boolean> isAlreadyCaughtUp() {
+                asking.countDown();
+                awaitLatchQuietly(release);
+                throw new IllegalStateException("marker unreadable");
+            }
+
+            @Override
+            public Flux<String> replay() {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> markCaughtUp() {
+                return Mono.empty();
+            }
+        };
+    }
+
     // The refusal of a payload the full buffer has no room for runs its caller's code, here a stop, while another
     // thread is stopping the handover too.
     @Test

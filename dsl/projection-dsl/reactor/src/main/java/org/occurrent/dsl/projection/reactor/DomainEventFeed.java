@@ -415,10 +415,13 @@ public final class DomainEventFeed<E> {
      * <p>
      * A feed with no catch-up running that has not gone live stops too. The {@link Mono} {@link #accept(Object)}
      * returned for an event fed before the stop, or after it and before the next catch-up or {@link #goLive(String)},
-     * errors, and a catch-up started after the stop does not fold that event. The error handling of each event fed
-     * before the stop runs on the thread that calls this method. A catch-up counts as running from the
-     * subscription to the {@link Mono} that {@link #catchUpAll()}, {@link #catchUp(String)} or {@link #goLive(String)}
-     * returned, not from the call, until the feed goes live, its replay notices a stop, or it fails.
+     * errors, and a catch-up started after the stop does not fold that event. The error handling of each event still
+     * waiting when this method is called runs on the calling thread, unless the listener's own pipeline moves it. A
+     * catch-up counts as running from the subscription to the {@link Mono} that {@link #catchUpAll()},
+     * {@link #catchUp(String)} or {@link #goLive(String)} returned, not from the call, until the feed goes live, its
+     * replay notices a stop, or it fails. A stop that comes during a catch-up whose {@link Mono} then errors, for
+     * example because reading the catch-up marker threw, still errors the {@link Mono} {@link #accept(Object)} returned
+     * for each waiting event, unless another catch-up takes the feed live and applies that event.
      * <p>
      * Stopping is what a caller cannot do for itself. Backgrounding is not, since the returned {@link Mono} from
      * {@link #catchUpAll()} is the caller's to compose or not.
