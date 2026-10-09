@@ -1976,6 +1976,174 @@ class MigrateReactorCancelSubscriptionReturnTypeTest implements RewriteTest {
     }
 
     @Test
+    void keepsASneakyThrowsTheParserCannotSeeOnlyOnTheMethodWhoseBodyMovesWhenItIsImportedFromOutsideLombok() {
+        rewriteRun(
+                spec -> spec.typeValidationOptions(TypeValidation.none()),
+                java(
+                        """
+                        package com.example;
+
+                        import com.example.web.SneakyThrows;
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                        import java.util.HashSet;
+                        import java.util.Set;
+
+                        class Model implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @SneakyThrows
+                            public void cancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    ids.clear();
+                                }
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import com.example.web.SneakyThrows;
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                        import reactor.core.publisher.Mono;
+
+                        import java.util.HashSet;
+                        import java.util.Set;
+
+                        class Model implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @SneakyThrows
+                            public Mono<Void> cancelSubscription(String subscriptionId) {
+                                doCancelSubscription(subscriptionId);
+                                return Mono.empty();
+                            }
+
+                            private void doCancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    ids.clear();
+                                }
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void keepsASuppressWarningsTheParserCannotSeeOnlyOnTheMethodWhoseBodyMovesWhenItIsImportedFromOutsideJavaLang() {
+        rewriteRun(
+                spec -> spec.typeValidationOptions(TypeValidation.none()),
+                java(
+                        """
+                        package com.example;
+
+                        import com.example.web.SuppressWarnings;
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                        import java.util.HashSet;
+                        import java.util.Set;
+
+                        class Model implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @SuppressWarnings
+                            public void cancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    ids.clear();
+                                }
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import com.example.web.SuppressWarnings;
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                        import reactor.core.publisher.Mono;
+
+                        import java.util.HashSet;
+                        import java.util.Set;
+
+                        class Model implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @SuppressWarnings
+                            public Mono<Void> cancelSubscription(String subscriptionId) {
+                                doCancelSubscription(subscriptionId);
+                                return Mono.empty();
+                            }
+
+                            private void doCancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    ids.clear();
+                                }
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void givesTheVoidMethodASneakyThrowsTheParserCannotSeeWhenLombokIsImportedOnDemand() {
+        String after = """
+                package com.example;
+
+                import lombok.*;
+                import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+                import reactor.core.publisher.Mono;
+
+                import java.util.HashSet;
+                import java.util.Set;
+
+                class Model implements CancellableSubscriptions {
+                    private final Set<String> ids = new HashSet<>();
+
+                    @SneakyThrows
+                    public Mono<Void> cancelSubscription(String subscriptionId) {
+                        doCancelSubscription(subscriptionId);
+                        return Mono.empty();
+                    }
+
+                    @SneakyThrows
+                    private void doCancelSubscription(String subscriptionId) {
+                        if (ids.remove(subscriptionId)) {
+                            ids.clear();
+                        }
+                    }
+                }
+                """;
+        rewriteRun(
+                spec -> spec.typeValidationOptions(TypeValidation.none()),
+                java(
+                        """
+                        package com.example;
+
+                        import lombok.*;
+                        import org.occurrent.subscription.api.reactor.CancellableSubscriptions;
+
+                        import java.util.HashSet;
+                        import java.util.Set;
+
+                        class Model implements CancellableSubscriptions {
+                            private final Set<String> ids = new HashSet<>();
+
+                            @SneakyThrows
+                            public void cancelSubscription(String subscriptionId) {
+                                if (ids.remove(subscriptionId)) {
+                                    ids.clear();
+                                }
+                            }
+                        }
+                        """,
+                        after
+                )
+        );
+        assertCompiles(after, SNEAKY_THROWS);
+    }
+
+    @Test
     void keepsAnOverrideAfterTheModifiersOfABodyThatStays() {
         migrates(
                 """

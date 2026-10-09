@@ -47,6 +47,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 /**
  * Changes a Java {@code void cancelSubscription(String)} that implements the reactor {@code CancellableSubscriptions}
@@ -67,7 +68,8 @@ import java.util.UUID;
  *     {@code cancelSubscriptionBodyBeforeOccurrent0340} instead, numbered the same way, since that supertype can have
  *     a public {@code doCancelSubscription(String)} that nothing in the class calls, and a private method of the same
  *     name and parameters would not compile. The method keeps all its annotations, and the new method gets only
- *     Lombok's {@code @SneakyThrows} and {@code @SuppressWarnings} of them, which the body can need to compile. Any
+ *     Lombok's {@code @SneakyThrows} and Java's {@code @SuppressWarnings} of them, which the body can need to compile.
+ *     When the parser cannot see an annotation's type, the recipe tells which one it is from the file's imports. Any
  *     other annotation could take effect on both methods, one Spring reads at run time such as
  *     {@code @EventListener}, or one an annotation processor reads.</li>
  * </ul>
@@ -98,9 +100,8 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
     private static final String HELPER_NAME = "doCancelSubscription";
     // For an owner with a supertype this parser cannot see, since any method that type declares can then have the name
     private static final String HELPER_NAME_BESIDE_AN_UNSEEN_SUPERTYPE = "cancelSubscriptionBodyBeforeOccurrent0340";
-    // The only annotations a moved body gets, by fully qualified name, or by simple name when the parser cannot see the
-    // annotation's type
-    private static final Set<String> FOR_THE_BODY = Set.of("lombok.SneakyThrows", "SneakyThrows", "java.lang.SuppressWarnings", "SuppressWarnings");
+    // The only annotations a moved body gets
+    private static final Set<String> FOR_THE_BODY = Set.of("lombok.SneakyThrows", "java.lang.SuppressWarnings");
     private static final String RETURN_THE_WRAPPED_CANCEL = " TODO: return the Mono of the cancelSubscription call this method makes, so that the Mono returned here waits for its cleanup";
 
     // Parsed with a stub of Mono because this parser does not see the classpath of the source being migrated
@@ -439,16 +440,18 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                 JavaType.Method type = copy.getMethodType() == null ? null : copy.getMethodType().withName(name);
                 String whitespace = method.getPrefix().getWhitespace();
                 String indent = whitespace.substring(whitespace.lastIndexOf('\n') + 1);
+                J.CompilationUnit compilationUnit = getCursor().firstEnclosing(J.CompilationUnit.class);
+                List<J.Import> imports = compilationUnit == null ? List.of() : compilationUnit.getImports();
                 List<J.Annotation> annotations = new ArrayList<>(copy.getLeadingAnnotations());
                 // An annotation between two modifiers belongs to the second, which the new method does not have
                 copy.getModifiers().forEach(modifier -> annotations.addAll(modifier.getAnnotations()));
-                annotations.removeIf(annotation -> !forTheBody(annotation));
+                annotations.removeIf(annotation -> !forTheBody(annotation, imports));
                 String beforeFirstModifier = copy.getModifiers().isEmpty() ? "" : copy.getModifiers().get(0).getPrefix().getWhitespace();
                 Space beforePrivate = annotations.isEmpty() ? Space.EMPTY : Space.format(beforeFirstModifier.isEmpty() ? "\n" + indent : beforeFirstModifier);
                 J.Modifier privateModifier = new J.Modifier(Tree.randomId(), beforePrivate, Markers.EMPTY, null, J.Modifier.Type.Private, Collections.emptyList());
                 TypeTree returnType = copy.getReturnTypeExpression();
                 if (returnType instanceof J.AnnotatedType annotated) {
-                    List<J.Annotation> onReturnType = ListUtils.map(annotated.getAnnotations(), annotation -> forTheBody(annotation) ? annotation : null);
+                    List<J.Annotation> onReturnType = ListUtils.map(annotated.getAnnotations(), annotation -> forTheBody(annotation, imports) ? annotation : null);
                     returnType = onReturnType.isEmpty() ? annotated.getTypeExpression() : annotated.withAnnotations(onReturnType);
                 }
                 return copy.withPrefix(Space.format("\n\n" + indent))
@@ -462,9 +465,39 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
             // A framework can read an annotation at run time, and an annotation processor can read one the compiler
             // discards, so any other annotation could take effect twice. A private method that overrides nothing cannot
             // have @Override.
-            private boolean forTheBody(J.Annotation annotation) {
-                JavaType.FullyQualified type = TypeUtils.asFullyQualified(annotation.getType());
-                return FOR_THE_BODY.contains(type == null ? annotation.getSimpleName() : type.getFullyQualifiedName());
+            private boolean forTheBody(J.Annotation annotation, List<J.Import> imports) {
+                String written = qualifiedName(annotation.getAnnotationType());
+                return FOR_THE_BODY.contains(written.contains(".") ? written : typeNamed(written, annotation.getType(), imports));
+            }
+
+            // A single-type import of the name decides which type it is, ahead of the parser, which attributes the name
+            // to java.lang when it cannot see the imported type. Without one, the parser's type decides, since a type
+            // of the same package or a nested one comes first. Without that, an import on demand or java.lang does.
+            private String typeNamed(String simpleName, @Nullable JavaType attributed, List<J.Import> imports) {
+                for (J.Import anImport : imports) {
+                    if (anImport.getQualid().getSimpleName().equals(simpleName)) {
+                        return qualifiedName(anImport.getQualid());
+                    }
+                }
+                JavaType.FullyQualified type = TypeUtils.asFullyQualified(attributed);
+                if (type != null) {
+                    return type.getFullyQualifiedName();
+                }
+                Stream<String> onDemand = imports.stream()
+                        .filter(anImport -> anImport.getQualid().getSimpleName().equals("*"))
+                        .map(anImport -> qualifiedName(anImport.getQualid().getTarget()));
+                return Stream.concat(onDemand, Stream.of("java.lang"))
+                        .map(container -> container + "." + simpleName)
+                        .filter(FOR_THE_BODY::contains)
+                        .findFirst()
+                        .orElse(simpleName);
+            }
+
+            private String qualifiedName(J name) {
+                if (name instanceof J.FieldAccess access) {
+                    return qualifiedName(access.getTarget()) + "." + access.getSimpleName();
+                }
+                return name instanceof J.Identifier identifier ? identifier.getSimpleName() : "";
             }
 
             private J.MethodInvocation callTo(J.MethodDeclaration helper, J.MethodDeclaration method) {
