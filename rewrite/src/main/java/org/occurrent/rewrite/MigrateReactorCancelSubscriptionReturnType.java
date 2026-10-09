@@ -66,7 +66,9 @@ import java.util.UUID;
  *     a qualifier. A class with a supertype the parser cannot see gets
  *     {@code cancelSubscriptionBodyBeforeOccurrent0340} instead, numbered the same way, since that supertype can have
  *     a public {@code doCancelSubscription(String)} that nothing in the class calls, and a private method of the same
- *     name and parameters would not compile.</li>
+ *     name and parameters would not compile. The new method keeps every annotation of the method apart from
+ *     {@code @Override}, which a private method cannot have, so an annotation the body needs to compile, such as
+ *     Lombok's {@code @SneakyThrows}, stays on it.</li>
  * </ul>
  * A body ending in a {@code return} or a {@code throw} stays in place too. Each {@code return;} of a body that stays in
  * place becomes {@code return Mono.empty();}. A declaration with no body, abstract or in an interface that extends
@@ -210,8 +212,13 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                 return returningMonoOfVoid(md);
             }
 
+            // An annotation after the last modifier is parsed as one on the return type, and stays there
             private J.MethodDeclaration returningMonoOfVoid(J.MethodDeclaration md) {
-                return md.withReturnTypeExpression(monoOfVoid(md.getReturnTypeExpression() == null ? Space.EMPTY : md.getReturnTypeExpression().getPrefix()))
+                TypeTree returnType = md.getReturnTypeExpression();
+                TypeTree monoOfVoid = returnType instanceof J.AnnotatedType annotated
+                        ? annotated.withTypeExpression(monoOfVoid(annotated.getTypeExpression().getPrefix()))
+                        : monoOfVoid(returnType == null ? Space.EMPTY : returnType.getPrefix());
+                return md.withReturnTypeExpression(monoOfVoid)
                         .withMethodType(md.getMethodType() == null ? null : md.getMethodType().withReturnType(monoOfVoidType()));
             }
 
@@ -241,7 +248,8 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                 if (!"cancelSubscription".equals(method.getSimpleName())) {
                     return false;
                 }
-                if (!(method.getReturnTypeExpression() instanceof J.Primitive primitive) || primitive.getType() != JavaType.Primitive.Void) {
+                TypeTree returnType = method.getReturnTypeExpression() instanceof J.AnnotatedType annotated ? annotated.getTypeExpression() : method.getReturnTypeExpression();
+                if (!(returnType instanceof J.Primitive primitive) || primitive.getType() != JavaType.Primitive.Void) {
                     return false;
                 }
                 JavaType.Method methodType = method.getMethodType();
@@ -420,18 +428,38 @@ public class MigrateReactorCancelSubscriptionReturnType extends Recipe {
                 return seen;
             }
 
-            // The method as it was, with its body, parameters and throws clause, made private and renamed
+            // The method as it was, with its body, parameters, throws clause and annotations, made private and renamed.
+            // Every annotation but @Override stays, since one can be what lets the body compile, Lombok's @SneakyThrows
+            // for example, and a private method that overrides nothing cannot have @Override.
             private J.MethodDeclaration helper(J.MethodDeclaration method, String name) {
                 J.MethodDeclaration copy = (J.MethodDeclaration) new RandomizeIdVisitor<Integer>().visitNonNull(method, 0);
                 JavaType.Method type = copy.getMethodType() == null ? null : copy.getMethodType().withName(name);
                 String whitespace = method.getPrefix().getWhitespace();
                 String indent = whitespace.substring(whitespace.lastIndexOf('\n') + 1);
-                J.Modifier privateModifier = new J.Modifier(Tree.randomId(), Space.EMPTY, Markers.EMPTY, null, J.Modifier.Type.Private, Collections.emptyList());
+                List<J.Annotation> annotations = new ArrayList<>(copy.getLeadingAnnotations());
+                // An annotation between two modifiers belongs to the second, which the new method does not have
+                copy.getModifiers().forEach(modifier -> annotations.addAll(modifier.getAnnotations()));
+                annotations.removeIf(this::isOverride);
+                String beforeFirstModifier = copy.getModifiers().isEmpty() ? "" : copy.getModifiers().get(0).getPrefix().getWhitespace();
+                Space beforePrivate = annotations.isEmpty() ? Space.EMPTY : Space.format(beforeFirstModifier.isEmpty() ? "\n" + indent : beforeFirstModifier);
+                J.Modifier privateModifier = new J.Modifier(Tree.randomId(), beforePrivate, Markers.EMPTY, null, J.Modifier.Type.Private, Collections.emptyList());
+                TypeTree returnType = copy.getReturnTypeExpression();
+                if (returnType instanceof J.AnnotatedType annotated) {
+                    List<J.Annotation> onReturnType = ListUtils.map(annotated.getAnnotations(), annotation -> isOverride(annotation) ? null : annotation);
+                    returnType = onReturnType.isEmpty() ? annotated.getTypeExpression() : annotated.withAnnotations(onReturnType);
+                }
                 return copy.withPrefix(Space.format("\n\n" + indent))
-                        .withLeadingAnnotations(Collections.emptyList())
+                        .withLeadingAnnotations(ListUtils.mapFirst(annotations, annotation -> annotation.withPrefix(Space.EMPTY)))
                         .withModifiers(List.of(privateModifier))
+                        .withReturnTypeExpression(returnType)
                         .withName(copy.getName().withSimpleName(name).withType(type))
                         .withMethodType(type);
+            }
+
+            // By name when the parser cannot see the annotation's type
+            private boolean isOverride(J.Annotation annotation) {
+                JavaType.FullyQualified type = TypeUtils.asFullyQualified(annotation.getType());
+                return type == null ? "Override".equals(annotation.getSimpleName()) : "java.lang.Override".equals(type.getFullyQualifiedName());
             }
 
             private J.MethodInvocation callTo(J.MethodDeclaration helper, J.MethodDeclaration method) {
