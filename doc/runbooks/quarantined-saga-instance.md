@@ -12,7 +12,7 @@ already have one.
 
 ## Why an instance stops
 
-A saga has one subscription and every instance of that saga is fed by it. When handling an event for one instance
+Each saga gets one subscription, and that subscription delivers the events for all of its instances. When handling an event for one instance
 throws, the executor rethrows, and on a subscription model that offers the event again the instance tries again. Usually that is
 the instance's `evolve`, its `react`, or its command dispatcher, and it can also be the read that loads the instance,
 which is how an instance whose state no longer decodes ends up here. Up to 0.33.0 that went on without limit.

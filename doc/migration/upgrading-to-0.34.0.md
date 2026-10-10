@@ -741,7 +741,7 @@ cluster gets the same no-code-change path out of the refusal it has had since 0.
 
 ## 8. A saga instance that keeps failing is quarantined, and four saga types change with it
 
-A saga has one subscription, and every instance of that saga is fed by it. Up to 0.33.0, an event that a saga's
+Each saga gets one subscription, and that subscription delivers the events for all of its instances. Up to 0.33.0, an event that a saga's
 `evolve`, its `react` or its command dispatcher could not handle propagated to the subscription model, and wherever
 that model offered the event again the saga tried again, without limit.
 
