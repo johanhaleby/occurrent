@@ -31,7 +31,9 @@ import org.bson.conversions.Bson;
 import org.bson.json.JsonParseException;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.condition.Condition;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
@@ -69,6 +71,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
@@ -824,6 +827,49 @@ public class NativeMongoSubscriptionModelTest {
             // Then
             await().atMost(FIVE_SECONDS).until(state::size, is(1));
             assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.eventId(), NameDefined.class.getName()));
+        }
+    }
+
+    @Nested
+    @DisplayName("Resume at a checkpoint the model cannot read")
+    class ResumeAtACheckpointTheModelCannotReadTest {
+
+        @Test
+        void resuming_at_a_global_position_checkpoint_does_not_skip_what_was_written_while_paused() {
+            assertWhatWasWrittenWhilePausedIsDeliveredWhenResumingAt(
+                    liveStart -> GlobalCheckpoint.parse(new StringBasedCheckpoint(GlobalCheckpoint.of(5, liveStart, 0, 7).asString())));
+        }
+
+        @Test
+        void resuming_at_a_time_based_checkpoint_does_not_skip_what_was_written_while_paused() {
+            assertWhatWasWrittenWhilePausedIsDeliveredWhenResumingAt(
+                    liveStart -> new StringBasedCheckpoint("2026-01-01T00:00:00Z"));
+        }
+
+        private void assertWhatWasWrittenWhilePausedIsDeliveredWhenResumingAt(UnaryOperator<Checkpoint> foreignCheckpoint) {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            Checkpoint liveStart = requireNonNull(subscriptionModel.globalCheckpoint());
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), state::add).waitUntilStarted(Duration.ofSeconds(10));
+
+            NameDefined firstEvent = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(firstEvent));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+            NameWasChanged duringPause = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
+            mongoEventStore.write("1", 1, serialize(duringPause));
+            subscriptionModel.resumeSubscription(subscriptionId, StartAt.checkpoint(foreignCheckpoint.apply(liveStart))).waitUntilStarted(Duration.ofSeconds(10));
+            NameWasChanged sentinel = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "sentinel");
+            mongoEventStore.write("1", 2, serialize(sentinel));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(state).extracting(CloudEvent::getId).contains(sentinel.eventId()));
+
+            // Then nothing written while the subscription was paused is lost. Duplicates are not asserted on.
+            assertThat(state).extracting(CloudEvent::getId).contains(duringPause.eventId());
         }
     }
 

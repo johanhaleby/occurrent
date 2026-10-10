@@ -36,6 +36,7 @@ import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionNotRunningException;
@@ -748,9 +749,17 @@ public final class ChangeStreamSubscriptions {
 
     /**
      * Resumes a paused subscription, at {@code repositionTo} when it is given and otherwise from the position the
-     * subscription has read to.
+     * subscription has read to. A {@code repositionTo} holding a checkpoint with neither a resume token nor an
+     * operation time, such as the position a catch-up stores while it replays, resumes from the position the
+     * subscription has read to as well, since opening the change stream at the present would skip what was written
+     * while it was paused.
      */
     public Subscription resumeSubscription(String subscriptionId, @Nullable StartAt repositionTo) {
+        if (repositionTo instanceof StartAtCheckpoint unreadable && MongoCommons.opensAtThePresent(repositionTo)) {
+            log.info("Subscription {} resumes from the position it had read to rather than at checkpoint {}, which is not a change stream position. Events another consumer handled in the meantime are delivered again.",
+                    subscriptionId, unreadable.checkpoint.asString());
+            return resumeSubscription(subscriptionId, null);
+        }
         if (shutdown) {
             throw new IllegalStateException(SubscriptionModel.class.getSimpleName() + " is shutdown");
         }
