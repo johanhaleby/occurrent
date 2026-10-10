@@ -19,6 +19,7 @@ package org.occurrent.subscription.mongodb.internal;
 import com.mongodb.MongoCommandException;
 import org.bson.*;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
@@ -64,11 +65,14 @@ public class MongoCommons {
      */
     public static final String WRITE_VERSION = "version";
     /**
-     * The field a catch-up's live start is stored in next to {@link #GENERIC_CHECKPOINT}, see {@link GlobalCheckpoint#liveFrom()}.
+     * The field a catch-up's live start is stored in next to {@link #GENERIC_CHECKPOINT}, see {@link GlobalCheckpoint#liveFrom()}
+     * and {@link CatchupTimeCheckpoint#liveFrom()}.
      */
     public static final String CATCHUP_LIVE_FROM = "catchupLiveFrom";
     /**
      * The field a catch-up's replay origin is stored in next to {@link #GENERIC_CHECKPOINT}, see {@link GlobalCheckpoint#replayOrigin()}.
+     * A position catch-up stores it as a number, and a time catch-up as an RFC 3339 string, see
+     * {@link CatchupTimeCheckpoint#replayOrigin()}.
      */
     public static final String CATCHUP_REPLAY_ORIGIN = "catchupReplayOrigin";
     /**
@@ -109,22 +113,32 @@ public class MongoCommons {
             document = generateOperationTimeStreamPositionDocument(subscriptionId, mongoOperationTimeCheckpoint.operationTime);
         } else {
             GlobalCheckpoint withLiveStart = globalCheckpointWithLiveStart(checkpoint);
-            if (withLiveStart == null) {
-                document = generateGenericCheckpointDocument(subscriptionId, checkpoint.asString());
-            } else {
+            if (withLiveStart != null) {
                 // The live start goes in fields of its own, so a version that knows only the plain position reads
                 // "checkpoint" as before and ignores them. A live start at the top level would be read as the
                 // subscription's own change-stream position and skip the rest of the replay.
-                Checkpoint liveFrom = withLiveStart.liveFrom().orElseThrow();
-                Document liveFromDocument = generateCheckpointDocument(subscriptionId, typedLiveStart(liveFrom));
-                liveFromDocument.remove(MongoCloudEventsToJsonDeserializer.ID);
                 document = generateGenericCheckpointDocument(subscriptionId, GlobalCheckpoint.of(withLiveStart.position()).asString());
-                document.put(CATCHUP_LIVE_FROM, liveFromDocument);
+                document.put(CATCHUP_LIVE_FROM, liveFromDocument(subscriptionId, withLiveStart.liveFrom().orElseThrow()));
                 document.put(CATCHUP_REPLAY_ORIGIN, withLiveStart.replayOrigin().orElseThrow());
                 document.put(CATCHUP_REPLAY_TO, withLiveStart.replayTo().orElseThrow());
+            } else if (CatchupTimeCheckpoint.isCatchupTimeCheckpoint(checkpoint)) {
+                // The same fields as a position, with the time in "checkpoint" and the replay origin as a time, so a
+                // version that knows only the plain time reads "checkpoint" as before
+                CatchupTimeCheckpoint withLiveStartAtTime = CatchupTimeCheckpoint.parse(checkpoint);
+                document = generateGenericCheckpointDocument(subscriptionId, withLiveStartAtTime.time());
+                document.put(CATCHUP_LIVE_FROM, liveFromDocument(subscriptionId, withLiveStartAtTime.liveFrom()));
+                document.put(CATCHUP_REPLAY_ORIGIN, withLiveStartAtTime.replayOrigin());
+            } else {
+                document = generateGenericCheckpointDocument(subscriptionId, checkpoint.asString());
             }
         }
         return document;
+    }
+
+    private static Document liveFromDocument(String subscriptionId, Checkpoint liveFrom) {
+        Document liveFromDocument = generateCheckpointDocument(subscriptionId, typedLiveStart(liveFrom));
+        liveFromDocument.remove(MongoCloudEventsToJsonDeserializer.ID);
+        return liveFromDocument;
     }
 
     private static @Nullable GlobalCheckpoint globalCheckpointWithLiveStart(Checkpoint checkpoint) {
@@ -501,8 +515,8 @@ public class MongoCommons {
             withStartPositionApplied = applyResumeToken.apply(t, resumeToken);
         } else if (changeStreamPosition instanceof MongoOperationTimeCheckpoint mongoOperationTimeCheckpoint) {
             withStartPositionApplied = applyOperationTime.apply(t, mongoOperationTimeCheckpoint.operationTime);
-        } else if (GlobalCheckpoint.isGlobalCheckpoint(changeStreamPosition)) {
-            // A catch-up's position, whose live start would otherwise match below and fail to parse as a whole
+        } else if (GlobalCheckpoint.isGlobalCheckpoint(changeStreamPosition) || CatchupTimeCheckpoint.isCatchupTimeCheckpoint(changeStreamPosition)) {
+            // A catch-up's position or time, whose live start would otherwise match below and fail to parse as a whole
             return t;
         } else {
             String changeStreamPositionString = changeStreamPosition.asString();
@@ -688,12 +702,16 @@ public class MongoCommons {
         } else if (checkpointDocument.containsKey(MongoCommons.GENERIC_CHECKPOINT)) {
             String value = checkpointDocument.getString(MongoCommons.GENERIC_CHECKPOINT);
             Document liveFrom = checkpointDocument.get(CATCHUP_LIVE_FROM, Document.class);
-            Number replayOrigin = checkpointDocument.get(CATCHUP_REPLAY_ORIGIN, Number.class);
-            Number replayTo = checkpointDocument.get(CATCHUP_REPLAY_TO, Number.class);
+            // A position catch-up stores the replay origin as a number and a time catch-up as a string
+            Object replayOrigin = checkpointDocument.get(CATCHUP_REPLAY_ORIGIN);
+            Object replayTo = checkpointDocument.get(CATCHUP_REPLAY_TO);
+            boolean position = GlobalCheckpoint.isGlobalCheckpoint(new StringBasedCheckpoint(value));
             // Without the replay end the live start is ignored, and the catch-up resumes as from a plain position
-            if (liveFrom != null && replayOrigin != null && replayTo != null && GlobalCheckpoint.isGlobalCheckpoint(new StringBasedCheckpoint(value))) {
+            if (liveFrom != null && position && replayOrigin instanceof Number origin && replayTo instanceof Number to) {
                 changeStreamPosition = GlobalCheckpoint.of(GlobalCheckpoint.positionOf(new StringBasedCheckpoint(value)),
-                        calculateCheckpointFromMongoStreamPositionDocument(liveFrom), replayOrigin.longValue(), replayTo.longValue());
+                        calculateCheckpointFromMongoStreamPositionDocument(liveFrom), origin.longValue(), to.longValue());
+            } else if (liveFrom != null && !position && replayOrigin instanceof String origin && replayTo == null) {
+                changeStreamPosition = CatchupTimeCheckpoint.of(value, calculateCheckpointFromMongoStreamPositionDocument(liveFrom), origin);
             } else {
                 changeStreamPosition = new StringBasedCheckpoint(value);
             }

@@ -67,10 +67,8 @@ import java.util.stream.Stream;
  * </p>
  * <br>
  * <p>
- * Delivery is at-least-once. Events written while the catch-up phase runs are reconciled and delivered, including events whose {@code time} is clock-skewed earlier than the replay cursor.
- * This reconciliation assumes the set of events matching the filter only grows while catching up, which holds for append-only stores. If events are deleted from the store while a catch-up
- * replay is running, the reconciliation can under-count and miss some events written during that replay. Avoid deleting events that match a running catch-up subscription's filter until it
- * has caught up.
+ * Delivery is at-least-once. Events written while the catch-up phase runs are delivered live from the live resume token read before the replay, including events whose {@code time} is
+ * earlier than what the replay has already read.
  * </p>
  * <br>
  * <p>
@@ -83,8 +81,8 @@ import java.util.stream.Stream;
  * During catch-up the live resume token is captured before the bulk replay, so an event committed during the replay
  * is still delivered live. A replay that runs longer than the database change stream history (the MongoDB oplog
  * window) leaves the token behind. The token is checked again once the replay is done, and one the wrapped model no
- * longer has the history from is not handed over. The replay runs again from the position the first attempt started
- * from, with a token read then, and redelivers the events in between. When the token leaves the history during 4
+ * longer has the history from is not handed over. The replay runs again from the position or time the first attempt
+ * started from, with a token read then, and redelivers the events in between. When the token leaves the history during 4
  * replays in a row, the subscription fails with an {@code IllegalStateException} instead of replaying a fifth time,
  * so size the oplog for very large rebuilds.
  * </p>

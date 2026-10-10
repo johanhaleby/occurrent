@@ -272,73 +272,25 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         StartAt nextStartAt = firstStartAt.get(generateSubscriptionModelContext());
         Checkpoint checkpoint = ((StartAtCheckpoint) Objects.requireNonNull(nextStartAt)).checkpoint;
 
-        Filter catchupFilter = deriveFilterToUseDuringCatchupPhase(filter, checkpoint);
-
-        long numberOfEventsBeforeStartingCatchupSubscription = eventStoreQueries.count(catchupFilter);
-        Predicate<CloudEvent> persistDuringCatchup = persistDuringCatchupForOneAttempt();
-
-        // Perform the catchup
-        runCatchupForStream(eventStoreQueries.query(catchupFilter, config.catchupPhaseSortBy), subscriptionId, action, null, persistDuringCatchup);
-
         // The delegated subscription model may be configured to never store its position durably, e.g. @Subscription
         // with startAt=BEGINNING_OF_TIME and resume=SAME_AS_START_AT: since every restart replays from beginning of
         // time anyway, no position needs to be stored. This lets in-memory projections/views/policies catch up.
         //
-        // The wrapping subscription is forced to be a CheckpointAwareSubscriptionModel to capture where live
-        // delivery should resume. Captured *after* the bulk replay, not before, so the token stays fresh: capturing
-        // it before a long replay risks it ageing out of the change stream (e.g. MongoDB's oplog) before handover.
-        // Events written during the replay are not covered by this checkpoint; they are reconciled separately by
-        // the insertion-order delta below. A null resume token fails loudly (captureLiveResumeCheckpoint) instead
-        // of silently resuming live at "now" and dropping events committed during the replay; the position path
-        // captures its checkpoint before its replay instead, for the same guarantee.
+        // The live start is read before the bulk replay, or kept from the attempt that stored the checkpoint. An event
+        // whose time sorts before what the replay has read but which commits during the replay, or after an earlier
+        // attempt stored a later time, is then delivered live, since it commits after the live start. A null resume
+        // token fails loudly (captureLiveResumeCheckpoint) instead of silently resuming live at "now". A live start
+        // that leaves the change stream history during a long replay is not handed over (replayUntilLiveStartHolds).
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        final Checkpoint globalCheckpoint = captureLiveResumeCheckpoint(delegatedStartAt);
+        TimeReplayStart replayStart = timeReplayStart(subscriptionId, checkpoint, delegatedStartAt);
 
         // Cache to avoid re-delivering events already streamed during catch-up when they arrive again live.
         BoundedIdCache<CatchupEventKey> catchupPhaseCache = new BoundedIdCache<>(config.cacheSize);
-
-        // Reconcile events written after the bulk replay started but at or before the live resume position
-        // (globalCheckpoint): read the newest N in insertion order (SortBy.natural descending + limit, no skip)
-        // and reverse for delivery.
-        //
-        // Selecting by insertion order rather than the configurable catchupPhaseSortBy is what keeps this loss-free
-        // under clock skew (ADR 0014): a during-catch-up event whose time sorts before the already-processed
-        // boundary would be missed by both a time-sorted reconcile and by live delivery. Insertion order also reads
-        // only the recent tail instead of the whole backlog.
-        //
-        // The count to read comes from a count query, but more events can be written before the read runs, shifting
-        // the window and pushing an old during-catch-up event out. Re-read until the matching count stops growing:
-        // a pass with no new event has delivered them all. Re-reads are deduped by the cache (at-least-once).
-        // Anything written after a pass is newer than globalCheckpoint and is covered by live delivery regardless.
-        // Everything the bulk replay was going to deliver has been delivered by now, so what follows is the events
-        // written since it started. A recording projection records those and skips the history above it. Skipped when
-        // the replay was truncated, since a history that stopped part way through is not a history that was read.
-        if (shouldKeepReplaying(subscriptionId)) {
-            historyRead(subscriptionId);
-        }
-
-        long reconciledThroughCount = numberOfEventsBeforeStartingCatchupSubscription;
-        long matchingEventCount = eventStoreQueries.count(catchupFilter);
-        while (matchingEventCount > reconciledThroughCount && shouldKeepReplaying(subscriptionId)) {
-            long numberOfEventsToReconcile = matchingEventCount - numberOfEventsBeforeStartingCatchupSubscription;
-            // Read the delta in bounded windows, newest-window-first (skip counts down from the full delta), instead
-            // of materializing the whole delta in one ArrayList, mirroring the position path's window delivery. Each
-            // window is still read and reversed in natural-order-descending, so events within and across windows are
-            // delivered oldest first.
-            long remaining = numberOfEventsToReconcile;
-            while (remaining > 0 && shouldKeepReplaying(subscriptionId)) {
-                long windowCountAsLong = Math.min(remaining, Math.min(config.dcbCatchupPositionWindowSize, Integer.MAX_VALUE));
-                int windowCount = (int) windowCountAsLong;
-                long skip = remaining - windowCount;
-                List<CloudEvent> window = new ArrayList<>(eventStoreQueries.query(catchupFilter, Math.toIntExact(skip), windowCount, SortBy.natural(DESCENDING)).toList());
-                Collections.reverse(window);
-                runCatchupForStream(window.stream(), subscriptionId, action, catchupPhaseCache, persistDuringCatchup);
-                remaining -= windowCount;
-            }
-            reconciledThroughCount = matchingEventCount;
-            matchingEventCount = eventStoreQueries.count(catchupFilter);
-        }
+        Predicate<CloudEvent> persistDuringCatchup = persistDuringCatchupForOneAttempt();
+        TimeReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, replayStart, delegatedStartAt,
+                start -> replayTimes(subscriptionId, filter, action, start, catchupPhaseCache, persistDuringCatchup));
+        final Checkpoint globalCheckpoint = handoverStart.liveFrom();
 
         // Locked from the identity decision through the delegate subscribe call below. Unlocked, a
         // cancelSubscription or a fresh subscribe for this id could land in the gap after this attempt decided it
@@ -393,6 +345,52 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 }
             };
             return startDelegatedSubscription(subscriptionId, filter, subscriptionsWasCancelledOrShutdown, startAtToUse, liveConsumer);
+        }
+    }
+
+    // One pass of the time replay from replayStart
+    private void replayTimes(String subscriptionId, @Nullable SubscriptionFilter filter, Consumer<CloudEvent> action, TimeReplayStart replayStart,
+                             BoundedIdCache<CatchupEventKey> catchupPhaseCache, Predicate<CloudEvent> persistDuringCatchup) {
+        Filter catchupFilter = deriveFilterToUseDuringCatchupPhase(filter, replayStart.replayFrom());
+        Function<CloudEvent, Checkpoint> checkpointAt = e -> replayStart.checkpointAt(e.getTime());
+
+        long numberOfEventsBeforeStartingCatchupSubscription = eventStoreQueries.count(catchupFilter);
+        deliverCatchupEvents(eventStoreQueries.query(catchupFilter, config.catchupPhaseSortBy), subscriptionId, action, null, persistDuringCatchup, checkpointAt);
+
+        // Reconcile events written after the bulk replay started by reading the newest N in insertion order
+        // (SortBy.natural descending + limit, no skip) and reversing them for delivery. Live delivery from the live
+        // start delivers them too, so this pass is not what keeps them from being lost. It delivers them before the
+        // handover and fills the bounded cache that keeps live delivery from delivering them again.
+        //
+        // The count to read comes from a count query, but more events can be written before the read runs, shifting
+        // the window. Re-read until the matching count stops growing. Re-reads are deduped by the cache.
+        // Everything the bulk replay was going to deliver has been delivered by now, so what follows is the events
+        // written since it started. A recording projection records those and skips the history above it. Skipped when
+        // the replay was truncated, since a history that stopped part way through is not a history that was read.
+        if (shouldKeepReplaying(subscriptionId)) {
+            historyRead(subscriptionId);
+        }
+
+        long reconciledThroughCount = numberOfEventsBeforeStartingCatchupSubscription;
+        long matchingEventCount = eventStoreQueries.count(catchupFilter);
+        while (matchingEventCount > reconciledThroughCount && shouldKeepReplaying(subscriptionId)) {
+            long numberOfEventsToReconcile = matchingEventCount - numberOfEventsBeforeStartingCatchupSubscription;
+            // Read the delta in bounded windows, newest-window-first (skip counts down from the full delta), instead
+            // of materializing the whole delta in one ArrayList, mirroring the position path's window delivery. Each
+            // window is still read and reversed in natural-order-descending, so events within and across windows are
+            // delivered oldest first.
+            long remaining = numberOfEventsToReconcile;
+            while (remaining > 0 && shouldKeepReplaying(subscriptionId)) {
+                long windowCountAsLong = Math.min(remaining, Math.min(config.dcbCatchupPositionWindowSize, Integer.MAX_VALUE));
+                int windowCount = (int) windowCountAsLong;
+                long skip = remaining - windowCount;
+                List<CloudEvent> window = new ArrayList<>(eventStoreQueries.query(catchupFilter, Math.toIntExact(skip), windowCount, SortBy.natural(DESCENDING)).toList());
+                Collections.reverse(window);
+                deliverCatchupEvents(window.stream(), subscriptionId, action, catchupPhaseCache, persistDuringCatchup, checkpointAt);
+                remaining -= windowCount;
+            }
+            reconciledThroughCount = matchingEventCount;
+            matchingEventCount = eventStoreQueries.count(catchupFilter);
         }
     }
 
@@ -511,14 +509,14 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 catchupPhaseCache, () -> historyRead(subscriptionId));
     }
 
-    private Filter deriveFilterToUseDuringCatchupPhase(@Nullable SubscriptionFilter filter, Checkpoint checkpoint) {
+    private Filter deriveFilterToUseDuringCatchupPhase(@Nullable SubscriptionFilter filter, TimeBasedCheckpoint replayFrom) {
         final Filter timeFilter;
-        if (isBeginningOfTime(checkpoint)) {
+        if (replayFrom.isBeginningOfTime()) {
             timeFilter = Filter.all();
         } else {
             // Inclusive, since events can share a time and a stored time says only that one of them was handled. The
             // events at that time are delivered again, which at-least-once delivery allows.
-            OffsetDateTime offsetDateTime = OffsetDateTime.parse(checkpoint.asString(), RFC_3339_DATE_TIME_FORMATTER);
+            OffsetDateTime offsetDateTime = OffsetDateTime.parse(replayFrom.asString(), RFC_3339_DATE_TIME_FORMATTER);
             timeFilter = time(gte(offsetDateTime));
         }
 
@@ -563,10 +561,6 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     // models only understand StreamSubscriptionFilter and DcbSubscriptionFilter.
     private StreamSubscriptionFilter withCapabilityScope(@Nullable SubscriptionFilter filter) {
         return StreamSubscriptionFilter.filter(withCapabilityScope(plainFilterOf(filter)));
-    }
-
-    private void runCatchupForStream(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache, Predicate<CloudEvent> persistDuringCatchup) {
-        deliverCatchupEvents(cloudEvents, subscriptionId, action, cache, persistDuringCatchup, e -> TimeBasedCheckpoint.from(e.getTime()));
     }
 
     // One per catch-up attempt, shared by all its windows, so an EveryN configured for the whole model counts this
@@ -629,9 +623,11 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         return isTimeBasedCheckpoint(checkpoint);
     }
 
+    // A CatchupTimeCheckpoint counts too, since it is the time a time-based catch-up stored with its live start
     static boolean isTimeBasedCheckpoint(Checkpoint checkpoint) {
         return checkpoint instanceof TimeBasedCheckpoint ||
-                (checkpoint instanceof StringBasedCheckpoint && isRfc3339Timestamp(checkpoint.asString()));
+                (checkpoint instanceof StringBasedCheckpoint && isRfc3339Timestamp(checkpoint.asString())) ||
+                (CatchupTimeCheckpoint.isCatchupTimeCheckpoint(checkpoint) && isRfc3339Timestamp(CatchupTimeCheckpoint.parse(checkpoint).time()));
     }
 
     private static boolean isRfc3339Timestamp(String string) {
