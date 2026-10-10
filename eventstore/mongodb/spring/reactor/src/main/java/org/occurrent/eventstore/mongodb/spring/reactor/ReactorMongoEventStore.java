@@ -43,6 +43,7 @@ import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.api.reactor.*;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbTagsIndexCheck;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator;
@@ -793,6 +794,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     .then();
         }
 
+        if (dcbEnabled && !eventStoreCapabilities.contains(STREAM)) {
+            chain = chain.then(warnOnPositionedStreamEventsWithoutDcbTagsIndex(eventStoreCollectionName, mongoTemplate));
+        }
+
         // Damage check first. The unpositioned check errors when requireBackfilledPosition is set, and an event
         // whose position updateEvent dropped has no position field either, so it would fail startup naming the
         // position backfill, and backfilling such an event assigns a wrong position for good.
@@ -811,6 +816,29 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         mongoTemplate.setSessionSynchronization(ALWAYS);
 
         return chain;
+    }
+
+    // Runs after the (dcbTags, position) index exists, since the lookup is hinted on it. A failed check only logs.
+    private static Mono<Void> warnOnPositionedStreamEventsWithoutDcbTagsIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
+        return mongoTemplate.getCollection(eventStoreCollectionName)
+                .flatMap(collection -> Flux.from(collection.listIndexes()).any(DcbTagsIndexCheck::isDcbTagsIndex)
+                        .flatMap(hasDcbTagsIndex -> hasDcbTagsIndex ? Mono.just(false) : Mono.from(collection.find(DcbTagsIndexCheck.positionedStreamEvent())
+                                .hint(DcbTagsIndexCheck.hint())
+                                .min(DcbTagsIndexCheck.min())
+                                .max(DcbTagsIndexCheck.max())
+                                .limit(1)
+                                .projection(Projections.include(ID))
+                                .first()).hasElement()))
+                .doOnNext(hasPositionedStreamEvent -> {
+                    if (hasPositionedStreamEvent) {
+                        LOGGER.warn(DcbTagsIndexCheck.missingIndexMessage(eventStoreCollectionName));
+                    }
+                })
+                .then()
+                .onErrorResume(RuntimeException.class, e -> {
+                    LOGGER.warn(DcbTagsIndexCheck.checkFailedMessage(eventStoreCollectionName), e);
+                    return Mono.empty();
+                });
     }
 
     // Startup guard: when this store writes position but the event collection already has events without one, those

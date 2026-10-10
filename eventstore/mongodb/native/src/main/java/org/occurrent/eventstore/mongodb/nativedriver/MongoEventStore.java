@@ -39,6 +39,7 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbTagsIndexCheck;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
@@ -864,6 +865,33 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             // Evidence: explain("executionStats") on a 5,000-of-305,000 skewed dataset (a plausible popular-tag
             // boundary) showed a winning SORT stage over the dcbTags index without this compound index.
             eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true));
+        }
+        if (dcbEnabled && !eventStoreCapabilities.contains(STREAM)) {
+            warnOnPositionedStreamEventsWithoutDcbTagsIndex(eventStoreCollection);
+        }
+    }
+
+    // Runs after the (dcbTags, position) index exists, since the lookup is hinted on it. A failed check only logs.
+    private static void warnOnPositionedStreamEventsWithoutDcbTagsIndex(MongoCollection<Document> eventStoreCollection) {
+        String collectionName = eventStoreCollection.getNamespace().getCollectionName();
+        try {
+            for (Document index : eventStoreCollection.listIndexes()) {
+                if (DcbTagsIndexCheck.isDcbTagsIndex(index)) {
+                    return;
+                }
+            }
+            Document positionedStreamEvent = eventStoreCollection.find(DcbTagsIndexCheck.positionedStreamEvent())
+                    .hint(DcbTagsIndexCheck.hint())
+                    .min(DcbTagsIndexCheck.min())
+                    .max(DcbTagsIndexCheck.max())
+                    .limit(1)
+                    .projection(Projections.include(ID))
+                    .first();
+            if (positionedStreamEvent != null) {
+                log.warn(DcbTagsIndexCheck.missingIndexMessage(collectionName));
+            }
+        } catch (RuntimeException e) {
+            log.warn(DcbTagsIndexCheck.checkFailedMessage(collectionName), e);
         }
     }
 

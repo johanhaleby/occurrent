@@ -129,7 +129,14 @@ never drops an index. Four cases follow from that.
   store that never had `DCB` doesn't have it, and the DCB-only store doesn't create it. Without it, a match-all query
   and the append check of `wholeStoreLock()` read every stream event with a `position` in the range, 200,200
   documents instead of 200 in the mixed store above. The results are correct, only slower. The operator creates the
-  index by hand in that case.
+  index by hand in that case. At startup a DCB-only store logs a warning when the collection has no index keyed on
+  `dcbTags` alone and holds a stream event with a numeric `position`. It looks for that event with one find on
+  `(dcbTags, position)`, hinted and bounded to the keys whose `dcbTags` is null. On a collection the native store
+  wrote with 10,000 DCB events, that find examined 0 keys and 0 documents, also after 5,000 stream events without a
+  `position` were added, and 1 key and 1 document once 3,000 stream events with a `position` were added. Both MongoDB
+  8.0.29 and 4.2.8 gave those numbers. A find for an event with a `position` and no `dcbTags`, without the hint and
+  bounds, used `position` there and examined 10,000 keys and 10,000 documents on the collection with only DCB events.
+  I didn't measure a stream event whose `position` is a string.
 - **A DCB-only store that later enables `STREAM`.** Startup builds `dcbTags` over the whole collection, unless it's
   already there, and the store doesn't start until MongoDB has built it. On a large collection the operator builds it
   first, with the same key and options, as a rolling build the way step 1 of the

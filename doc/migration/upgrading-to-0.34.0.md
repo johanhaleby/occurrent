@@ -2459,6 +2459,11 @@ Don't drop it if the collection holds stream events that have a `position`, for 
 `STREAM` enabled before, or if you'll enable `STREAM` on the store later. The first makes the match-all queries above
 slow, and the second makes startup build the index again.
 
+A store that had `STREAM` alone and that you configure with `DCB` alone never had `dcbTags_1`, and the DCB-only store
+doesn't create it. Its stream events that have a `position` make the match-all queries slow in the same way, so create
+the index by hand with `db.events.createIndex({ dcbTags: 1 }, { sparse: true })`. At startup a DCB-only store logs a
+warning when its collection has no index on `dcbTags` alone and holds a stream event with a numeric `position`.
+
 Enabling `STREAM` on a DCB store builds `dcbTags_1` at startup when the collection doesn't have it. That's a DCB-only
 store created on 0.34.0 or later, or one you dropped the index from. The store doesn't start until MongoDB has built
 the index over the whole collection. On a large collection, build it before you deploy the configuration that adds
