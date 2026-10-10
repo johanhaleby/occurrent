@@ -133,9 +133,10 @@ replays are the same code for both, `replayUntilLiveStartHolds` in `AbstractCatc
 without a live start, written by 0.33.0, resumes with a live start read at the resume, and the catch-up logs a warning
 that names the subscription and the stored value.
 
-At the handover, a catch-up replaces the stored checkpoint with the live start when that checkpoint is a position or
-a time, with or without a live start, whichever kind of catch-up stored it. In 0.33.0 each handover replaced only its
-own kind and passed the other to the wrapped model as where to start, and the MongoDB models opened at the present.
+When a blocking `StreamCatchupSubscriptionModel` or `DcbCatchupSubscriptionModel` goes live, its handover replaces
+the stored checkpoint with the live start when that checkpoint is a position or a time, with or without a live start,
+whichever kind of catch-up stored it. In 0.33.0 these handovers replaced only their own kind and passed the other to
+the wrapped model as where to start, and the MongoDB models opened at the present.
 
 ## Alternatives considered
 
