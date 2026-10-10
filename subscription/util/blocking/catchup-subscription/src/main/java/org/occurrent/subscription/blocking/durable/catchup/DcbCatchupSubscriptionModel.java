@@ -217,9 +217,10 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
                             cfg -> () -> {
                                 Checkpoint position = cfg.storage().read(subscriptionId);
-                                // If nothing is stored, or the stored position is a DCB position (written by this catch-up),
-                                // save the live change-stream position so the wrapped subscription resumes from there.
-                                if ((position == null || GlobalCheckpoint.isGlobalCheckpoint(position)) && globalCheckpoint != null) {
+                                // If nothing is stored, or the stored position is a DCB position or a time (written by a
+                                // catch-up of any kind), save the live change-stream position so the wrapped subscription
+                                // resumes from there.
+                                if ((position == null || isCatchupCheckpoint(position)) && globalCheckpoint != null) {
                                     position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
                                 } else if (position == null) {
                                     return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();

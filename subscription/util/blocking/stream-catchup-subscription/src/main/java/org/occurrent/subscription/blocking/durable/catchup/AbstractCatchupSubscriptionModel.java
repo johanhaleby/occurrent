@@ -796,6 +796,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
+     * Whether {@code checkpoint} is a global position or a time, with or without a live start, which is what a
+     * catch-up stores during its replay. The handover replaces any of them with the live start, whichever kind of
+     * catch-up wrote it, since the MongoDB subscription models don't recognize either and open at the present.
+     */
+    protected static boolean isCatchupCheckpoint(Checkpoint checkpoint) {
+        return GlobalCheckpoint.isGlobalCheckpoint(checkpoint) || StreamCatchupSubscriptionModel.isTimeBasedCheckpoint(checkpoint);
+    }
+
+    /**
      * Logs a warning when {@code stored} is a global position or a time without a live start, which a catch-up stored
      * before the live start was kept. The resume replays from it and goes live from a live start read now, which can
      * miss an event whose position was reserved below the stored position, or whose time is earlier than the stored

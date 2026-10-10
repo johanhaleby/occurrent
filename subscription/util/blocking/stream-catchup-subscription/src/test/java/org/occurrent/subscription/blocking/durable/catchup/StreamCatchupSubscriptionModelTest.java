@@ -29,6 +29,8 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
@@ -1383,6 +1385,56 @@ class StreamCatchupSubscriptionModelTest {
 
         await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history));
         assertThat(model.resumeProbes).containsExactly(agedOut, liveStartReadNow);
+    }
+
+    static Stream<Checkpoint> catchUpCheckpointsOfTheTimeKind() {
+        StringBasedCheckpoint someLiveStart = new StringBasedCheckpoint("some live start");
+        return Stream.of(CatchupTimeCheckpoint.of(asTime(at(2)), someLiveStart, BEGINNING_OF_TIME), TimeBasedCheckpoint.from(at(2)), new StringBasedCheckpoint(asTime(at(2))));
+    }
+
+    static Stream<Checkpoint> catchUpCheckpointsOfThePositionKind() {
+        return Stream.of(GlobalCheckpoint.of(2), GlobalCheckpoint.of(2, new StringBasedCheckpoint("some live start"), 0, 4));
+    }
+
+    @ParameterizedTest
+    @MethodSource("catchUpCheckpointsOfTheTimeKind")
+    void a_position_catch_up_replaces_a_stored_checkpoint_written_by_a_time_catch_up_with_the_live_start_it_read_before_the_replay(Checkpoint storedByATimeCatchUp) {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        List<DomainEvent> history = List.of(nameDefined("event1"), nameDefined("event2"), nameDefined("event3"));
+        history.forEach(event -> write(eventStore, event));
+        StringBasedCheckpoint liveStartReadNow = new StringBasedCheckpoint("live start read now");
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, liveStartReadNow);
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        storage.save("subscription", storedByATimeCatchUp);
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage)));
+
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history));
+        assertThat(model.liveStarts).as("the wrapped model goes live from the live start read before the replay, not from the checkpoint the other kind of catch-up stored")
+                .containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
+        assertThat(storage.read("subscription")).isEqualTo(liveStartReadNow);
+    }
+
+    @ParameterizedTest
+    @MethodSource("catchUpCheckpointsOfThePositionKind")
+    void a_time_catch_up_replaces_a_stored_checkpoint_written_by_a_position_catch_up_with_the_live_start_it_read_before_the_replay(Checkpoint storedByAPositionCatchUp) {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        List<DomainEvent> history = List.of(writeAt(eventStore, "event1", at(1)), writeAt(eventStore, "event2", at(2)), writeAt(eventStore, "event3", at(3)));
+        StringBasedCheckpoint liveStartReadNow = new StringBasedCheckpoint("live start read now");
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, liveStartReadNow);
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        storage.save("subscription", storedByAPositionCatchUp);
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage)));
+
+        subscription.subscribe("subscription", StartAtTime.beginningOfTime(), toDomainEvents(received)).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(history));
+        assertThat(model.liveStarts).as("the wrapped model goes live from the live start read before the replay, not from the checkpoint the other kind of catch-up stored")
+                .containsExactly(StartAt.checkpoint(liveStartReadNow).toString());
+        assertThat(storage.read("subscription")).isEqualTo(liveStartReadNow);
     }
 
     private static final OffsetDateTime BASE_TIME = OffsetDateTime.parse("2026-01-01T10:00:00Z");

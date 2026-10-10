@@ -321,9 +321,9 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                             cfg -> () -> {
                                 // Read inside the supplier so a retry picks up the latest checkpoint
                                 Checkpoint position = cfg.storage().read(subscriptionId);
-                                // Nothing stored, or a time-based position from catch-up: save globalCheckpoint, since
-                                // the wrapped subscription may not support time-based positions.
-                                if ((position == null || isTimeBasedCheckpoint(position)) && globalCheckpoint != null) {
+                                // Save globalCheckpoint when nothing is stored, or a time or global position from a
+                                // catch-up of either kind, since the wrapped subscription may not support either.
+                                if ((position == null || isCatchupCheckpoint(position)) && globalCheckpoint != null) {
                                     position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
                                 } else if (position == null) {
                                     // globalCheckpoint is also null: start at subscriptionModelDefault if the delegate may subscribe
@@ -469,10 +469,10 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
                             cfg -> () -> {
                                 Checkpoint position = cfg.storage().read(subscriptionId);
-                                // If nothing is stored, or the stored position is a global position (written by this
-                                // catch-up), save the live change-stream position so the wrapped subscription resumes
-                                // from there.
-                                if ((position == null || GlobalCheckpoint.isGlobalCheckpoint(position)) && globalCheckpoint != null) {
+                                // If nothing is stored, or the stored position is a global position or a time (written
+                                // by a catch-up of either kind), save the live change-stream position so the wrapped
+                                // subscription resumes from there.
+                                if ((position == null || isCatchupCheckpoint(position)) && globalCheckpoint != null) {
                                     position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
                                 } else if (position == null) {
                                     return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
