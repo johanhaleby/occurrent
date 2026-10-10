@@ -148,6 +148,34 @@ class CatchupTimeCheckpointTest {
         assertThatThrownBy(() -> CatchupTimeCheckpoint.of(TIME, LIVE_START, replayOrigin)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("replayOrigin");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"not-a-time", "2026-01-01", "10:00:05Z", "1767261605"})
+    void a_time_must_be_an_rfc_3339_time(String time) {
+        assertThatThrownBy(() -> CatchupTimeCheckpoint.of(time, LIVE_START, ORIGIN)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("time");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"not-a-time", "2026-01-01", "10:00:00Z", "1767261600"})
+    void a_replay_origin_must_be_an_rfc_3339_time(String replayOrigin) {
+        assertThatThrownBy(() -> CatchupTimeCheckpoint.of(TIME, LIVE_START, replayOrigin)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("replayOrigin");
+    }
+
+    @Test
+    void a_string_form_whose_time_is_not_an_rfc_3339_time_is_not_a_catch_up_time_checkpoint() {
+        Checkpoint checkpoint = new StringBasedCheckpoint("garbage;origin:" + ORIGIN + ";liveFrom:" + LIVE_START.asString());
+
+        assertThat(CatchupTimeCheckpoint.isCatchupTimeCheckpoint(checkpoint)).isFalse();
+        assertThatThrownBy(() -> CatchupTimeCheckpoint.parse(checkpoint)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void a_string_form_whose_replay_origin_is_not_an_rfc_3339_time_is_not_a_catch_up_time_checkpoint() {
+        Checkpoint checkpoint = new StringBasedCheckpoint(TIME + ";origin:garbage;liveFrom:" + LIVE_START.asString());
+
+        assertThat(CatchupTimeCheckpoint.isCatchupTimeCheckpoint(checkpoint)).isFalse();
+        assertThatThrownBy(() -> CatchupTimeCheckpoint.parse(checkpoint)).isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     void a_live_start_and_the_times_cannot_be_null() {
         assertThatThrownBy(() -> CatchupTimeCheckpoint.of(TIME, null, ORIGIN)).isInstanceOf(NullPointerException.class);

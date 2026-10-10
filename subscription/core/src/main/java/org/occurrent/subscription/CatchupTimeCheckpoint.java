@@ -19,7 +19,11 @@ package org.occurrent.subscription;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.Objects;
+
+import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 /**
  * The {@link Checkpoint} a time-based catch-up stores while it replays history by event time. It holds the time of
@@ -62,7 +66,7 @@ public final class CatchupTimeCheckpoint implements Checkpoint {
      * @param replayOrigin The time the first attempt at the replay started from, in RFC 3339 form. A resume replays
      *                     from here again, with a new live start, when the live feed no longer has the history from
      *                     {@code liveFrom}.
-     * @throws IllegalArgumentException if {@code time} or {@code replayOrigin} is blank or contains {@code ;}
+     * @throws IllegalArgumentException if {@code time} or {@code replayOrigin} is not an RFC 3339 time
      */
     public static CatchupTimeCheckpoint of(String time, Checkpoint liveFrom, String replayOrigin) {
         return new CatchupTimeCheckpoint(time, liveFrom, replayOrigin);
@@ -140,13 +144,18 @@ public final class CatchupTimeCheckpoint implements Checkpoint {
     private static String requireTime(String time, String name) {
         Objects.requireNonNull(time, name + " cannot be null");
         if (!isTime(time)) {
-            throw new IllegalArgumentException(name + " must be a non-blank time without ';', was \"" + time + "\"");
+            throw new IllegalArgumentException(name + " must be an RFC 3339 time, was \"" + time + "\"");
         }
         return time;
     }
 
     private static boolean isTime(String time) {
-        return !time.isBlank() && time.indexOf(';') < 0;
+        try {
+            OffsetDateTime.parse(time, RFC_3339_DATE_TIME_FORMATTER);
+            return true;
+        } catch (DateTimeParseException e) {
+            return false;
+        }
     }
 
     private static IllegalArgumentException notACatchupTimeCheckpoint(String value) {

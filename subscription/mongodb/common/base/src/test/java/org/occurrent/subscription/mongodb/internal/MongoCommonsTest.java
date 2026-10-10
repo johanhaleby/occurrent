@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class MongoCommonsTest {
@@ -433,6 +434,24 @@ class MongoCommonsTest {
         document.put(MongoCommons.CATCHUP_REPLAY_TO, 40L);
 
         assertThat(MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document))).isEqualTo(new StringBasedCheckpoint("position:42"));
+    }
+
+    @Test
+    void a_time_stored_with_a_live_start_and_a_replay_origin_but_a_value_that_is_not_a_time_fails_when_read() {
+        Document document = MongoCommons.generateGenericCheckpointDocument("subscription-1", "garbage");
+        document.put(MongoCommons.CATCHUP_LIVE_FROM, new Document(MongoCommons.OPERATION_TIME, new BsonTimestamp(1735689600, 1)));
+        document.put(MongoCommons.CATCHUP_REPLAY_ORIGIN, "2026-01-01T10:00:00Z");
+
+        assertThatThrownBy(() -> MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document))).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void a_time_stored_with_a_live_start_and_a_replay_origin_that_is_not_a_time_fails_when_read() {
+        Document document = MongoCommons.generateGenericCheckpointDocument("subscription-1", "2026-01-01T10:00:05.123Z");
+        document.put(MongoCommons.CATCHUP_LIVE_FROM, new Document(MongoCommons.OPERATION_TIME, new BsonTimestamp(1735689600, 1)));
+        document.put(MongoCommons.CATCHUP_REPLAY_ORIGIN, "garbage");
+
+        assertThatThrownBy(() -> MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document))).isInstanceOf(IllegalStateException.class);
     }
 
     @Test

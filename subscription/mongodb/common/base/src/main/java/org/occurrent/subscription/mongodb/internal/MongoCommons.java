@@ -711,7 +711,12 @@ public class MongoCommons {
                 changeStreamPosition = GlobalCheckpoint.of(GlobalCheckpoint.positionOf(new StringBasedCheckpoint(value)),
                         calculateCheckpointFromMongoStreamPositionDocument(liveFrom), origin.longValue(), to.longValue());
             } else if (liveFrom != null && !position && replayOrigin instanceof String origin && replayTo == null) {
-                changeStreamPosition = CatchupTimeCheckpoint.of(value, calculateCheckpointFromMongoStreamPositionDocument(liveFrom), origin);
+                // A value or replay origin that is not a time fails like any other document this method doesn't recognize
+                try {
+                    changeStreamPosition = CatchupTimeCheckpoint.of(value, calculateCheckpointFromMongoStreamPositionDocument(liveFrom), origin);
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalStateException("Doesn't recognize " + checkpointDocument + " as a valid checkpoint document", e);
+                }
             } else {
                 changeStreamPosition = new StringBasedCheckpoint(value);
             }
