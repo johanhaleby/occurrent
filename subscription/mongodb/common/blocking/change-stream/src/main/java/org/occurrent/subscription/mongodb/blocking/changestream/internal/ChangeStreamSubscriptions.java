@@ -299,16 +299,17 @@ public final class ChangeStreamSubscriptions {
     // opens, and answers the recorded present if it resolves to the present then. A supplier that writes, such as
     // the one saving a durable subscription's first checkpoint, then writes once
     private void pinThePresent(AtomicReference<StartAt> currentStartAt) {
-        while (true) {
-            StartAt tracked = currentStartAt.get();
-            if (!needsThePresent(tracked)) {
-                return;
-            }
-            BsonTimestamp operationTime = currentOperationTime();
-            if (operationTime == null || currentStartAt.compareAndSet(tracked, MongoCommons.pinnedTo(tracked, operationTime))) {
-                return;
-            }
+        if (!needsThePresent(currentStartAt.get())) {
+            return;
         }
+        BsonTimestamp operationTime = currentOperationTime();
+        if (operationTime == null) {
+            return;
+        }
+        // Asked once, and recorded on whatever position is there by then, such as one a resume put there meanwhile
+        // that falls back to the position it replaced. Asking again would record a later present and skip what was
+        // written in between, while this earlier one can only deliver an event again.
+        currentStartAt.updateAndGet(tracked -> needsThePresent(tracked) ? MongoCommons.pinnedTo(tracked, operationTime) : tracked);
     }
 
     private static boolean needsThePresent(StartAt position) {
@@ -823,7 +824,7 @@ public final class ChangeStreamSubscriptions {
     }
 
     private void logResumingFromTheTrackedPosition(String subscriptionId, Checkpoint unreadable) {
-        log.info("Subscription {} resumes from the position it had read to rather than at checkpoint {}, which is not a change stream position. Events another consumer handled in the meantime are delivered again.",
+        log.info("Subscription {} resumes from its own position rather than at checkpoint {}, which is not a change stream position. Events that checkpoint already covers can be delivered again.",
                 subscriptionId, unreadable.asString());
     }
 

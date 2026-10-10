@@ -773,8 +773,8 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)}). The fallback is deliberately the wrapped
      * model's own tracked position, never {@link StartAt#subscriptionModelDefault()}, which resolves to the
      * present and would silently drop whatever was published while this subscription was paused. For the same
-     * reason a MongoDB model resumes from its own tracked position when the stored checkpoint is one it cannot read,
-     * such as the position a catch-up stores while it replays.
+     * reason a MongoDB model resumes from its own tracked position when the stored checkpoint is one it cannot open
+     * its change stream at, such as the position a catch-up stores while it replays.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {

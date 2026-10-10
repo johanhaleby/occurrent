@@ -18,12 +18,15 @@ package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.MongoTimeoutException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
+import com.mongodb.event.CommandListener;
+import com.mongodb.event.CommandSucceededEvent;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
@@ -73,6 +76,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
@@ -890,6 +894,99 @@ public class NativeMongoSubscriptionModelTest {
                     .containsExactly(firstEvent.eventId(), secondEvent.eventId(), secondEvent.eventId(), thirdEvent.eventId());
         }
 
+        @Test
+        void resuming_at_a_dynamic_position_that_resolves_to_a_global_position_checkpoint_while_the_present_is_being_recorded_does_not_skip_what_was_written_meanwhile() throws InterruptedException {
+            assertWhatWasWrittenWhileThePresentIsBeingRecordedIsDeliveredWhenResumingAt(
+                    liveStart -> StartAt.dynamic(() -> StartAt.checkpoint(globalPositionCheckpoint(liveStart))));
+        }
+
+        @Test
+        void resuming_at_a_global_position_checkpoint_while_the_present_is_being_recorded_does_not_skip_what_was_written_meanwhile() throws InterruptedException {
+            assertWhatWasWrittenWhileThePresentIsBeingRecordedIsDeliveredWhenResumingAt(
+                    liveStart -> StartAt.checkpoint(globalPositionCheckpoint(liveStart)));
+        }
+
+        @Test
+        void resuming_a_subscription_paused_before_its_dynamic_start_opened_at_a_dynamic_position_that_resolves_to_an_unreadable_checkpoint_does_not_skip_what_was_written_while_paused() throws Exception {
+            assertWhatWasWrittenWhilePausedIsDeliveredWhenAPausedDynamicStartIsResumedAtAnUnreadableCheckpoint(() -> StartAt.now());
+        }
+
+        @Test
+        void resuming_a_subscription_paused_before_its_dynamic_default_start_opened_at_a_dynamic_position_that_resolves_to_an_unreadable_checkpoint_does_not_skip_what_was_written_while_paused() throws Exception {
+            assertWhatWasWrittenWhilePausedIsDeliveredWhenAPausedDynamicStartIsResumedAtAnUnreadableCheckpoint(() -> StartAt.subscriptionModelDefault());
+        }
+
+        private void assertWhatWasWrittenWhileThePresentIsBeingRecordedIsDeliveredWhenResumingAt(Function<Checkpoint, StartAt> repositionTo) throws InterruptedException {
+            // Given
+            HoldTheFirstPing firstPing = new HoldTheFirstPing();
+            ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+            ExecutorService executor = Executors.newCachedThreadPool();
+            NativeMongoSubscriptionModel model = null;
+            try (MongoClient listeningClient = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).addCommandListener(firstPing).build())) {
+                MongoDatabase listeningDatabase = listeningClient.getDatabase(requireNonNull(connectionString.getDatabase()));
+                model = new NativeMongoSubscriptionModel(listeningDatabase, listeningDatabase.getCollection(requireNonNull(connectionString.getCollection())), timeRepresentation, executor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
+                LocalDateTime now = LocalDateTime.now();
+                CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+                String subscriptionId = UUID.randomUUID().toString();
+                Checkpoint liveStart = requireNonNull(model.globalCheckpoint());
+                model.subscribePaused(subscriptionId, null, StartAt.now(), state::add);
+                assertThat(firstPing.held.await(5, SECONDS)).as("the reply to the ping that records the present is held").isTrue();
+
+                // When
+                NameDefined writtenWhileRecording = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+                mongoEventStore.write("1", 0, serialize(writtenWhileRecording));
+                Subscription resumed = model.resumeSubscription(subscriptionId, repositionTo.apply(liveStart));
+                firstPing.release();
+                resumed.waitUntilStarted(Duration.ofSeconds(10));
+                NameWasChanged sentinel = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "sentinel");
+                mongoEventStore.write("1", 1, serialize(sentinel));
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(state).extracting(CloudEvent::getId).contains(sentinel.eventId()));
+
+                // Then what was written after the present was read, and before the resume, is not lost. Duplicates are not asserted on.
+                assertThat(state).extracting(CloudEvent::getId).contains(writtenWhileRecording.eventId());
+            } finally {
+                firstPing.release();
+                if (model != null) {
+                    model.shutdown();
+                }
+                executor.shutdown();
+                ExecutorShutdown.shutdownSafely(executor, 10, TimeUnit.SECONDS);
+            }
+        }
+
+        private void assertWhatWasWrittenWhilePausedIsDeliveredWhenAPausedDynamicStartIsResumedAtAnUnreadableCheckpoint(Supplier<StartAt> dynamicStart) throws Exception {
+            // Given
+            // One thread, so a task submitted after subscribePaused runs once the present at subscribe is recorded
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            NativeMongoSubscriptionModel model = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, executor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
+            try {
+                LocalDateTime now = LocalDateTime.now();
+                CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+                String subscriptionId = UUID.randomUUID().toString();
+                Checkpoint liveStart = requireNonNull(model.globalCheckpoint());
+                model.subscribePaused(subscriptionId, null, StartAt.dynamic(dynamicStart), state::add);
+                executor.submit(() -> {
+                }).get(5, SECONDS);
+
+                // When
+                NameDefined duringPause = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+                mongoEventStore.write("1", 0, serialize(duringPause));
+                model.resumeSubscription(subscriptionId, StartAt.dynamic(() -> StartAt.checkpoint(globalPositionCheckpoint(liveStart)))).waitUntilStarted(Duration.ofSeconds(10));
+                NameWasChanged sentinel = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "sentinel");
+                mongoEventStore.write("1", 1, serialize(sentinel));
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(state).extracting(CloudEvent::getId).contains(sentinel.eventId()));
+
+                // Then what was written after the present at subscribe was recorded, while the subscription was paused, is not lost. Duplicates are not asserted on.
+                assertThat(state).extracting(CloudEvent::getId).contains(duringPause.eventId());
+            } finally {
+                model.shutdown();
+                executor.shutdown();
+                ExecutorShutdown.shutdownSafely(executor, 10, TimeUnit.SECONDS);
+            }
+        }
+
         private Checkpoint globalPositionCheckpoint(Checkpoint liveStart) {
             return GlobalCheckpoint.parse(new StringBasedCheckpoint(GlobalCheckpoint.of(5, liveStart, 0, 7).asString()));
         }
@@ -922,6 +1019,28 @@ public class NativeMongoSubscriptionModelTest {
 
             // Then nothing written while the subscription was paused is lost. Duplicates are not asserted on.
             assertThat(state).extracting(CloudEvent::getId).contains(duringPause.eventId());
+        }
+    }
+
+    private static final class HoldTheFirstPing implements CommandListener {
+        final CountDownLatch held = new CountDownLatch(1);
+        private final CountDownLatch released = new CountDownLatch(1);
+        private final AtomicBoolean first = new AtomicBoolean(true);
+
+        @Override
+        public void commandSucceeded(CommandSucceededEvent event) {
+            if ("ping".equals(event.getCommandName()) && first.getAndSet(false)) {
+                held.countDown();
+                try {
+                    released.await(10, SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+
+        void release() {
+            released.countDown();
         }
     }
 
