@@ -23,10 +23,13 @@ import ch.qos.logback.core.read.ListAppender;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -47,19 +50,21 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
  * The startup warning of a store with {@code DCB} and without {@code STREAM} over a collection that holds stream
- * events with a position and no index on {@code dcbTags} alone. The store logs it for that collection and for no
- * other.
+ * events with a position and no usable index on {@code dcbTags} alone. The store logs it for that collection and for
+ * no other.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -85,6 +90,7 @@ class MongoEventStoreDcbTagsIndexWarningTest {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcbtagsindex");
         mongoClient = MongoClients.create(connectionString);
         databaseName = requireNonNull(connectionString.getDatabase());
+        mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION).drop();
 
         logAppender = new ListAppender<>();
         logAppender.start();
@@ -120,7 +126,7 @@ class MongoEventStoreDcbTagsIndexWarningTest {
 
         assertThat(warnings())
                 .as("DCB events have a position too, and a collection with only them has no stream event for the match-all queries to read")
-                .doesNotContain(DcbTagsIndexCheck.missingIndexMessage(EVENT_COLLECTION));
+                .isEmpty();
     }
 
     @Test
@@ -134,7 +140,76 @@ class MongoEventStoreDcbTagsIndexWarningTest {
 
         assertThat(warnings())
                 .as("the operator already did what the warning asks for, so repeating it on every startup would be noise")
-                .doesNotContain(DcbTagsIndexCheck.missingIndexMessage(EVENT_COLLECTION));
+                .isEmpty();
+    }
+
+    @Test
+    void a_dcb_only_store_warns_that_a_dcb_tags_index_that_is_not_sparse_is_unusable() {
+        newStreamStore().write("stream:1", List.of(event("Defined"), event("Renamed")));
+        Document index = createDcbTagsIndex(new IndexOptions());
+
+        logAppender.list.clear();
+        newDcbStore();
+
+        assertThat(warnings())
+                .as("a non sparse index also holds the stream events, so it narrows nothing and the operator must hear that it is the wrong one")
+                .containsExactly(DcbTagsIndexCheck.unusableIndexMessage(EVENT_COLLECTION, index));
+    }
+
+    @Test
+    void a_dcb_only_store_warns_that_a_dcb_tags_index_with_a_partial_filter_expression_is_unusable() {
+        newStreamStore().write("stream:1", List.of(event("Defined"), event("Renamed")));
+        Document index = createDcbTagsIndex(new IndexOptions().partialFilterExpression(Filters.eq("type", "Defined")));
+
+        logAppender.list.clear();
+        newDcbStore();
+
+        assertThat(warnings())
+                .as("a partial index cannot answer a query for every DCB event, so the planner never picks it for a match-all read")
+                .containsExactly(DcbTagsIndexCheck.unusableIndexMessage(EVENT_COLLECTION, index));
+    }
+
+    @Test
+    void a_dcb_only_store_warns_that_a_hidden_dcb_tags_index_is_unusable() {
+        assumeTrue(serverIsAtLeast(4, 4), "hidden indexes need MongoDB 4.4");
+        newStreamStore().write("stream:1", List.of(event("Defined"), event("Renamed")));
+        Document index = createDcbTagsIndex(new IndexOptions().sparse(true).hidden(true));
+
+        logAppender.list.clear();
+        newDcbStore();
+
+        assertThat(warnings())
+                .as("the planner ignores a hidden index, so the operator who created it must hear that it does nothing until it is unhidden")
+                .containsExactly(DcbTagsIndexCheck.unusableIndexMessage(EVENT_COLLECTION, index));
+    }
+
+    @Test
+    void a_dcb_only_store_says_nothing_about_an_unusable_dcb_tags_index_when_the_collection_holds_only_dcb_events() {
+        newDcbStore().append(List.of(taggedEvent("Defined", "name:1"), taggedEvent("Renamed", "name:1")));
+        createDcbTagsIndex(new IndexOptions());
+
+        logAppender.list.clear();
+        newDcbStore();
+
+        assertThat(warnings())
+                .as("with no stream event to read, the index being unusable costs nothing")
+                .isEmpty();
+    }
+
+    private Document createDcbTagsIndex(IndexOptions options) {
+        MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
+        events.createIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), options);
+        return events.listIndexes().into(new ArrayList<>()).stream()
+                .filter(index -> index.get("key", Document.class).equals(new Document(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, 1)))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private boolean serverIsAtLeast(int major, int minor) {
+        List<?> version = mongoClient.getDatabase("admin").runCommand(new Document("buildInfo", 1)).getList("versionArray", Object.class);
+        int serverMajor = ((Number) version.get(0)).intValue();
+        int serverMinor = ((Number) version.get(1)).intValue();
+        return serverMajor > major || (serverMajor == major && serverMinor >= minor);
     }
 
     private List<String> warnings() {

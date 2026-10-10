@@ -884,7 +884,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (dcbEnabled && eventStoreCapabilities.contains(STREAM)) {
             // Only DCB events have dcbTags, so with stream events in the collection this index narrows a match-all
             // DcbCriteria to the DCB events. (dcbTags, position) also holds every stream event with a position. On a
-            // DCB-only store this index holds the same events as the position index, so it narrows nothing.
+            // DCB-only store whose collection holds only DCB events, this index holds the same events as the position
+            // index, so it narrows nothing.
             eventStoreCollection.createIndex(Indexes.ascending(DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true));
         }
         if (dcbEnabled) {
@@ -919,10 +920,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // Runs after the (dcbTags, position) index exists, since the lookup is hinted on it. A failed check only logs.
     private static void warnOnPositionedStreamEventsWithoutDcbTagsIndex(MongoCollection<Document> eventStoreCollection, String eventStoreCollectionName) {
         try {
-            for (Document index : eventStoreCollection.listIndexes()) {
-                if (DcbTagsIndexCheck.isDcbTagsIndex(index)) {
-                    return;
-                }
+            String warning = DcbTagsIndexCheck.warningFor(eventStoreCollectionName, eventStoreCollection.listIndexes());
+            if (warning == null) {
+                return;
             }
             Document positionedStreamEvent = eventStoreCollection.find(DcbTagsIndexCheck.positionedStreamEvent())
                     .hint(DcbTagsIndexCheck.hint())
@@ -932,7 +932,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                     .projection(Projections.include(ID))
                     .first();
             if (positionedStreamEvent != null) {
-                log.warn(DcbTagsIndexCheck.missingIndexMessage(eventStoreCollectionName));
+                log.warn(warning);
             }
         } catch (RuntimeException e) {
             log.warn(DcbTagsIndexCheck.checkFailedMessage(eventStoreCollectionName), e);

@@ -2437,10 +2437,10 @@ collection. Only a store with both `STREAM` and `DCB` creates it. `type_1_positi
 still created whenever `DCB` is enabled, and a `STREAM` store that enables `DCB` builds all three at startup, as in
 0.33.0.
 
-On a DCB-only store `dcbTags_1` holds the same events as the `position_1` index, and every DCB query measured in
+On a DCB-only store whose collection holds only DCB events, `dcbTags_1` holds the same events as the `position_1`
+index, and every DCB query measured in
 [ADR 145](../architecture/decisions/0145-the-standalone-dcbtags-index-is-for-match-all-dcb-queries.md) read the same
-documents without it. It still has
-to be written on every append. With 200,000 events of 2 tags each it took 7.9 MB of the 53.6 MB the collection's
+documents without it. It still has to be written on every append. With 200,000 events of 2 tags each it took 7.9 MB of the 53.6 MB the collection's
 indexes used.
 
 With stream events in the same collection, `dcbTags_1` is the index that lets a read, `count` or `exists` with
@@ -2461,8 +2461,13 @@ slow, and the second makes startup build the index again.
 
 A store that had `STREAM` alone and that you configure with `DCB` alone never had `dcbTags_1`, and the DCB-only store
 doesn't create it. Its stream events that have a `position` make the match-all queries slow in the same way, so create
-the index by hand with `db.events.createIndex({ dcbTags: 1 }, { sparse: true })`. At startup a DCB-only store logs a
-warning when its collection has no index on `dcbTags` alone and holds a stream event with a numeric `position`.
+the index by hand with `db.events.createIndex({ dcbTags: 1 }, { sparse: true })`.
+
+At startup a DCB-only store logs a warning when its collection holds a stream event with a numeric `position` and has
+no usable index on `dcbTags` alone. A usable one is keyed on `dcbTags` ascending and nothing else, is sparse, has no
+`partialFilterExpression` and isn't hidden. When the collection has an index on `dcbTags` alone that isn't usable, the
+warning names it and has the commands that drop it and create the sparse one, or the `collMod` that unhides it when
+being hidden is all that's wrong with it.
 
 Enabling `STREAM` on a DCB store builds `dcbTags_1` at startup when the collection doesn't have it. That's a DCB-only
 store created on 0.34.0 or later, or one you dropped the index from. The store doesn't start until MongoDB has built

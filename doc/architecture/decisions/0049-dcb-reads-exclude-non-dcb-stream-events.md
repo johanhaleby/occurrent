@@ -5,8 +5,8 @@ Date: 2026-07-05
 ## Status
 
 Accepted. [ADR 145](0145-the-standalone-dcbtags-index-is-for-match-all-dcb-queries.md) creates the `dcbTags` index
-only for a store with both `STREAM` and `DCB`, since on a DCB-only store it holds the same events as the `position`
-index. It also measures the sparse `(dcbTags, position)` index added later, which can't replace the `dcbTags` index
+only for a store with both `STREAM` and `DCB`, since on a DCB-only store whose collection holds only DCB events it
+holds the same events as the `position` index. It also measures the sparse `(dcbTags, position)` index added later, which can't replace the `dcbTags` index
 either.
 
 ## Context

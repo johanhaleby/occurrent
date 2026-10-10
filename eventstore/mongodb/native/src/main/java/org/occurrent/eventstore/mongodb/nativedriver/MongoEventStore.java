@@ -848,7 +848,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (dcbEnabled && eventStoreCapabilities.contains(STREAM)) {
             // Only DCB events have dcbTags, so with stream events in the collection this index narrows a match-all
             // DcbCriteria to the DCB events. (dcbTags, position) also holds every stream event with a position. On a
-            // DCB-only store this index holds the same events as the position index, so it narrows nothing.
+            // DCB-only store whose collection holds only DCB events, this index holds the same events as the position
+            // index, so it narrows nothing.
             eventStoreCollection.createIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true));
         }
         if (dcbEnabled) {
@@ -875,10 +876,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private static void warnOnPositionedStreamEventsWithoutDcbTagsIndex(MongoCollection<Document> eventStoreCollection) {
         String collectionName = eventStoreCollection.getNamespace().getCollectionName();
         try {
-            for (Document index : eventStoreCollection.listIndexes()) {
-                if (DcbTagsIndexCheck.isDcbTagsIndex(index)) {
-                    return;
-                }
+            String warning = DcbTagsIndexCheck.warningFor(collectionName, eventStoreCollection.listIndexes());
+            if (warning == null) {
+                return;
             }
             Document positionedStreamEvent = eventStoreCollection.find(DcbTagsIndexCheck.positionedStreamEvent())
                     .hint(DcbTagsIndexCheck.hint())
@@ -888,7 +888,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                     .projection(Projections.include(ID))
                     .first();
             if (positionedStreamEvent != null) {
-                log.warn(DcbTagsIndexCheck.missingIndexMessage(collectionName));
+                log.warn(warning);
             }
         } catch (RuntimeException e) {
             log.warn(DcbTagsIndexCheck.checkFailedMessage(collectionName), e);

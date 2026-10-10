@@ -18,9 +18,12 @@ package org.occurrent.eventstore.mongodb.dcb.internal;
 
 import org.bson.Document;
 import org.bson.conversions.Bson;
-import org.bson.types.MaxKey;
 import org.bson.types.MinKey;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.exists;
@@ -29,29 +32,47 @@ import static org.occurrent.cloudevents.OccurrentCloudEventExtension.POSITION;
 import static org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper.DCB_TAGS_INDEX_FIELD;
 
 /**
- * The startup check a MongoDB event store with {@code DCB} and without {@code STREAM} runs when its event collection
- * has no {@code dcbTags} index. Without that index a match-all DCB query reads every stream event that has a
- * {@code position}, so the store warns when it finds one.
+ * The startup check a MongoDB event store with {@code DCB} and without {@code STREAM} runs on its event collection.
+ * Without a usable index on {@code dcbTags} alone, a match-all DCB query reads every stream event that has a
+ * {@code position}, so the store warns when the collection has no such index and holds such an event.
  * <p>
- * Send {@link #positionedStreamEvent()} with {@link #hint()}, {@link #min()}, {@link #max()} and a limit of 1. The
- * bounds keep the scan to the index keys whose {@code dcbTags} is null, so a collection holding only DCB events reads
- * no keys at all.
+ * Call {@link #warningFor(String, Iterable)} with the collection's indexes. Only when it returns a warning, send
+ * {@link #positionedStreamEvent()} with {@link #hint()}, {@link #min()}, {@link #max()} and a limit of 1, and log the
+ * warning if that finds an event. The bounds keep the scan to the index keys whose {@code dcbTags} is null and whose
+ * {@code position} is a number, so a collection holding only DCB events reads no keys at all.
  */
 @NullMarked
 public final class DcbTagsIndexCheck {
+
+    private static final String SPARSE = "sparse";
+    private static final String PARTIAL_FILTER_EXPRESSION = "partialFilterExpression";
+    private static final String HIDDEN = "hidden";
 
     private DcbTagsIndexCheck() {
     }
 
     /**
-     * @param index a document that {@code listIndexes} returns
-     * @return {@code true} if the index is keyed on {@code dcbTags} ascending and nothing else
+     * @param collectionName the event collection
+     * @param indexes        the documents {@code listIndexes} returns for it
+     * @return {@code null} when one of the indexes is keyed on {@code dcbTags} ascending and nothing else, is sparse,
+     * has no {@code partialFilterExpression} and isn't hidden. Otherwise the warning to log if the collection holds a
+     * stream event that has a {@code position}, {@link #unusableIndexMessage(String, Document)} when there's an index
+     * on {@code dcbTags} alone that fails one of those conditions, {@link #missingIndexMessage(String)} when there's
+     * none.
      */
-    public static boolean isDcbTagsIndex(Document index) {
-        return index.get("key") instanceof Document key
-                && key.size() == 1
-                && key.get(DCB_TAGS_INDEX_FIELD) instanceof Number direction
-                && direction.doubleValue() == 1;
+    public static @Nullable String warningFor(String collectionName, Iterable<Document> indexes) {
+        Document unusableIndex = null;
+        for (Document index : indexes) {
+            if (isKeyedOnDcbTagsAlone(index)) {
+                if (isUsable(index)) {
+                    return null;
+                }
+                if (unusableIndex == null) {
+                    unusableIndex = index;
+                }
+            }
+        }
+        return unusableIndex == null ? missingIndexMessage(collectionName) : unusableIndexMessage(collectionName, unusableIndex);
     }
 
     /**
@@ -76,15 +97,18 @@ public final class DcbTagsIndexCheck {
     }
 
     /**
-     * @return the upper bound, exclusive, of the index keys whose {@code dcbTags} is null
+     * @return the upper bound, exclusive, of the index keys whose {@code dcbTags} is null and whose {@code position}
+     * is a number. MongoDB sorts every number before every string, and the empty string before every other string, so
+     * the scan stops before the first stream event whose {@code position} is a string.
      */
     public static Bson max() {
-        return new Document(DCB_TAGS_INDEX_FIELD, null).append(POSITION, new MaxKey());
+        return new Document(DCB_TAGS_INDEX_FIELD, null).append(POSITION, "");
     }
 
     /**
      * @param collectionName the event collection
-     * @return the warning a store logs when the check finds a stream event that has a {@code position}
+     * @return the warning a store logs when the collection has no index on {@code dcbTags} alone and holds a stream
+     * event that has a {@code position}
      */
     public static String missingIndexMessage(String collectionName) {
         return "The event collection '" + collectionName + "' holds stream events that have a position, and it has no"
@@ -97,11 +121,59 @@ public final class DcbTagsIndexCheck {
 
     /**
      * @param collectionName the event collection
+     * @param index          the document {@code listIndexes} returns for an index on {@code dcbTags} alone that isn't
+     *                       sparse, has a {@code partialFilterExpression} or is hidden
+     * @return the warning a store logs when the collection has that index, no usable one, and a stream event that has
+     * a {@code position}
+     */
+    public static String unusableIndexMessage(String collectionName, Document index) {
+        String indexName = String.valueOf(index.get("name"));
+        List<String> reasons = new ArrayList<>();
+        if (!isTrue(index.get(SPARSE))) {
+            reasons.add("isn't sparse");
+        }
+        if (index.containsKey(PARTIAL_FILTER_EXPRESSION)) {
+            reasons.add("has a partialFilterExpression");
+        }
+        boolean hidden = isTrue(index.get(HIDDEN));
+        if (hidden) {
+            reasons.add("is hidden");
+        }
+        String fix = hidden && reasons.size() == 1
+                ? "Unhide it with db.runCommand({ collMod: \"" + collectionName + "\", index: { name: \"" + indexName + "\", hidden: false } })"
+                : "Replace it with db." + collectionName + ".dropIndex(\"" + indexName + "\") and then"
+                + " db." + collectionName + ".createIndex({ dcbTags: 1 }, { sparse: true })";
+        return "The event collection '" + collectionName + "' holds stream events that have a position, and its index '"
+                + indexName + "' on dcbTags alone " + String.join(" and ", reasons) + ". A store with DCB and without"
+                + " STREAM only counts a sparse index on dcbTags alone, without a partialFilterExpression and not"
+                + " hidden, as the index that lets a read, count or exists with DcbCriteria.all(), and the append check"
+                + " of DcbAppendCondition.wholeStoreLock(), read the DCB events without the stream events. The results"
+                + " are correct either way. " + fix;
+    }
+
+    /**
+     * @param collectionName the event collection
      * @return what a store logs when the check itself fails, before it starts anyway
      */
     public static String checkFailedMessage(String collectionName) {
         return "Couldn't check whether the event collection '" + collectionName + "' holds stream events that have a"
-                + " position and no index on dcbTags alone. The store starts anyway. If the collection holds such events, create the index with"
-                + " db." + collectionName + ".createIndex({ dcbTags: 1 }, { sparse: true })";
+                + " position and no sparse index on dcbTags alone, without a partialFilterExpression and not hidden."
+                + " The store starts anyway. If the collection holds such events, it needs that index, and"
+                + " db." + collectionName + ".createIndex({ dcbTags: 1 }, { sparse: true }) creates it";
+    }
+
+    private static boolean isKeyedOnDcbTagsAlone(Document index) {
+        return index.get("key") instanceof Document key
+                && key.size() == 1
+                && key.get(DCB_TAGS_INDEX_FIELD) instanceof Number direction
+                && direction.doubleValue() == 1;
+    }
+
+    private static boolean isUsable(Document index) {
+        return isTrue(index.get(SPARSE)) && !index.containsKey(PARTIAL_FILTER_EXPRESSION) && !isTrue(index.get(HIDDEN));
+    }
+
+    private static boolean isTrue(@Nullable Object option) {
+        return option instanceof Boolean b ? b : option instanceof Number n && n.doubleValue() != 0;
     }
 }

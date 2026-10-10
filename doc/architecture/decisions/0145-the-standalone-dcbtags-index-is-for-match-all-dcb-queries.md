@@ -92,10 +92,10 @@ DCB-only store:
 | `tags(course:7)`, 1,000 returned | 1,000, 1,000, `(dcbTags, position)` | the same |
 | `types(CourseRenamed)`, 200 returned | 200, 200, `(type, position)` | the same |
 
-On the mixed store the planner picks the standalone index for every match-all query, and a read sorts the matching
-DCB events in memory instead of walking the `position` index. On the DCB-only store the standalone index holds the
-same documents as the `position` index, so it narrows nothing. There the planner picks `position` for every match-all
-query, because it gives position order without a sort.
+In these runs the planner picked the standalone index for each match-all query on the mixed store, and a read sorted
+the matching DCB events in memory instead of walking the `position` index. On the DCB-only store the standalone index
+holds the same documents as the `position` index, so it narrows nothing. In these runs the planner picked `position`
+for each match-all query there.
 
 The 1,001 for `limit(1)` without the index is the number of stream events before the first DCB event in this data. I
 didn't measure a store where DCB was enabled after years of stream events, but in that case every stream event comes
@@ -129,14 +129,29 @@ never drops an index. Four cases follow from that.
   store that never had `DCB` doesn't have it, and the DCB-only store doesn't create it. Without it, a match-all query
   and the append check of `wholeStoreLock()` read every stream event with a `position` in the range, 200,200
   documents instead of 200 in the mixed store above. The results are correct, only slower. The operator creates the
-  index by hand in that case. At startup a DCB-only store logs a warning when the collection has no index keyed on
-  `dcbTags` alone and holds a stream event with a numeric `position`. It looks for that event with one find on
-  `(dcbTags, position)`, hinted and bounded to the keys whose `dcbTags` is null. On a collection the native store
-  wrote with 10,000 DCB events, that find examined 0 keys and 0 documents, also after 5,000 stream events without a
-  `position` were added, and 1 key and 1 document once 3,000 stream events with a `position` were added. Both MongoDB
-  8.0.29 and 4.2.8 gave those numbers. A find for an event with a `position` and no `dcbTags`, without the hint and
-  bounds, used `position` there and examined 10,000 keys and 10,000 documents on the collection with only DCB events.
-  I didn't measure a stream event whose `position` is a string.
+  index by hand in that case.
+
+  At startup a DCB-only store logs a warning when the collection holds a stream event with a numeric `position` and
+  has no usable index on `dcbTags` alone. The store counts an index as usable when it's keyed on `dcbTags` ascending
+  and nothing else, is sparse, has no `partialFilterExpression` and isn't hidden. A non-sparse one also holds every
+  stream event, a partial one may leave DCB events out, and the planner doesn't use a hidden one. A `createIndex` for
+  the sparse index can conflict with such an index, so when the collection has one, the warning names it and says
+  to drop it and create the sparse one, or to unhide it when being hidden is all that's wrong with it.
+
+  The store looks for that stream event with one find on `(dcbTags, position)`, hinted and bounded to the keys whose
+  `dcbTags` is null and whose `position` is a number. The upper bound is an empty string, which MongoDB sorts after
+  every number and before every other string. A test runs that find on 3 DCB events, one of them without tags,
+  together with 3 stream events whose `position` is a string, the way the `updateEvent` of 0.33.0 and earlier left
+  it, and 2 stream events without a `position`. It examined 0 keys and 0 documents on MongoDB 8.0.29 and 4.2.8. With
+  one more stream event whose `position` is a number, it examined 1 key and 1 document on both versions and returned
+  that event. With `MaxKey` as the upper bound instead, the same find examined 3 keys and 3 documents on 8.0.29, one
+  for each stream event with a string `position`.
+
+  I also measured the find with `MaxKey` as the upper bound on a larger collection, on both versions. On a collection
+  the native store wrote with 10,000 DCB events, it examined 0 keys and 0 documents, also after 5,000 stream events
+  without a `position` were added, and 1 key and 1 document once 3,000 stream events with a `position` were added. A
+  find for an event with a `position` and no `dcbTags`, without the hint and bounds, used `position` there and
+  examined 10,000 keys and 10,000 documents on the collection with only DCB events.
 - **A DCB-only store that later enables `STREAM`.** Startup builds `dcbTags` over the whole collection, unless it's
   already there, and the store doesn't start until MongoDB has built it. On a large collection the operator builds it
   first, with the same key and options, as a rolling build the way step 1 of the

@@ -770,7 +770,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         if (dcbEnabled && eventStoreCapabilities.contains(STREAM)) {
             // Only DCB events have dcbTags, so with stream events in the collection this index narrows a match-all
             // DcbCriteria to the DCB events. (dcbTags, position) also holds every stream event with a position. On a
-            // DCB-only store this index holds the same events as the position index, so it narrows nothing.
+            // DCB-only store whose collection holds only DCB events, this index holds the same events as the position
+            // index, so it narrows nothing.
             chain = chain.then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true))).then();
         }
 
@@ -821,19 +822,16 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // Runs after the (dcbTags, position) index exists, since the lookup is hinted on it. A failed check only logs.
     private static Mono<Void> warnOnPositionedStreamEventsWithoutDcbTagsIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
         return mongoTemplate.getCollection(eventStoreCollectionName)
-                .flatMap(collection -> Flux.from(collection.listIndexes()).any(DcbTagsIndexCheck::isDcbTagsIndex)
-                        .flatMap(hasDcbTagsIndex -> hasDcbTagsIndex ? Mono.just(false) : Mono.from(collection.find(DcbTagsIndexCheck.positionedStreamEvent())
+                .flatMap(collection -> Flux.from(collection.listIndexes()).collectList()
+                        .flatMap(indexes -> Mono.justOrEmpty(DcbTagsIndexCheck.warningFor(eventStoreCollectionName, indexes)))
+                        .filterWhen(warning -> Mono.from(collection.find(DcbTagsIndexCheck.positionedStreamEvent())
                                 .hint(DcbTagsIndexCheck.hint())
                                 .min(DcbTagsIndexCheck.min())
                                 .max(DcbTagsIndexCheck.max())
                                 .limit(1)
                                 .projection(Projections.include(ID))
                                 .first()).hasElement()))
-                .doOnNext(hasPositionedStreamEvent -> {
-                    if (hasPositionedStreamEvent) {
-                        LOGGER.warn(DcbTagsIndexCheck.missingIndexMessage(eventStoreCollectionName));
-                    }
-                })
+                .doOnNext(LOGGER::warn)
                 .then()
                 .onErrorResume(RuntimeException.class, e -> {
                     LOGGER.warn(DcbTagsIndexCheck.checkFailedMessage(eventStoreCollectionName), e);
