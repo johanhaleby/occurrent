@@ -98,9 +98,9 @@ holds the same documents as the `position` index, so it narrows nothing. In thes
 for each match-all query there.
 
 The 1,001 for `limit(1)` without the index is the number of stream events before the first DCB event in this data. I
-didn't measure a store where DCB was enabled after years of stream events, but in that case every stream event comes
-before the first DCB event, so without the `dcbTags` index the append check of `wholeStoreLock()` would read every
-stream event that has a `position`.
+didn't measure a store where DCB was enabled after years of stream events. In that case, without the `dcbTags` index,
+the append check of `wholeStoreLock()` would read every stream event that has a `position` and was written before the
+first DCB event.
 
 ### What the index costs on a DCB-only store
 
@@ -132,11 +132,15 @@ never drops an index. Four cases follow from that.
   index by hand in that case.
 
   At startup a DCB-only store logs a warning when the collection holds a stream event with a numeric `position` and
-  has no usable index on `dcbTags` alone. The store counts an index as usable when it's keyed on `dcbTags` ascending
-  and nothing else, is sparse, has no `partialFilterExpression` and isn't hidden. A non-sparse one also holds every
-  stream event, a partial one may leave DCB events out, and the planner doesn't use a hidden one. A `createIndex` for
-  the sparse index can conflict with such an index, so when the collection has one, the warning names it and says
-  to drop it and create the sparse one, or to unhide it when being hidden is all that's wrong with it.
+  has no usable index on `dcbTags` alone. The store counts an index as usable when it's keyed on `dcbTags` and
+  nothing else, ascending or descending, isn't hidden, and is either sparse or has the `partialFilterExpression`
+  `{ dcbTags: { $exists: true } }`. A sparse index and a partial index with that filter both hold every DCB event and
+  nothing else. On MongoDB 8.0.29 the planner used a sparse descending one and a partial one with that filter for the
+  match-all read. A non-sparse index without a `partialFilterExpression` also holds every stream event, the planner
+  doesn't pick a partial index that doesn't hold every DCB event, and it doesn't use a hidden one. The store also
+  counts a partial index with any other filter as unusable. A `createIndex` for the sparse index can conflict with
+  such an index, so when the collection has one, the warning names it and says to drop it and create the sparse one,
+  or to unhide it when being hidden is all that's wrong with it.
 
   The store looks for that stream event with one find on `(dcbTags, position)`, hinted and bounded to the keys whose
   `dcbTags` is null and whose `position` is a number. The upper bound is an empty string, which MongoDB sorts after

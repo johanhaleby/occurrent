@@ -2464,10 +2464,10 @@ doesn't create it. Its stream events that have a `position` make the match-all q
 the index by hand with `db.events.createIndex({ dcbTags: 1 }, { sparse: true })`.
 
 At startup a DCB-only store logs a warning when its collection holds a stream event with a numeric `position` and has
-no usable index on `dcbTags` alone. A usable one is keyed on `dcbTags` ascending and nothing else, is sparse, has no
-`partialFilterExpression` and isn't hidden. When the collection has an index on `dcbTags` alone that isn't usable, the
-warning names it and has the commands that drop it and create the sparse one, or the `collMod` that unhides it when
-being hidden is all that's wrong with it.
+no usable index on `dcbTags` alone. A usable one is keyed on `dcbTags` and nothing else, ascending or descending,
+isn't hidden, and is either sparse or has the `partialFilterExpression` `{ dcbTags: { $exists: true } }`. When the
+collection has an index on `dcbTags` alone that isn't usable, the warning names it and has the commands that drop it
+and create the sparse one, or the `collMod` that unhides it when being hidden is all that's wrong with it.
 
 Enabling `STREAM` on a DCB store builds `dcbTags_1` at startup when the collection doesn't have it. That's a DCB-only
 store created on 0.34.0 or later, or one you dropped the index from. The store doesn't start until MongoDB has built
@@ -2480,7 +2480,7 @@ db.events.createIndex({ dcbTags: 1 }, { sparse: true })
 
 On MongoDB Atlas or any other replica set, build it as a rolling build, the way step 1 of the
 [position backfill runbook](../runbooks/position-backfill.md#1-create-the-position-index) builds the `position` index.
-An index on `dcbTags` with other options makes startup fail.
+An index on `dcbTags` alone with other options can make startup fail, and always does when it's named `dcbTags_1`.
 
 There is no recipe for this change. Which indexes a collection has is database state that a rewrite of the source
 cannot see.

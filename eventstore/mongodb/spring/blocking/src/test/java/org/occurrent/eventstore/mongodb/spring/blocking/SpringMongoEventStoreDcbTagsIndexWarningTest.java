@@ -151,6 +151,35 @@ class SpringMongoEventStoreDcbTagsIndexWarningTest {
     }
 
     @Test
+    void a_dcb_only_store_says_nothing_when_the_dcb_tags_index_is_sparse_and_descending() {
+        newStreamStore().write("stream:1", List.of(event("Defined"), event("Renamed")));
+        mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION)
+                .createIndex(Indexes.descending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true));
+
+        logAppender.list.clear();
+        newDcbStore();
+
+        assertThat(warnings())
+                .as("the planner uses a descending index on dcbTags for a match-all read as well as an ascending one")
+                .isEmpty();
+    }
+
+    @Test
+    void a_dcb_only_store_says_nothing_when_the_dcb_tags_index_is_partial_on_dcb_tags_existing() {
+        newStreamStore().write("stream:1", List.of(event("Defined"), event("Renamed")));
+        mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION)
+                .createIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD),
+                        new IndexOptions().partialFilterExpression(Filters.exists(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD)));
+
+        logAppender.list.clear();
+        newDcbStore();
+
+        assertThat(warnings())
+                .as("a partial index on { dcbTags: { $exists: true } } holds every DCB event and nothing else, like the sparse one")
+                .isEmpty();
+    }
+
+    @Test
     void a_dcb_only_store_warns_that_a_dcb_tags_index_that_is_not_sparse_is_unusable() {
         newStreamStore().write("stream:1", List.of(event("Defined"), event("Renamed")));
         Document index = createDcbTagsIndex(new IndexOptions());
@@ -172,7 +201,7 @@ class SpringMongoEventStoreDcbTagsIndexWarningTest {
         newDcbStore();
 
         assertThat(warnings())
-                .as("a partial index cannot answer a query for every DCB event, so the planner never picks it for a match-all read")
+                .as("a partial index that doesn't hold every DCB event can't answer a match-all read, so the planner doesn't pick it for one")
                 .containsExactly(DcbTagsIndexCheck.unusableIndexMessage(EVENT_COLLECTION, index));
     }
 
