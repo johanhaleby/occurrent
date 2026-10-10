@@ -306,9 +306,9 @@ public final class ChangeStreamSubscriptions {
         if (operationTime == null) {
             return;
         }
-        // Asked once, and recorded on whatever position is there by then, such as one a resume put there meanwhile
-        // that falls back to the position it replaced. Asking again would record a later present and skip what was
-        // written in between, while this earlier one can only deliver an event again.
+        // Recorded on whatever position is there once the answer arrives, such as one a resume put there meanwhile
+        // that falls back to the position it replaced, rather than asked for again when the position has changed. A
+        // later answer would skip what was written in between, while this earlier one can only deliver an event again.
         currentStartAt.updateAndGet(tracked -> needsThePresent(tracked) ? MongoCommons.pinnedTo(tracked, operationTime) : tracked);
     }
 
