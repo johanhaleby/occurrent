@@ -158,6 +158,60 @@ class ReactorMongoEventStorePositionTest {
         assertThat(names).contains("type_1_position_1", "dcbTags_1_position_1");
     }
 
+    @Test
+    void dcb_only_store_does_not_create_the_single_field_dcb_tags_index() {
+        storeWith(DCB);
+
+        // Without stream events the single-field dcbTags index would hold the same documents as the position index,
+        // so it is not created. The compound indexes are still there.
+        assertThat(indexNames()).contains("position_1", "type_1_position_1", "dcbTags_1_position_1");
+        assertThat(indexNames()).doesNotContain("dcbTags_1");
+    }
+
+    @Test
+    void stream_and_dcb_store_creates_the_sparse_single_field_dcb_tags_index() {
+        storeWith(STREAM, DCB);
+
+        assertThat(indexNames()).contains("position_1", "dcbTags_1", "type_1_position_1", "dcbTags_1_position_1");
+        assertThat(index("dcbTags_1"))
+                .containsEntry("key", new Document("dcbTags", 1))
+                .containsEntry("sparse", true);
+    }
+
+    @Test
+    void a_stream_store_restarted_with_dcb_enabled_gains_all_dcb_indexes() {
+        storeWith(STREAM);
+        assertThat(indexNames()).doesNotContain("dcbTags_1", "type_1_position_1", "dcbTags_1_position_1");
+
+        storeWith(STREAM, DCB);
+
+        assertThat(indexNames()).contains("position_1", "dcbTags_1", "type_1_position_1", "dcbTags_1_position_1");
+    }
+
+    @Test
+    void a_dcb_only_store_restarted_with_stream_added_gains_the_dcb_tags_index() {
+        storeWith(DCB);
+        assertThat(indexNames()).doesNotContain("dcbTags_1");
+
+        storeWith(STREAM, DCB);
+
+        assertThat(indexNames()).contains("position_1", "dcbTags_1", "type_1_position_1", "dcbTags_1_position_1");
+    }
+
+    private List<String> indexNames() {
+        return listIndexes().stream().map(document -> document.getString("name")).toList();
+    }
+
+    private Document index(String name) {
+        return listIndexes().stream().filter(document -> name.equals(document.getString("name"))).findFirst().orElseThrow();
+    }
+
+    private List<Document> listIndexes() {
+        return requireNonNull(mongoTemplate.getCollection("events")
+                .flatMapMany(collection -> Flux.from(collection.listIndexes()))
+                .collectList()
+                .block());
+    }
 
     @Test
     void combining_dcb_with_an_explicit_stream_position_opt_out_fails_fast() {

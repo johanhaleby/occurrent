@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-The guide has twenty-six sections, six of them about compile-time breaks. At compile time, if you use the flow saga's
+The guide has twenty-seven sections, six of them about compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -101,11 +101,14 @@ the call. So does what a `StartAt.dynamic(..)` function throws, unless a checkpo
 and the function runs later. A refusal it finds only at the hand-over, once storage has answered, and a failure of
 a function that runs later, fail `waitUntilStarted()` instead of being thrown. Read
 [section 25](#25-a-durable-reactor-subscribe-from-the-model-default-returns-without-waiting-for-storage).
-Finally, a position catch-up now stores the live start it read before its replay next to the position, so a restart in
+Then a position catch-up now stores the live start it read before its replay next to the position, so a restart in
 the middle of the replay no longer misses an event that committed late below the stored position. A resume delivers
 some events a second time, and a checkpoint stored by 0.33.0 in the middle of a replay still resumes as in 0.33.0, with
 a warning. Read
 [section 26](#26-a-position-catch-up-stores-the-live-start-it-read-before-the-replay).
+Finally, a MongoDB event store with `DCB` and without `STREAM` no longer creates the `dcbTags_1` index, though one
+created on 0.33.0 or earlier keeps it. Enabling `STREAM` on a DCB store builds it at startup if it isn't there. Read
+[section 27](#27-a-dcb-only-mongodb-event-store-no-longer-creates-the-dcbtags-index).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -2424,3 +2427,50 @@ model no longer has.
 
 There is no recipe for this change. What is stored and when a resume delivers again is runtime behavior that a rewrite
 of the source cannot see.
+
+## 27. A DCB-only MongoDB event store no longer creates the `dcbTags` index
+
+This covers `MongoEventStore`, `SpringMongoEventStore` and `ReactorMongoEventStore`.
+
+A store with `DCB` and without `STREAM` no longer creates the sparse single-field `dcbTags_1` index on the event
+collection. Only a store with both `STREAM` and `DCB` creates it. `type_1_position_1` and `dcbTags_1_position_1` are
+still created whenever `DCB` is enabled, and a `STREAM` store that enables `DCB` builds all three at startup, as in
+0.33.0.
+
+On a DCB-only store `dcbTags_1` holds the same events as the `position_1` index, and MongoDB picked `position_1` for
+every DCB query measured in
+[ADR 145](../architecture/decisions/0145-the-standalone-dcbtags-index-is-for-match-all-dcb-queries.md). It still has
+to be written on every append. With 200,000 events of 2 tags each it took 7.9 MB of the 53.6 MB the collection's
+indexes used.
+
+With stream events in the same collection, `dcbTags_1` is the index that lets a read, `count` or `exists` with
+`DcbCriteria.all()`, and the append check of `DcbAppendCondition.wholeStoreLock()`, read only the DCB events. Without
+it they read every stream event that has a `position` in the range as well. The results are the same, only slower, and
+in ADR 145 one such query read 200,200 documents instead of 200.
+
+A DCB-only store created on 0.30.0 to 0.33.x already has `dcbTags_1`. Occurrent never drops an index, so it keeps it.
+You may drop it by hand:
+
+```javascript
+db.events.dropIndex("dcbTags_1")
+```
+
+Don't drop it if the collection holds stream events that have a `position`, for example because the store had
+`STREAM` enabled before, or if you'll enable `STREAM` on the store later. The first makes the match-all queries above
+slow, and the second makes startup build the index again.
+
+Enabling `STREAM` on a DCB store builds `dcbTags_1` at startup when the collection doesn't have it. That's a DCB-only
+store created on 0.34.0 or later, or one you dropped the index from. The store doesn't start until MongoDB has built
+the index over the whole collection. On a large collection, build it before you deploy the configuration that adds
+`STREAM`, with the key and options the store uses, so that startup finds it already there:
+
+```javascript
+db.events.createIndex({ dcbTags: 1 }, { sparse: true })
+```
+
+On MongoDB Atlas or any other replica set, build it as a rolling build, the way step 1 of the
+[position backfill runbook](../runbooks/position-backfill.md#1-create-the-position-index) builds the `position` index.
+An index on `dcbTags` with other options makes startup fail.
+
+There is no recipe for this change. Which indexes a collection has is database state that a rewrite of the source
+cannot see.

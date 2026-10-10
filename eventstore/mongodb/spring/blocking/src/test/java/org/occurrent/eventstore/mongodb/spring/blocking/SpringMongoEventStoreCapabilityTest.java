@@ -146,7 +146,10 @@ class SpringMongoEventStoreCapabilityTest {
         // up the current stream version per partition (currentStreamVersion). It is unique, identical to the STREAM
         // index: DCB-only writes assign sequential per-partition stream versions, and the only collision (two
         // disjoint DCB boundaries hashing to the same partition stream) is a retryable transient, not a duplicate.
-        assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, DCB_TAGS_INDEX, TYPE_POSITION_INDEX, DCB_TAGS_POSITION_INDEX);
+        assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, TYPE_POSITION_INDEX, DCB_TAGS_POSITION_INDEX);
+        // Without stream events the single-field dcbTags index would hold the same documents as the position index,
+        // so it is not created.
+        assertThat(indexNames()).doesNotContain(DCB_TAGS_INDEX);
         assertThat(index(CLOUD_EVENT_ID_SOURCE_INDEX))
                 .containsEntry("key", new Document("id", 1).append("source", 1))
                 .containsEntry("unique", true);
@@ -157,7 +160,6 @@ class SpringMongoEventStoreCapabilityTest {
                 .containsEntry("key", new Document("position", 1))
                 .containsEntry("unique", true)
                 .containsEntry("sparse", true);
-        assertThat(index(DCB_TAGS_INDEX)).containsEntry("key", new Document("dcbTags", 1));
         // These compound indexes back type-only DCB reads and large tag-boundary DCB reads that would otherwise fall
         // back to a residual FETCH filter or an in-memory SORT over the position index (see initializeEventStore's
         // comments for the explain evidence).
@@ -173,6 +175,29 @@ class SpringMongoEventStoreCapabilityTest {
 
     @Test
     void stream_and_dcb_capabilities_initialize_both_index_sets() {
+        new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
+
+        assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, DCB_TAGS_INDEX, TYPE_POSITION_INDEX, DCB_TAGS_POSITION_INDEX);
+        assertThat(index(DCB_TAGS_INDEX))
+                .containsEntry("key", new Document("dcbTags", 1))
+                .containsEntry("sparse", true);
+    }
+
+    @Test
+    void a_stream_store_restarted_with_dcb_enabled_gains_all_dcb_indexes() {
+        new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM).build());
+        assertThat(indexNames()).doesNotContain(DCB_TAGS_INDEX, TYPE_POSITION_INDEX, DCB_TAGS_POSITION_INDEX);
+
+        new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
+
+        assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, DCB_TAGS_INDEX, TYPE_POSITION_INDEX, DCB_TAGS_POSITION_INDEX);
+    }
+
+    @Test
+    void a_dcb_only_store_restarted_with_stream_added_gains_the_dcb_tags_index() {
+        new SpringMongoEventStore(mongoTemplate, eventStoreConfig(DCB).build());
+        assertThat(indexNames()).doesNotContain(DCB_TAGS_INDEX);
+
         new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
 
         assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, DCB_TAGS_INDEX, TYPE_POSITION_INDEX, DCB_TAGS_POSITION_INDEX);
