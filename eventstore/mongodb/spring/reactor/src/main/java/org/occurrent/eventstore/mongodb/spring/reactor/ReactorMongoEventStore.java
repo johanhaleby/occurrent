@@ -43,6 +43,7 @@ import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.api.reactor.*;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbTagsIndexCheck;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.UpdateEventDamage;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator;
@@ -766,10 +767,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     .then();
         }
 
+        if (dcbEnabled && eventStoreCapabilities.contains(STREAM)) {
+            // Only DCB events have dcbTags, so with stream events in the collection this index narrows a match-all
+            // DcbCriteria to the DCB events. (dcbTags, position) also holds every stream event with a position. On a
+            // DCB-only store whose collection holds only DCB events, this index holds the same events as the position
+            // index, so it narrows nothing.
+            chain = chain.then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true))).then();
+        }
+
         if (dcbEnabled) {
             chain = chain
                     .then(createCollection(dcbCheckpointCollectionName, mongoTemplate))
-                    .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true)))
                     // A type-only DcbCriteria has no tags to hit the dcbTags index with, so it falls back to the
                     // position index with type checked as a residual FETCH filter, examining every DCB event in the
                     // position range. A (type, position) compound index lets the planner satisfy the type equality
@@ -785,6 +793,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     // index without this compound index.
                     .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true)))
                     .then();
+        }
+
+        if (dcbEnabled && !eventStoreCapabilities.contains(STREAM)) {
+            chain = chain.then(warnOnPositionedStreamEventsWithoutDcbTagsIndex(eventStoreCollectionName, mongoTemplate));
         }
 
         // Damage check first. The unpositioned check errors when requireBackfilledPosition is set, and an event
@@ -805,6 +817,26 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         mongoTemplate.setSessionSynchronization(ALWAYS);
 
         return chain;
+    }
+
+    // Runs after the (dcbTags, position) index exists, since the lookup is hinted on it. A failed check only logs.
+    private static Mono<Void> warnOnPositionedStreamEventsWithoutDcbTagsIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
+        return mongoTemplate.getCollection(eventStoreCollectionName)
+                .flatMap(collection -> Flux.from(collection.listIndexes()).collectList()
+                        .flatMap(indexes -> Mono.justOrEmpty(DcbTagsIndexCheck.warningFor(eventStoreCollectionName, indexes)))
+                        .filterWhen(warning -> Mono.from(collection.find(DcbTagsIndexCheck.positionedStreamEvent())
+                                .hint(DcbTagsIndexCheck.hint())
+                                .min(DcbTagsIndexCheck.min())
+                                .max(DcbTagsIndexCheck.max())
+                                .limit(1)
+                                .projection(Projections.include(ID))
+                                .first()).hasElement()))
+                .doOnNext(LOGGER::warn)
+                .then()
+                .onErrorResume(RuntimeException.class, e -> {
+                    LOGGER.warn(DcbTagsIndexCheck.checkFailedMessage(eventStoreCollectionName), e);
+                    return Mono.empty();
+                });
     }
 
     // Startup guard: when this store writes position but the event collection already has events without one, those
