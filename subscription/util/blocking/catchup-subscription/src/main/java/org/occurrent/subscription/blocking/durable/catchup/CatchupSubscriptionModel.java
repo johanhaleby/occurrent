@@ -303,12 +303,18 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // resuming automatically, as the delegate itself resumes only then. When the delegate's start throws, each child
     // that was stopped stops again, unless the delegate runs, or another start or stop of that child, or a resume of
     // the delegate, came in the meantime. The delegate is asked whether it runs once, before any child takes its lock.
+    // When a subscription the delegate holds paused would replay on resumeSubscription(..), the delegate starts without
+    // resuming anything and each subscription it holds paused is resumed as resumeSubscription(..) resumes it, as a
+    // child's own start does.
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
         Map<AbstractCatchupSubscriptionModel, AbstractCatchupSubscriptionModel.StartAttempt> attempts = new LinkedHashMap<>();
         presentCatchupModels().forEach(model -> attempts.put(model, model.beginStart()));
+        AbstractCatchupSubscriptionModel replaysOnResume = resumeSubscriptionsAutomatically
+                ? presentCatchupModels().filter(AbstractCatchupSubscriptionModel::anyResumeReplays).findFirst().orElse(null)
+                : null;
         try {
-            getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
+            getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && replaysOnResume == null);
         } catch (Throwable e) {
             boolean liveDelegateRuns = attempts.values().stream().anyMatch(AbstractCatchupSubscriptionModel.StartAttempt::wasStopped)
                     && AbstractCatchupSubscriptionModel.runsAfterFailedStart(getWrappedSubscriptionModel(), e);
@@ -317,6 +323,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         }
         if (resumeSubscriptionsAutomatically) {
             presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::relaunchParkedReplays);
+        }
+        if (replaysOnResume != null) {
+            AbstractCatchupSubscriptionModel.resumeEach(replaysOnResume.subscriptionsTheLiveDelegateHoldsPaused(), this::resumeSubscription);
         }
     }
 
@@ -423,12 +432,20 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @Override
     public void pauseSubscription(String subscriptionId) {
         // A replay a resume started hands the subscription back to the live delegate once it is done, so the catch-up
-        // running it applies the pause then
-        AbstractCatchupSubscriptionModel replaying = presentCatchupModels().filter(model -> model.replaysToResumeHere(subscriptionId)).findFirst().orElse(null);
-        if (replaying != null) {
-            replaying.pauseSubscription(subscriptionId);
-        } else {
-            getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
+        // running it applies the pause then. Decided under the handover lock the children share, so a pause that comes
+        // while that replay hands over waits until the live delegate has the subscription.
+        AbstractCatchupSubscriptionModel.HandoverLock lock = presentCatchupModels().findFirst().map(model -> model.tryLockHandover(subscriptionId)).orElse(null);
+        try {
+            AbstractCatchupSubscriptionModel replaying = presentCatchupModels().filter(model -> model.replaysToResumeHere(subscriptionId)).findFirst().orElse(null);
+            if (replaying != null) {
+                replaying.pauseSubscription(subscriptionId);
+            } else {
+                getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
+            }
+        } finally {
+            if (lock != null) {
+                lock.close();
+            }
         }
     }
 

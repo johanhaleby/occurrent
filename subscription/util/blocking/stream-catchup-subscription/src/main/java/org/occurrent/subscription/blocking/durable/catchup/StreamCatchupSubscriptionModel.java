@@ -193,9 +193,8 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     }
 
     @Override
-    @Nullable Subscription replayToResume(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, Checkpoint stored) {
-        CatchupReplay replay = replayFrom(subscriptionId, filter, startAt, action, StartAt.checkpoint(stored));
-        return replay == null ? null : new CatchupSubscription(subscriptionId, startReplayToResume(subscriptionId, replay));
+    @Nullable CatchupReplay replayToResume(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, Checkpoint stored) {
+        return replayFrom(subscriptionId, filter, startAt, action, StartAt.checkpoint(stored));
     }
 
     // The replay of the history from firstStartAt, or null when firstStartAt starts live. A replay that stop() cut

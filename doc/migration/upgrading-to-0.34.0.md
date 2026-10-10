@@ -2419,6 +2419,16 @@ A `CheckpointStorage` of your own that stores `asString()` and returns a `String
 that reads `position:` itself with `Long.parseLong` fails on the new form, so read it with `GlobalCheckpoint.parse(..)`
 instead.
 
+On the blocking stack, a subscription that resumes from the position another node's catch-up stored now replays from
+it too, through `CatchupSubscriptionModel` or `StreamCatchupSubscriptionModel`. That is what a competing consumer does
+when it takes over the lease of a subscription whose catch-up another node had not finished. In 0.33.0 the MongoDB model
+went live from the present there and skipped the events in between, see
+[#1219](https://github.com/johanhaleby/occurrent/issues/1219). The new owner can now deliver again what the other node
+already delivered after that position, up to the event store's head. `resumeSubscription(subscriptionId)` and
+`start(true)` replay this way, and `resumeSubscription(subscriptionId, startAt)` doesn't. A replay that fails is logged
+at `ERROR` and runs again after a backoff that starts at 100 ms and doubles up to 2 seconds. When the wrapped model
+can't resume a subscription from a given position, the resume throws an `IllegalStateException` that names that model.
+
 `CheckpointAwareSubscriptionModel` gains `canResumeFrom(Checkpoint)`, `boolean` on the blocking stack and
 `Mono<Boolean>` on the reactor stack. It answers `true` by default, so a model of your own still compiles. The MongoDB
 models answer `false` when MongoDB refuses to open a change stream at the checkpoint because its history is gone. If

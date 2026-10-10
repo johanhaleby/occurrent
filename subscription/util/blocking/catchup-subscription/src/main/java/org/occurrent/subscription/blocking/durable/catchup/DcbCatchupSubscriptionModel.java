@@ -130,14 +130,12 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     }
 
     @Override
-    @Nullable Subscription replayToResume(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, Checkpoint stored) {
+    @Nullable CatchupReplay replayToResume(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, Checkpoint stored) {
         StartAt storedStartAt = StartAt.checkpoint(stored);
         if (!isDcbCatchupPosition(storedStartAt)) {
             return null;
         }
-        Future<Subscription> replaying = startReplayToResume(subscriptionId,
-                lastStored -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, lastStored == null ? storedStartAt : StartAt.checkpoint(lastStored)));
-        return new CatchupSubscription(subscriptionId, replaying);
+        return lastStored -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, lastStored == null ? storedStartAt : StartAt.checkpoint(lastStored));
     }
 
     /**
