@@ -86,8 +86,9 @@ import static java.util.Objects.requireNonNull;
  *       What a failing event holds up is decided by whatever feeds the subscription rather than by the runner, and
  *       {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} says what that can be.
  *       <p>
- *       An instance that keeps failing can be quarantined instead, with a budget set by
- *       {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. Whether a failing event is considered
+ *       An instance that keeps failing can be quarantined instead once you turn quarantine on with
+ *       {@link SagaRunnerConfig#withQuarantineAfter(java.time.Duration)}. It is off by default, because 0.34.0 has no
+ *       operation that brings a quarantined instance back. Whether a failing event is considered
  *       for quarantine and whether a considered one is actually quarantined are separate conditions, and
  *       {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} lists both. An instance can be past its budget and
  *       still {@code ACTIVE}, so read the instance's status rather than inferring it from the budget.
@@ -118,8 +119,9 @@ import static java.util.Objects.requireNonNull;
  *       fires for as long as the event keeps being offered, never on a
  *       subscription model that does not offer a refused delivery again, which gets only the first WARN.
  *       <p>
- *       Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of never quarantining instead, so
- *       the saga keeps refusing the event for as long as the model offers it again. That is also what a subscription
+ *       Without quarantine, which is the default and what {@link SagaRunnerConfig#disableQuarantine()} gives, the
+ *       saga keeps the pre-0.34.0 behaviour and keeps refusing the event for as long as the model offers it again.
+ *       That is also what a subscription
  *       model that does not guarantee it holds every event it delivers gets, since
  *       the event could not be obtained again there.</li>
  *   <li><strong>Timer path.</strong> A failing timeout is caught per instance, logged, and left due, so it stays
@@ -298,8 +300,9 @@ public final class SagaRunner<E, C> {
     }
 
     /**
-     * Quarantine needs the failing event to be obtainable a second time, so it is available only on a subscription
-     * model that can say whether it still holds one, meaning a {@link HistoryRetainingSubscriptions}. On any other
+     * Quarantine is available only on a subscription model that can say whether it still holds the failing event,
+     * meaning a {@link HistoryRetainingSubscriptions}, so that a future release could hand that event back. 0.34.0
+     * does not. On any other
      * model this returns a configuration with the budget switched off, and the saga keeps the behaviour it had before
      * 0.34.0.
      * <p>
@@ -318,19 +321,19 @@ public final class SagaRunner<E, C> {
      * pre-0.34.0 behaviour of never quarantining, and is told why at startup.
      */
     private SagaRunnerConfig quarantineOnlyIfTheEventCanBeAskedForAgain(String subscriptionId, SagaRunnerConfig config) {
-        if (config.quarantineAfter() == null) {
+        if (config.quarantineAfter().isEmpty()) {
             return config;
         }
         Optional<HistoryRetainingSubscriptions> retention = HistoryRetainingSubscriptions.findIn(subscriptionModel);
         if (retention.isEmpty()) {
             log.warn("Saga subscription '{}' runs on a subscription model that cannot say whether it still holds an event it delivered ({}), so the event a quarantined instance stopped on has to be treated as one that could not be obtained again, and quarantine is switched off for this saga. An instance that keeps failing is therefore never quarantined, which is the behaviour before 0.34.0. What its failing event holds up is decided by whatever feeds this subscription. A model answers by implementing HistoryRetainingSubscriptions, which the MongoDB subscription models do, and so does a catch-up model over one of them. A push feed on its own does not, because it is handed its events without being told where they came from, so it cannot establish that anything here still has them, whether or not something does. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                     subscriptionId, subscriptionModel.getClass().getName());
-            return config.withQuarantineAfter(null);
+            return config.disableQuarantine();
         }
         if (!retention.get().retainsEveryEvent()) {
             log.warn("Saga subscription '{}' runs on a subscription model that cannot guarantee it holds every event it delivers ({}), so quarantine is switched off for this saga, and an instance that keeps failing is never quarantined, which is the behaviour before 0.34.0. What its failing event holds up is decided by whatever feeds this subscription. Quarantining the event an instance stopped on would be safe whenever this model still holds that one, but a quarantined instance skips everything addressed to it afterwards, and skipping acknowledges. On a model that holds only some of what it delivers, one of those later events may be a copy nothing else has. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                     subscriptionId, subscriptionModel.getClass().getName());
-            return config.withQuarantineAfter(null);
+            return config.disableQuarantine();
         }
         return config;
     }
@@ -342,7 +345,7 @@ public final class SagaRunner<E, C> {
      * than because the question is skipped.
      */
     private Predicate<CloudEvent> retentionCheckFor(String subscriptionId, SagaRunnerConfig config) {
-        if (config.quarantineAfter() == null) {
+        if (config.quarantineAfter().isEmpty()) {
             return event -> false;
         }
         // Only a model guaranteeing it holds everything gets this far, so the per-event answer is a formality it

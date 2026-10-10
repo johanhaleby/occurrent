@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-The guide has twenty-seven sections, six of them about compile-time breaks. At compile time, if you use the flow saga's
+The guide has twenty-eight sections, six of them about compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -26,9 +26,10 @@ a second compile-time break, and comparing either whole for equality fails silen
 used to start without a recorded position is now refused at `subscribe(..)`. Read
 [section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
 Then a saga instance whose event keeps failing can now be quarantined instead of left active and failing
-indefinitely, which changes five things about the saga API at once. `SagaEnvelope` gains
+indefinitely. Quarantine is off by default, and the five changes it makes to the saga API apply whether or not you turn
+it on. `SagaEnvelope` gains
 two record components and `SagaRunnerConfig` gains one, `SagaInstance` gains a method, and `SagaStatus` gains a constant that `findByStatus(ACTIVE, ..)` no longer returns. Read
-[section 8](#8-a-saga-instance-that-keeps-failing-is-quarantined-and-four-saga-types-change-with-it).
+[section 8](#8-a-saga-instance-that-keeps-failing-can-be-quarantined-and-four-saga-types-change-with-it).
 Then a reactor catch-up subscription now delivers an event a second time when a write that was in flight during the
 replay was read by a history window, which needs a handler that is safe to run twice on the same event. Read
 [section 9](#9-a-reactor-catch-up-subscription-can-deliver-a-concurrent-write-twice).
@@ -106,9 +107,13 @@ the middle of the replay no longer misses an event that committed late below the
 some events a second time, and a checkpoint stored by 0.33.0 in the middle of a replay still resumes as in 0.33.0, with
 a warning. Read
 [section 26](#26-a-position-catch-up-stores-the-live-start-it-read-before-the-replay).
-Finally, a MongoDB event store with `DCB` and without `STREAM` no longer creates the `dcbTags_1` index, though one
+Then a MongoDB event store with `DCB` and without `STREAM` no longer creates the `dcbTags_1` index, though one
 created on 0.33.0 or earlier keeps it. Enabling `STREAM` on a DCB store builds it at startup if it isn't there. Read
 [section 27](#27-a-dcb-only-mongodb-event-store-no-longer-creates-the-dcbtags-index).
+Finally, a blocking catch-up that replays by event time now reads its live start before the replay and stores it with
+the time, so an event with an earlier time that commits late is no longer missed. More events arrive twice, a long
+replay depends on the oplog, and a rollback with a string storage fails to start such a subscription. Read
+[section 28](#28-a-time-based-catch-up-reads-its-live-start-before-the-replay).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -739,7 +744,7 @@ property reaches the reactive starter too, where
 cluster gets the same no-code-change path out of the refusal it has had since 0.33.0.
 
 
-## 8. A saga instance that keeps failing is quarantined, and four saga types change with it
+## 8. A saga instance that keeps failing can be quarantined, and four saga types change with it
 
 Each saga gets one subscription, and that subscription delivers the events for all of its instances. Up to 0.33.0, an event that a saga's
 `evolve`, its `react` or its command dispatcher could not handle propagated to the subscription model, and wherever
@@ -748,12 +753,25 @@ that model offered the event again the saga tried again, without limit.
 What the failing event holds up in the meantime is decided by whatever feeds the subscription, and the javadoc on
 `SagaStatus.QUARANTINED` says what that can be.
 
-From 0.34.0 the executor times the failing rather than counting the attempts. Where a quarantine budget is in force, an
-instance's first failing event can write down the instant it started failing, and it rethrows whether or not that write
+0.34.0 adds quarantine, and it is off by default, so a saga you upgrade keeps the 0.33.0 behaviour until you turn it
+on. Nothing in 0.34.0 brings a quarantined instance back, and `SagaStateStore.delete(sagaId)` is the only way out of
+quarantine. That deletes the instance's state. Turn quarantine on when abandoning one instance is better for you than
+having its failing event hold up the subscription. Five minutes is a reasonable budget.
+
+```java
+SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5));
+```
+
+On the annotation path the budget is a property instead.
+
+```properties
+occurrent.saga.quarantine-after=5m
+```
+
+With a budget set, the executor times the failing rather than counting the attempts. An instance's first failing event can write down the instant it started failing, and it rethrows whether or not that write
 succeeds, exactly as before. Some ways of failing write nothing, a failing timeout among them, and the javadoc on
 `SagaStatus.QUARANTINED` lists them. Where nothing was recorded, the next delivery decides on whatever the store holds
-then. Once that instance has kept failing for at least `SagaRunnerConfig.quarantineAfter`, five minutes by default, it
-can move to the new `SagaStatus.QUARANTINED`, and when it does the executor stops rethrowing.
+then. Once that instance has kept failing for at least the budget, it can move to the new `SagaStatus.QUARANTINED`, and when it does the executor stops rethrowing.
 
 Reaching the budget is not enough on its own. The javadoc on `SagaStatus.QUARANTINED` lists what else has to hold, so
 an instance past its budget can still be `ACTIVE`. Read its status rather than working it out from the time.
@@ -773,15 +791,17 @@ One case has no instance to quarantine, and it keeps the 0.33.0 behaviour. An ev
 throws never reaches an instance, so the subscription is never let past it, whatever the budget. It may still belong to
 an instance, and once the subscription moved past it the next event for that instance would mark the instance as
 having handled it, so the event would be lost. It is refused instead, and the first failure is logged at `WARN` and after that at `ERROR` once per interval, naming the event and what stopped it. That
-interval is the quarantine budget when the saga has one, and a fixed five-minute default when it does not, so the
+interval is the quarantine budget when the saga has one, and a fixed five minutes when it does not, so the
 `ERROR` still repeats on a subscription model this saga cannot quarantine anything on, for as long as that model keeps
 offering the event. A model that does not offer a refused delivery again gets only the first `WARN`, and
 `DeliveryFailurePolicy` is where a consume-side broker bridge's choice is configured.
 Where the event is offered again, repair the converter or the id extractor and the saga applies it in the order it was
 written.
 
-A quarantined instance receives no further events and fires no timers, and its redelivery watermarks stop moving, so
-nothing it skipped is recorded as handled. What it stopped on stays on the record instead of being lost.
+A quarantined instance applies no further events and fires no timers. Later events addressed to it are still
+delivered, and the saga skips them. Its redelivery watermarks stop moving, so nothing it skipped is recorded as
+handled. The event it stopped on stays in the event store. The quarantine record holds only that event's redelivery
+key, and 0.34.0 cannot hand the event back to the instance.
 
 0.34.0 stops there. Nothing in it brings an instance back out of quarantine, so read `SagaInstance.failure()` to see
 which input it stopped on and what the saga threw, and call `SagaStateStore.delete(sagaId)` to abandon the instance
@@ -796,8 +816,8 @@ which it declares by implementing `HistoryRetainingSubscriptions`. `NativeMongoS
 `SpringMongoSubscriptionModel` hold everything they deliver and say so, including either of them behind
 `DurableSubscriptionModel`, `CompetingConsumerSubscriptionModel` or `CatchupSubscriptionModel`, since a wrapper that
 declares nothing itself is answered by the model it wraps. On a model that declares nothing at all, a bare
-`PushSubscriptionModel` being the one you are most likely to meet, the runner switches the budget off at startup and
-logs why, so the saga keeps the 0.33.0 behaviour of never quarantining. That model hands the acknowledge-or-redeliver
+`PushSubscriptionModel` being the one you are most likely to meet, the runner switches a budget you set off at startup
+and logs why, so the saga keeps the 0.33.0 behaviour of never quarantining. That model hands the acknowledge-or-redeliver
 decision to the listener that called `accept`. What the failing event holds up is that listener's call as well.
 
 A model that cannot promise to hold everything gets no quarantine either, even where it can answer for the event an
@@ -834,8 +854,8 @@ rather than copying the `COMPLETED` branch. A quarantined instance is not finish
 somebody to look at it.
 
 **`findByStatus(ACTIVE, ..)` no longer returns a quarantined instance,** and it breaks nothing at compile time.
-If you use that call to sweep for instances that have gone quiet, which is what it was built for, it now misses the
-instances most worth finding. Enumerate `QUARANTINED` as well.
+If you use that call to sweep for instances that have gone quiet, which is what it was built for, it misses the
+instances most worth finding once quarantine is on. Enumerate `QUARANTINED` as well.
 
 ```java
 List<SagaInstance> stuck = new ArrayList<>();
@@ -886,23 +906,15 @@ case SagaEnvelope(String sagaId, var state, var status, long version, var timers
                   boolean started, var failure) -> ...
 ```
 
-**`SagaRunnerConfig` gains a fifth record component, `quarantineAfter`.** The four-argument form stays as a
-constructor that defaults it to five minutes, so a call site written against 0.33.0 compiles unchanged and gets the
-new behaviour. A record pattern over `SagaRunnerConfig` has to name the fifth component. Pass `null` to never
-quarantine, so the saga keeps rethrowing for as long as the subscription model offers the event again, which is the
-0.33.0 behaviour.
+**`SagaRunnerConfig` gains a fifth record component, `Optional<Duration> quarantineAfter`.** The four-argument form
+stays as a constructor that leaves it empty, so a call site written against 0.33.0 compiles unchanged and keeps the
+0.33.0 behaviour, and so does `SagaRunnerConfig.defaults()`. A record pattern over `SagaRunnerConfig` has to name the
+fifth component. `withQuarantineAfter(Duration)` turns quarantine on and refuses `null`, and `disableQuarantine()` turns
+it off again.
 
-```java
-SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(null);
-```
-
-On the annotation path you never build a `SagaRunnerConfig`, so the budget is a property instead. It defaults to five
-minutes, and zero is how it says never, because a `Duration` property that is not set binds to its default rather than
-to null.
-
-```properties
-occurrent.saga.quarantine-after=0
-```
+On the annotation path you never build a `SagaRunnerConfig`, and `occurrent.saga.quarantine-after` sets the budget. It
+has no default, and leaving it out keeps quarantine off. A blank value, `occurrent.saga.quarantine-after=`, counts as
+leaving it out. Zero and negative values stop the application from starting when it has at least one `@Saga`.
 
 ### Why there is no recipe for this one
 
@@ -2494,3 +2506,81 @@ An index on `dcbTags` alone with other options can make startup fail, and always
 
 There is no recipe for this change. Which indexes a collection has is database state that a rewrite of the source
 cannot see.
+
+## 28. A time-based catch-up reads its live start before the replay
+
+This covers the blocking `StreamCatchupSubscriptionModel`, also behind `CatchupSubscriptionModel`, when it replays by
+event time. It does that when it starts from `StartAtTime.offsetDateTime(..)` or resumes from a stored time, and on an
+event store that doesn't write a position also when it starts from `StartAtTime.beginningOfTime()`. The reactor
+catch-ups replay by position only and are not affected.
+
+An event's time is set by the application that writes it, so event A can have an earlier time than event B and commit
+after it. In 0.33.0 the time catch-up read its live start, the change-stream position live delivery picks up from,
+after its replay. An A that committed after the replay had read past its time was in neither, and was never delivered.
+That happened within one run, and after a restart in the middle of the replay that resumed from B's stored time.
+[#1218](https://github.com/johanhaleby/occurrent/issues/1218) has the details, and the reasoning is in
+[ADR 144](../architecture/decisions/0144-a-catch-up-checkpoint-keeps-the-live-start-it-read-before-the-replay.md).
+
+Now the time catch-up reads its live start before the replay, as the position catch-ups in
+[section 26](#26-a-position-catch-up-stores-the-live-start-it-read-before-the-replay) do. The checkpoint it stores
+during the replay is a `CatchupTimeCheckpoint`, which holds the time, that live start, and the time the replay first
+started from. A resume replays from the stored time and goes live from the stored live start. A catch-up whose
+`StartAt` answers `null` for the wrapped subscription model never goes live, so it reads no live start and stores a
+plain time, as in 0.33.0.
+
+The MongoDB checkpoint storages keep the time in `checkpoint` as before and put the other two in `catchupLiveFrom` and
+`catchupReplayOrigin`. The origin is an RFC 3339 string, and there is no `catchupReplayTo`:
+
+```javascript
+{ _id: "orders", checkpoint: "2026-10-10T08:15:30.123Z", catchupLiveFrom: { operationTime: Timestamp(1760000000, 1) }, catchupReplayOrigin: "1970-01-01T00:00:00Z" }
+```
+
+A storage that keeps strings, `SpringRedisCheckpointStorage` for one, stores
+`2026-10-10T08:15:30.123Z;origin:1970-01-01T00:00:00Z;liveFrom:{"operationTime": ...}`. The live subscription's
+checkpoint replaces all of it when the catch-up reaches live delivery.
+
+A resume can deliver more events a second time than a position resume does. A position has a replay end that splits
+the events by when they committed. A time doesn't, since a writer can commit an event with any time at any moment. So
+the resumed replay reads everything up to the present, and live delivery from the stored live start delivers every
+matching event written after that live start too. That includes everything written while the subscription was
+stopped, which can come twice.
+
+A catch-up that is never restarted can deliver an event twice as well. An event committed during the replay arrives
+live, and when the replay reads it too, it arrives a second time. Catch-up delivery
+has always been at-least-once, so a handler that is safe to run twice on the same event needs no change. If yours is
+not, key the work by the CloudEvent id before upgrading.
+
+A long time replay now depends on the oplog. In 0.33.0 it read its live start once it was done, so the oplog never had
+to reach back over the whole replay. Now a live start that MongoDB drops from its oplog, while the subscription is
+stopped or while the replay runs, makes the catch-up replay again from the time its replay first started from, with a
+new live start, and log a warning. When the live start is gone after 4 replays in a row, the catch-up fails with an
+`IllegalStateException` that tells you to size the oplog, as section 26 describes for a position catch-up. Size the
+oplog for the longest time replay, and for the longest time a catch-up can be stopped in the middle of one.
+
+A time stored by 0.33.0 has no live start, and none can be worked out afterwards. It resumes with a live start read at
+the resume, and logs a warning that names the subscription and the stored value. An event with an earlier time that
+committed after the earlier replay read past it can still be missed there, once, until that catch-up reaches live
+delivery. To find such checkpoints before you upgrade, look for a stored value that is a time. With the MongoDB
+starter's default collection:
+
+```javascript
+db.subscriptions.find({ checkpoint: /^\d{4}-\d{2}-\d{2}T/ })
+```
+
+With `SpringRedisCheckpointStorage`, the checkpoint is the plain string stored at the subscription id's key. A match
+is a catch-up that has not reached live delivery yet. Let it get that far before you upgrade, or accept the 0.33.0
+behaviour for that one subscription.
+
+A rollback to 0.33.0 reads the MongoDB document as the plain time, ignores the two new fields, and handles it the way
+0.33.0 handles any stored time. A string storage is different. 0.33.0 doesn't recognize
+`<time>;origin:...;liveFrom:...` as a time, so it hands the value to the MongoDB subscription model as a change-stream
+position. The value contains the live start's `operationTime` or `resumeToken`, so the model parses the whole string
+as JSON, and `subscribe(..)` throws a `JsonParseException`. The same goes for a 0.33.0 node that takes over the lease
+of such a subscription during a rolling upgrade. Let the catch-ups reach live delivery before rolling back, or set the
+value by hand to the time before the first `;`.
+
+A `CheckpointStorage` of your own that stores `asString()` and returns a `StringBasedCheckpoint` needs no change. One
+that parses the stored time itself fails on the new form, so read it with `CatchupTimeCheckpoint.parse(..)` instead.
+
+There is no recipe for this change. What is stored and when a resume delivers again is runtime behavior that a rewrite
+of the source cannot see.

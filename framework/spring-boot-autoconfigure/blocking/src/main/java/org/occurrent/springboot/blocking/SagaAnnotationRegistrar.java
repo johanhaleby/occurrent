@@ -146,9 +146,8 @@ class SagaAnnotationRegistrar {
         // A push model ignores StartAt, and a replay in front of it always starts at the beginning, so there is no
         // start position to compute. rejectStartPositionAttributes has already refused the four that would imply one.
         StartAt startAt = push ? null : startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
-        SagaRunnerConfig config = SagaRunnerConfig.defaults()
+        SagaRunnerConfig config = withQuarantineBudget(SagaRunnerConfig.defaults(), occurrentProperties().getSaga().getQuarantineAfter())
                 .withTimerPollInterval(sagaTimerPollInterval())
-                .withQuarantineAfter(sagaQuarantineAfter())
                 .withRedeliveryDetection(redeliveryDetectionOf(annotation));
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         SagaRunner<E, C> configured = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
@@ -636,16 +635,15 @@ class SagaAnnotationRegistrar {
         return occurrentProperties().getSaga().getTimerPollInterval();
     }
 
-    private @Nullable Duration sagaQuarantineAfter() {
-        return quarantineBudgetOf(occurrentProperties().getSaga().getQuarantineAfter());
-    }
-
-    // Zero is how a Duration property says "never", since an unset property binds to the default rather than to null,
-    // and null is what SagaRunnerConfig takes for a saga that is never quarantined. A negative value is passed on
-    // untouched so SagaRunnerConfig rejects it, because reading a typo as "never" would quietly switch quarantine
-    // off.
-    static @Nullable Duration quarantineBudgetOf(@Nullable Duration configured) {
-        return configured == null || configured.isZero() ? null : configured;
+    // Zero is refused because a reader can take it to mean "never" or "immediately"
+    static SagaRunnerConfig withQuarantineBudget(SagaRunnerConfig config, @Nullable Duration configured) {
+        if (configured == null) {
+            return config.disableQuarantine();
+        }
+        if (configured.isZero() || configured.isNegative()) {
+            throw new IllegalArgumentException("occurrent.saga.quarantine-after must be a positive duration, such as 5m, but was " + configured + ". Leave the property out to keep quarantine off.");
+        }
+        return config.withQuarantineAfter(configured);
     }
 
     // The saga state type is the second type argument of the factory return type Saga<E, S, C>.

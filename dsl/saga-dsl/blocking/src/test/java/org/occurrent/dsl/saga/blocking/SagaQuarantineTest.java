@@ -260,7 +260,7 @@ class SagaQuarantineTest {
         @Test
         void blocks_them_exactly_as_before_when_the_quarantine_budget_is_switched_off() throws Exception {
             ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
-            run(model, CONFIG.withQuarantineAfter(null));
+            run(model, CONFIG.disableQuarantine());
             model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
             model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
             model.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
@@ -770,7 +770,7 @@ class SagaQuarantineTest {
         void blocks_them_exactly_as_before_when_the_quarantine_budget_is_switched_off() throws Exception {
             uncorrelatableEventId = "3";
             ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
-            run(model, CONFIG.withQuarantineAfter(null));
+            run(model, CONFIG.disableQuarantine());
             pushTheHealthyEventBehindTheUncorrelatableOne(model);
 
             TimeUnit.SECONDS.sleep(2);
@@ -780,7 +780,7 @@ class SagaQuarantineTest {
 
         /**
          * A runner on a feed that cannot promise to hold what it delivers has no quarantine budget, but the repeated
-         * ERROR is paced on {@link SagaRunnerConfig#DEFAULT_QUARANTINE_AFTER} instead of going silent, so it is not
+         * ERROR is paced on {@link SagaExecution#UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE} instead of going silent, so it is not
          * due yet within this short a window. This alone does not tell a fallback interval apart from no pacing at
          * all, since both stay quiet here.
          * {@link #fires_the_error_past_the_fallback_interval_even_though_quarantine_is_switched_off} is what actually
@@ -788,7 +788,7 @@ class SagaQuarantineTest {
          * minutes.
          */
         @Test
-        void still_says_so_once_within_a_window_shorter_than_the_default_budget_when_quarantine_is_switched_off() throws Exception {
+        void still_says_so_once_within_a_window_shorter_than_the_fallback_interval_when_quarantine_is_switched_off() throws Exception {
             uncorrelatableEventId = "3";
             ListAppender<ILoggingEvent> appender = new ListAppender<>();
             appender.start();
@@ -796,7 +796,7 @@ class SagaQuarantineTest {
             executionLog.addAppender(appender);
             try {
                 ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
-                run(model, CONFIG.withQuarantineAfter(null));
+                run(model, CONFIG.disableQuarantine());
                 pushTheHealthyEventBehindTheUncorrelatableOne(model);
 
                 TimeUnit.MILLISECONDS.sleep(BUDGET.toMillis() * 4);
@@ -824,19 +824,19 @@ class SagaQuarantineTest {
         }
 
         @Test
-        void falls_back_to_the_default_budget_when_none_is_configured() {
+        void falls_back_to_the_fixed_five_minute_interval_when_none_is_configured() {
             SagaExecution<OrderEvent, OrderState, OrderCommand> execution =
                     new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                            CONFIG.withQuarantineAfter(null), event -> true);
+                            CONFIG.disableQuarantine(), event -> true);
 
-            assertThat(execution.unroutableErrorInterval()).isEqualTo(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER);
+            assertThat(execution.unroutableErrorInterval()).isEqualTo(SagaExecution.UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE);
         }
 
         /**
-         * The bite proof for this whole fix. A fake clock crosses {@link SagaRunnerConfig#DEFAULT_QUARANTINE_AFTER}
+         * The bite proof for this whole fix. A fake clock crosses {@link SagaExecution#UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE}
          * without a real sleep, so an execution with no configured budget still has to emit the ERROR, on that
          * interval and no faster. Reverting {@code refuseUnroutableDelivery} to its old
-         * {@code quarantineAfter == null} early return leaves every other test in this class green while this one
+         * early return on an empty {@code quarantineAfter} leaves every other test in this class green while this one
          * fails, because those either configure a budget or never advance the clock far enough to tell "paced on the
          * fallback" apart from "never fires".
          */
@@ -851,18 +851,18 @@ class SagaQuarantineTest {
                 AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
                 SagaExecution<OrderEvent, OrderState, OrderCommand> execution = new SagaExecution<>(
                         "orders", orderFulfillment(), stateStore, dispatched::add, converter,
-                        CONFIG.withQuarantineAfter(null), event -> true, now::get);
+                        CONFIG.disableQuarantine(), event -> true, now::get);
                 CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
 
                 assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
 
-                now.set(now.get().plus(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER).plusSeconds(1));
+                now.set(now.get().plus(SagaExecution.UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE).plusSeconds(1));
                 assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
 
                 now.set(now.get().plusSeconds(1));
                 assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
 
-                now.set(now.get().plus(SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER));
+                now.set(now.get().plus(SagaExecution.UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE));
                 assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
 
                 List<ILoggingEvent> logged;
@@ -962,6 +962,64 @@ class SagaQuarantineTest {
                     .withType("event")
                     .withExtension(OccurrentCloudEventExtension.occurrent("order", streamVersion))
                     .build();
+        }
+    }
+
+    @Nested
+    class UnderTheDefaultConfiguration {
+
+        private final Instant start = Instant.parse("2026-01-01T00:00:00Z");
+        private final AtomicReference<Instant> now = new AtomicReference<>(start);
+
+        private SagaExecution<OrderEvent, OrderState, OrderCommand> execution() {
+            return new SagaExecution<>("orders", orderFulfillment(), stateStore, dispatched::add, converter,
+                    SagaRunnerConfig.defaults(), event -> true, now::get);
+        }
+
+        @Test
+        void keeps_rethrowing_and_leaves_the_instance_active_however_long_it_has_been_failing() {
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = execution();
+            execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("2", POISON));
+
+            for (Duration elapsed : List.of(Duration.ZERO, Duration.ofSeconds(1), Duration.ofMinutes(5), Duration.ofMinutes(6), Duration.ofHours(1), Duration.ofDays(1))) {
+                now.set(start.plus(elapsed));
+                assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent))
+                        .as("redelivery after %s", elapsed)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessage("this instance can never handle its payment");
+            }
+
+            SagaEnvelope<OrderState> instance = stateStore.find(POISON).orElseThrow();
+            assertAll(
+                    () -> assertThat(instance.status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(instance.failure()).isNull(),
+                    () -> assertThat(instance.state()).isEqualTo(new AwaitingPayment(POISON)),
+                    () -> assertThat(dispatched).isEmpty()
+            );
+        }
+
+        @Test
+        void handles_the_events_of_another_instance_as_it_did_before_quarantine_existed() {
+            SagaExecution<OrderEvent, OrderState, OrderCommand> execution = execution();
+            execution.onCloudEvent(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            execution.onCloudEvent(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            CloudEvent poisonEvent = cloudEvent(POISON, 2, new PaymentReserved("3", POISON));
+            assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+            now.set(start.plus(Duration.ofHours(1)));
+            assertThatThrownBy(() -> execution.onCloudEvent(poisonEvent)).isInstanceOf(IllegalStateException.class);
+
+            execution.onCloudEvent(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            SagaEnvelope<OrderState> healthy = stateStore.find(HEALTHY).orElseThrow();
+            SagaEnvelope<OrderState> poison = stateStore.find(POISON).orElseThrow();
+            assertAll(
+                    () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)),
+                    () -> assertThat(healthy.status()).isEqualTo(SagaStatus.COMPLETED),
+                    () -> assertThat(healthy.state()).isEqualTo(new Shipped(HEALTHY)),
+                    () -> assertThat(poison.status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(poison.state()).isEqualTo(new AwaitingPayment(POISON))
+            );
         }
     }
 

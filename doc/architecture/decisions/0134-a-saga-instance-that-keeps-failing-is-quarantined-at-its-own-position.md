@@ -20,6 +20,11 @@ pacing the unroutable-delivery `ERROR` on the budget alone left it unfired on ev
 switched off for, which is push feeds and the broker bridges. The paragraph below now says the `ERROR` is paced on the
 budget when one is configured and on a fixed five-minute default otherwise. This has not shipped either.
 
+Amended in place a fourth time on 2026-10-10, before 0.34.0 shipped, to make quarantine off by default. Decision point 7
+ships no release operation, so deleting the instance is the only way out of quarantine, and an upgrade should not turn
+that on without being asked. Decision point 3 records the new default, and Decision point 1 and the Consequences no
+longer promise a release. No release is scheduled.
+
 The three questions this decision could not settle on its own were ruled at that gate and are recorded in
 **Rulings at the design gate** near the end of this file. One of them, the non-replayable source, ships as a
 narrowing rather than a closure, and [#918](https://github.com/johanhaleby/occurrent/issues/918) is its recorded
@@ -119,7 +124,8 @@ The design therefore does not classify. It measures how long the failure has las
 
 The failing event is not copied into the saga's store and it is not moved to a holding area. It stays where it
 already is durably, in the event store or on the feed. What the saga records is the position it stopped that instance
-at, so the instance can be resumed from there later.
+at, so that a release operation could resume the instance from there. No release is scheduled, and Decision point 7
+says why 0.34.0 does not ship one.
 
 That distinction is what keeps the no-loss half of the isolation rule intact. Removing an event from a channel and
 keeping it somewhere else is a second copy with its own retention and its own failure modes. Recording where an
@@ -190,11 +196,20 @@ record and pauses the partition for roughly one poll timeout before offering it 
 unrelated mechanisms running at unrelated rates, so an attempt count means a different amount of time on each, while
 five minutes means five minutes on both.
 
-**The default budget is five minutes.** Once the MongoDB backoff saturates it retries every two seconds, so five
-minutes is on the order of a hundred and fifty attempts, which is ample evidence that an input is not going to
-succeed. It also spans the failures worth surviving without quarantining anything. A replica-set election takes
-seconds and a rolling restart takes a minute or two, and both finish well inside it. Against that, it is also the
-earliest a failing instance can be quarantined.
+**Quarantine is off by default, and five minutes is the budget the documentation suggests.** Decision point 7 ships
+no release, so a quarantined instance can only be abandoned with `SagaStateStore.delete(sagaId)`, which deletes its
+state. A default budget would let an upgrade start doing that without being asked, for example to every instance
+still failing on an outage that lasted longer than the budget. So `SagaRunnerConfig.defaults()` has an empty
+`quarantineAfter`, `withQuarantineAfter(Duration)` turns quarantine on and refuses `null`, and `disableQuarantine()`
+turns it off again. `occurrent.saga.quarantine-after` has no default, so leaving it out or leaving it blank keeps
+quarantine off, and zero and negative values stop an application with at least one `@Saga` from starting. A reader can
+take zero to mean "never" or "immediately", so neither path accepts it.
+
+Five minutes is the suggested budget for the same reasons it was first chosen as the default. Once the MongoDB backoff
+saturates it retries every two seconds, so five minutes is on the order of a hundred and fifty attempts, which is
+ample evidence that an input is not going to succeed. It also spans the failures worth surviving without quarantining
+anything. A replica-set election takes seconds and a rolling restart takes a minute or two, and both finish well
+inside it. Against that, it is also the earliest a failing instance can be quarantined.
 
 **A transport that never re-offers the input cannot be quarantined by this mechanism, and the design does not pretend
 otherwise.** `PushSubscriptionModel` has no retrying, no checkpoint and no position, and its javadoc says a handler
@@ -585,8 +600,8 @@ keeps that later work cheap. A position is a number one subscription model assig
 different one on a different replay path, or none at all. The redelivery key belongs to the event, so release can be
 added on top of instances written by 0.34.0 without migrating them.
 
-`SagaStateStore.delete(sagaId)`, the escape hatch ADR 128 already names, stays available throughout, and until release
-ships it is the only way out of quarantine. It abandons the instance deliberately instead of quietly.
+`SagaStateStore.delete(sagaId)`, the escape hatch ADR 128 already names, stays available throughout. No release is
+scheduled, so it is the only way out of quarantine. It abandons the instance deliberately instead of quietly.
 
 ### 8. The migration treatment for the shipped API this breaks
 
@@ -628,17 +643,16 @@ restart. For every other instance those events were already handled, so at-least
 advancing costs them nothing.
 
 For the quarantined instance, at-least-once through the subscription channel is given up at that position and
-replaced by the recorded position, which a release will later replay from. This is the real trade in this decision and
+replaced by the recorded position, which a release operation could replay from. No release is scheduled. This is the real trade in this decision and
 it should be read as such. What the instance gets in exchange is that the property becomes explicit, durable and visible in
 `findByStatus`, rather than implicit in a channel that is no longer moving.
 
-A long outage of something the saga calls can quarantine instances. Past the budget the design cannot tell an outage
+With quarantine on, a long outage of something the saga calls can quarantine instances. Past the budget the design cannot tell an outage
 from an input that will never succeed, so it treats it as the latter, and an instance still failing on the outage when
 a delivery finds its budget used up is quarantined wherever the other conditions on
 `SagaStatus.QUARANTINED` hold. An outage of the saga's own
 state store quarantines nothing while it lasts, because the quarantine is written to that store.
-Until release ships they cannot be brought back through the saga API, so the budget's default has to be chosen with
-that in mind.
+They cannot be brought back through the saga API, which is why quarantine is off by default. See Decision point 3.
 
 Releasing an instance would pause the saga's subscription while the replay catches up, so it is an operation with a
 visible cost rather than a background one. 0.34.0 does not ship it. See Decision point 7.
@@ -688,7 +702,8 @@ derived from a gap, and nothing downstream can detect that.
 ## Rulings at the design gate
 
 Three questions were left for the gate rather than decided in the drafting, and all three are now closed. The
-budget's default was never among them, it is decided at five minutes in Decision point 3.
+budget's default was never among them. It was decided at five minutes in Decision point 3 and later changed to off,
+which the Status section records.
 
 1. **Migration.** One section in `doc/migration/upgrading-to-0.34.0.md` covering all five shipped breaks, meaning the
    `SagaEnvelope` component, the `SagaRunnerConfig` component, the `SagaInstance` accessor, the exhaustive switch over

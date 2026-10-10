@@ -24,56 +24,70 @@ import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.springboot.common.OccurrentProperties;
 
 import java.time.Duration;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * A saga on the annotation path takes its quarantine budget from {@code occurrent.saga.quarantine-after}, and the
- * migration guide tells a reader to switch quarantine off to keep the pre-0.34.0 behaviour. A {@code Duration} property
- * that is not set binds to its default rather than to null, so zero is what says "never" here.
+ * A saga on the annotation path takes its quarantine budget from {@code occurrent.saga.quarantine-after}. The property
+ * has no default, and leaving it out keeps quarantine off. Zero is refused rather than read as off, because it reads
+ * as "never" as easily as "immediately", and a negative value is refused as well.
  */
 @DisplayName("The saga quarantine budget property")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaQuarantineBudgetPropertyTest {
 
     @Test
-    void defaults_to_the_same_five_minutes_the_runner_defaults_to() {
+    void has_no_default_which_agrees_with_the_runner_never_quarantining_by_default() {
         assertAll(
-                () -> assertThat(new OccurrentProperties.SagaProperties().getQuarantineAfter()).isEqualTo(Duration.ofMinutes(5)),
-                () -> assertThat(SagaRunnerConfig.defaults().quarantineAfter()).isEqualTo(Duration.ofMinutes(5))
+                () -> assertThat(new OccurrentProperties.SagaProperties().getQuarantineAfter()).isNull(),
+                () -> assertThat(SagaRunnerConfig.defaults().quarantineAfter()).isEmpty()
         );
     }
 
     @Test
+    void leaves_quarantine_off_when_the_property_is_not_set() {
+        Duration unset = new OccurrentProperties.SagaProperties().getQuarantineAfter();
+
+        assertThat(SagaAnnotationRegistrar.withQuarantineBudget(SagaRunnerConfig.defaults(), unset).quarantineAfter()).isEmpty();
+    }
+
+    @Test
+    void turns_quarantine_on_with_five_minutes() {
+        assertThat(SagaAnnotationRegistrar.withQuarantineBudget(SagaRunnerConfig.defaults(), Duration.ofMinutes(5)).quarantineAfter())
+                .isEqualTo(Optional.of(Duration.ofMinutes(5)));
+    }
+
+    @Test
     void passes_a_configured_budget_through_unchanged() {
-        assertThat(SagaAnnotationRegistrar.quarantineBudgetOf(Duration.ofSeconds(30))).isEqualTo(Duration.ofSeconds(30));
+        assertThat(SagaAnnotationRegistrar.withQuarantineBudget(SagaRunnerConfig.defaults(), Duration.ofSeconds(30)).quarantineAfter())
+                .isEqualTo(Optional.of(Duration.ofSeconds(30)));
     }
 
     @Test
     void refuses_a_zero_budget_passed_straight_to_the_config_rather_than_quarantining_on_the_first_failure() {
-        // The property reads zero as never, so accepting it here as "quarantine immediately" would make one literal
-        // mean opposite things depending on how the saga was configured.
         assertThatThrownBy(() -> SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("quarantineAfter must be positive");
     }
 
     @Test
-    void reads_zero_as_the_pre_0_34_0_behaviour_of_retrying_forever() {
-        assertThat(SagaAnnotationRegistrar.quarantineBudgetOf(Duration.ZERO)).isNull();
+    void throws_IllegalArgumentException_for_a_zero_budget_rather_than_reading_it_as_never() {
+        assertThatThrownBy(() -> SagaAnnotationRegistrar.withQuarantineBudget(SagaRunnerConfig.defaults(), Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("occurrent.saga.quarantine-after")
+                .hasMessageContaining("must be a positive duration")
+                .hasMessageContaining("Leave the property out");
     }
 
     @Test
-    void passes_a_negative_budget_on_so_SagaRunnerConfig_rejects_it_rather_than_reading_a_typo_as_never() {
-        Duration negative = Duration.ofSeconds(-1);
-
-        assertAll(
-                () -> assertThat(SagaAnnotationRegistrar.quarantineBudgetOf(negative)).isEqualTo(negative),
-                () -> assertThatThrownBy(() -> SagaRunnerConfig.defaults().withQuarantineAfter(negative))
-                        .isInstanceOf(IllegalArgumentException.class)
-                        .hasMessageContaining("quarantineAfter must be positive")
-        );
+    void throws_IllegalArgumentException_for_a_negative_budget_rather_than_reading_a_typo_as_never() {
+        assertThatThrownBy(() -> SagaAnnotationRegistrar.withQuarantineBudget(SagaRunnerConfig.defaults(), Duration.ofSeconds(-1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("occurrent.saga.quarantine-after")
+                .hasMessageContaining("must be a positive duration")
+                .hasMessageContaining("Leave the property out");
     }
 }

@@ -67,8 +67,9 @@ public enum SagaStatus {
      * <ul>
      *   <li>The saga worked out which instance the event belongs to. A failure in the converter or the id extractor is
      *       never charged to an instance.</li>
-     *   <li>{@code SagaRunnerConfig.quarantineAfter} is set, and the runner did not switch it off at startup. It does
-     *       that on a subscription model that cannot guarantee it holds every event it delivers.</li>
+     *   <li>Quarantine is switched off neither by {@code SagaRunnerConfig.disableQuarantine()} nor by the runner at
+     *       startup. The runner switches it off on a subscription model that cannot guarantee it holds every event it
+     *       delivers.</li>
      *   <li>The event carries a redelivery key, which is a stream id with its stream version or a global position.</li>
      *   <li>What was thrown is not an {@link OutOfMemoryError}.</li>
      *   <li>The instance is {@link #ACTIVE} and does not already count the event as handled.</li>

@@ -21,6 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
@@ -128,13 +129,15 @@ public abstract class CheckpointStorageConformance {
 
     /**
      * The checkpoints every storage owes an answer for, plus whatever the fixture added. A {@code GlobalCheckpoint}
-     * comes both as a plain position and with the live start a catch-up stores alongside it.
+     * comes both as a plain position and with the live start a catch-up stores alongside it, and a
+     * {@code CatchupTimeCheckpoint} holds the live start a time catch-up stores next to its time.
      */
     private List<Checkpoint> checkpointsToRoundTrip() {
         List<Checkpoint> checkpoints = new ArrayList<>();
         checkpoints.add(new StringBasedCheckpoint("a-checkpoint-value"));
         checkpoints.add(GlobalCheckpoint.of(42));
         checkpoints.add(GlobalCheckpoint.of(42, new StringBasedCheckpoint("a-live-start"), 7, 40));
+        checkpoints.add(CatchupTimeCheckpoint.of("2026-01-01T10:00:05.123Z", new StringBasedCheckpoint("a-live-start"), "2026-01-01T10:00:00Z"));
         checkpoints.addAll(fixture().additionalCheckpoints());
         return checkpoints;
     }
@@ -213,6 +216,19 @@ public abstract class CheckpointStorageConformance {
                     .as("a storage that keeps the live start apart from the position has to clear it, or a catch-up "
                             + "resumes live from a start that belongs to an earlier replay")
                     .isEqualTo("position:50");
+        }
+
+        @Test
+        void a_time_without_a_live_start_replaces_one_with_a_live_start() {
+            String id = subscriptionId();
+            checkpointStorage().save(id, CatchupTimeCheckpoint.of("2026-01-01T10:00:05.123Z", new StringBasedCheckpoint("a-live-start"), "2026-01-01T10:00:00Z")).block();
+
+            checkpointStorage().save(id, new StringBasedCheckpoint("2026-01-01T10:00:50Z")).block();
+
+            assertThat(requireNonNull(checkpointStorage().read(id).block()).asString())
+                    .as("a storage that keeps the live start apart from the time has to clear it, or a catch-up "
+                            + "resumes live from a start that belongs to an earlier replay")
+                    .isEqualTo("2026-01-01T10:00:50Z");
         }
 
         @Test
