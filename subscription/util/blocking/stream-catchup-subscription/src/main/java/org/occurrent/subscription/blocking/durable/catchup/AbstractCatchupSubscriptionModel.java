@@ -24,10 +24,12 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -109,6 +111,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // low-cardinality here, unlike a per-event or per-request key; cancelRunningCatchup never creates one for an id
     // it has not seen, so an arbitrary or unknown id passed to cancelSubscription costs nothing.
     private final ConcurrentMap<String, ReentrantLock> handoverLocks;
+    // What each subscription asked for when it was last made through this model or another child of the same
+    // dispatcher, so a resume can replay from a position a catch-up stored for it. Removed when it is cancelled.
+    private final ConcurrentMap<String, Subscribed> subscribed;
 
     protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
         this(subscriptionModel, config, subscriptionModelContextType, new SharedCatchupState());
@@ -131,6 +136,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         this.handoverLocks = sharedState.handoverLocks;
         this.currentAttempt = sharedState.currentAttempt;
         this.runningCatchupSubscriptions = sharedState.runningCatchupSubscriptions;
+        this.subscribed = sharedState.subscribed;
     }
 
     /**
@@ -144,6 +150,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final ConcurrentMap<String, ReentrantLock> handoverLocks = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, CatchupAttempt> currentAttempt = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, Subscribed> subscribed = new ConcurrentHashMap<>();
+    }
+
+    /**
+     * A subscription as it was made, and the child of a dispatcher it was made through.
+     */
+    private record Subscribed(AbstractCatchupSubscriptionModel owner, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
     }
 
     // Reports subscriptionModelContextType (the dispatcher's type when wrapped) so a caller's StartAt.dynamic
@@ -154,7 +167,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-        return subscribe(subscriptionId, filter, startAt, action, false);
+        Subscription subscription = subscribe(subscriptionId, filter, startAt, action, false);
+        subscribed.put(subscriptionId, new Subscribed(this, filter, startAt, action));
+        return subscription;
     }
 
     /**
@@ -163,7 +178,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     @Override
     public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-        return subscribe(subscriptionId, filter, startAt, action, true);
+        Subscription subscription = subscribe(subscriptionId, filter, startAt, action, true);
+        subscribed.put(subscriptionId, new Subscribed(this, filter, startAt, action));
+        return subscription;
     }
 
     /**
@@ -250,15 +267,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
+    // The live delegate holds a subscription paused while a resume replays for it, and it runs all the same
     @Override
     public boolean isPaused(String subscriptionId) {
-        return pauseRequestedDuringCatchup.containsKey(subscriptionId) || parkedReplays.containsKey(subscriptionId) || getWrappedSubscriptionModel().isPaused(subscriptionId);
+        return pauseRequestedDuringCatchup.containsKey(subscriptionId) || parkedReplays.containsKey(subscriptionId)
+                || (!isReplayingToResume(subscriptionId) && getWrappedSubscriptionModel().isPaused(subscriptionId));
     }
 
     /**
      * Runs a parked replay again and passes any other subscription to the live delegate. When this model is stopped and
      * the subscription is paused, this first starts the model without resuming anything else, as resuming a
      * subscription starts the live delegate, so a subscription made afterwards replays at once.
+     * <p>
+     * When the position stored for the subscription is one a catch-up replays from, such as the position another
+     * node's catch-up stored while it replayed, this replays from there before the live delegate resumes it, as
+     * {@link #replayToResume(String)} describes.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
@@ -272,7 +295,97 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return relaunched;
             }
         }
+        Subscription replaying = replayToResume(subscriptionId);
+        if (replaying != null) {
+            return replaying;
+        }
         Subscription resumed = getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
+        liveDelegateResumed();
+        return resumed;
+    }
+
+    /**
+     * Replays from the position stored for {@code subscriptionId} when it is one a catch-up replays from, and resumes
+     * the subscription the live delegate holds paused once the replay has delivered the history, from the live start
+     * the stored position holds, or one read before the replay when it holds none. Returns the handle, or {@code null}
+     * when this model has nothing to replay, so the live delegate resumes the subscription itself.
+     * <p>
+     * The live delegate can't open its live feed at such a position, and would resume from its own position instead,
+     * which for a subscription it never opened is the present it read when the subscription was made. The events
+     * between the stored position and that present would then be delivered to no one. Replaying delivers them, along
+     * with events this node may already have delivered, so some arrive again.
+     * <p>
+     * Asked only for a subscription made through this model or another child of the same dispatcher, that the live
+     * delegate holds paused, and whose start lets this model catch up. A resume while such a replay runs returns the
+     * handle of that replay.
+     */
+    @Nullable Subscription replayToResume(String subscriptionId) {
+        CatchupAttempt running = currentAttempt.get(subscriptionId);
+        if (running != null && running.replay.resuming) {
+            return new CatchupSubscription(subscriptionId, running.replay.result);
+        }
+        Subscribed subscription = subscribed.get(subscriptionId);
+        if (subscription == null || subscription.owner() != this || shuttingDown || !getWrappedSubscriptionModel().isPaused(subscriptionId)
+                || (subscription.startAt().isDynamic() && subscription.startAt().get(generateSubscriptionModelContext()) == null)) {
+            return null;
+        }
+        Checkpoint stored = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
+        if (stored == null) {
+            return null;
+        }
+        warnIfStoredWithoutLiveStart(subscriptionId, stored);
+        return replayToResume(subscriptionId, subscription.filter(), subscription.startAt(), subscription.action(), stored);
+    }
+
+    /**
+     * Starts the replay from {@code stored} that {@link #replayToResume(String)} describes, through
+     * {@link #startReplayToResume}, or returns {@code null} when {@code stored} is not a position this model replays
+     * from. This model has none.
+     */
+    @Nullable Subscription replayToResume(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, Checkpoint stored) {
+        return null;
+    }
+
+    boolean isReplayingToResume(String subscriptionId) {
+        CatchupAttempt running = currentAttempt.get(subscriptionId);
+        return running != null && running.replay.resuming;
+    }
+
+    // Whether this model, rather than another child of the same dispatcher, runs the replay a resume started
+    boolean replaysToResumeHere(String subscriptionId) {
+        CatchupAttempt running = currentAttempt.get(subscriptionId);
+        return running != null && running.replay.resuming && running.owner == this;
+    }
+
+    /**
+     * Hands {@code subscriptionId} over to the live delegate once its replay has delivered the history. A replay a
+     * subscribe started subscribes it there from {@code startAtToUse}. A replay a resume started resumes the
+     * subscription the live delegate holds paused, from the position {@code startAtToUse} resolves to, which stores
+     * the live start when the stored position is the catch-up's own. That subscription keeps the action it was made
+     * with, so {@code liveConsumer} goes unused and an event the replay delivered can arrive again. A pause asked for
+     * during the replay pauses the subscription once it is handed over. Called with the handover lock held, on the
+     * virtual thread {@link #startCatchupAsync} started for this attempt.
+     */
+    Subscription handOver(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAtToUse, Consumer<CloudEvent> liveConsumer) {
+        final Subscription subscription;
+        if (Objects.requireNonNull(CURRENT_ATTEMPT.get()).replay.resuming) {
+            subscription = resumeTheLiveDelegate(subscriptionId, startAtToUse);
+        } else {
+            subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAtToUse, liveConsumer);
+        }
+        applyPendingPauseIfAny(subscriptionId);
+        return subscription;
+    }
+
+    // Repositioned rather than resumed when it can be, since a live delegate that reads no stored position resumes
+    // from where it last read
+    private Subscription resumeTheLiveDelegate(String subscriptionId, StartAt startAtToUse) {
+        SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
+        StartAt liveStart = startAtToUse.get(new SubscriptionModelContext(liveDelegate.getClass()));
+        Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.findIn(liveDelegate);
+        Subscription resumed = liveStart instanceof StartAtCheckpoint && repositionable.isPresent()
+                ? repositionable.get().resumeSubscription(subscriptionId, liveStart)
+                : liveDelegate.resumeSubscription(subscriptionId);
         liveDelegateResumed();
         return resumed;
     }
@@ -344,10 +457,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private volatile boolean cancelled = false;
         // The last position an attempt at this replay stored, which the next attempt replays from
         private final AtomicReference<@Nullable Checkpoint> lastStored = new AtomicReference<>();
+        // Whether a resume started it, so it resumes the subscription the live delegate holds instead of subscribing it
+        private final boolean resuming;
 
-        private ReplayState(CatchupReplay catchup, CompletableFuture<Subscription> result) {
+        private ReplayState(CatchupReplay catchup, CompletableFuture<Subscription> result, boolean resuming) {
             this.catchup = catchup;
             this.result = result;
+            this.resuming = resuming;
         }
     }
 
@@ -738,6 +854,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return attempt;
             });
             pauseRequestedDuringCatchup.remove(subscriptionId);
+            subscribed.remove(subscriptionId);
             // A parked replay never runs again, and waitUntilStarted on its subscriber's handle returns false. Flagged
             // too, since the attempt that stop() took it from can still be in the subscriber's action and must not
             // store a position once that returns.
@@ -763,6 +880,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         catchupListeners.clear();
         currentAttempt.clear();
         pauseRequestedDuringCatchup.clear();
+        subscribed.clear();
         parkedReplays.values().forEach(parked -> parked.replay().result.cancel(false));
         parkedReplays.clear();
     }
@@ -945,8 +1063,20 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@code holdPaused}. The returned future then completes once the replay has run and handed over.
      */
     protected Future<Subscription> startCatchupAsync(String subscriptionId, CatchupReplay catchup, boolean holdPaused) {
+        return startCatchupAsync(subscriptionId, catchup, holdPaused, false);
+    }
+
+    /**
+     * Starts {@code catchup} as {@link #startCatchupAsync(String, CatchupReplay, boolean)} does, for a replay
+     * {@link #replayToResume(String)} starts, which {@link #handOver} then hands over by resuming the subscription.
+     */
+    Future<Subscription> startReplayToResume(String subscriptionId, CatchupReplay catchup) {
+        return startCatchupAsync(subscriptionId, catchup, false, true);
+    }
+
+    private Future<Subscription> startCatchupAsync(String subscriptionId, CatchupReplay catchup, boolean holdPaused, boolean resuming) {
         CompletableFuture<Subscription> result = new CompletableFuture<>();
-        ReplayState replay = new ReplayState(catchup, result);
+        ReplayState replay = new ReplayState(catchup, result, resuming);
         final CatchupAttempt attempt;
         // Locked so this registration cannot land inside a still-finishing earlier attempt's own lockHandover span
         // for the same id. Unlocked, this attempt could start, and its replay could reach a checkpoint save, before

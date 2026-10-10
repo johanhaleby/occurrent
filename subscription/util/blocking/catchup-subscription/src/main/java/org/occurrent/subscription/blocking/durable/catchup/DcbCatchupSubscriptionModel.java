@@ -129,16 +129,23 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
     }
 
-    private Subscription startLiveDcbSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAtToUse, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache) {
-        return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, dcbLiveConsumer(action, cache));
+    @Override
+    @Nullable Subscription replayToResume(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, Checkpoint stored) {
+        StartAt storedStartAt = StartAt.checkpoint(stored);
+        if (!isDcbCatchupPosition(storedStartAt)) {
+            return null;
+        }
+        Future<Subscription> replaying = startReplayToResume(subscriptionId,
+                lastStored -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, lastStored == null ? storedStartAt : StartAt.checkpoint(lastStored)));
+        return new CatchupSubscription(subscriptionId, replaying);
     }
 
     /**
      * Hands {@code subscriptionId} straight to the live delegate, without a catch-up phase. Cancels any catch-up
      * already running for this id first, under the same per-id lock as a finishing attempt's own handover, so that
      * attempt is told it has been superseded instead of also subscribing the delegate for the id this call just
-     * claimed. Distinct from {@link #startLiveDcbSubscription}'s own use inside a finishing attempt's handover,
-     * which has already gone through that lock and that decision and must not cancel itself.
+     * claimed. Distinct from {@link #handOver}'s own use inside a finishing attempt's handover, which has already
+     * gone through that lock and that decision and must not cancel itself.
      */
     private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
         cancelRunningCatchup(subscriptionId);
@@ -241,8 +248,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                 // history, and a cancel would get back the position it deleted.
                 subscription = new CancelledSubscription(subscriptionId);
             } else {
-                subscription = startLiveDcbSubscription(subscriptionId, filter, startAtToUse, action, catchupPhaseCache);
-                applyPendingPauseIfAny(subscriptionId);
+                subscription = handOver(subscriptionId, filter, startAtToUse, dcbLiveConsumer(action, catchupPhaseCache));
             }
             return subscription;
         }

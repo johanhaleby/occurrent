@@ -362,7 +362,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     @Override
     public boolean isPaused(String subscriptionId) {
         return presentCatchupModels().anyMatch(model -> model.isPaused(subscriptionId))
-                || getWrappedSubscriptionModel().isPaused(subscriptionId);
+                || (presentCatchupModels().noneMatch(model -> model.isReplayingToResume(subscriptionId)) && getWrappedSubscriptionModel().isPaused(subscriptionId));
     }
 
     /**
@@ -370,6 +370,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * subscription to the live delegate. When this model is stopped and the subscription is paused, this first starts
      * the model without resuming anything else, as resuming a subscription starts the live delegate, so a subscription
      * made afterwards replays at once, whichever mode it uses.
+     * <p>
+     * When the position stored for the subscription is one a catch-up replays from, such as the position another
+     * node's catch-up stored while it replayed, the catch-up the subscription was made through replays from there
+     * before the live delegate resumes it. The live delegate can't open its live feed at such a position, and would
+     * resume from its own position instead, past events nobody delivered to the subscription. The replay can deliver
+     * events this node already delivered.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
@@ -383,6 +389,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 return relaunched;
             }
         }
+        for (AbstractCatchupSubscriptionModel model : presentCatchupModels().toList()) {
+            Subscription replaying = model.replayToResume(subscriptionId);
+            if (replaying != null) {
+                return replaying;
+            }
+        }
         Subscription resumed = getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
         presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
         return resumed;
@@ -390,9 +402,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
 
     /**
      * Forwards to whichever {@link RepositionableSubscriptions} the wrapped model resolves to. Unlike
-     * {@link #resumeSubscription(String)}, it doesn't start this model first or run a parked replay. Catch-up is never
-     * re-triggered by a resume at an explicit position. It stays what it already was, a one-time replay driven from
-     * {@code subscribe}, not something a lease regain can turn back on.
+     * {@link #resumeSubscription(String)}, it doesn't start this model first or run a parked replay, and it never
+     * replays, also not at a position a catch-up stores. The wrapped model handles such a position as one it cannot
+     * open its live feed at.
      * <p>
      * Once the wrapped model returns from the resume, this model is started again if a start whose live delegate threw
      * stopped it, so a subscription made afterwards replays at once. After {@link #stop()} it stays stopped.
@@ -410,7 +422,14 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
 
     @Override
     public void pauseSubscription(String subscriptionId) {
-        getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
+        // A replay a resume started hands the subscription back to the live delegate once it is done, so the catch-up
+        // running it applies the pause then
+        AbstractCatchupSubscriptionModel replaying = presentCatchupModels().filter(model -> model.replaysToResumeHere(subscriptionId)).findFirst().orElse(null);
+        if (replaying != null) {
+            replaying.pauseSubscription(subscriptionId);
+        } else {
+            getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
+        }
     }
 
     @Override
