@@ -23,6 +23,7 @@ import org.bson.Document;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
@@ -325,6 +326,121 @@ class MongoCommonsTest {
         assertThat(MongoCommons.opensAtThePresent(StartAt.checkpoint(GlobalCheckpoint.of(42)))).isTrue();
         assertThat(MongoCommons.opensAtThePresent(StartAt.checkpoint(withLiveStart))).isTrue();
         assertThat(MongoCommons.opensAtThePresent(StartAt.checkpoint(new StringBasedCheckpoint(withLiveStart.asString())))).isTrue();
+    }
+
+    @Test
+    void a_catch_up_time_with_a_resume_token_live_start_keeps_the_live_start_out_of_the_fields_a_change_stream_position_is_read_from() {
+        MongoResumeTokenCheckpoint liveStart = new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("82ABCDEF")));
+        CatchupTimeCheckpoint checkpoint = CatchupTimeCheckpoint.of("2026-01-01T10:00:05.123Z", liveStart, "2026-01-01T10:00:00Z");
+
+        Document document = MongoCommons.generateCheckpointDocument("subscription-1", checkpoint);
+
+        assertThat(document.getString(MongoCommons.GENERIC_CHECKPOINT)).isEqualTo("2026-01-01T10:00:05.123Z");
+        assertThat(document).doesNotContainKeys(MongoCommons.OPERATION_TIME, MongoCommons.RESUME_TOKEN, MongoCommons.CATCHUP_REPLAY_TO);
+        Document liveFrom = document.get(MongoCommons.CATCHUP_LIVE_FROM, Document.class);
+        assertThat(liveFrom).isEqualTo(new Document(MongoCommons.RESUME_TOKEN, liveStart.resumeToken));
+        assertThat(liveFrom).doesNotContainKey("_id");
+        assertThat(document.get(MongoCommons.CATCHUP_REPLAY_ORIGIN)).isEqualTo("2026-01-01T10:00:00Z");
+        Checkpoint readBack = MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document));
+        assertThat(readBack).isEqualTo(checkpoint);
+        assertThat(((CatchupTimeCheckpoint) readBack).liveFrom()).isInstanceOf(MongoResumeTokenCheckpoint.class);
+    }
+
+    @Test
+    void a_catch_up_time_with_an_operation_time_live_start_keeps_the_live_start_out_of_the_fields_a_change_stream_position_is_read_from() {
+        MongoOperationTimeCheckpoint liveStart = new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1));
+        CatchupTimeCheckpoint checkpoint = CatchupTimeCheckpoint.of("2026-01-01T10:00:05.123Z", liveStart, "1970-01-01T00:00:00Z");
+
+        Document document = MongoCommons.generateCheckpointDocument("subscription-1", checkpoint);
+
+        assertThat(document.getString(MongoCommons.GENERIC_CHECKPOINT)).isEqualTo("2026-01-01T10:00:05.123Z");
+        assertThat(document).doesNotContainKeys(MongoCommons.OPERATION_TIME, MongoCommons.RESUME_TOKEN, MongoCommons.CATCHUP_REPLAY_TO);
+        Document liveFrom = document.get(MongoCommons.CATCHUP_LIVE_FROM, Document.class);
+        assertThat(liveFrom).isEqualTo(new Document(MongoCommons.OPERATION_TIME, liveStart.operationTime));
+        assertThat(liveFrom).doesNotContainKey("_id");
+        assertThat(document.get(MongoCommons.CATCHUP_REPLAY_ORIGIN)).isEqualTo("1970-01-01T00:00:00Z");
+        Checkpoint readBack = MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document));
+        assertThat(readBack).isEqualTo(checkpoint);
+        assertThat(((CatchupTimeCheckpoint) readBack).liveFrom()).isInstanceOf(MongoOperationTimeCheckpoint.class);
+    }
+
+    @Test
+    void a_catch_up_time_read_back_as_a_string_is_stored_the_same_way() {
+        MongoResumeTokenCheckpoint liveStart = new MongoResumeTokenCheckpoint(new BsonDocument("_data", new BsonString("82ABCDEF")));
+        CatchupTimeCheckpoint checkpoint = CatchupTimeCheckpoint.of("2026-01-01T10:00:05.123Z", liveStart, "2026-01-01T10:00:00Z");
+
+        Document document = MongoCommons.generateCheckpointDocument("subscription-1", new StringBasedCheckpoint(checkpoint.asString()));
+
+        assertThat(document).doesNotContainKeys(MongoCommons.OPERATION_TIME, MongoCommons.RESUME_TOKEN, MongoCommons.CATCHUP_REPLAY_TO);
+        assertThat(document.getString(MongoCommons.GENERIC_CHECKPOINT)).isEqualTo("2026-01-01T10:00:05.123Z");
+        Checkpoint readBack = MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document));
+        assertThat(readBack).isEqualTo(checkpoint);
+        assertThat(((CatchupTimeCheckpoint) readBack).liveFrom()).isInstanceOf(MongoResumeTokenCheckpoint.class);
+    }
+
+    @Test
+    void a_time_without_a_live_start_is_stored_as_before() {
+        Document document = MongoCommons.generateCheckpointDocument("subscription-1", new StringBasedCheckpoint("2026-01-01T10:00:05.123Z"));
+
+        assertThat(document.getString(MongoCommons.GENERIC_CHECKPOINT)).isEqualTo("2026-01-01T10:00:05.123Z");
+        assertThat(document).doesNotContainKeys(MongoCommons.CATCHUP_LIVE_FROM, MongoCommons.CATCHUP_REPLAY_ORIGIN, MongoCommons.CATCHUP_REPLAY_TO);
+        assertThat(MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document))).isEqualTo(new StringBasedCheckpoint("2026-01-01T10:00:05.123Z"));
+    }
+
+    @Test
+    void a_time_stored_with_a_live_start_and_a_replay_end_is_read_back_as_a_plain_time() {
+        // Only a position catch-up stores a replay end, so a document holding both is read as the time it stores
+        Document document = MongoCommons.generateCheckpointDocument("subscription-1",
+                CatchupTimeCheckpoint.of("2026-01-01T10:00:05.123Z", new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1)), "2026-01-01T10:00:00Z"));
+        document.put(MongoCommons.CATCHUP_REPLAY_TO, 40L);
+
+        assertThat(MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document))).isEqualTo(new StringBasedCheckpoint("2026-01-01T10:00:05.123Z"));
+    }
+
+    @Test
+    void a_time_stored_with_a_live_start_but_a_numeric_replay_origin_is_read_back_as_a_plain_time() {
+        Document document = MongoCommons.generateCheckpointDocument("subscription-1",
+                CatchupTimeCheckpoint.of("2026-01-01T10:00:05.123Z", new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1)), "2026-01-01T10:00:00Z"));
+        document.put(MongoCommons.CATCHUP_REPLAY_ORIGIN, 7L);
+
+        assertThat(MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document))).isEqualTo(new StringBasedCheckpoint("2026-01-01T10:00:05.123Z"));
+    }
+
+    @Test
+    void a_time_stored_with_a_replay_origin_but_no_live_start_is_read_back_as_a_plain_time() {
+        Document document = MongoCommons.generateCheckpointDocument("subscription-1",
+                CatchupTimeCheckpoint.of("2026-01-01T10:00:05.123Z", new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1)), "2026-01-01T10:00:00Z"));
+        document.remove(MongoCommons.CATCHUP_LIVE_FROM);
+
+        assertThat(MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document))).isEqualTo(new StringBasedCheckpoint("2026-01-01T10:00:05.123Z"));
+    }
+
+    @Test
+    void a_position_stored_with_a_live_start_and_a_time_as_replay_origin_is_read_back_as_a_plain_position() {
+        // The fields of a time catch-up beside a position, which no version writes
+        Document document = MongoCommons.generateGenericCheckpointDocument("subscription-1", "position:42");
+        document.put(MongoCommons.CATCHUP_LIVE_FROM, new Document(MongoCommons.OPERATION_TIME, new BsonTimestamp(1735689600, 1)));
+        document.put(MongoCommons.CATCHUP_REPLAY_ORIGIN, "2026-01-01T10:00:00Z");
+
+        assertThat(MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document))).isEqualTo(new StringBasedCheckpoint("position:42"));
+    }
+
+    @Test
+    void a_position_stored_with_a_live_start_and_a_time_as_replay_origin_and_a_replay_end_is_read_back_as_a_plain_position() {
+        Document document = MongoCommons.generateGenericCheckpointDocument("subscription-1", "position:42");
+        document.put(MongoCommons.CATCHUP_LIVE_FROM, new Document(MongoCommons.OPERATION_TIME, new BsonTimestamp(1735689600, 1)));
+        document.put(MongoCommons.CATCHUP_REPLAY_ORIGIN, "2026-01-01T10:00:00Z");
+        document.put(MongoCommons.CATCHUP_REPLAY_TO, 40L);
+
+        assertThat(MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(asStored(document))).isEqualTo(new StringBasedCheckpoint("position:42"));
+    }
+
+    @Test
+    void a_change_stream_given_a_catch_up_time_opens_at_the_present() {
+        CatchupTimeCheckpoint checkpoint = CatchupTimeCheckpoint.of("2026-01-01T10:00:05.123Z", new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1)), "2026-01-01T10:00:00Z");
+
+        assertThat(MongoCommons.opensAtThePresent(StartAt.checkpoint(checkpoint))).isTrue();
+        assertThat(MongoCommons.opensAtThePresent(StartAt.checkpoint(new StringBasedCheckpoint(checkpoint.asString())))).isTrue();
     }
 
     // What a storage reads back once MongoDB has the document, where a nested BsonDocument comes back as a Document

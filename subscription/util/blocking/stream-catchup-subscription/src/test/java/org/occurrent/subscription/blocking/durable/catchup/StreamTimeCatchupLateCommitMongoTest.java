@@ -21,6 +21,8 @@ import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import org.bson.BsonTimestamp;
+import org.bson.Document;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -32,11 +34,14 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CatchupTimeCheckpoint;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.ChangeStreamHistory;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -221,6 +226,95 @@ class StreamTimeCatchupLateCommitMongoTest {
         } finally {
             model.shutdown();
         }
+    }
+
+    @Test
+    void an_event_whose_earlier_time_committed_after_the_live_start_is_delivered_when_the_live_start_leaves_the_change_stream_history_during_the_resumed_replay() throws Exception {
+        LocalDateTime base = LocalDateTime.now();
+        // Writer A takes the earliest time and holds its transaction open
+        Thread writerA = new Thread(() -> appendToStream("stream-a", namedAt("A", base.plusSeconds(1))), HELD_WRITER);
+        writerA.start();
+        assertThat(aInCommit.await(20, TimeUnit.SECONDS)).isTrue();
+        // B and C take later times and commit
+        appendToStream("stream-b", namedAt("B", base.plusSeconds(2)));
+        appendToStream("stream-c", namedAt("C", base.plusSeconds(3)));
+
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "checkpoints");
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+
+        // The first process replays B, stores B's time with the live start it read before the replay, then the
+        // process dies while handling C
+        StreamCatchupSubscriptionModel first = new StreamCatchupSubscriptionModel(liveModelThatRestartsOnLostHistory(), eventStore, config);
+        CountDownLatch handlingC = new CountDownLatch(1);
+        CountDownLatch crashed = new CountDownLatch(1);
+        first.subscribe("sub", StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime()), cloudEvent -> {
+            String name = nameOf(cloudEvent);
+            received.add(name);
+            if (name.equals("C")) {
+                handlingC.countDown();
+                block(crashed);
+            }
+        });
+        assertThat(handlingC.await(20, TimeUnit.SECONDS)).isTrue();
+        Checkpoint stored = requireNonNull(storage.read("sub"));
+        assertThat(CatchupTimeCheckpoint.isCatchupTimeCheckpoint(stored)).isTrue();
+        assertThat(CatchupTimeCheckpoint.parse(stored).replayOrigin()).isEqualTo(TimeBasedCheckpoint.beginningOfTime().asString());
+        first.shutdown();
+        crashed.countDown();
+
+        // A commits, with a time earlier than the stored one and after the first process read its live start
+        releaseA.countDown();
+        writerA.join(20_000);
+
+        // The second process resumes the replay, checks the stored live start, then MongoDB drops the history from it while
+        // the replay handles the first event it delivers
+        StreamCatchupSubscriptionModel second = new StreamCatchupSubscriptionModel(liveModelThatRestartsOnLostHistory(), eventStore, config);
+        CountDownLatch handlingTheFirstResumedEvent = new CountDownLatch(1);
+        CountDownLatch historyDropped = new CountDownLatch(1);
+        try {
+            Subscription subscription = second.subscribe("sub", StartAt.subscriptionModelDefault(), cloudEvent -> {
+                received.add(nameOf(cloudEvent));
+                if (handlingTheFirstResumedEvent.getCount() > 0) {
+                    handlingTheFirstResumedEvent.countDown();
+                    block(historyDropped);
+                }
+            });
+            assertThat(handlingTheFirstResumedEvent.await(20, TimeUnit.SECONDS)).isTrue();
+            dropChangeStreamHistoryUpToNow();
+            historyDropped.countDown();
+            subscription.waitUntilStarted();
+            appendToStream("stream-d", named("D"));
+            await().atMost(AT_MOST).untilAsserted(() -> assertThat(received).as("every committed event reaches the subscription").contains("A", "B", "C", "D"));
+            assertThat(received.stream().filter("A"::equals)).as("deliveries of A").hasSize(1);
+            List<String> deliveries = List.copyOf(received);
+            assertThat(deliveries.subList(deliveries.size() - 4, deliveries.size())).as("the replay from the origin, then the live event").containsExactly("A", "B", "C", "D");
+        } finally {
+            second.shutdown();
+        }
+    }
+
+    // The Spring Boot starter's default
+    private SpringMongoSubscriptionModel liveModelThatRestartsOnLostHistory() {
+        return new SpringMongoSubscriptionModel(mongoTemplate, SpringMongoSubscriptionModelConfig.withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(true));
+    }
+
+    private void dropChangeStreamHistoryUpToNow() {
+        BsonTimestamp now = requireNonNull(mongoClient.getDatabase(DATABASE).runCommand(new Document("hostInfo", 1)).get("operationTime", BsonTimestamp.class));
+        ChangeStreamHistory.dropHistoryFrom(mongoDBContainer, DATABASE, now);
+    }
+
+    private static void block(CountDownLatch latch) {
+        try {
+            // Longer than the three minutes MongoDB gets to drop the history
+            latch.await(4, TimeUnit.MINUTES);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private NameDefined namedAt(String name, LocalDateTime time) {
+        return new NameDefined(UUID.randomUUID().toString(), time, "user", name);
     }
 
     private String nameOf(CloudEvent cloudEvent) {
