@@ -49,7 +49,8 @@ contains DCB events. In the compound index it also contains every positioned str
 each of them to find out that it has no `dcbTags`.
 
 On a DCB-only store whose collection holds nothing but DCB events, the `dcbTags` index holds the same events as the
-`position` index and narrows nothing. The planner picked `position` for every DCB query I measured there, with or without `dcbTags`.
+`position` index and narrows nothing. Every DCB query I measured there examined the same keys and documents with and without `dcbTags`. The match-all
+queries used `position`, and the tag and type queries used the compound indexes.
 The index still has to be written on every append and kept on disk and in memory, so a DCB-only store doesn't get it.
 
 ### What I measured

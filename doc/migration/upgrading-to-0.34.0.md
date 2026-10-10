@@ -2437,9 +2437,9 @@ collection. Only a store with both `STREAM` and `DCB` creates it. `type_1_positi
 still created whenever `DCB` is enabled, and a `STREAM` store that enables `DCB` builds all three at startup, as in
 0.33.0.
 
-On a DCB-only store `dcbTags_1` holds the same events as the `position_1` index, and MongoDB picked `position_1` for
-every DCB query measured in
-[ADR 145](../architecture/decisions/0145-the-standalone-dcbtags-index-is-for-match-all-dcb-queries.md). It still has
+On a DCB-only store `dcbTags_1` holds the same events as the `position_1` index, and every DCB query measured in
+[ADR 145](../architecture/decisions/0145-the-standalone-dcbtags-index-is-for-match-all-dcb-queries.md) read the same
+documents without it. It still has
 to be written on every append. With 200,000 events of 2 tags each it took 7.9 MB of the 53.6 MB the collection's
 indexes used.
 

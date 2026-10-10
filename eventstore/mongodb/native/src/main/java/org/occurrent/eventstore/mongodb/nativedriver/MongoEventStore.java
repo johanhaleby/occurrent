@@ -847,7 +847,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (dcbEnabled && eventStoreCapabilities.contains(STREAM)) {
             // Only DCB events have dcbTags, so with stream events in the collection this index narrows a match-all
             // DcbCriteria to the DCB events. (dcbTags, position) also holds every stream event with a position. On a
-            // DCB-only store this index holds the same events as the position index, so the planner doesn't pick it.
+            // DCB-only store this index holds the same events as the position index, so it narrows nothing.
             eventStoreCollection.createIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true));
         }
         if (dcbEnabled) {
