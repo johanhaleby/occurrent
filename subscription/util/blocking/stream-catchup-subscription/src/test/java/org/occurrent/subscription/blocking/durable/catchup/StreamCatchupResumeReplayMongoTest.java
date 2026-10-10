@@ -21,6 +21,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +42,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
@@ -66,6 +68,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -329,6 +332,41 @@ class StreamCatchupResumeReplayMongoTest {
                 .untilAsserted(() -> assertThat(receivedByTheCancelledAction).isEmpty());
     }
 
+    @Test
+    void a_resume_from_a_time_another_catch_up_stored_delivers_an_event_with_an_earlier_time_written_while_the_subscription_was_paused() throws Exception {
+        // Given B holds the subscription paused, with nothing stored
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        catchupA = new StreamCatchupSubscriptionModel(new DurableSubscriptionModel(springModel(), storage), eventStore, config);
+        durableB = new DurableSubscriptionModel(springModel(), storage);
+        catchupB = new StreamCatchupSubscriptionModel(durableB, eventStore, config);
+        appendAt("h1", OffsetDateTime.parse("2026-01-01T00:00:00Z"));
+        appendAt("h2", OffsetDateTime.parse("2026-01-01T00:00:01Z"));
+        appendAt("h3", OffsetDateTime.parse("2026-01-01T00:00:02Z"));
+        catchupB.subscribePaused(subscriptionId, null, StartAt.subscriptionModelDefault(), event -> receivedByB.add(nameOf(event)));
+        // And A replays by time and stalls in its second event, with the time of the first stored
+        AtomicInteger deliveredToA = new AtomicInteger();
+        CountDownLatch aIsStalled = new CountDownLatch(1);
+        catchupA.subscribe(subscriptionId, StartAtTime.offsetDateTime(OffsetDateTime.parse("2025-12-31T00:00:00Z")), event -> {
+            if (deliveredToA.incrementAndGet() > 1) {
+                aIsStalled.countDown();
+                awaitUninterrupted(releaseA);
+            }
+        });
+        assertThat(aIsStalled.await(10, SECONDS)).as("A's replay reaches its second event").isTrue();
+        assertThat(CatchupTimeCheckpoint.isCatchupTimeCheckpoint(requireNonNull(storage.read(subscriptionId)))).as("what A's replay stored is a catch-up time checkpoint").isTrue();
+        // And an event is written that has a time earlier than the one stored, after the live start A read
+        appendAt("late", OffsetDateTime.parse("2025-12-31T12:00:00Z"));
+
+        // When B is resumed, and the replay has handed over to the live subscription
+        CatchupSubscription resumed = (CatchupSubscription) catchupB.resumeSubscription(subscriptionId);
+        resumed.delegatedSubscription().get(10, SECONDS);
+        appendAt("afterResume", OffsetDateTime.parse("2026-01-01T00:00:04Z"));
+
+        // Then everything written while the subscription was paused is delivered, also what has the earlier time
+        await("B delivers what is written after the resume").atMost(10, SECONDS).until(() -> receivedByB.contains("afterResume"));
+        assertThat(receivedByB).as("what B received").contains("late", "h2", "h3", "afterResume");
+    }
+
     // B holds the subscription paused with nothing stored. A replays from the start and stalls in its second event,
     // with the position after the first stored. An event is written after B registered.
     private void givenAnotherNodeStoredAPosition(Consumer<CloudEvent> actionOfB) throws Exception {
@@ -420,6 +458,13 @@ class StreamCatchupResumeReplayMongoTest {
     private void append(String name, int secondsAfterStart) {
         DomainEvent event = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.of(2026, 1, 1, 0, 0, secondsAfterStart), "name", name);
         eventStore.write(UUID.randomUUID().toString(), cloudEventConverter.toCloudEvents(List.of(event)));
+    }
+
+    // The converter gives an event the time it is written, so a test that needs a given time sets it on the cloud event
+    private void appendAt(String name, OffsetDateTime time) {
+        DomainEvent event = new NameDefined(UUID.randomUUID().toString(), time.toLocalDateTime(), "name", name);
+        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(event)).stream().map(cloudEvent -> CloudEventBuilder.v1(cloudEvent).withTime(time).build()).toList();
+        eventStore.write(UUID.randomUUID().toString(), cloudEvents);
     }
 
     /**
