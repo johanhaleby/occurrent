@@ -7,7 +7,9 @@ Date: 2026-10-09
 Accepted. Part of [#1217](https://github.com/johanhaleby/occurrent/issues/1217). Applies to the position catch-ups,
 `StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel` on the blocking stack and
 `ReactorStreamCatchupSubscriptionModel` and `ReactorDcbCatchupSubscriptionModel` on the reactor stack, and to the
-MongoDB checkpoint storages and subscription models they run on.
+MongoDB checkpoint storages and subscription models they run on. Also part of
+[#1218](https://github.com/johanhaleby/occurrent/issues/1218), which applies it to the time-based catch-up in the
+blocking `StreamCatchupSubscriptionModel`.
 
 ## Context
 
@@ -35,6 +37,13 @@ transactions in flight, which is why [ADR 62](0062-pluggable-projection-event-so
 and [ADR 122](0122-an-applied-position-is-not-a-completed-prefix.md) rejected a contiguous
 watermark. The live start read before the first replay attempt is the only point that is known to be before A's
 commit.
+
+The time-based catch-up in `StreamCatchupSubscriptionModel` replays in event time order and stores a time,
+`TimeBasedCheckpoint`, while it replays. The application that writes an event sets its time, so A can have an earlier
+time than B and commit after it. That catch-up read its live start after its replay. A test that holds A's commit open
+showed A lost after a restart that resumed from B's time, and also within one run, with no restart, when A committed
+while the replay ran. The replay had read past A's time, and the live start came after A's commit. The reconciliation
+read after the replay, the newest events in insertion order, missed it too.
 
 ## Decision
 
@@ -97,6 +106,23 @@ resumes as in 0.33.0, with a live start read after the restart, and the catch-up
 subscription and the stored value. A live start stored without a replay end is read back as a plain `position:N` and
 resumes the same way. No released version writes one.
 
+The time-based catch-up reads its live start before its replay too, on every run, and stores it with the time.
+`CatchupTimeCheckpoint` in `occurrent-subscription-core` holds the time, the live start, and the time the first
+attempt at the replay started from, `replayOrigin`. It keeps both times as RFC 3339 strings, since core doesn't
+depend on the module that has `TimeBasedCheckpoint`. Its string form is `<time>;origin:<time>;liveFrom:<live start>`.
+The MongoDB storages write the time in `checkpoint` as before, the live start in `catchupLiveFrom`, and the origin as
+a string in `catchupReplayOrigin`. A position checkpoint has a number there, a time checkpoint a string.
+
+A time checkpoint has no replay end. A position splits the events by when they committed because a position is
+reserved before the commit. A time is set by the writer, so an event that committed before the live start can have any
+time, and no time read after the live start bounds them. A resume replays from the stored time to the present and goes
+live from the stored live start.
+
+The check that the live start is still in the history, the replay again from the origin, and the limit of 3 more
+replays are the same code for both, `replayUntilLiveStartHolds` in `AbstractCatchupSubscriptionModel`. A stored time
+without a live start, written by 0.33.0, resumes with a live start read at the resume, and the catch-up logs a warning
+that names the subscription and the stored value.
+
 ## Alternatives considered
 
 - **A contiguous or committed watermark.** Rejected in ADR 62 and ADR 122, since MongoDB cannot say which reserved
@@ -123,6 +149,14 @@ resumes the same way. No released version writes one.
 - **Fail on the first live start lost during a replay.** One burst of writes during a replay can push the live start
   out of the oplog, and the next replay doesn't necessarily meet the same burst. 3 more replays give that a chance,
   and the limit is a private constant rather than configuration, since a larger oplog is the fix.
+- **Read the time catch-up's live start before the replay only when it stores checkpoints during the replay.** A
+  time replay that stores nothing would then not depend on the oplog. But a test with no restart lost A too, so the live
+  start has to come before every time replay.
+- **One checkpoint type for position and time.** Extending `GlobalCheckpoint` with a time would have taught every
+  caller of `isGlobalCheckpoint` and `positionOf` about times. A separate `CatchupTimeCheckpoint` that reuses the
+  MongoDB field names keeps the position code as it is.
+- **A replay end for the time catch-up.** A time read after the live start doesn't bound the events that committed
+  before it, so stopping the resumed replay there would lose them.
 - **Fall back to a fresh live start at the stored position.** It delivers fewer events a second time than a replay
   from the origin, but an event committed late below the stored position is lost, as in 0.33.0.
 
@@ -163,5 +197,18 @@ A rollback to 0.33.0 reads the MongoDB document as `position:N` and resumes as 0
 the composite form makes 0.33.0 throw `NumberFormatException` when the subscription starts, so let every catch-up
 reach live delivery first, or rewrite the value to `position:N`.
 
-The time-based catch-up reads its live start after its replay and is not covered. That is
-[#1218](https://github.com/johanhaleby/occurrent/issues/1218).
+Without a replay end, a time catch-up delivers more events twice than a position catch-up. A resume can deliver every
+matching event written after the stored live start twice, once from the resumed replay and once live, which includes
+everything written while the subscription was stopped. Within one run, an event committed during the replay that the
+replay also reads arrives live as well, since the bulk replay doesn't fill the bounded cache that live delivery
+checks.
+
+A time replay depends on the oplog now, as a position replay does. In 0.33.0 a time replay of any length went live,
+because it read its live start only once it was done. Now a time replay that outlasts the oplog 4 times in a row fails
+with the `IllegalStateException`.
+
+A rollback to 0.33.0 reads the MongoDB document of a time checkpoint as the plain time. A string storage holding the
+time form makes 0.33.0 hand the value to the MongoDB subscription model as a change-stream position, because it is not
+a time. The model finds `operationTime` or `resumeToken` in it, parses the whole string as JSON, and `subscribe(..)`
+throws a `JsonParseException`. Let every catch-up reach live delivery first, or rewrite the value to the time before
+the first `;`.
