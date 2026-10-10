@@ -201,9 +201,9 @@ no release, so a quarantined instance can only be abandoned with `SagaStateStore
 state. A default budget would let an upgrade start doing that without being asked, for example to every instance
 still failing on an outage that lasted longer than the budget. So `SagaRunnerConfig.defaults()` has an empty
 `quarantineAfter`, `withQuarantineAfter(Duration)` turns quarantine on and refuses `null`, and `disableQuarantine()`
-turns it off again. `occurrent.saga.quarantine-after` has no default, so leaving it out keeps quarantine off, and
-zero and negative values are refused at startup. A reader can take zero to mean "never" or "immediately", so neither
-path accepts it.
+turns it off again. `occurrent.saga.quarantine-after` has no default, so leaving it out or leaving it blank keeps
+quarantine off, and zero and negative values stop an application with at least one `@Saga` from starting. A reader can
+take zero to mean "never" or "immediately", so neither path accepts it.
 
 Five minutes is the suggested budget for the same reasons it was first chosen as the default. Once the MongoDB backoff
 saturates it retries every two seconds, so five minutes is on the order of a hundred and fifty attempts, which is

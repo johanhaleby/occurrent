@@ -315,8 +315,9 @@ minutes, so an instance is not quarantined for an outage that would have resolve
 
 Turning quarantine off again restores the 0.33.0 behaviour, where the saga is never quarantined. How you say that
 differs by path. On the annotation path remove the property, and otherwise call `SagaRunnerConfig.disableQuarantine()`.
-Zero is refused on both paths, because a reader can take it to mean "never" or "immediately". The property fails
-startup, and `withQuarantineAfter(Duration.ZERO)` throws an `IllegalArgumentException`.
+A blank value, `occurrent.saga.quarantine-after=`, counts as removing the property. Zero is refused on both paths,
+because a reader can take it to mean "never" or "immediately". The property stops the application from starting when
+it has at least one `@Saga`, and `withQuarantineAfter(Duration.ZERO)` throws an `IllegalArgumentException`.
 
 Either way this stops the next instance being quarantined. It does not bring back one you already have.
 
