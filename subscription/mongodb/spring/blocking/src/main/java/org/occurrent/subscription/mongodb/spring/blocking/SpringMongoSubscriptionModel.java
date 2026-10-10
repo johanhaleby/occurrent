@@ -356,9 +356,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
     /**
      * Resume a paused subscription at {@code startAt}, instead of the change-stream position it had read to. A
-     * checkpoint with neither a resume token nor an operation time, such as the position a catch-up stores while it
-     * replays, resumes from the position it had read to, as {@link #resumeSubscription(String)} does, since opening
-     * the change stream at the present would skip what was written while the subscription was paused.
+     * checkpoint the change stream can't open at, such as a catch-up's position ({@code GlobalCheckpoint}) or a time,
+     * resumes from the position it had read to, as {@link #resumeSubscription(String)} does, since opening the change
+     * stream at the present would skip what was written while the subscription was paused. So does a dynamic
+     * {@code startAt} each time it resolves to such a checkpoint.
      *
      * @see RepositionableSubscriptions#resumeSubscription(String, StartAt)
      */

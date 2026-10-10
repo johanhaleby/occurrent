@@ -76,7 +76,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.UnaryOperator;
+import java.util.function.Function;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static com.mongodb.client.model.Filters.and;
@@ -837,16 +837,67 @@ public class SpringMongoSubscriptionModelTest {
         @Test
         void resuming_at_a_global_position_checkpoint_does_not_skip_what_was_written_while_paused() {
             assertWhatWasWrittenWhilePausedIsDeliveredWhenResumingAt(
-                    liveStart -> GlobalCheckpoint.parse(new StringBasedCheckpoint(GlobalCheckpoint.of(5, liveStart, 0, 7).asString())));
+                    liveStart -> StartAt.checkpoint(globalPositionCheckpoint(liveStart)));
         }
 
         @Test
         void resuming_at_a_time_based_checkpoint_does_not_skip_what_was_written_while_paused() {
             assertWhatWasWrittenWhilePausedIsDeliveredWhenResumingAt(
-                    liveStart -> new StringBasedCheckpoint("2026-01-01T00:00:00Z"));
+                    liveStart -> StartAt.checkpoint(timeBasedCheckpoint()));
         }
 
-        private void assertWhatWasWrittenWhilePausedIsDeliveredWhenResumingAt(UnaryOperator<Checkpoint> foreignCheckpoint) {
+        @Test
+        void resuming_at_a_dynamic_position_that_resolves_to_a_global_position_checkpoint_does_not_skip_what_was_written_while_paused() {
+            assertWhatWasWrittenWhilePausedIsDeliveredWhenResumingAt(
+                    liveStart -> StartAt.dynamic(() -> StartAt.checkpoint(globalPositionCheckpoint(liveStart))));
+        }
+
+        @Test
+        void resuming_at_a_dynamic_position_that_resolves_to_a_time_based_checkpoint_does_not_skip_what_was_written_while_paused() {
+            assertWhatWasWrittenWhilePausedIsDeliveredWhenResumingAt(
+                    liveStart -> StartAt.dynamic(() -> StartAt.checkpoint(timeBasedCheckpoint())));
+        }
+
+        @Test
+        void resuming_at_a_dynamic_position_that_resolves_to_a_readable_checkpoint_reopens_the_change_stream_there() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+            NameDefined firstEvent = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(firstEvent));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+            // Before the second event, so earlier than where the subscription has read to when it is paused below
+            Checkpoint afterFirstEvent = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(state.get(0));
+
+            NameWasChanged secondEvent = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
+            mongoEventStore.write("1", 1, serialize(secondEvent));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(2));
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+            NameWasChanged thirdEvent = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name3");
+            mongoEventStore.write("1", 2, serialize(thirdEvent));
+            subscriptionModel.resumeSubscription(subscriptionId, StartAt.dynamic(() -> StartAt.checkpoint(afterFirstEvent))).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+            // Then the second event arrives again, since the change stream reopened where the dynamic position
+            // resolved to. The position the subscription had read to was past it and would have delivered only the third.
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(4));
+            assertThat(state).extracting(CloudEvent::getId)
+                    .containsExactly(firstEvent.eventId(), secondEvent.eventId(), secondEvent.eventId(), thirdEvent.eventId());
+        }
+
+        private Checkpoint globalPositionCheckpoint(Checkpoint liveStart) {
+            return GlobalCheckpoint.parse(new StringBasedCheckpoint(GlobalCheckpoint.of(5, liveStart, 0, 7).asString()));
+        }
+
+        private Checkpoint timeBasedCheckpoint() {
+            return new StringBasedCheckpoint("2026-01-01T00:00:00Z");
+        }
+
+        private void assertWhatWasWrittenWhilePausedIsDeliveredWhenResumingAt(Function<Checkpoint, StartAt> repositionTo) {
             // Given
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -862,7 +913,7 @@ public class SpringMongoSubscriptionModelTest {
             subscriptionModel.pauseSubscription(subscriptionId);
             NameWasChanged duringPause = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
             mongoEventStore.write("1", 1, serialize(duringPause));
-            subscriptionModel.resumeSubscription(subscriptionId, StartAt.checkpoint(foreignCheckpoint.apply(liveStart))).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+            subscriptionModel.resumeSubscription(subscriptionId, repositionTo.apply(liveStart)).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
             NameWasChanged sentinel = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "sentinel");
             mongoEventStore.write("1", 2, serialize(sentinel));
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->

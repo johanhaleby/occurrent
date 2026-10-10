@@ -75,6 +75,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -749,17 +750,12 @@ public final class ChangeStreamSubscriptions {
 
     /**
      * Resumes a paused subscription, at {@code repositionTo} when it is given and otherwise from the position the
-     * subscription has read to. A {@code repositionTo} holding a checkpoint with neither a resume token nor an
-     * operation time, such as the position a catch-up stores while it replays, resumes from the position the
-     * subscription has read to as well, since opening the change stream at the present would skip what was written
-     * while it was paused.
+     * subscription has read to. A {@code repositionTo} that is a checkpoint the change stream can't open at, such as
+     * a catch-up's position ({@code GlobalCheckpoint}) or a time, resumes from the position the subscription has read
+     * to as well, since opening the change stream at the present would skip what was written while it was paused. So
+     * does a dynamic {@code repositionTo} each time it resolves to such a checkpoint.
      */
     public Subscription resumeSubscription(String subscriptionId, @Nullable StartAt repositionTo) {
-        if (repositionTo instanceof StartAtCheckpoint unreadable && MongoCommons.opensAtThePresent(repositionTo)) {
-            log.info("Subscription {} resumes from the position it had read to rather than at checkpoint {}, which is not a change stream position. Events another consumer handled in the meantime are delivered again.",
-                    subscriptionId, unreadable.checkpoint.asString());
-            return resumeSubscription(subscriptionId, null);
-        }
         if (shutdown) {
             throw new IllegalStateException(SubscriptionModel.class.getSimpleName() + " is shutdown");
         }
@@ -772,11 +768,12 @@ public final class ChangeStreamSubscriptions {
         if (internalSubscription == null) {
             throw new SubscriptionNotRunningException(subscriptionId);
         }
+        UnaryOperator<StartAt> reposition = repositioning(subscriptionId, repositionTo);
         running = true;
 
         // Shares the same currentStartAt reference so a resume continues from the last change-stream document
         // read before the subscription was paused, not the original StartAt, unless repositionTo replaces it.
-        InternalSubscription resumed = internalSubscription.replacedBy(repositionTo);
+        InternalSubscription resumed = internalSubscription.replacedBy(reposition);
         pausedSubscriptions.remove(subscriptionId);
         runningSubscriptions.put(subscriptionId, resumed);
         try {
@@ -794,6 +791,40 @@ public final class ChangeStreamSubscriptions {
         }
 
         return model.subscription(subscriptionId, resumed.startedLatch);
+    }
+
+    // Replaces the position the subscription has read to with repositionTo, or keeps it when repositionTo is a
+    // checkpoint the change stream can't open at. A dynamic repositionTo is resolved when the change stream opens, as
+    // any dynamic position is, and the position it replaced stands in for it whenever it resolves to such a checkpoint.
+    private @Nullable UnaryOperator<StartAt> repositioning(String subscriptionId, @Nullable StartAt repositionTo) {
+        if (repositionTo == null) {
+            return null;
+        }
+        if (notAChangeStreamPosition(repositionTo) instanceof Checkpoint unreadable) {
+            logResumingFromTheTrackedPosition(subscriptionId, unreadable);
+            return null;
+        }
+        if (!repositionTo.isDynamic()) {
+            return __ -> repositionTo;
+        }
+        return tracked -> StartAt.dynamic(ctx -> {
+            StartAt resolved = repositionTo.get(ctx);
+            if (notAChangeStreamPosition(resolved) instanceof Checkpoint unreadable) {
+                logResumingFromTheTrackedPosition(subscriptionId, unreadable);
+                return tracked;
+            }
+            return resolved;
+        });
+    }
+
+    // The checkpoint in position when the change stream can't open at it and would open at the present instead
+    private static @Nullable Checkpoint notAChangeStreamPosition(@Nullable StartAt position) {
+        return position instanceof StartAtCheckpoint checkpoint && MongoCommons.opensAtThePresent(position) ? checkpoint.checkpoint : null;
+    }
+
+    private void logResumingFromTheTrackedPosition(String subscriptionId, Checkpoint unreadable) {
+        log.info("Subscription {} resumes from the position it had read to rather than at checkpoint {}, which is not a change stream position. Events another consumer handled in the meantime are delivered again.",
+                subscriptionId, unreadable.asString());
     }
 
     private void pausedAgain(String subscriptionId, InternalSubscription paused, InternalSubscription resumed) {
@@ -1002,12 +1033,13 @@ public final class ChangeStreamSubscriptions {
 
         // Under the same lock as movedUnlessReplacedTo, so an action of this run that returns after the pause waited
         // for it cannot move the position once the run that replaces it exists
-        InternalSubscription replacedBy(@Nullable StartAt repositionTo) {
+        InternalSubscription replacedBy(@Nullable UnaryOperator<StartAt> reposition) {
             lock.lock();
             try {
                 replaced = true;
-                if (repositionTo != null) {
-                    currentStartAt.set(repositionTo);
+                if (reposition != null) {
+                    // In one step, since the operation time asked for at subscribe can be recorded meanwhile
+                    currentStartAt.updateAndGet(reposition);
                 }
                 return new InternalSubscription(log, currentStartAt, action, pipeline, presentAtSubscribe, firstStartedLatch);
             } finally {
