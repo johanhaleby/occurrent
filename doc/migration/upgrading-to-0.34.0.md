@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-The guide has twenty-seven sections, six of them about compile-time breaks. At compile time, if you use the flow saga's
+The guide has twenty-eight sections, six of them about compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -107,9 +107,13 @@ the middle of the replay no longer misses an event that committed late below the
 some events a second time, and a checkpoint stored by 0.33.0 in the middle of a replay still resumes as in 0.33.0, with
 a warning. Read
 [section 26](#26-a-position-catch-up-stores-the-live-start-it-read-before-the-replay).
-Finally, a MongoDB event store with `DCB` and without `STREAM` no longer creates the `dcbTags_1` index, though one
+Then a MongoDB event store with `DCB` and without `STREAM` no longer creates the `dcbTags_1` index, though one
 created on 0.33.0 or earlier keeps it. Enabling `STREAM` on a DCB store builds it at startup if it isn't there. Read
 [section 27](#27-a-dcb-only-mongodb-event-store-no-longer-creates-the-dcbtags-index).
+Finally, a blocking catch-up that replays by event time now reads its live start before the replay and stores it with
+the time, so an event with an earlier time that commits late is no longer missed. More events arrive twice, a long
+replay depends on the oplog, and a rollback with a string storage fails to start such a subscription. Read
+[section 28](#28-a-time-based-catch-up-reads-its-live-start-before-the-replay).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -2492,3 +2496,81 @@ An index on `dcbTags` alone with other options can make startup fail, and always
 
 There is no recipe for this change. Which indexes a collection has is database state that a rewrite of the source
 cannot see.
+
+## 28. A time-based catch-up reads its live start before the replay
+
+This covers the blocking `StreamCatchupSubscriptionModel`, also behind `CatchupSubscriptionModel`, when it replays by
+event time. It does that when it starts from `StartAtTime.offsetDateTime(..)` or resumes from a stored time, and on an
+event store that doesn't write a position also when it starts from `StartAtTime.beginningOfTime()`. The reactor
+catch-ups replay by position only and are not affected.
+
+An event's time is set by the application that writes it, so event A can have an earlier time than event B and commit
+after it. In 0.33.0 the time catch-up read its live start, the change-stream position live delivery picks up from,
+after its replay. An A that committed after the replay had read past its time was in neither, and was never delivered.
+That happened within one run, and after a restart in the middle of the replay that resumed from B's stored time.
+[#1218](https://github.com/johanhaleby/occurrent/issues/1218) has the details, and the reasoning is in
+[ADR 144](../architecture/decisions/0144-a-catch-up-checkpoint-keeps-the-live-start-it-read-before-the-replay.md).
+
+Now the time catch-up reads its live start before the replay, as the position catch-ups in
+[section 26](#26-a-position-catch-up-stores-the-live-start-it-read-before-the-replay) do. The checkpoint it stores
+during the replay is a `CatchupTimeCheckpoint`, which holds the time, that live start, and the time the replay first
+started from. A resume replays from the stored time and goes live from the stored live start. A catch-up whose
+`StartAt` answers `null` for the wrapped subscription model never goes live, so it reads no live start and stores a
+plain time, as in 0.33.0.
+
+The MongoDB checkpoint storages keep the time in `checkpoint` as before and put the other two in `catchupLiveFrom` and
+`catchupReplayOrigin`. The origin is an RFC 3339 string, and there is no `catchupReplayTo`:
+
+```javascript
+{ _id: "orders", checkpoint: "2026-10-10T08:15:30.123Z", catchupLiveFrom: { operationTime: Timestamp(1760000000, 1) }, catchupReplayOrigin: "1970-01-01T00:00:00Z" }
+```
+
+A storage that keeps strings, `SpringRedisCheckpointStorage` for one, stores
+`2026-10-10T08:15:30.123Z;origin:1970-01-01T00:00:00Z;liveFrom:{"operationTime": ...}`. The live subscription's
+checkpoint replaces all of it when the catch-up reaches live delivery.
+
+A resume can deliver more events a second time than a position resume does. A position has a replay end that splits
+the events by when they committed. A time doesn't, since a writer can commit an event with any time at any moment. So
+the resumed replay reads everything up to the present, and live delivery from the stored live start delivers every
+matching event written after that live start too. That includes everything written while the subscription was
+stopped, which can come twice.
+
+A catch-up that is never restarted can deliver an event twice as well. An event committed during the replay arrives
+live, and when the replay reads it too, it arrives a second time. Catch-up delivery
+has always been at-least-once, so a handler that is safe to run twice on the same event needs no change. If yours is
+not, key the work by the CloudEvent id before upgrading.
+
+A long time replay now depends on the oplog. In 0.33.0 it read its live start once it was done, so the oplog never had
+to reach back over the whole replay. Now a live start that MongoDB drops from its oplog, while the subscription is
+stopped or while the replay runs, makes the catch-up replay again from the time its replay first started from, with a
+new live start, and log a warning. When the live start is gone after 4 replays in a row, the catch-up fails with an
+`IllegalStateException` that tells you to size the oplog, as section 26 describes for a position catch-up. Size the
+oplog for the longest time replay, and for the longest time a catch-up can be stopped in the middle of one.
+
+A time stored by 0.33.0 has no live start, and none can be worked out afterwards. It resumes with a live start read at
+the resume, and logs a warning that names the subscription and the stored value. An event with an earlier time that
+committed after the earlier replay read past it can still be missed there, once, until that catch-up reaches live
+delivery. To find such checkpoints before you upgrade, look for a stored value that is a time. With the MongoDB
+starter's default collection:
+
+```javascript
+db.subscriptions.find({ checkpoint: /^\d{4}-\d{2}-\d{2}T/ })
+```
+
+With `SpringRedisCheckpointStorage`, the checkpoint is the plain string stored at the subscription id's key. A match
+is a catch-up that has not reached live delivery yet. Let it get that far before you upgrade, or accept the 0.33.0
+behaviour for that one subscription.
+
+A rollback to 0.33.0 reads the MongoDB document as the plain time, ignores the two new fields, and handles it the way
+0.33.0 handles any stored time. A string storage is different. 0.33.0 doesn't recognize
+`<time>;origin:...;liveFrom:...` as a time, so it hands the value to the MongoDB subscription model as a change-stream
+position. The value contains the live start's `operationTime` or `resumeToken`, so the model parses the whole string
+as JSON, and `subscribe(..)` throws a `JsonParseException`. The same goes for a 0.33.0 node that takes over the lease
+of such a subscription during a rolling upgrade. Let the catch-ups reach live delivery before rolling back, or set the
+value by hand to the time before the first `;`.
+
+A `CheckpointStorage` of your own that stores `asString()` and returns a `StringBasedCheckpoint` needs no change. One
+that parses the stored time itself fails on the new form, so read it with `CatchupTimeCheckpoint.parse(..)` instead.
+
+There is no recipe for this change. What is stored and when a resume delivers again is runtime behavior that a rewrite
+of the source cannot see.

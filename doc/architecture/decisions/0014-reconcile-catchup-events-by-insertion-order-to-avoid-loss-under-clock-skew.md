@@ -4,7 +4,9 @@ Date: 2026-06-18
 
 ## Status
 
-Accepted
+Accepted. For the time-based catch-up, the choice to read the live start after the bulk replay is reversed by
+[ADR 144](0144-a-catch-up-checkpoint-keeps-the-live-start-it-read-before-the-replay.md), which reads it before the
+replay.
 
 ## Context
 
