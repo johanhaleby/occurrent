@@ -9,7 +9,9 @@ Accepted. Part of [#1217](https://github.com/johanhaleby/occurrent/issues/1217).
 `ReactorStreamCatchupSubscriptionModel` and `ReactorDcbCatchupSubscriptionModel` on the reactor stack, and to the
 MongoDB checkpoint storages and subscription models they run on. Also part of
 [#1218](https://github.com/johanhaleby/occurrent/issues/1218), which applies it to the time-based catch-up in the
-blocking `StreamCatchupSubscriptionModel`.
+blocking `StreamCatchupSubscriptionModel`. For that catch-up it reverses the choice in
+[ADR 14](0014-reconcile-catchup-events-by-insertion-order-to-avoid-loss-under-clock-skew.md) to read the live start after
+the replay.
 
 ## Context
 
@@ -106,12 +108,20 @@ resumes as in 0.33.0, with a live start read after the restart, and the catch-up
 subscription and the stored value. A live start stored without a replay end is read back as a plain `position:N` and
 resumes the same way. No released version writes one.
 
-The time-based catch-up reads its live start before its replay too, on every run, and stores it with the time.
+The time-based catch-up reads its live start before its replay too, on every run that goes live afterwards, and
+stores it with the time.
 `CatchupTimeCheckpoint` in `occurrent-subscription-core` holds the time, the live start, and the time the first
 attempt at the replay started from, `replayOrigin`. It keeps both times as RFC 3339 strings, since core doesn't
 depend on the module that has `TimeBasedCheckpoint`. Its string form is `<time>;origin:<time>;liveFrom:<live start>`.
 The MongoDB storages write the time in `checkpoint` as before, the live start in `catchupLiveFrom`, and the origin as
 a string in `catchupReplayOrigin`. A position checkpoint has a number there, a time checkpoint a string.
+
+For the time catch-up this reverses the choice in
+[ADR 14](0014-reconcile-catchup-events-by-insertion-order-to-avoid-loss-under-clock-skew.md) to read the live start after
+the replay. ADR 14 kept it there, so that a long replay could not outlast it in the oplog, and counted on the read of
+the newest events in insertion order after the replay to deliver what committed during it. The test without a restart
+lost A anyway. The check below handles the oplog risk ADR 14 rejected this for.
+[ADR 28](0028-dcb-catch-up-captures-resume-token-before-replay.md) made the same change for the DCB catch-up.
 
 A time checkpoint has no replay end. A position splits the events by when they committed because a position is
 reserved before the commit. A time is set by the writer, so an event that committed before the live start can have any
@@ -122,6 +132,10 @@ The check that the live start is still in the history, the replay again from the
 replays are the same code for both, `replayUntilLiveStartHolds` in `AbstractCatchupSubscriptionModel`. A stored time
 without a live start, written by 0.33.0, resumes with a live start read at the resume, and the catch-up logs a warning
 that names the subscription and the stored value.
+
+At the handover, a catch-up replaces the stored checkpoint with the live start when that checkpoint is a position or
+a time, with or without a live start, whichever kind of catch-up stored it. In 0.33.0 each handover replaced only its
+own kind and passed the other to the wrapped model as where to start, and the MongoDB models opened at the present.
 
 ## Alternatives considered
 
@@ -186,7 +200,8 @@ live from it anyway, and what happens then is up to the wrapped model's handling
 the default `canResumeFrom` does not detect that.
 
 A blocking catch-up whose `StartAt` answers `null` for the wrapped model reads no live start before its replay, so
-it still stores a plain `position:N`, a resume logs the warning, and it behaves as in 0.33.0.
+it still stores a plain `position:N`, a resume logs the warning, and it behaves as in 0.33.0. A time catch-up in
+that case reads no live start either and stores a plain time.
 
 `applyResolvedStartPosition` in `MongoCommons` treats every `GlobalCheckpoint` as a position it does not recognize and
 opens at the present, as 0.33.0 did for `position:N`. Without that, the `operationTime` inside a stored live start would

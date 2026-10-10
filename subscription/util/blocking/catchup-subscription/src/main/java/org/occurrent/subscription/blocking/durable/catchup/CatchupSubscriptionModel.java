@@ -67,8 +67,9 @@ import java.util.stream.Stream;
  * </p>
  * <br>
  * <p>
- * Delivery is at-least-once. Events written while the catch-up phase runs are delivered live from the live resume token read before the replay, including events whose {@code time} is
- * earlier than what the replay has already read.
+ * Delivery is at-least-once. When the catch-up goes live afterwards, events written while the catch-up phase runs are delivered live from the live resume token read before the
+ * replay, including events whose {@code time} is earlier than what the replay has already read. A catch-up whose {@code StartAt} answers {@code null} for the wrapped
+ * subscription model never goes live, so it reads no live resume token.
  * </p>
  * <br>
  * <p>

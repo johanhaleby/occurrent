@@ -2506,7 +2506,9 @@ That happened within one run, and after a restart in the middle of the replay th
 Now the time catch-up reads its live start before the replay, as the position catch-ups in
 [section 26](#26-a-position-catch-up-stores-the-live-start-it-read-before-the-replay) do. The checkpoint it stores
 during the replay is a `CatchupTimeCheckpoint`, which holds the time, that live start, and the time the replay first
-started from. A resume replays from the stored time and goes live from the stored live start.
+started from. A resume replays from the stored time and goes live from the stored live start. A catch-up whose
+`StartAt` answers `null` for the wrapped subscription model never goes live, so it reads no live start and stores a
+plain time, as in 0.33.0.
 
 The MongoDB checkpoint storages keep the time in `checkpoint` as before and put the other two in `catchupLiveFrom` and
 `catchupReplayOrigin`. The origin is an RFC 3339 string, and there is no `catchupReplayTo`:
