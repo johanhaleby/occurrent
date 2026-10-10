@@ -183,6 +183,46 @@ class StreamTimeCatchupLateCommitMongoTest {
         }
     }
 
+    @Test
+    void an_event_whose_earlier_time_commits_during_the_catch_up_replay_is_delivered() throws Exception {
+        // Writer A takes the earliest time and holds its transaction open
+        Thread writerA = new Thread(() -> appendToStream("stream-a", named("A")), HELD_WRITER);
+        writerA.start();
+        assertThat(aInCommit.await(20, TimeUnit.SECONDS)).isTrue();
+        // B and C take later times and commit
+        appendToStream("stream-b", named("B"));
+        appendToStream("stream-c", named("C"));
+
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "checkpoints");
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage));
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+
+        SpringMongoSubscriptionModel live = new SpringMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        StreamCatchupSubscriptionModel model = new StreamCatchupSubscriptionModel(live, eventStore, config);
+        try {
+            Subscription subscription = model.subscribe("sub", StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime()), cloudEvent -> {
+                String name = nameOf(cloudEvent);
+                received.add(name);
+                if (name.equals("C")) {
+                    // A commits after the replay read past its time and before the live start is read
+                    releaseA.countDown();
+                    try {
+                        writerA.join(20_000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            });
+            subscription.waitUntilStarted();
+            assertThat(writerA.isAlive()).isFalse();
+            appendToStream("stream-d", named("D"));
+            await().atMost(AT_MOST).untilAsserted(() -> assertThat(received).contains("D"));
+            assertThat(received).as("an event committed during the replay reaches the subscription").contains("A", "B", "C", "D");
+        } finally {
+            model.shutdown();
+        }
+    }
+
     private String nameOf(CloudEvent cloudEvent) {
         return ((NameDefined) converter.toDomainEvent(cloudEvent)).name();
     }
