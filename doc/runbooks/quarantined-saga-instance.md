@@ -6,7 +6,7 @@ You run a saga on 0.34.0 or later, an instance of it has stopped, and you want t
 do with it. The `SagaStatus.QUARANTINED` state is new in 0.34.0, so nothing before that release can produce one.
 
 If you are deciding whether to turn quarantine on at all, that question is in
-[section 8 of Upgrading to 0.34.0](../migration/upgrading-to-0.34.0.md#8-a-saga-instance-that-keeps-failing-is-quarantined-and-four-saga-types-change-with-it),
+[section 8 of Upgrading to 0.34.0](../migration/upgrading-to-0.34.0.md#8-a-saga-instance-that-keeps-failing-can-be-quarantined-and-four-saga-types-change-with-it),
 which also covers the two cases where a saga never quarantines anything. This runbook starts from the point where you
 already have one.
 
@@ -20,9 +20,10 @@ which is how an instance whose state no longer decodes ends up here. Up to 0.33.
 What the failing event holds up in the meantime is decided by whatever feeds the subscription, and the javadoc on
 `SagaStatus.QUARANTINED` says what that can be.
 
-From 0.34.0 the executor times how long the instance has been failing. Once that reaches
-`SagaRunnerConfig.quarantineAfter`, five minutes by default, the instance can move to `SagaStatus.QUARANTINED`, and
-when it does the executor stops rethrowing.
+Quarantine is off by default in 0.34.0, so an instance can only be quarantined if you turned it on, with
+`SagaRunnerConfig.withQuarantineAfter(..)` or `occurrent.saga.quarantine-after` on the annotation path. The executor
+then times how long the instance has been failing. Once that reaches the budget, the instance can move to
+`SagaStatus.QUARANTINED`, and when it does the executor stops rethrowing.
 
 Reaching the budget is not enough on its own. The javadoc on `SagaStatus.QUARANTINED` lists what else has to hold, so
 an instance past its budget can still be `ACTIVE`. Read its status rather than working it out from the time.
@@ -45,7 +46,7 @@ handled it, so it could not be fed to the saga again.
 Nothing is written for it, so `findByStatus(QUARANTINED, ..)` does not list it and the rest of this runbook does not
 apply. What you get is a `WARN` from `SagaExecution` on the first failure and an `ERROR` once per interval after that,
 each saying the saga could not work out which instance the event belongs to and logging what stopped it. That interval
-is the quarantine budget when one is configured, and a fixed five-minute default when it is not, so this `ERROR` still
+is the quarantine budget when one is configured, and a fixed five minutes when it is not, so this `ERROR` still
 fires on a subscription model this saga cannot quarantine anything on, such as a push feed, including one a broker
 bridge feeds, for as long as that model keeps offering the event. A model that does not offer a refused delivery again gets only the
 first `WARN`, and `DeliveryFailurePolicy` is where a consume-side broker bridge's choice is configured. The event is named by its
@@ -205,8 +206,8 @@ likely to be looking at. `findByStatus` reads no state on any store, since that 
 contract requires of it. Step 2's by-id read is state-free only on a store that overrides `findWithoutState`, as above.
 
 An instance whose state can no longer be decoded, after an event class was renamed or a converter changed, is
-quarantined like any other. Its state is still stored, untouched, so repairing the converter and reading it again is
-what gets it back.
+quarantined like any other. Its state is still stored, untouched, so repairing the converter and reading it again
+gets the state back. The instance stays quarantined.
 
 `SagaStateStore.find(sagaId)` is the read that does decode the state, and it is the one that throws on such an
 instance. Use it when the state itself is what you need:
@@ -231,9 +232,9 @@ failing for as long as the subscription model offers the failing event again, th
 Whatever the cause, fixing it does not release the instance, so this step is about what you learn rather than about
 getting the instance moving. Three common ones, and what each one tells you.
 
-**The saga's own code is wrong.** Deploy the fix. The instance stays quarantined anyway. `QUARANTINED` is absorbing,
-so the input it stopped on is never handed to the saga again no matter how many later events reach the runner, and
-step 5 is still what ends it.
+**The saga's own code is wrong.** Deploy the fix. The instance stays quarantined anyway. `QUARANTINED` is not terminal,
+but nothing in 0.34.0 brings an instance out of it, so the input it stopped on is never handed to the saga again no
+matter how many later events reach the runner, and step 5 is still what ends it.
 
 **The state cannot be decoded.** That shows up as a store or converter class in `failureType()` rather than
 anything of your saga's. Repair the converter or restore the event class, deploy, and read the instance again with
@@ -304,17 +305,18 @@ which is the race in step 5.
 
 ## Preventing the next one
 
-`SagaRunnerConfig.quarantineAfter` is how long an instance has to keep failing before it can be quarantined, five
-minutes by default. On the annotation path it is `occurrent.saga.quarantine-after` instead.
+`SagaRunnerConfig.quarantineAfter` is how long an instance has to keep failing before it can be quarantined. It is
+empty by default, which means never, and five minutes is a reasonable budget when you turn it on. On the annotation
+path it is `occurrent.saga.quarantine-after` instead.
 
 Lower it when you would rather find out sooner and are willing to quarantine an instance whose downstream service was
 only briefly unavailable. Raise it when your dispatcher talks to something that is routinely down for longer than five
 minutes, so an instance is not quarantined for an outage that would have resolved.
 
-Turning quarantine off restores the 0.33.0 behaviour, where the saga is never quarantined. How you say that differs by
-path. Set the property to zero, and pass `null` for
-`SagaRunnerConfig.quarantineAfter`. `Duration.ZERO` is refused there with an `IllegalArgumentException`, deliberately,
-so that one literal does not mean opposite things on the two paths.
+Turning quarantine off again restores the 0.33.0 behaviour, where the saga is never quarantined. How you say that
+differs by path. Set the property to zero, or remove it, and call `SagaRunnerConfig.disableQuarantine()`.
+`withQuarantineAfter(Duration.ZERO)` is refused with an `IllegalArgumentException`, deliberately, so that one literal
+does not mean opposite things on the two paths.
 
 Either way this stops the next instance being quarantined. It does not bring back one you already have.
 

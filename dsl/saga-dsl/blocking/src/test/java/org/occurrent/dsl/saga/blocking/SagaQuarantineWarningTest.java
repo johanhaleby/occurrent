@@ -25,9 +25,12 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.dsl.saga.Saga;
@@ -44,6 +47,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -152,10 +156,30 @@ class SagaQuarantineWarningTest {
     void says_nothing_when_quarantine_was_switched_off_deliberately() {
         SagaRunner.<OrderEvent, ShipOrder>agnostic(new RetainsNothing(), converter)
                 .run("orders", saga(), SagaStateStore.inMemory(), c -> {
-                }, null, SagaRunnerConfig.defaults().withQuarantineAfter(null))
+                }, null, SagaRunnerConfig.defaults().disableQuarantine())
                 .close();
 
         assertThat(warnings()).isEmpty();
+    }
+
+    /**
+     * Quarantine is off unless asked for, so a saga on the default configuration has given nothing up and there is
+     * nothing to warn about. Without this the message would fire for every saga on a feed that cannot retain events.
+     */
+    @ParameterizedTest
+    @MethodSource("modelsThatCannotSupportQuarantine")
+    @DisplayName("says nothing under the default configuration")
+    void says_nothing_under_the_default_configuration(Subscribable model) {
+        SagaRunner.<OrderEvent, ShipOrder>agnostic(model, converter)
+                .run("orders", saga(), SagaStateStore.inMemory(), c -> {
+                }, null, SagaRunnerConfig.defaults())
+                .close();
+
+        assertThat(warnings()).isEmpty();
+    }
+
+    private static Stream<Subscribable> modelsThatCannotSupportQuarantine() {
+        return Stream.of(new RetainsNothing(), new RetainsSomeEvents());
     }
 
     private void run(Subscribable model) {

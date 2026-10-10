@@ -334,7 +334,7 @@ class SagaRunnerTest {
         // Quarantine off, because these tests count saves and a failure record is a save of its own. What is under
         // test here is the compare-and-set retry, not the budget.
         private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(SagaStateStore<OrderState> store, int maxCasAttempts) {
-            return execution(store, new SagaRunnerConfig(Duration.ofMinutes(1), 100, maxCasAttempts).withQuarantineAfter(null));
+            return execution(store, new SagaRunnerConfig(Duration.ofMinutes(1), 100, maxCasAttempts).disableQuarantine());
         }
 
         private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(SagaStateStore<OrderState> store, SagaRunnerConfig config) {
@@ -378,7 +378,7 @@ class SagaRunnerTest {
             // IllegalArgumentException instead of the store failure.
             RuntimeException storeDown = new IllegalStateException("saga store is down");
             ScriptedCasStore store = new ScriptedCasStore(attempt -> false, storeDown);
-            SagaRunnerConfig quarantining = new SagaRunnerConfig(Duration.ofMinutes(1), 100, 5);
+            SagaRunnerConfig quarantining = new SagaRunnerConfig(Duration.ofMinutes(1), 100, 5).withQuarantineAfter(Duration.ofMinutes(5));
 
             assertThatThrownBy(() -> execution(store, quarantining).onCloudEvent(orderPlaced("order-cas-4")))
                     .isSameAs(storeDown);
