@@ -236,6 +236,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return ambientSession == null ? eventCollection.countDocuments(query) : eventCollection.countDocuments(ambientSession, query);
     }
 
+    // Existence through the ambient ClientSession when one is bound (see findEvents). A find limited to one document
+    // stops at the first match, where countDocuments examines every matching document.
+    private boolean anyEventMatches(Bson query) {
+        return queryOptions.apply(findEvents(query).projection(Projections.include(ID)).limit(1)).first() != null;
+    }
+
     private Stream<Document> readCloudEvents(Bson query, int skip, int limit, SortBy sortBy) {
         final FindIterable<Document> documentsWithoutSkipAndLimit = findEvents(query);
 
@@ -428,7 +434,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         requireDcbCapability();
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return countEvents(toDcbBsonQuery(criteria, lowerBound(options), upperBound(options))) > 0;
+        return anyEventMatches(toDcbBsonQuery(criteria, lowerBound(options), upperBound(options)));
     }
 
     @Override
@@ -712,7 +718,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     @Override
     public boolean exists(String streamId) {
         requireStreamCapability();
-        return countEvents(eq(STREAM_ID, streamId)) > 0;
+        return anyEventMatches(eq(STREAM_ID, streamId));
     }
 
     @Override
@@ -805,7 +811,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     public boolean exists(Filter filter) {
         requireStreamCapability();
         requireNonNull(filter, "Filter cannot be null");
-        return count(filter) > 0;
+        return anyEventMatches(FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter));
     }
 
     private record EventStreamImpl<T>(String id, long version, Stream<T> events) implements EventStream<T> {
@@ -1017,7 +1023,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return and(streamIdEqualTo(streamId), gt(STREAM_VERSION, afterVersion), lte(STREAM_VERSION, uptoAndIncludingVersion));
     }
 
-    private static Bson toDcbBsonQuery(DcbCriteria criteria, long afterPosition, long upperSequencePosition) {
+    // Package-private so MongoEventStoreDcbConcurrencyTest can explain the exact query the store sends
+    static Bson toDcbBsonQuery(DcbCriteria criteria, long afterPosition, long upperSequencePosition) {
         Bson positionFilter = and(gt(OccurrentCloudEventExtension.POSITION, afterPosition), lte(OccurrentCloudEventExtension.POSITION, upperSequencePosition));
         Bson dcbTagsExistsFilter = Filters.exists(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD);
         if (criteria instanceof DcbCriteria.MatchAll) {

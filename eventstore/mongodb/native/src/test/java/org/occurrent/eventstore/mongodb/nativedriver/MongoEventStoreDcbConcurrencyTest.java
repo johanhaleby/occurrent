@@ -30,6 +30,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.BsonDocument;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -539,34 +540,20 @@ class MongoEventStoreDcbConcurrencyTest {
 
         MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(COLLECTION);
 
-        Document tagReadQuery = new Document("$and", List.of(
-                new Document("position", new Document("$gt", 0).append("$lte", 1000000)),
-                new Document("$or", List.of(
-                        new Document("dcbTags", new Document("$all", List.of("explain:tag")))
-                ))
-        ));
+        // Built by the store, so each explained query has the dcbTags $exists clause the store adds to every DCB query
+        Bson tagReadQuery = MongoEventStore.toDcbBsonQuery(tags(Tag.parse("explain:tag")), 0, 1000000);
         Document tagReadExplain = collection.find(tagReadQuery).explain(ExplainVerbosity.QUERY_PLANNER);
         assertThat(extractWinningPlanStage(tagReadExplain))
                 .as("Tag read query should use IXSCAN, not COLLSCAN or unrecognized stage. Full explain: %s", tagReadExplain.toJson())
                 .isEqualTo("IXSCAN");
 
-        Document typeReadQuery = new Document("$and", List.of(
-                new Document("position", new Document("$gt", 0).append("$lte", 1000000)),
-                new Document("$or", List.of(
-                        new Document("type", new Document("$in", List.of("SeedType")))
-                ))
-        ));
+        Bson typeReadQuery = MongoEventStore.toDcbBsonQuery(types("SeedType"), 0, 1000000);
         Document typeReadExplain = collection.find(typeReadQuery).explain(ExplainVerbosity.QUERY_PLANNER);
         assertThat(extractWinningPlanStage(typeReadExplain))
                 .as("Type read query should use IXSCAN (position index), not COLLSCAN or unrecognized stage. Full explain: %s", typeReadExplain.toJson())
                 .isEqualTo("IXSCAN");
 
-        Document existenceQuery = new Document("$and", List.of(
-                new Document("position", new Document("$gt", 0).append("$lte", Long.MAX_VALUE)),
-                new Document("$or", List.of(
-                        new Document("dcbTags", new Document("$all", List.of("explain:tag")))
-                ))
-        ));
+        Bson existenceQuery = MongoEventStore.toDcbBsonQuery(tags(Tag.parse("explain:tag")), 0, Long.MAX_VALUE);
         Document existenceExplain = collection.find(existenceQuery).explain(ExplainVerbosity.QUERY_PLANNER);
         assertThat(extractWinningPlanStage(existenceExplain))
                 .as("Existence/conflict check query should use IXSCAN, not COLLSCAN or unrecognized stage. Full explain: %s", existenceExplain.toJson())
