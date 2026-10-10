@@ -909,8 +909,7 @@ fifth component. `withQuarantineAfter(Duration)` turns quarantine on and refuses
 it off again.
 
 On the annotation path you never build a `SagaRunnerConfig`, and `occurrent.saga.quarantine-after` sets the budget. It
-defaults to zero, which is how it says never, because a `Duration` property that is not set binds to its default rather
-than to null.
+has no default, and leaving it out keeps quarantine off. Zero and negative values are refused at startup.
 
 ### Why there is no recipe for this one
 

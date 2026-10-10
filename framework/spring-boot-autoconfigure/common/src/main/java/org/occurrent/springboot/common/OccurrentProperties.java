@@ -730,10 +730,11 @@ public class OccurrentProperties {
         private Duration timerPollInterval = Duration.ofSeconds(15);
 
         /**
-         * How long one saga instance may keep failing before it can be quarantined. Defaults to zero, which means
-         * never, matching {@code SagaRunnerConfig.defaults()}. Quarantine is off by default because 0.34.0 has no
-         * operation that brings a quarantined instance back, so {@code SagaStateStore.delete(sagaId)} is the only way
-         * out of it. Five minutes is a reasonable value when you turn it on.
+         * How long one saga instance may keep failing before it can be quarantined. It has no default. Leave it out
+         * and quarantine stays off, matching {@code SagaRunnerConfig.defaults()}, and set it to a positive duration,
+         * such as {@code 5m}, to turn quarantine on. Quarantine is off by default because 0.34.0 has no operation that
+         * brings a quarantined instance back, so {@code SagaStateStore.delete(sagaId)} is the only way out of it. Five
+         * minutes is a reasonable value when you turn it on.
          * <p>
          * The clock belongs to the instance rather than to one event, so an instance where two events both fail keeps
          * the instant it started failing and a second event can reach the budget on its first failure.
@@ -744,14 +745,15 @@ public class OccurrentProperties {
          * before the saga can work out which instance it belongs to is never let past, because acknowledging it would
          * lose it. It is refused on every redelivery, and this only sets how often that is logged.
          * <p>
-         * Zero keeps the pre-0.34.0 behaviour, where the saga is never quarantined. A negative value is rejected at
-         * startup rather than read as zero. Even when it is set, quarantine is switched off on its own,
+         * Zero and negative values are rejected at startup, because a reader can take zero to mean "never" or
+         * "immediately". Leave the property out to keep quarantine off. Even when it is set, quarantine is switched
+         * off on its own,
          * with a warning at startup, unless the subscription model guarantees that it holds every event it delivers,
          * because a quarantined instance skips everything addressed to it afterwards and skipping acknowledges. A
          * model that can answer for one event but cannot make that guarantee gets no quarantine either. The event an
          * instance stops on is checked as well, so a guarantee made wrongly is caught before that event is dropped.
          */
-        private Duration quarantineAfter = Duration.ZERO;
+        private @Nullable Duration quarantineAfter;
 
         /**
          * Competing-consumer (leader-election) configuration for the saga timer poller.
@@ -766,11 +768,11 @@ public class OccurrentProperties {
             this.timerPollInterval = timerPollInterval;
         }
 
-        public Duration getQuarantineAfter() {
+        public @Nullable Duration getQuarantineAfter() {
             return quarantineAfter;
         }
 
-        public void setQuarantineAfter(Duration quarantineAfter) {
+        public void setQuarantineAfter(@Nullable Duration quarantineAfter) {
             this.quarantineAfter = quarantineAfter;
         }
 

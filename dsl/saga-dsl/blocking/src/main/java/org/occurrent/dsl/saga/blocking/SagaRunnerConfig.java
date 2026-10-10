@@ -68,8 +68,8 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
         requireNonNull(redeliveryDetection, "redeliveryDetection cannot be null");
         requireNonNull(quarantineAfter, "quarantineAfter cannot be null, use disableQuarantine() to never quarantine");
         if (quarantineAfter.filter(budget -> budget.isZero() || budget.isNegative()).isPresent()) {
-            // Zero is refused rather than read as "quarantine on the first failure", because the Spring property reads
-            // zero as never, and one literal meaning opposite things on the two paths is worse than refusing it here.
+            // Zero is refused because a reader can take it to mean "never" or "immediately". The Spring property
+            // refuses it too.
             throw new IllegalArgumentException("quarantineAfter must be positive, use disableQuarantine() to never quarantine");
         }
         if (timerPollInterval.isZero() || timerPollInterval.isNegative()) {

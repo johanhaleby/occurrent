@@ -314,9 +314,9 @@ only briefly unavailable. Raise it when your dispatcher talks to something that 
 minutes, so an instance is not quarantined for an outage that would have resolved.
 
 Turning quarantine off again restores the 0.33.0 behaviour, where the saga is never quarantined. How you say that
-differs by path. Set the property to zero, or remove it, and call `SagaRunnerConfig.disableQuarantine()`.
-`withQuarantineAfter(Duration.ZERO)` is refused with an `IllegalArgumentException`, deliberately, so that one literal
-does not mean opposite things on the two paths.
+differs by path. On the annotation path remove the property, and otherwise call `SagaRunnerConfig.disableQuarantine()`.
+Zero is refused on both paths, because a reader can take it to mean "never" or "immediately". The property fails
+startup, and `withQuarantineAfter(Duration.ZERO)` throws an `IllegalArgumentException`.
 
 Either way this stops the next instance being quarantined. It does not bring back one you already have.
 

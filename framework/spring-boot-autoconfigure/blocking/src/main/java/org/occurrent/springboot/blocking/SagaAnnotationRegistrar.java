@@ -635,11 +635,15 @@ class SagaAnnotationRegistrar {
         return occurrentProperties().getSaga().getTimerPollInterval();
     }
 
-    // Zero is how a Duration property says "never", since an unset property binds to the default rather than to null.
-    // A negative value is passed on untouched so SagaRunnerConfig rejects it, because reading a typo as "never" would
-    // quietly switch quarantine off.
+    // Zero is refused because a reader can take it to mean "never" or "immediately"
     static SagaRunnerConfig withQuarantineBudget(SagaRunnerConfig config, @Nullable Duration configured) {
-        return configured == null || configured.isZero() ? config.disableQuarantine() : config.withQuarantineAfter(configured);
+        if (configured == null) {
+            return config.disableQuarantine();
+        }
+        if (configured.isZero() || configured.isNegative()) {
+            throw new IllegalArgumentException("occurrent.saga.quarantine-after must be a positive duration, such as 5m, but was " + configured + ". Leave the property out to keep quarantine off.");
+        }
+        return config.withQuarantineAfter(configured);
     }
 
     // The saga state type is the second type argument of the factory return type Saga<E, S, C>.
