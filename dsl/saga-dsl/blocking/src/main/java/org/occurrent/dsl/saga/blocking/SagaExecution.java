@@ -42,6 +42,7 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -87,6 +88,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 final class SagaExecution<E, S extends @Nullable Object, C> {
     private static final Logger log = LoggerFactory.getLogger(SagaExecution.class);
+    static final Duration UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE = Duration.ofMinutes(5);
 
     private final String subscriptionId;
     private final Saga<E, S, C> saga;
@@ -198,11 +200,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             refuseUnroutableDelivery(meta, cloudEvent, failure);
             return false;
         }
-        Duration quarantineAfter = config.quarantineAfter();
-        if (quarantineAfter == null || !meta.carriesRedeliveryKey() || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
+        Optional<Duration> quarantineAfter = config.quarantineAfter();
+        if (quarantineAfter.isEmpty() || !meta.carriesRedeliveryKey() || !SagaExecutionSupport.isAttributableToTheInstance(failure)) {
             return false;
         }
-        return quarantine(sagaId, cloudEvent, meta, failure, quarantineAfter);
+        return quarantine(sagaId, cloudEvent, meta, failure, quarantineAfter.get());
     }
 
     // The redelivery key where the event has one, and otherwise its CloudEvent id and source, which also stay the same
@@ -257,18 +259,17 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     /**
      * How often {@link #refuseUnroutableDelivery} repeats its ERROR once the first failure has already been warned
      * about. An event the saga cannot route is refused whether or not {@link SagaRunnerConfig#quarantineAfter()} is
-     * set, because nothing here ever quarantines an instance for it (see {@link #refuseUnroutableDelivery}), so pacing
-     * this ERROR on that budget alone would leave a saga on a subscription model {@code SagaRunner} switches quarantine
-     * off for, such as a push feed, including one a broker bridge feeds, warning once and then staying silent for good
-     * even while that
-     * model keeps offering the event. A model that does not offer a refused delivery again gets only the
-     * first WARN either way. Using the configured budget when there is one keeps one number for an operator to reason
-     * about, and {@link SagaRunnerConfig#DEFAULT_QUARANTINE_AFTER} otherwise gives every other model the same
-     * five-minute cadence rather than inventing a second tunable for it.
+     * set, because nothing here ever quarantines an instance for it (see {@link #refuseUnroutableDelivery}). Pacing
+     * this ERROR on that budget alone would leave a saga without one warning once and then silent for good, even while
+     * the model keeps offering the event. That is every saga under the default configuration, and every saga on a
+     * subscription model {@code SagaRunner} switches quarantine off for, such as a push feed, including one a broker
+     * bridge feeds. A model that does not offer a refused delivery again gets only the first WARN either way. Using
+     * the configured budget when there is one keeps one number for an operator to reason about, and
+     * {@link #UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE} otherwise gives every other saga the same five-minute
+     * cadence rather than inventing a second tunable for it.
      */
     Duration unroutableErrorInterval() {
-        Duration quarantineAfter = config.quarantineAfter();
-        return quarantineAfter != null ? quarantineAfter : SagaRunnerConfig.DEFAULT_QUARANTINE_AFTER;
+        return config.quarantineAfter().orElse(UNROUTABLE_ERROR_INTERVAL_WITHOUT_QUARANTINE);
     }
 
     /**

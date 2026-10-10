@@ -26,9 +26,10 @@ a second compile-time break, and comparing either whole for equality fails silen
 used to start without a recorded position is now refused at `subscribe(..)`. Read
 [section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
 Then a saga instance whose event keeps failing can now be quarantined instead of left active and failing
-indefinitely, which changes five things about the saga API at once. `SagaEnvelope` gains
+indefinitely. Quarantine is off by default, and the five changes it makes to the saga API apply whether or not you turn
+it on. `SagaEnvelope` gains
 two record components and `SagaRunnerConfig` gains one, `SagaInstance` gains a method, and `SagaStatus` gains a constant that `findByStatus(ACTIVE, ..)` no longer returns. Read
-[section 8](#8-a-saga-instance-that-keeps-failing-is-quarantined-and-four-saga-types-change-with-it).
+[section 8](#8-a-saga-instance-that-keeps-failing-can-be-quarantined-and-four-saga-types-change-with-it).
 Then a reactor catch-up subscription now delivers an event a second time when a write that was in flight during the
 replay was read by a history window, which needs a handler that is safe to run twice on the same event. Read
 [section 9](#9-a-reactor-catch-up-subscription-can-deliver-a-concurrent-write-twice).
@@ -739,7 +740,7 @@ property reaches the reactive starter too, where
 cluster gets the same no-code-change path out of the refusal it has had since 0.33.0.
 
 
-## 8. A saga instance that keeps failing is quarantined, and four saga types change with it
+## 8. A saga instance that keeps failing can be quarantined, and four saga types change with it
 
 Each saga gets one subscription, and that subscription delivers the events for all of its instances. Up to 0.33.0, an event that a saga's
 `evolve`, its `react` or its command dispatcher could not handle propagated to the subscription model, and wherever
@@ -748,12 +749,25 @@ that model offered the event again the saga tried again, without limit.
 What the failing event holds up in the meantime is decided by whatever feeds the subscription, and the javadoc on
 `SagaStatus.QUARANTINED` says what that can be.
 
-From 0.34.0 the executor times the failing rather than counting the attempts. Where a quarantine budget is in force, an
-instance's first failing event can write down the instant it started failing, and it rethrows whether or not that write
+0.34.0 adds quarantine, and it is off by default, so a saga you upgrade keeps the 0.33.0 behaviour until you turn it
+on. Nothing in 0.34.0 brings a quarantined instance back, and `SagaStateStore.delete(sagaId)` is the only way out of
+quarantine. That deletes the instance's state. Turn quarantine on when abandoning one instance is better for you than
+having its failing event hold up the subscription. Five minutes is a reasonable budget.
+
+```java
+SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ofMinutes(5));
+```
+
+On the annotation path the budget is a property instead.
+
+```properties
+occurrent.saga.quarantine-after=5m
+```
+
+With a budget set, the executor times the failing rather than counting the attempts. An instance's first failing event can write down the instant it started failing, and it rethrows whether or not that write
 succeeds, exactly as before. Some ways of failing write nothing, a failing timeout among them, and the javadoc on
 `SagaStatus.QUARANTINED` lists them. Where nothing was recorded, the next delivery decides on whatever the store holds
-then. Once that instance has kept failing for at least `SagaRunnerConfig.quarantineAfter`, five minutes by default, it
-can move to the new `SagaStatus.QUARANTINED`, and when it does the executor stops rethrowing.
+then. Once that instance has kept failing for at least the budget, it can move to the new `SagaStatus.QUARANTINED`, and when it does the executor stops rethrowing.
 
 Reaching the budget is not enough on its own. The javadoc on `SagaStatus.QUARANTINED` lists what else has to hold, so
 an instance past its budget can still be `ACTIVE`. Read its status rather than working it out from the time.
@@ -773,15 +787,17 @@ One case has no instance to quarantine, and it keeps the 0.33.0 behaviour. An ev
 throws never reaches an instance, so the subscription is never let past it, whatever the budget. It may still belong to
 an instance, and once the subscription moved past it the next event for that instance would mark the instance as
 having handled it, so the event would be lost. It is refused instead, and the first failure is logged at `WARN` and after that at `ERROR` once per interval, naming the event and what stopped it. That
-interval is the quarantine budget when the saga has one, and a fixed five-minute default when it does not, so the
+interval is the quarantine budget when the saga has one, and a fixed five minutes when it does not, so the
 `ERROR` still repeats on a subscription model this saga cannot quarantine anything on, for as long as that model keeps
 offering the event. A model that does not offer a refused delivery again gets only the first `WARN`, and
 `DeliveryFailurePolicy` is where a consume-side broker bridge's choice is configured.
 Where the event is offered again, repair the converter or the id extractor and the saga applies it in the order it was
 written.
 
-A quarantined instance receives no further events and fires no timers, and its redelivery watermarks stop moving, so
-nothing it skipped is recorded as handled. What it stopped on stays on the record instead of being lost.
+A quarantined instance applies no further events and fires no timers. Later events addressed to it are still
+delivered, and the saga skips them. Its redelivery watermarks stop moving, so nothing it skipped is recorded as
+handled. The event it stopped on stays in the event store. The quarantine record holds only that event's redelivery
+key, and 0.34.0 cannot hand the event back to the instance.
 
 0.34.0 stops there. Nothing in it brings an instance back out of quarantine, so read `SagaInstance.failure()` to see
 which input it stopped on and what the saga threw, and call `SagaStateStore.delete(sagaId)` to abandon the instance
@@ -796,8 +812,8 @@ which it declares by implementing `HistoryRetainingSubscriptions`. `NativeMongoS
 `SpringMongoSubscriptionModel` hold everything they deliver and say so, including either of them behind
 `DurableSubscriptionModel`, `CompetingConsumerSubscriptionModel` or `CatchupSubscriptionModel`, since a wrapper that
 declares nothing itself is answered by the model it wraps. On a model that declares nothing at all, a bare
-`PushSubscriptionModel` being the one you are most likely to meet, the runner switches the budget off at startup and
-logs why, so the saga keeps the 0.33.0 behaviour of never quarantining. That model hands the acknowledge-or-redeliver
+`PushSubscriptionModel` being the one you are most likely to meet, the runner switches a budget you set off at startup
+and logs why, so the saga keeps the 0.33.0 behaviour of never quarantining. That model hands the acknowledge-or-redeliver
 decision to the listener that called `accept`. What the failing event holds up is that listener's call as well.
 
 A model that cannot promise to hold everything gets no quarantine either, even where it can answer for the event an
@@ -834,8 +850,8 @@ rather than copying the `COMPLETED` branch. A quarantined instance is not finish
 somebody to look at it.
 
 **`findByStatus(ACTIVE, ..)` no longer returns a quarantined instance,** and it breaks nothing at compile time.
-If you use that call to sweep for instances that have gone quiet, which is what it was built for, it now misses the
-instances most worth finding. Enumerate `QUARANTINED` as well.
+If you use that call to sweep for instances that have gone quiet, which is what it was built for, it misses the
+instances most worth finding once quarantine is on. Enumerate `QUARANTINED` as well.
 
 ```java
 List<SagaInstance> stuck = new ArrayList<>();
@@ -886,23 +902,15 @@ case SagaEnvelope(String sagaId, var state, var status, long version, var timers
                   boolean started, var failure) -> ...
 ```
 
-**`SagaRunnerConfig` gains a fifth record component, `quarantineAfter`.** The four-argument form stays as a
-constructor that defaults it to five minutes, so a call site written against 0.33.0 compiles unchanged and gets the
-new behaviour. A record pattern over `SagaRunnerConfig` has to name the fifth component. Pass `null` to never
-quarantine, so the saga keeps rethrowing for as long as the subscription model offers the event again, which is the
-0.33.0 behaviour.
+**`SagaRunnerConfig` gains a fifth record component, `Optional<Duration> quarantineAfter`.** The four-argument form
+stays as a constructor that leaves it empty, so a call site written against 0.33.0 compiles unchanged and keeps the
+0.33.0 behaviour, and so does `SagaRunnerConfig.defaults()`. A record pattern over `SagaRunnerConfig` has to name the
+fifth component. `withQuarantineAfter(Duration)` turns quarantine on and refuses `null`, and `disableQuarantine()` turns
+it off again.
 
-```java
-SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(null);
-```
-
-On the annotation path you never build a `SagaRunnerConfig`, so the budget is a property instead. It defaults to five
-minutes, and zero is how it says never, because a `Duration` property that is not set binds to its default rather than
-to null.
-
-```properties
-occurrent.saga.quarantine-after=0
-```
+On the annotation path you never build a `SagaRunnerConfig`, and `occurrent.saga.quarantine-after` sets the budget. It
+has no default, and leaving it out keeps quarantine off. A blank value, `occurrent.saga.quarantine-after=`, counts as
+leaving it out. Zero and negative values stop the application from starting when it has at least one `@Saga`.
 
 ### Why there is no recipe for this one
 
