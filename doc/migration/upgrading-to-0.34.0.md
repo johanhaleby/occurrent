@@ -2623,7 +2623,7 @@ is running and catching up, and isn't paused. A call that comes in the meantime 
 | `pauseSubscription(subscriptionId)` | Held, and the subscription is paused until `resumeSubscription(subscriptionId)` or `start(true)` runs the replay again |
 | `stop()` | Held the same way, and it stays held after `start(false)` |
 | `cancelSubscription(subscriptionId)` or `shutdown()` | Ends |
-| `resumeSubscription(subscriptionId, startAt)` on the catch-up model | Ends, and the subscription resumes at `startAt`, unless an earlier run of the replay is still in the subscription's action, as described below |
+| `resumeSubscription(subscriptionId, startAt)` on the catch-up model | Ends once the subscription resumes at `startAt`, unless an earlier run of the replay is still in the subscription's action or the wrapped model fails to resume it, as described below |
 
 `StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel` implement `RepositionableSubscriptions`, as
 `CatchupSubscriptionModel` already did. `RepositionableSubscriptions.findIn(..)` finds either of them when the model it
@@ -2631,8 +2631,10 @@ wraps can resume a subscription from a given position, and finds nothing otherwi
 the catch-up model, and a resume at a position there didn't end the replay.
 
 `resumeSubscription(subscriptionId, startAt)` also ends a replay that reads history. While the replay is inside the
-subscription's action, the call holds the replay and waits up to 10 seconds for the action to return. Then the replay
-ends and the wrapped model resumes the subscription at `startAt`.
+subscription's action, the call holds the replay and waits up to 10 seconds for the action to return. Then the wrapped
+model resumes the subscription at `startAt`, and the replay ends once it has. When the wrapped model throws, the call
+throws the same exception, and the replay is as it was before the call. A replay that ran runs again from the last
+position it stored, and one a pause or a stop held stays held.
 
 While the call waits, a subscription that was running when the call began stays running.
 `isRunning(subscriptionId)` returns `true` and `isPaused(subscriptionId)` returns `false`, and a pause that comes
@@ -2668,7 +2670,7 @@ It changes nothing for the subscription after that, and the message says what th
 | `pauseSubscription(subscriptionId)`, `cancelSubscription(subscriptionId)`, `subscribe(..)`, `resumeSubscription(subscriptionId, startAt)` | Nothing |
 | `resumeSubscription(subscriptionId)` on a stopped model | Started the model, without resuming the subscription |
 | `stop()` | Stopped the model. A replay for the subscription delivers nothing more until `start(true)` or `resumeSubscription(subscriptionId)` runs it again |
-| `start(true)` | Started the model and resumed the other subscriptions, without running the replay that a stop held for the subscription |
+| `start(true)` | Started the model and resumed the other subscriptions, without running the replay held for the subscription |
 
 A pause, a resume or a cancel from inside the subscription's action during a replay goes
 ahead when no other call for the subscription runs, and throws `IllegalStateException` at once when one does.
