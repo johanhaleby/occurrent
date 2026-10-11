@@ -1,124 +1,119 @@
 # Upgrading to Occurrent 0.34.0
 
-Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
-`UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
+Each section describes one 0.34.0 change, what the `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and
+what you have to do by hand. Find the parts of Occurrent you use in the lists below and read those sections.
 
-The guide has twenty-nine sections, six of them about compile-time breaks. At compile time, if you use the flow saga's
-deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
-[section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
-counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
-callers need to do nothing about. Read
-[section 2](#2-a-flow-sagas-stepwindow-now-caps-its-declared-events-and-the-start-type). A projection, a subscription, a
-query, or a snapshot that declares an event type whose concrete subtypes cannot be found is now refused, the same
-refusal 0.33.0 already shipped for a saga and an annotation-based subscription, and one shape that was exempt
-everywhere, a concrete class that is neither final nor sealed, is now refused on all six. Read
-[section 3](#3-declaring-an-event-type-whose-concrete-subtypes-cannot-be-found-is-refused). At
-startup, if you set a MongoDB collection name, a MongoDB time representation, or whether a subscription restarts
-after losing change-stream history, through `OccurrentProperties`, four configuration keys are deprecated and have
-a recipe that rewrites them for you. Read [section 4](#4-four-mongodb-only-keys-move-under-mongodb). A
-`@Projection`, `@Saga`, or `@Snapshot` factory method no longer runs through a proxy, so class-level advice that
-ran as a side effect of building the descriptor at startup no longer runs at all. Read
-[section 5](#5-a-descriptor-factorys-class-level-advice-no-longer-runs-at-startup).
-`WriteResult` and `DcbAppendResult` both gain a fourth component. Deconstructing either with a record pattern is
-a second compile-time break, and comparing either whole for equality fails silently at runtime instead. Read
-[section 6](#6-writeresult-and-dcbappendresult-gain-a-fourth-component-the-append-id). And if
-`DurableSubscriptionModel` wraps a MongoDB subscription model on a shared Atlas cluster, a fresh subscription that
-used to start without a recorded position is now refused at `subscribe(..)`. Read
-[section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
-Then a saga instance whose event keeps failing can now be quarantined instead of left active and failing
-indefinitely. Quarantine is off by default, and the five changes it makes to the saga API apply whether or not you turn
-it on. `SagaEnvelope` gains
-two record components and `SagaRunnerConfig` gains one, `SagaInstance` gains a method, and `SagaStatus` gains a constant that `findByStatus(ACTIVE, ..)` no longer returns. Read
-[section 8](#8-a-saga-instance-that-keeps-failing-can-be-quarantined-and-four-saga-types-change-with-it).
-Then a reactor catch-up subscription now delivers an event a second time when a write that was in flight during the
-replay was read by a history window, which needs a handler that is safe to run twice on the same event. Read
-[section 9](#9-a-reactor-catch-up-subscription-can-deliver-a-concurrent-write-twice).
-Then, if your application ever called `updateEvent` while running 0.33.0 or earlier, some of your stored
-events are damaged and a one-off repair puts them back. Read
-[section 10](#10-events-updateevent-damaged-before-0340-need-a-one-off-repair).
-Then a subscription handler Spring's proxy cannot invoke now fails startup instead of silently losing its advice,
-and every annotation-based handler registers later, once singleton construction has finished, so a live-only
-subscription no longer sees an event a bean wrote from its own startup. Read
-[section 11](#11-a-subscription-handler-spring-cannot-invoke-now-fails-startup-and-a-live-subscription-can-miss-a-startup-write).
-Then a projection feed's `accept(..)` no longer reports an event it did not apply as handled. On the blocking
-stack it now waits during a catch-up until the event is applied and throws when it was not, so a call on the same
-thread that later starts the catch-up waits until another thread runs the catch-up, takes the feed live, calls
-`stopCatchUp()` or interrupts it. On the reactor stack its `Mono` now errors for an event fed while the feed is
-stopped, and for one fed before a `stopCatchUp()` on a feed that has not gone live and has no catch-up running.
-Read
-[section 12](#12-a-projection-feeds-accept-waits-until-the-event-is-applied-and-fails-when-it-is-not).
-Then feeding a push model's `accept(..)` is supported only from the in-memory event store's write path, where
-0.33.0 also named a broker listener, a Spring application event and an HTTP endpoint. Read
-[section 13](#13-only-the-in-memory-event-stores-write-path-may-feed-a-push-models-accept).
-Then a projection feed's `goLive()` called while a catch-up of the same projection is replaying now waits for
-that replay to end, where 0.33.0 did not wait, and fails when a catch-up of that projection failed meanwhile. Read
-[section 14](#14-a-projection-feeds-golive-waits-for-a-running-catch-up).
-Then a reactor subscription handler, or the code that applies an event to a reactor projection feed, that feeds an
-event back into its own subscription or feed no longer waits forever. The call is answered once the event is queued,
-and when applying that event fails, the subscription or feed fails for good. Read
-[section 15](#15-feeding-a-reactor-catch-up-from-its-own-handler-no-longer-waits-forever).
-Then, on `NativeMongoSubscriptionModel`, a subscription made while the model is stopped now starts when `start()`
-opens its change stream. A call that waits for it to start hangs when it runs before `start()` on the thread that calls
-`start()`. Read
-[section 16](#16-a-native-mongodb-subscription-made-while-the-model-is-stopped-starts-with-start).
-Then a blocking catch-up subscription from `StartAtTime.offsetDateTime(..)` now also delivers the events stored at
-the time you give, so passing the time of the last event you handled delivers that event again. Read
-[section 17](#17-startattimeoffsetdatetime-includes-the-events-stored-at-that-time).
-Then `CompetingConsumerSubscriptionModel.start(..)` and `resumeSubscription(..)` no longer throw what the lease
-strategy or the wrapped model threw for a competing subscription. They log it and return, and the subscription is tried
-again on a thread of its own. Read
-[section 18](#18-a-competing-consumers-start-and-resumesubscription-log-a-failure-and-return).
-Then `SpringMongoSubscriptionModel` no longer skips an event whose action keeps failing, forgets a subscription
-whose history was lost when it is told not to restart it, and no longer builds on Spring Data's
-`MessageListenerContainer`, which removes the `protected` constructor of `SpringMongoSubscription`. A
-`DurableSubscriptionModel` over a MongoDB model also writes a checkpoint once a minute for a subscription that receives
-no events. `ReactorMongoSubscriptionModel` reads the driver's change stream cursor itself for a subscription with an
-id, which changes what a test that mocks `ReactiveMongoOperations` has to stub. Read
-[section 19](#19-springmongosubscriptionmodel-reads-its-own-cursor-and-a-quiet-durable-subscription-saves-its-position).
-Then `CompetingConsumerSubscriptionModel.isRunning()` now says whether the model is started, and no longer returns
-what the wrapped model returns, which after `stop()` and a `start(..)` that won no lease was `false`, unless the model
-had a subscription that doesn't compete. A competing subscription you paused directly on the wrapped model also runs
-again on the competing consumer model's next `start(..)`, a grant of its lease or a resume of it. Read
-[section 20](#20-a-competing-consumers-isrunning-says-whether-the-model-is-started).
-Then a `ReactorMongoSubscriptionModel` subscription started at the present now starts from the moment
-`subscribe(..)` is called. It can receive events written up to 16 seconds before the call, and one whose change stream
-first opens after its history is gone stops, unless you configure the model to restart it. A
-`ReactorDurableSubscriptionModel` subscription at `StartAt.now()` over a model of your own that is not a
-`SubscriptionModel` now asks your model's `globalCheckpointAsOfNow()` at the `subscribe(..)` call and starts from its
-answer. A reactor `CheckpointAwareSubscriptionModel` of your own must implement `globalCheckpointAsOfNow()`, which has no default, and that is a fifth compile-time break. Read
-[section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call).
-Then a new `CompetingConsumerSubscriptionModel` over a wrapped model that is not running runs a competing
-subscription only once you call its own `start(..)`, and calling `start()` on the wrapped model instead never gets one
-running. Read [section 22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start).
-Then the reactor `cancelSubscription(..)` returns a `Mono<Void>`, which is a sixth compile-time break for a class
-that implements it. Read
-[section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted).
-Then a `CompetingConsumerSubscriptionModel` whose wrapped model throws from its own `shutdown()` no longer keeps its
-leases, and stops delivering once they may have expired. Read
-[section 24](#24-a-competing-consumer-whose-wrapped-model-fails-to-shut-down-lets-its-leases-expire).
-Then `ReactorDurableSubscriptionModel` over a model that manages named subscriptions returns from a `subscribe(..)`
-from the subscription-model default without waiting for storage. A duplicate id it finds at the call still comes out of
-the call. So does what a `StartAt.dynamic(..)` function throws, unless a checkpoint of the id waits to be written back
-and the function runs later. A refusal it finds only at the hand-over, once storage has answered, and a failure of
-a function that runs later, fail `waitUntilStarted()` instead of being thrown. Read
-[section 25](#25-a-durable-reactor-subscribe-from-the-model-default-returns-without-waiting-for-storage).
-Then a position catch-up now stores the live start it read before its replay next to the position, so a restart in
-the middle of the replay no longer misses an event that committed late below the stored position. A resume delivers
-some events a second time, and a checkpoint stored by 0.33.0 in the middle of a replay still resumes as in 0.33.0, with
-a warning. Read
-[section 26](#26-a-position-catch-up-stores-the-live-start-it-read-before-the-replay).
-Then a MongoDB event store with `DCB` and without `STREAM` no longer creates the `dcbTags_1` index, though one
-created on 0.33.0 or earlier keeps it. Enabling `STREAM` on a DCB store builds it at startup if it isn't there. Read
-[section 27](#27-a-dcb-only-mongodb-event-store-no-longer-creates-the-dcbtags-index).
-Then a blocking catch-up that replays by event time now reads its live start before the replay and stores it with
-the time, so an event with an earlier time that commits late is no longer missed. More events arrive twice, a long
-replay depends on the oplog, and a rollback with a string storage fails to start such a subscription. Read
-[section 28](#28-a-time-based-catch-up-reads-its-live-start-before-the-replay).
-Finally, on the blocking stack a subscription that resumes from the position another node's catch-up stored, as a
-competing consumer does when it takes over a lease, now replays from it instead of going live from the present. A
-`subscribe(..)` through the catch-up model with the id of a subscription the wrapped model holds is refused at the
-call. Read
-[section 29](#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it).
+Sections [1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed),
+[6](#6-writeresult-and-dcbappendresult-gain-a-fourth-component-the-append-id),
+[8](#8-a-saga-instance-that-keeps-failing-can-be-quarantined-and-four-saga-types-change-with-it),
+[19](#19-springmongosubscriptionmodel-reads-its-own-cursor-and-a-quiet-durable-subscription-saves-its-position),
+[21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call) and
+[23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted) can break the
+build, and each bullet says when. The compiler finds those for you. The other sections compile fine and behave
+differently, so read them first.
+
+### Sagas
+
+- [Section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `join` and Kotlin's
+  `expect<T>` are gone. Use `on(allOf(...))` instead. A recipe rewrites the Java calls it can prove. **Breaks the
+  build.**
+- [Section 2](#2-a-flow-sagas-stepwindow-now-caps-its-declared-events-and-the-start-type). A flow saga's `stepWindow`
+  only counts the events its own steps declare, plus the type that starts the flow. Most callers need to do nothing.
+- [Section 8](#8-a-saga-instance-that-keeps-failing-can-be-quarantined-and-four-saga-types-change-with-it). A saga
+  instance whose event keeps failing can be quarantined. Quarantine is off by default, but `SagaStatus` gains
+  `QUARANTINED` either way, and `findByStatus(ACTIVE, ..)` no longer returns a quarantined instance. **Breaks the
+  build** if you switch exhaustively over `SagaStatus`, implement `SagaInstance`, or use a record pattern over
+  `SagaEnvelope` or `SagaRunnerConfig`.
+
+### Event types and stored events
+
+- [Section 3](#3-declaring-an-event-type-whose-concrete-subtypes-cannot-be-found-is-refused). A projection,
+  subscription, query or snapshot whose declared event type has concrete subtypes that can't be found is now
+  refused, as a saga already was. A plain class that is neither `final` nor `sealed` is refused everywhere.
+- [Section 6](#6-writeresult-and-dcbappendresult-gain-a-fourth-component-the-append-id). `WriteResult` and
+  `DcbAppendResult` get a fourth component, so an equality assertion on the whole record starts failing at runtime.
+  **Breaks the build** if you use a record pattern over either.
+- [Section 10](#10-events-updateevent-damaged-before-0340-need-a-one-off-repair). If you ever called `updateEvent` on
+  0.33.0 or earlier, some stored events are damaged. A one-off repair fixes them.
+- [Section 27](#27-a-dcb-only-mongodb-event-store-no-longer-creates-the-dcbtags-index). A MongoDB event store with
+  `DCB` but not `STREAM` no longer creates the `dcbTags_1` index. Enabling `STREAM` later builds it at startup.
+
+### Spring Boot
+
+- [Section 4](#4-four-mongodb-only-keys-move-under-mongodb). Four MongoDB configuration keys move under `mongodb`.
+  The old keys still work, and a recipe rewrites them.
+- [Section 5](#5-a-descriptor-factorys-class-level-advice-no-longer-runs-at-startup). Class-level advice such as
+  `@Transactional` no longer runs when Spring calls a `@Projection`, `@Saga` or `@Snapshot` factory method.
+- [Section 11](#11-a-subscription-handler-spring-cannot-invoke-now-fails-startup-and-a-live-subscription-can-miss-a-startup-write).
+  A subscription handler that Spring's proxy can't call now stops startup. A `StartPosition.NOW` or
+  `@SynchronousSubscription` handler no longer sees an event that a bean writes while it is being created, from
+  `@PostConstruct` for example.
+
+### Projection feeds and push subscriptions
+
+- [Section 12](#12-a-projection-feeds-accept-waits-until-the-event-is-applied-and-fails-when-it-is-not). A projection
+  feed's `accept(..)` no longer reports an event as handled when it wasn't applied. On the blocking stack it can now
+  wait during a catch-up.
+- [Section 13](#13-only-the-in-memory-event-stores-write-path-may-feed-a-push-models-accept). `accept(..)` on a
+  `PushSubscriptionModel` is supported only from the listener of an `InMemoryEventStore`. A RabbitMQ or Kafka listener
+  uses `acceptRedeliverable(CloudEvent)`.
+- [Section 14](#14-a-projection-feeds-golive-waits-for-a-running-catch-up). A projection feed's `goLive()` waits for a
+  running catch-up of the same projection, and fails if that catch-up failed.
+
+### Subscription models
+
+- [Section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded). On a
+  shared MongoDB Atlas cluster, `DurableSubscriptionModel.subscribe(..)` now throws for a first subscription that
+  starts at `StartAt.subscriptionModelDefault()`. Set
+  `occurrent.subscription.start-when-no-start-position-can-be-recorded=true` to start it the way 0.33.0 did.
+- [Section 16](#16-a-native-mongodb-subscription-made-while-the-model-is-stopped-starts-with-start). A
+  `NativeMongoSubscriptionModel` subscription made while the model is stopped starts when you call `start()`.
+- [Section 19](#19-springmongosubscriptionmodel-reads-its-own-cursor-and-a-quiet-durable-subscription-saves-its-position).
+  `SpringMongoSubscriptionModel` no longer uses Spring Data's `MessageListenerContainer`, and no longer skips an event
+  whose action keeps failing. A durable subscription that gets no events now saves its position once a minute.
+  **Breaks the build** if you subclass `SpringMongoSubscription`.
+- [Section 21](#21-a-reactive-mongodb-subscription-started-at-the-present-starts-from-the-subscribe-call). A
+  `ReactorMongoSubscriptionModel` subscription that starts at `StartAt.now()` or the model default starts from the `subscribe(..)` call.
+  **Breaks the build** if you implement a reactor `CheckpointAwareSubscriptionModel`, which must now implement
+  `globalCheckpointAsOfNow()`.
+- [Section 23](#23-a-reactor-cancelsubscription-returns-a-mono-that-completes-once-the-stored-state-is-deleted). The
+  reactor `cancelSubscription(..)` returns a `Mono<Void>`. **Breaks the build** if you implement it.
+- [Section 25](#25-a-durable-reactor-subscribe-from-the-model-default-returns-without-waiting-for-storage). A
+  `ReactorDurableSubscriptionModel.subscribe(..)` that starts at `StartAt.subscriptionModelDefault()` no longer waits
+  for storage. Some failures now show up in `waitUntilStarted()` instead of being thrown.
+
+### Catch-up subscriptions
+
+- [Section 9](#9-a-reactor-catch-up-subscription-can-deliver-a-concurrent-write-twice). A reactor catch-up can deliver
+  an event twice when it was written during the replay. Your handler must be safe to run twice.
+- [Section 15](#15-feeding-a-reactor-catch-up-from-its-own-handler-no-longer-waits-forever). A reactor handler that
+  feeds an event back into its own subscription or projection feed no longer waits forever.
+- [Section 17](#17-startattimeoffsetdatetime-includes-the-events-stored-at-that-time). A blocking catch-up from
+  `StartAtTime.offsetDateTime(..)` now also delivers the events stored at exactly that time.
+- [Section 26](#26-a-position-catch-up-stores-the-live-start-it-read-before-the-replay). A catch-up by position no
+  longer misses an event that commits late when it restarts in the middle of a replay. Some events now arrive twice.
+- [Section 28](#28-a-time-based-catch-up-reads-its-live-start-before-the-replay). A catch-up by event time gets the
+  same fix as section 26. Rolling back to 0.33.0 with a `CheckpointStorage` that keeps strings, such as
+  `SpringRedisCheckpointStorage`, then makes `subscribe(..)` throw for that subscription.
+- [Section 29](#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it). A
+  blocking catch-up subscription that resumes from the position another node's catch-up stored replays from there,
+  so some events arrive twice. Subscribing again through the catch-up model with the id of a subscription that is
+  running or paused throws `DuplicateSubscriptionIdException`.
+
+### Competing consumers
+
+These cover `CompetingConsumerSubscriptionModel` and the subscription model it wraps.
+
+- [Section 18](#18-a-competing-consumers-start-and-resumesubscription-log-a-failure-and-return). `start(..)` and
+  `resumeSubscription(..)` log a failure for a competing subscription and try again, instead of throwing it.
+- [Section 20](#20-a-competing-consumers-isrunning-says-whether-the-model-is-started). `isRunning()` says whether the
+  competing consumer model is started, not what the wrapped model says.
+- [Section 22](#22-a-competing-consumer-over-a-wrapped-model-that-is-not-running-waits-for-its-own-start). Over a
+  wrapped model that isn't running, such as a `SpringMongoSubscriptionModel` built with `autoStartup(false)`, a
+  competing subscription waits for the competing consumer's own `start(..)`.
+- [Section 24](#24-a-competing-consumer-whose-wrapped-model-fails-to-shut-down-lets-its-leases-expire). When the
+  wrapped model's `shutdown()` throws, the competing consumer gives up no lease and stops refreshing them. Another node
+  can take over once they expire, 20 seconds by default.
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -1760,6 +1755,11 @@ things change with it.
   returns `false`. `waitUntilStarted()` has already reported it started by then. In 0.33.0 it opened at the present and
   skipped the events written in between.
 
+When MongoDB's reply to `hello` has no server clock, the subscription stops, and `waitUntilStarted()` and
+`globalCheckpointAsOfNow()` fail with the reason. A server that doesn't know `hello` is asked with `isMaster`. The
+driver keeps its cluster time internal, so the model reads it by reflection, and logs a warning the first time it
+can't, unless the calling thread was interrupted. It then starts from the server's clock alone.
+
 What to do:
 
 - Make sure your handlers can receive an event they have already handled. Delivery is at least once, which already
@@ -2533,6 +2533,15 @@ The MongoDB checkpoint storages keep the time in `checkpoint` as before and put 
 A storage that keeps strings, `SpringRedisCheckpointStorage` for one, stores
 `2026-10-10T08:15:30.123Z;origin:1970-01-01T00:00:00Z;liveFrom:{"operationTime": ...}`. The live subscription's
 checkpoint replaces all of it when the catch-up reaches live delivery.
+
+A MongoDB checkpoint document in this form whose time is not an RFC 3339 time fails with an `IllegalStateException`
+when it is read.
+
+A catch-up that goes live now replaces a checkpoint the other kind of catch-up stored for the same subscription, a time
+under a position catch-up or a position under a time catch-up, with its live start. It already did that with a
+checkpoint of its own kind. This holds for `StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel`. In
+0.33.0 they passed such a checkpoint on to the MongoDB subscription model as where to start, and the model opened at
+the present instead of at the live start, which could miss the events written in between.
 
 A resume can deliver more events a second time than a position resume does. A position has a replay end that splits
 the events by when they committed. A time doesn't, since a writer can commit an event with any time at any moment. So
