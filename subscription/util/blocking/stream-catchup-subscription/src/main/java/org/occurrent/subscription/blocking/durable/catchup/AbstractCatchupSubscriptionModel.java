@@ -550,7 +550,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                             inTheWay.add(replay);
                         }
                     }
-                } catch (RuntimeException e) {
+                } catch (RuntimeException | Error e) {
                     putBack(inTheWay, e);
                     throw e;
                 }
@@ -561,7 +561,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 Subscription resumed;
                 try {
                     resumed = repositionable.resumeSubscription(subscriptionId, startAt);
-                } catch (RuntimeException e) {
+                } catch (RuntimeException | Error e) {
                     putBack(inTheWay, e);
                     throw e;
                 }
@@ -577,7 +577,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     // Runs each replay in the way as it was before the resume at a given position held it, with what fails added to e
-    private static void putBack(List<ReplayInTheWay> inTheWay, RuntimeException e) {
+    private static void putBack(List<ReplayInTheWay> inTheWay, Throwable e) {
         try {
             runEach(inTheWay, ReplayInTheWay::putBack);
         } catch (RuntimeException putBackFailure) {
@@ -1863,7 +1863,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     /**
      * Registers a fresh attempt for {@code catchup} as the running catch-up for {@code subscriptionId}, or parks
-     * {@code catchup} and returns {@code null} while this model is stopped or {@code holdPaused} is set. Called with the
+     * {@code catchup} and returns {@code null} while this model is stopped or {@code holdPaused} is set, or when the
+     * {@link CatchupListener} throws as the replay starts, which is logged at {@code ERROR}. Called with the
      * handover lock held. A replay still parked for the id is dropped, and waitUntilStarted on its handle returns false.
      */
     private @Nullable CatchupAttempt registerOrPark(String subscriptionId, ReplayState replay, CompletableFuture<Void> earlierAttemptsDone, boolean holdPaused) {
@@ -1882,14 +1883,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             parkedReplays.remove(subscriptionId);
         }
         CatchupAttempt attempt = new CatchupAttempt(subscriptionId, this, replay, earlierAttemptsDone);
-        runningCatchupSubscriptions.put(subscriptionId, true);
-        currentAttempt.put(subscriptionId, attempt);
         // Sent here, inside the same lock that takes ownership of the id and before the attempt's thread starts, so
-        // it always precedes anything this attempt delivers.
+        // it always precedes anything this attempt delivers. Before the attempt is registered, so one the listener
+        // fails is never registered without a thread to run it.
         CatchupListener listener = catchupListeners.get(subscriptionId);
         if (listener != null) {
-            listener.catchupStarted(attempt);
+            try {
+                listener.catchupStarted(attempt);
+            } catch (RuntimeException e) {
+                parkedReplays.put(subscriptionId, new ParkedReplay(replay, earlierAttemptsDone));
+                log.error("The catch-up listener for subscription {} failed when its replay started, so the replay is held and runs again once the subscription is resumed or this model started.", subscriptionId, e);
+                return null;
+            }
         }
+        runningCatchupSubscriptions.put(subscriptionId, true);
+        currentAttempt.put(subscriptionId, attempt);
         return attempt;
     }
 

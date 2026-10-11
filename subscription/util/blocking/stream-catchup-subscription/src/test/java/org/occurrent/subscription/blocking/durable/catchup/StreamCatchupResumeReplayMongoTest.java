@@ -48,6 +48,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
@@ -713,6 +714,152 @@ class StreamCatchupResumeReplayMongoTest {
                 .untilAsserted(() -> assertThat(receivedByB).contains("h2", "h3", "afterBRegistered", "afterTheFailedCall"));
         assertThat(catchupB.isPaused(subscriptionId)).as("paused after the resume").isFalse();
         assertThat(catchupB.isRunning(subscriptionId)).as("running after the resume").isTrue();
+    }
+
+    @Test
+    void a_replay_put_back_after_a_failed_resume_at_a_position_does_not_deliver_the_event_that_was_in_the_action_again() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, and the live delegate fails the next resume
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(recording("h2", inH2, releaseH2));
+        Subscription handleOfTheReplay = catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        liveOfB.failTheNextResumes(1);
+
+        // When the subscription is resumed at the present from another thread, and the action returns, so the live delegate fails
+        CompletableFuture<Subscription> repositioning = resumeAtThePresentFromAnotherThread();
+        releaseH2.countDown();
+        Throwable failure = failureOf(repositioning);
+
+        // Then the replay is put back and hands over, and delivers the rest of the history
+        assertThat(failure).as("the resume at a position").isInstanceOf(IllegalStateException.class).hasMessageContaining(ScriptedLiveModel.UNAVAILABLE);
+        assertThat(handleOfTheReplay.waitUntilStarted(Duration.ofSeconds(15))).as("the handle of the replay started").isTrue();
+        await("B delivers the rest of the history").atMost(15, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h3", "afterBRegistered"));
+        // And h2 was delivered once, since the held replay stores the position of the event in its action, and the replay put back after the failed live resume starts after it
+        assertThat(receivedByB).as("what B received").containsOnlyOnce("h2");
+    }
+
+    @Test
+    void a_resume_at_a_position_whose_live_delegate_throws_an_error_after_waiting_for_the_action_of_the_resume_replay_rethrows_it_and_leaves_the_replay_running() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, and the live delegate throws an error on the next resume
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(recording("h2", inH2, releaseH2));
+        Subscription handleOfTheReplay = catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        AssertionError error = new AssertionError("The live delegate broke");
+        liveOfB.throwOnTheNextResume(error);
+
+        // When the subscription is resumed at the present from another thread, and the action returns, so the live delegate throws
+        CompletableFuture<Subscription> repositioning = resumeAtThePresentFromAnotherThread();
+        releaseH2.countDown();
+        Throwable failure = failureOf(repositioning);
+
+        // Then the error reaches the caller
+        assertThat(failure).as("the resume at a position").isSameAs(error);
+        // And the replay runs as before
+        assertThat(catchupB.isRunning(subscriptionId)).as("running after the resume at a position threw an error").isTrue();
+        assertThat(catchupB.hasParkedReplay(subscriptionId)).as("a replay is held after the resume at a position threw an error").isFalse();
+        // And it hands over, so the handle of the first resume starts and the rest of the history arrives
+        assertThat(handleOfTheReplay.waitUntilStarted(Duration.ofSeconds(15))).as("the handle of the replay started").isTrue();
+        await("B delivers the rest of the history").atMost(15, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h3", "afterBRegistered"));
+        assertThat(liveOfB.resumeFailures.get()).as("the resumes of the live delegate that threw").isEqualTo(1);
+    }
+
+    @Test
+    void a_catch_up_listener_that_fails_when_the_resume_replay_starts_leaves_the_subscription_paused_and_a_later_resume_runs_the_replay() throws Exception {
+        // Given the listener of the subscription fails the first time a catch-up starts
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)));
+        FailingCatchupListener listener = new FailingCatchupListener(1);
+        catchupB.listenForCatchup(subscriptionId, listener);
+
+        // When the subscription is resumed, so its resume replay starts
+        catchThrowable(() -> catchupB.resumeSubscription(subscriptionId));
+
+        // Then nothing runs the replay, so the subscription does not read as running
+        assertThat(catchupB.isRunning(subscriptionId)).as("running after the replay failed to start").isFalse();
+        // And the failure is logged
+        assertThat(errorLog.messagesAbout(subscriptionId)).as("what was logged at ERROR").isNotEmpty();
+        // And a later resume runs the replay, which hands over, so every event arrives
+        Subscription resumed = catchupB.resumeSubscription(subscriptionId);
+        assertThat(resumed.waitUntilStarted(Duration.ofSeconds(15))).as("the replay handed over").isTrue();
+        append("afterTheResume", 4);
+        await("B delivers the history and what was written after the resume").atMost(15, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h2", "h3", "afterBRegistered", "afterTheResume"));
+        assertThat(catchupB.isRunning(subscriptionId)).as("running after the later resume").isTrue();
+        assertThat(listener.starts.get()).as("the catch-ups the listener was told about").isEqualTo(2);
+    }
+
+    @Test
+    void a_catch_up_listener_that_fails_when_a_replay_is_put_back_after_a_failed_resume_at_a_position_leaves_the_subscription_paused_and_a_later_resume_runs_the_replay() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, the live delegate fails the next resume, and the listener fails the second time a catch-up starts
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(recording("h2", inH2, releaseH2));
+        FailingCatchupListener listener = new FailingCatchupListener(2);
+        catchupB.listenForCatchup(subscriptionId, listener);
+        Subscription handleOfTheReplay = catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        liveOfB.failTheNextResumes(1);
+
+        // When the subscription is resumed at the present from another thread, and the action returns, so the live delegate fails and the replay is put back
+        CompletableFuture<Subscription> repositioning = resumeAtThePresentFromAnotherThread();
+        releaseH2.countDown();
+        Throwable failure = failureOf(repositioning);
+
+        // Then what the live delegate threw reaches the caller
+        assertThat(failure).as("the resume at a position").isInstanceOf(IllegalStateException.class).hasMessageContaining(ScriptedLiveModel.UNAVAILABLE);
+        // And nothing runs the replay, so the subscription does not read as running
+        assertThat(catchupB.isRunning(subscriptionId)).as("running after the put back replay failed to start").isFalse();
+        // And the failure is logged
+        assertThat(errorLog.messagesAbout(subscriptionId)).as("what was logged at ERROR").isNotEmpty();
+        // And a later resume runs the replay, which hands over, so the rest of the history arrives
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(handleOfTheReplay.waitUntilStarted(Duration.ofSeconds(15))).as("the handle of the replay started").isTrue();
+        await("B delivers the rest of the history").atMost(15, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h3", "afterBRegistered"));
+        assertThat(catchupB.isRunning(subscriptionId)).as("running after the later resume").isTrue();
+    }
+
+    @Test
+    void a_catch_up_listener_that_fails_when_a_subscribe_starts_its_replay_leaves_the_subscription_paused_and_a_later_resume_runs_the_replay() throws Exception {
+        // Given a history, and a listener that fails the first time a catch-up starts
+        givenTwoNodes(durable -> durable);
+        append("h1", 0);
+        append("h2", 1);
+        append("h3", 2);
+        FailingCatchupListener listener = new FailingCatchupListener(1);
+        catchupB.listenForCatchup(subscriptionId, listener);
+
+        // When the subscription is made, so its replay starts
+        catchThrowable(() -> catchupB.subscribe(subscriptionId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)), event -> receivedByB.add(nameOf(event))));
+
+        // Then nothing runs the replay, so the subscription does not read as running
+        assertThat(catchupB.isRunning(subscriptionId)).as("running after the replay failed to start").isFalse();
+        // And the failure is logged
+        assertThat(errorLog.messagesAbout(subscriptionId)).as("what was logged at ERROR").isNotEmpty();
+        // And a later resume runs the replay, which hands over, so every event arrives
+        Subscription resumed = catchupB.resumeSubscription(subscriptionId);
+        assertThat(resumed.waitUntilStarted(Duration.ofSeconds(15))).as("the replay handed over").isTrue();
+        append("afterTheResume", 3);
+        await("B delivers the history and what was written after the resume").atMost(15, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h1", "h2", "h3", "afterTheResume"));
+        assertThat(catchupB.isRunning(subscriptionId)).as("running after the later resume").isTrue();
+    }
+
+    // The subscription is resumed at the present from another thread, which returns once it waits for the action of the replay it holds
+    private CompletableFuture<Subscription> resumeAtThePresentFromAnotherThread() {
+        RepositionableSubscriptions found = RepositionableSubscriptions.findIn(catchupB).orElseThrow();
+        Checkpoint present = requireNonNull(durableB.globalCheckpoint());
+        AtomicReference<Thread> repositioningThread = new AtomicReference<>();
+        CompletableFuture<Subscription> repositioning = CompletableFuture.supplyAsync(() -> {
+            repositioningThread.set(Thread.currentThread());
+            return found.resumeSubscription(subscriptionId, StartAt.checkpoint(present));
+        });
+        awaitParkedIn(repositioning, repositioningThread, "awaitTheActions");
+        return repositioning;
     }
 
     @Test
@@ -1584,6 +1731,7 @@ class StreamCatchupResumeReplayMongoTest {
     private static final class ScriptedLiveModel extends SpringMongoSubscriptionModel {
         static final String UNAVAILABLE = "The live delegate is unavailable";
         private final AtomicInteger resumeFailuresLeft = new AtomicInteger();
+        private volatile @Nullable Error resumeError;
         final AtomicInteger resumeFailures = new AtomicInteger();
         private final AtomicInteger pauseFailuresLeft = new AtomicInteger();
         private final AtomicInteger startFailuresLeft = new AtomicInteger();
@@ -1599,6 +1747,10 @@ class StreamCatchupResumeReplayMongoTest {
 
         void failTheNextResumes(int times) {
             resumeFailuresLeft.set(times);
+        }
+
+        void throwOnTheNextResume(Error error) {
+            resumeError = error;
         }
 
         void failTheNextPause() {
@@ -1623,6 +1775,12 @@ class StreamCatchupResumeReplayMongoTest {
         }
 
         private void failIfAsked() {
+            Error error = resumeError;
+            if (error != null) {
+                resumeError = null;
+                resumeFailures.incrementAndGet();
+                throw error;
+            }
             if (resumeFailuresLeft.getAndUpdate(left -> left > 0 ? left - 1 : 0) > 0) {
                 resumeFailures.incrementAndGet();
                 throw new IllegalStateException(UNAVAILABLE);
@@ -1697,6 +1855,29 @@ class StreamCatchupResumeReplayMongoTest {
                 inGap.countDown();
                 awaitUpTo(leaveGap, 10);
             }
+        }
+    }
+
+    /**
+     * Fails the chosen time it is told a catch-up started, and counts how many times it is told.
+     */
+    private static final class FailingCatchupListener implements CatchupListener {
+        private final int failOnStart;
+        final AtomicInteger starts = new AtomicInteger();
+
+        FailingCatchupListener(int failOnStart) {
+            this.failOnStart = failOnStart;
+        }
+
+        @Override
+        public void catchupStarted(Object episode) {
+            if (starts.incrementAndGet() == failOnStart) {
+                throw new IllegalStateException("The listener failed");
+            }
+        }
+
+        @Override
+        public void historyRead(Object episode) {
         }
     }
 

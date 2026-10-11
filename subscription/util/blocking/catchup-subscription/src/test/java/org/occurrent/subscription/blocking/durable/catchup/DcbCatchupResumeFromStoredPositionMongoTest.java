@@ -21,6 +21,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -59,6 +60,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -67,6 +69,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
@@ -344,6 +347,132 @@ class DcbCatchupResumeFromStoredPositionMongoTest {
         }
     }
 
+    @Test
+    void a_dcb_replay_put_back_after_a_failed_resume_at_a_position_does_not_deliver_the_event_that_was_in_the_action_again() throws Exception {
+        // Given B's DCB resume replay is in the action, blocked on h2, and the live delegate fails the next resume
+        Scenario scenario = new Scenario();
+        try {
+            scenario.liveOfB.failTheNextResumes(1);
+
+            // When the subscription is resumed at the present from another thread, and the action returns, so the live delegate fails
+            CompletableFuture<Subscription> repositioning = scenario.resumeAtThePresentFromAnotherThread();
+            scenario.releaseH2.countDown();
+            Throwable failure = catchThrowable(() -> repositioning.get(10, SECONDS));
+
+            // Then the replay is put back and hands over, and delivers the rest of the history
+            assertThat(failure).as("the resume at a position").isInstanceOf(ExecutionException.class)
+                    .cause().isInstanceOf(IllegalStateException.class).hasMessageContaining("The live delegate is unavailable");
+            assertThat(scenario.handleOfTheReplay.waitUntilStarted(Duration.ofSeconds(15))).as("the handle of the replay started").isTrue();
+            await("B delivers the rest of the history").atMost(15, SECONDS)
+                    .untilAsserted(() -> assertThat(scenario.receivedByB).extracting(this::nameOf).contains("h3", "afterBRegistered"));
+            // And h2 was delivered once, since the held replay stores the position of the event in its action, and the replay put back after the failed live resume starts after it
+            assertThat(scenario.receivedByB).extracting(this::nameOf).as("what B received").containsOnlyOnce("h2");
+        } finally {
+            scenario.release();
+        }
+    }
+
+    @Test
+    void a_resume_at_a_position_whose_live_delegate_throws_an_error_after_waiting_for_the_action_of_the_dcb_resume_replay_rethrows_it_and_leaves_the_replay_running() throws Exception {
+        // Given B's DCB resume replay is in the action, blocked on h2, and the live delegate throws an error on the next resume
+        Scenario scenario = new Scenario();
+        try {
+            AssertionError error = new AssertionError("The live delegate broke");
+            scenario.liveOfB.throwOnTheNextResume(error);
+
+            // When the subscription is resumed at the present from another thread, and the action returns, so the live delegate throws
+            CompletableFuture<Subscription> repositioning = scenario.resumeAtThePresentFromAnotherThread();
+            scenario.releaseH2.countDown();
+            Throwable failure = catchThrowable(() -> repositioning.get(10, SECONDS));
+
+            // Then the error reaches the caller
+            assertThat(failure).as("the resume at a position").isInstanceOf(ExecutionException.class).cause().isSameAs(error);
+            // And the replay runs as before
+            assertThat(standaloneB.isRunning(scenario.subscriptionId)).as("running after the resume at a position threw an error").isTrue();
+            assertThat(standaloneB.hasParkedReplay(scenario.subscriptionId)).as("a replay is held after the resume at a position threw an error").isFalse();
+            // And it hands over, so the handle of the first resume starts and the rest of the history arrives
+            assertThat(scenario.handleOfTheReplay.waitUntilStarted(Duration.ofSeconds(15))).as("the handle of the replay started").isTrue();
+            await("B delivers the rest of the history").atMost(15, SECONDS)
+                    .untilAsserted(() -> assertThat(scenario.receivedByB).extracting(this::nameOf).contains("h3", "afterBRegistered"));
+        } finally {
+            scenario.release();
+        }
+    }
+
+    /**
+     * Two nodes over one event store and one checkpoint storage, with B's DCB resume replay in the action on h2 and
+     * the position after h1 stored by A, whose replay stalls in its second event.
+     */
+    private final class Scenario {
+        final SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "storage-" + UUID.randomUUID());
+        final CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        final DcbCriteria criteria = DcbCriteria.tags(Tag.parse("name:1"));
+        final PauseFailingLiveModel liveOfB = new PauseFailingLiveModel(mongoTemplate, eventCollectionName);
+        final DurableSubscriptionModel durableB = new DurableSubscriptionModel(liveOfB, storage);
+        final String subscriptionId = UUID.randomUUID().toString();
+        final CopyOnWriteArrayList<CloudEvent> receivedByB = new CopyOnWriteArrayList<>();
+        final CountDownLatch releaseA = new CountDownLatch(1);
+        final CountDownLatch releaseH2 = new CountDownLatch(1);
+        final Subscription handleOfTheReplay;
+
+        Scenario() throws Exception {
+            catchupA = new CatchupSubscriptionModel(new DurableSubscriptionModel(springModel(), storage), eventStore, criteria, config);
+            standaloneB = new DcbCatchupSubscriptionModel(durableB, eventStore, criteria, config);
+            AtomicInteger deliveredToA = new AtomicInteger();
+            CountDownLatch aIsStalled = new CountDownLatch(1);
+            Consumer<CloudEvent> stallingA = event -> {
+                if (deliveredToA.incrementAndGet() > 1) {
+                    aIsStalled.countDown();
+                    awaitUninterrupted(releaseA);
+                }
+            };
+            CountDownLatch inH2 = new CountDownLatch(1);
+            Consumer<CloudEvent> stallingB = event -> {
+                receivedByB.add(event);
+                if (nameOf(event).equals("h2") && inH2.getCount() > 0) {
+                    inH2.countDown();
+                    awaitUninterrupted(releaseH2);
+                }
+            };
+            appendTagged("name:1", nameDefined("h1"));
+            appendTagged("name:1", nameDefined("h2"));
+            appendTagged("name:1", nameDefined("h3"));
+            standaloneB.subscribePaused(subscriptionId, null, StartAt.subscriptionModelDefault(), stallingB);
+            catchupA.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), stallingA);
+            assertThat(aIsStalled.await(10, SECONDS)).as("A's replay reaches its second event").isTrue();
+            appendTagged("name:1", nameDefined("afterBRegistered"));
+            handleOfTheReplay = standaloneB.resumeSubscription(subscriptionId);
+            assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        }
+
+        // The subscription is resumed at the present from another thread, which returns once it waits for the action of the replay it holds
+        CompletableFuture<Subscription> resumeAtThePresentFromAnotherThread() {
+            RepositionableSubscriptions repositionable = RepositionableSubscriptions.findIn(standaloneB).orElseThrow();
+            Checkpoint present = requireNonNull(durableB.globalCheckpoint());
+            AtomicReference<Thread> repositioningThread = new AtomicReference<>();
+            CompletableFuture<Subscription> repositioning = CompletableFuture.supplyAsync(() -> {
+                repositioningThread.set(Thread.currentThread());
+                return repositionable.resumeSubscription(subscriptionId, StartAt.checkpoint(present));
+            });
+            await("the call waits inside awaitTheActions").atMost(10, SECONDS).until(() -> {
+                Thread thread = repositioningThread.get();
+                if (repositioning.isDone()) {
+                    return true;
+                }
+                if (thread == null || (thread.getState() != Thread.State.WAITING && thread.getState() != Thread.State.TIMED_WAITING)) {
+                    return false;
+                }
+                return Arrays.stream(thread.getStackTrace()).anyMatch(frame -> frame.getMethodName().equals("awaitTheActions"));
+            });
+            return repositioning;
+        }
+
+        void release() {
+            releaseA.countDown();
+            releaseH2.countDown();
+        }
+    }
+
     private SpringMongoSubscriptionModel springModel() {
         return new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, TimeRepresentation.RFC_3339_STRING);
     }
@@ -378,6 +507,7 @@ class DcbCatchupResumeFromStoredPositionMongoTest {
     private static final class PauseFailingLiveModel extends SpringMongoSubscriptionModel {
         private final AtomicInteger pauseFailuresLeft = new AtomicInteger();
         private final AtomicInteger resumeFailuresLeft = new AtomicInteger();
+        private volatile @Nullable Error resumeError;
         final AtomicInteger pauseCalls = new AtomicInteger();
 
         PauseFailingLiveModel(MongoTemplate mongoTemplate, String eventCollection) {
@@ -404,7 +534,16 @@ class DcbCatchupResumeFromStoredPositionMongoTest {
             return super.resumeSubscription(subscriptionId, startAt);
         }
 
+        void throwOnTheNextResume(Error error) {
+            resumeError = error;
+        }
+
         private void failIfAsked() {
+            Error error = resumeError;
+            if (error != null) {
+                resumeError = null;
+                throw error;
+            }
             if (resumeFailuresLeft.getAndUpdate(left -> left > 0 ? left - 1 : 0) > 0) {
                 throw new IllegalStateException("The live delegate is unavailable");
             }
