@@ -60,6 +60,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -67,11 +68,13 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
@@ -81,6 +84,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
@@ -180,6 +184,72 @@ class CatchupResumeReplayStreamModeMongoTest {
         append("afterPause", 4);
         await("nothing written after the pause reaches B while it is paused").during(2, SECONDS).atMost(5, SECONDS)
                 .untilAsserted(() -> assertThat(receivedByB).doesNotContain("afterPause"));
+    }
+
+    @Test
+    void the_subscription_reads_as_running_and_not_catching_up_while_the_resume_replay_hands_over_through_the_dispatcher() throws Exception {
+        // Given B has replayed the history another node's position leaves out, and its handover waits for the storage
+        CountDownLatch bIsStalled = new CountDownLatch(1);
+        CountDownLatch releaseB = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(recording("h3", bIsStalled, releaseB));
+        CompletableFuture<Subscription> resumed = CompletableFuture.supplyAsync(() -> catchupB.resumeSubscription(subscriptionId));
+        assertThat(bIsStalled.await(10, SECONDS)).as("B's replay reaches h3").isTrue();
+        storage.blockReadsOn(thread -> thread.getName().startsWith(REPLAY_THREAD_PREFIX));
+        releaseB.countDown();
+        assertThat(storage.blocked.await(10, SECONDS)).as("the handover reads the storage").isTrue();
+
+        // When the subscription is asked about in that window
+        boolean running = catchupB.isRunning(subscriptionId);
+        boolean paused = catchupB.isPaused(subscriptionId);
+        boolean catchingUp = catchupB.isCatchingUp(subscriptionId);
+        storage.unblock();
+        awaitHandover(resumed);
+
+        // Then it reads as running or paused
+        assertThat(running || paused).as("the subscription is running or paused while the replay hands over").isTrue();
+        // And as running, though no longer catching up
+        assertThat(running).as("the subscription is running while the replay hands over").isTrue();
+        assertThat(catchingUp).as("the replay has ended, so the subscription is not catching up").isFalse();
+        // And it keeps running once the handover is done
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running after the handover").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused after the handover").isFalse();
+    }
+
+    @Test
+    void a_pause_through_the_dispatcher_that_comes_right_after_a_failed_resume_handover_gave_up_the_lock_holds_the_replay_until_the_subscription_is_resumed() throws Exception {
+        // Given the storage fails the first read the handover of the resume replay makes, and the replay thread
+        // is descheduled right after it has given up the handover lock
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)));
+        GapLock gapLock = new GapLock(storage);
+        handoverLocksOf(catchupB).put(subscriptionId, gapLock);
+        storage.failTheNextHandoverReads(1);
+        gapLock.armed = true;
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(gapLock.inGap.await(10, SECONDS)).as("the handover failed and the replay thread gave up the lock").isTrue();
+
+        // When the subscription is paused in that gap
+        Throwable pauseFailure = catchThrowable(() -> catchupB.pauseSubscription(subscriptionId));
+        boolean paused = catchupB.isPaused(subscriptionId);
+        boolean running = catchupB.isRunning(subscriptionId);
+        gapLock.leaveGap.countDown();
+
+        // Then the pause returned without failing
+        assertThat(pauseFailure).as("the pause returned without throwing").isNull();
+        // And the subscription is paused right away
+        assertThat(paused).as("the subscription is paused after the pause returned").isTrue();
+        assertThat(running || paused).as("the subscription is running or paused in that gap").isTrue();
+        // And what is written after the pause is held back
+        append("afterPause", 4);
+        await("nothing written after the pause reaches B while it is paused").during(3, SECONDS).atMost(6, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).doesNotContain("afterPause"));
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is still paused").isTrue();
+
+        // And a later resume delivers the history and what was written after the pause
+        catchupB.resumeSubscription(subscriptionId);
+        await("B delivers what was written after the pause").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h2", "h3", "afterBRegistered", "afterPause"));
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused after the resume").isFalse();
+        assertThat(storage.handoverReadFailures.get()).as("the read in the handover failed once").isEqualTo(1);
     }
 
     @Test
@@ -331,6 +401,16 @@ class CatchupResumeReplayStreamModeMongoTest {
         ((CatchupSubscription) resumed.get(10, SECONDS)).delegatedSubscription().get(10, SECONDS);
     }
 
+    // The handover locks the children of the dispatcher share
+    @SuppressWarnings("unchecked")
+    private static ConcurrentMap<String, ReentrantLock> handoverLocksOf(CatchupSubscriptionModel dispatcher) throws Exception {
+        Field child = CatchupSubscriptionModel.class.getDeclaredField("streamCatchupSubscriptionModel");
+        child.setAccessible(true);
+        Field locks = AbstractCatchupSubscriptionModel.class.getDeclaredField("handoverLocks");
+        locks.setAccessible(true);
+        return (ConcurrentMap<String, ReentrantLock>) locks.get(child.get(dispatcher));
+    }
+
     private static void waitUpTo(CompletableFuture<?> future, int seconds) {
         try {
             future.get(seconds, SECONDS);
@@ -457,6 +537,31 @@ class CatchupResumeReplayStreamModeMongoTest {
     }
 
     /**
+     * The handover lock of an id, except that the replay thread waits once it has given the lock up for good after its
+     * handover failed, which stands in for a scheduler that deschedules it there.
+     */
+    private static final class GapLock extends ReentrantLock {
+        private final BlockingStorage storage;
+        volatile boolean armed = false;
+        final CountDownLatch inGap = new CountDownLatch(1);
+        final CountDownLatch leaveGap = new CountDownLatch(1);
+
+        GapLock(BlockingStorage storage) {
+            this.storage = storage;
+        }
+
+        @Override
+        public void unlock() {
+            super.unlock();
+            if (armed && !isHeldByCurrentThread() && Thread.currentThread().getName().startsWith(REPLAY_THREAD_PREFIX) && storage.handoverReadFailures.get() > 0) {
+                armed = false;
+                inGap.countDown();
+                awaitUpTo(leaveGap, 10);
+            }
+        }
+    }
+
+    /**
      * Reads the storage as it is, except that a read on a chosen thread either waits to be released or is held back
      * until something else has happened.
      */
@@ -466,6 +571,8 @@ class CatchupResumeReplayStreamModeMongoTest {
         private volatile @Nullable CountDownLatch holdUntil;
         final CountDownLatch blocked = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
+        private final AtomicInteger handoverReadFailuresLeft = new AtomicInteger();
+        final AtomicInteger handoverReadFailures = new AtomicInteger();
 
         BlockingStorage(CheckpointStorage delegate) {
             this.delegate = delegate;
@@ -487,8 +594,21 @@ class CatchupResumeReplayStreamModeMongoTest {
             release.countDown();
         }
 
+        // The next reads made while a resume replay hands over to the live delegate throw
+        void failTheNextHandoverReads(int times) {
+            handoverReadFailuresLeft.set(times);
+        }
+
+        private static boolean handsOverToTheLiveDelegate() {
+            return StackWalker.getInstance().walk(frames -> frames.anyMatch(frame -> frame.getMethodName().equals("resumeTheLiveDelegate")));
+        }
+
         @Override
         public @Nullable Checkpoint read(String subscriptionId) {
+            if (handoverReadFailuresLeft.get() > 0 && handsOverToTheLiveDelegate() && handoverReadFailuresLeft.getAndUpdate(left -> left > 0 ? left - 1 : 0) > 0) {
+                handoverReadFailures.incrementAndGet();
+                throw new IllegalStateException("The storage is unavailable");
+            }
             if (blockOn.test(Thread.currentThread())) {
                 CountDownLatch until = holdUntil;
                 if (until != null) {

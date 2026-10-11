@@ -205,7 +205,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // the gap after this attempt decided it was still current but before it finished acting on that, either
         // losing the cancellation or having a fresh attempt's checkpoint save wiped out by this attempt's late
         // delete a few lines down.
-        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+        return handOverUnderLock(subscriptionId, () -> {
             // endReplayIfStillCurrent checks stopped and shuttingDown as well as whether this attempt is still the
             // current one, so a stop() before this point parks this attempt's replay instead of handing it over. A
             // later attempt can have taken over just before this call, and only an attempt that ends its own
@@ -252,7 +252,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                 subscription = handOver(subscriptionId, filter, startAtToUse, dcbLiveConsumer(action, catchupPhaseCache));
             }
             return subscription;
-        }
+        });
     }
 
     // One pass of the position replay from replayStart

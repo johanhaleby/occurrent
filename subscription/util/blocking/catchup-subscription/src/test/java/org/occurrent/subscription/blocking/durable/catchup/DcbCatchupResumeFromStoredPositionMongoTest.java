@@ -65,6 +65,7 @@ import java.util.function.Consumer;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
@@ -182,8 +183,85 @@ class DcbCatchupResumeFromStoredPositionMongoTest {
         }
     }
 
+    @Test
+    void a_pause_during_the_dcb_resume_replay_leaves_the_live_delegate_paused_without_asking_it_to_pause_again() throws Exception {
+        // Given a DCB history, two catch-up instances over one checkpoint storage, and a live delegate of B that would fail a pause
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "storage-" + UUID.randomUUID());
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        DcbCriteria criteria = DcbCriteria.tags(Tag.parse("name:1"));
+        PauseFailingLiveModel liveOfB = new PauseFailingLiveModel(mongoTemplate, eventCollectionName);
+        DurableSubscriptionModel durableB = new DurableSubscriptionModel(liveOfB, storage);
+        catchupA = new CatchupSubscriptionModel(new DurableSubscriptionModel(springModel(), storage), eventStore, criteria, config);
+        catchupB = new CatchupSubscriptionModel(durableB, eventStore, criteria, config);
+
+        String subscriptionId = UUID.randomUUID().toString();
+        CopyOnWriteArrayList<CloudEvent> receivedByB = new CopyOnWriteArrayList<>();
+        AtomicInteger deliveredToA = new AtomicInteger();
+        CountDownLatch aIsStalled = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+        Consumer<CloudEvent> stallingA = event -> {
+            if (deliveredToA.incrementAndGet() > 1) {
+                aIsStalled.countDown();
+                awaitUninterrupted(releaseA);
+            }
+        };
+        CountDownLatch bIsStalled = new CountDownLatch(1);
+        CountDownLatch releaseB = new CountDownLatch(1);
+        Consumer<CloudEvent> stallingB = event -> {
+            receivedByB.add(event);
+            if (nameOf(event).equals("h3") && bIsStalled.getCount() > 0) {
+                bIsStalled.countDown();
+                awaitUninterrupted(releaseB);
+            }
+        };
+
+        try {
+            appendTagged("name:1", nameDefined("h1"));
+            appendTagged("name:1", nameDefined("h2"));
+            appendTagged("name:1", nameDefined("h3"));
+            catchupB.subscribePaused(subscriptionId, null, StartAt.subscriptionModelDefault(), stallingB);
+            catchupA.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), stallingA);
+            assertThat(aIsStalled.await(10, SECONDS)).as("A's replay reaches its second event").isTrue();
+            appendTagged("name:1", nameDefined("afterBRegistered"));
+            catchupB.resumeSubscription(subscriptionId);
+            assertThat(bIsStalled.await(10, SECONDS)).as("B's replay reaches h3").isTrue();
+            int pausesAskedBeforeThePause = liveOfB.pauseCalls.get();
+            liveOfB.failTheNextPause();
+
+            // When the subscription is paused, and the replay then hands over
+            assertThatCode(() -> catchupB.pauseSubscription(subscriptionId)).as("the pause").doesNotThrowAnyException();
+            releaseB.countDown();
+            appendTagged("name:1", nameDefined("afterPause"));
+
+            // Then what is written after the pause does not reach B
+            await("nothing written after the pause reaches B while it is paused").during(3, SECONDS).atMost(6, SECONDS)
+                    .untilAsserted(() -> assertThat(receivedByB).extracting(this::nameOf).doesNotContain("afterPause"));
+            // And the subscription is paused, and the live delegate holds it paused without having been asked to pause it
+            assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is paused").isTrue();
+            assertThat(durableB.isPaused(subscriptionId)).as("the live delegate holds the subscription paused").isTrue();
+            assertThat(liveOfB.pauseCalls.get() - pausesAskedBeforeThePause).as("the pauses the live delegate was asked for").isZero();
+
+            // And a later resume delivers what was written after the pause
+            catchupB.resumeSubscription(subscriptionId);
+            await("B delivers what was written after the pause").atMost(10, SECONDS)
+                    .untilAsserted(() -> assertThat(receivedByB).extracting(this::nameOf).contains("h2", "h3", "afterBRegistered", "afterPause"));
+            assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused after the resume").isFalse();
+        } finally {
+            releaseA.countDown();
+            releaseB.countDown();
+        }
+    }
+
     private SpringMongoSubscriptionModel springModel() {
         return new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, TimeRepresentation.RFC_3339_STRING);
+    }
+
+    private static void awaitUninterrupted(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private String nameOf(CloudEvent cloudEvent) {
@@ -199,5 +277,30 @@ class DcbCatchupResumeFromStoredPositionMongoTest {
                 .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.parse(tag))))
                 .toList();
         eventStore.append(cloudEvents);
+    }
+
+    /**
+     * The live delegate as it is, except that it counts the pauses it is asked for and can fail the next one.
+     */
+    private static final class PauseFailingLiveModel extends SpringMongoSubscriptionModel {
+        private final AtomicInteger pauseFailuresLeft = new AtomicInteger();
+        final AtomicInteger pauseCalls = new AtomicInteger();
+
+        PauseFailingLiveModel(MongoTemplate mongoTemplate, String eventCollection) {
+            super(mongoTemplate, eventCollection, TimeRepresentation.RFC_3339_STRING);
+        }
+
+        void failTheNextPause() {
+            pauseFailuresLeft.set(1);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            pauseCalls.incrementAndGet();
+            if (pauseFailuresLeft.getAndUpdate(left -> left > 0 ? left - 1 : 0) > 0) {
+                throw new IllegalStateException("The live delegate is unavailable");
+            }
+            super.pauseSubscription(subscriptionId);
+        }
     }
 }

@@ -307,7 +307,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // cancelSubscription or a fresh subscribe for this id could land in the gap after this attempt decided it
         // was still current but before it finished acting on that, either losing the cancellation or, for a fresh
         // attempt, having its own checkpoint save wiped out by this attempt's late delete a few lines down.
-        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+        return handOverUnderLock(subscriptionId, () -> {
             // endReplayIfStillCurrent checks stopped and shuttingDown as well as whether this attempt is still the
             // current one, so a stop() before this point parks this attempt's replay instead of handing it over. A
             // later attempt can have taken over just before this call, and only an attempt that ends its own
@@ -356,7 +356,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 }
             };
             return startDelegatedSubscription(subscriptionId, filter, subscriptionsWasCancelledOrShutdown, startAtToUse, liveConsumer);
-        }
+        });
     }
 
     // One pass of the time replay from replayStart
@@ -463,7 +463,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
         // time-based path above. An unlocked gap here is observable two ways, a lost cancellation, or a fresh
         // attempt's checkpoint save wiped out by this attempt's late delete.
-        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+        return handOverUnderLock(subscriptionId, () -> {
             // See the time-based path's identical reasoning for why this is the atomic decision itself.
             final boolean subscriptionsWasCancelledOrShutdown = !endReplayIfStillCurrent(subscriptionId);
 
@@ -503,7 +503,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 }
             };
             return startDelegatedSubscription(subscriptionId, filter, subscriptionsWasCancelledOrShutdown, startAtToUse, liveConsumer);
-        }
+        });
     }
 
     // One pass of the position replay from replayStart

@@ -435,9 +435,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
 
     @Override
     public void pauseSubscription(String subscriptionId) {
-        // A replay a resume started hands the subscription back to the live delegate once it is done, so the catch-up
-        // running it applies the pause then. Decided under the handover lock the children share, so a pause that comes
-        // while that replay hands over waits until the live delegate has the subscription.
+        // The live delegate holds the subscription of a replay a resume started paused, so the catch-up running that
+        // replay takes the pause and holds the replay. Decided under the handover lock the children share, so a pause
+        // that comes while that replay hands over waits until the handover has gone live or failed.
         AbstractCatchupSubscriptionModel.HandoverLock lock = presentCatchupModels().findFirst().map(model -> model.tryLockHandover(subscriptionId)).orElse(null);
         try {
             AbstractCatchupSubscriptionModel replaying = presentCatchupModels().filter(model -> model.replaysToResumeHere(subscriptionId)).findFirst().orElse(null);
