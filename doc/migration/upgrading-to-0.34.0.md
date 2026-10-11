@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-The guide has twenty-eight sections, six of them about compile-time breaks. At compile time, if you use the flow saga's
+The guide has twenty-nine sections, six of them about compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, plus the type that starts the flow, which most
@@ -110,10 +110,15 @@ a warning. Read
 Then a MongoDB event store with `DCB` and without `STREAM` no longer creates the `dcbTags_1` index, though one
 created on 0.33.0 or earlier keeps it. Enabling `STREAM` on a DCB store builds it at startup if it isn't there. Read
 [section 27](#27-a-dcb-only-mongodb-event-store-no-longer-creates-the-dcbtags-index).
-Finally, a blocking catch-up that replays by event time now reads its live start before the replay and stores it with
+Then a blocking catch-up that replays by event time now reads its live start before the replay and stores it with
 the time, so an event with an earlier time that commits late is no longer missed. More events arrive twice, a long
 replay depends on the oplog, and a rollback with a string storage fails to start such a subscription. Read
 [section 28](#28-a-time-based-catch-up-reads-its-live-start-before-the-replay).
+Finally, on the blocking stack a subscription that resumes from the position another node's catch-up stored, as a
+competing consumer does when it takes over a lease, now replays from it instead of going live from the present. A
+`subscribe(..)` through the catch-up model with the id of a subscription the wrapped model holds is refused at the
+call. Read
+[section 29](#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -2431,36 +2436,6 @@ A `CheckpointStorage` of your own that stores `asString()` and returns a `String
 that reads `position:` itself with `Long.parseLong` fails on the new form, so read it with `GlobalCheckpoint.parse(..)`
 instead.
 
-On the blocking stack, a subscription that resumes from the position another node's catch-up stored now replays from
-it too, through `CatchupSubscriptionModel` or `StreamCatchupSubscriptionModel`. That is what a competing consumer does
-when it takes over the lease of a subscription whose catch-up another node had not finished. In 0.33.0 the MongoDB model
-went live from the present there and skipped the events in between, see
-[#1219](https://github.com/johanhaleby/occurrent/issues/1219). The new owner can now deliver again what the other node
-already delivered after that position, up to the event store's head. `resumeSubscription(subscriptionId)` and
-`start(true)` replay this way, and `resumeSubscription(subscriptionId, startAt)` doesn't. When the wrapped model
-can't resume a subscription from a given position, the resume throws an `IllegalStateException` that names that model.
-
-To find out whether any subscription would replay, `start(true)` reads the stored position of the subscriptions made
-through the catch-up model on every start. When one would, the wrapped model starts without resuming anything, and the
-catch-up model then resumes each subscription the wrapped model holds paused. A wrapped model that can't list its
-subscriptions only gets the ones made through the catch-up model resumed, and the others stay paused.
-
-A replay that fails is logged at `ERROR` and runs again from the last position it stored, after a backoff that starts
-at 100 ms and doubles up to 2 seconds. That includes a failure at the handover, when reading or storing the position
-throws or the wrapped model fails to resume the subscription. While the replay waits to run again, the subscription
-is running and catching up, and isn't paused. A call that comes in the meantime decides what happens to the replay:
-
-| Call while the replay waits | What happens to the replay |
-|---|---|
-| `pauseSubscription(subscriptionId)` | Held, and the subscription is paused until `resumeSubscription(subscriptionId)` or `start(true)` runs the replay again |
-| `stop()` | Held the same way, and it stays held after `start(false)` |
-| `cancelSubscription(subscriptionId)` or `shutdown()` | Ends |
-| `resumeSubscription(subscriptionId, startAt)` on `CatchupSubscriptionModel` | Ends, and the subscription resumes at `startAt` |
-
-A stop while the replay reads history holds the replay too. A pause then is applied once the replay hands over, or
-holds the replay when it fails. When the wrapped model already runs the subscription by the time the replay hands
-over, the replay ends without running again, and that is logged at `ERROR` too.
-
 `CheckpointAwareSubscriptionModel` gains `canResumeFrom(Checkpoint)`, `boolean` on the blocking stack and
 `Mono<Boolean>` on the reactor stack. It answers `true` by default, so a model of your own still compiles. The MongoDB
 models answer `false` when MongoDB refuses to open a change stream at the checkpoint because its history is gone. If
@@ -2604,3 +2579,59 @@ that parses the stored time itself fails on the new form, so read it with `Catch
 
 There is no recipe for this change. What is stored and when a resume delivers again is runtime behavior that a rewrite
 of the source cannot see.
+
+## 29. A blocking subscription that resumes from another node's catch-up position replays from it
+
+On the blocking stack, `CatchupSubscriptionModel` and `StreamCatchupSubscriptionModel` now replay from the position
+another node's catch-up stored when a subscription resumes from it. That is what a competing consumer does when it
+takes over the lease of a subscription whose catch-up another node had not finished, and the blocking MongoDB Spring
+Boot starter builds a competing consumer over `CatchupSubscriptionModel`.
+
+In 0.33.0 the MongoDB model went live from the present there and skipped the events in between, see
+[#1219](https://github.com/johanhaleby/occurrent/issues/1219). The new owner can now deliver again what the other node
+already delivered after that position, up to the event store's head.
+
+`resumeSubscription(subscriptionId)` and `start(true)` replay this way, and `resumeSubscription(subscriptionId, startAt)`
+doesn't. To find out whether any subscription would replay, `start(true)` reads the stored position of the
+subscriptions made through the catch-up model on every start. When one would, the wrapped model starts without
+resuming anything, and the catch-up model then resumes each subscription the wrapped model holds paused. A wrapped
+model that can't list its subscriptions only gets the ones made through the catch-up model resumed, and the others
+stay paused.
+
+The replay needs a wrapped model that can resume a subscription from a given position, one that implements
+`RepositionableSubscriptions` or wraps one that does. Both MongoDB models implement it, so `DurableSubscriptionModel`
+over either of them works. Over any other wrapped model, a resume that would replay throws an `IllegalStateException`
+that names that model, where 0.33.0 had that model resume the subscription from its own position.
+
+A replay that fails is logged at `ERROR` and runs again from the last position it stored, after a backoff that starts
+at 100 ms and doubles up to 2 seconds. That includes a failure at the handover, when reading or storing the position
+throws or the wrapped model fails to resume the subscription. While the replay waits to run again, the subscription
+is running and catching up, and isn't paused. A call that comes in the meantime decides what happens to the replay:
+
+| Call while the replay waits | What happens to the replay |
+|---|---|
+| `pauseSubscription(subscriptionId)` | Held, and the subscription is paused until `resumeSubscription(subscriptionId)` or `start(true)` runs the replay again |
+| `stop()` | Held the same way, and it stays held after `start(false)` |
+| `cancelSubscription(subscriptionId)` or `shutdown()` | Ends |
+| `resumeSubscription(subscriptionId, startAt)` on `CatchupSubscriptionModel` | Ends, and the subscription resumes at `startAt` |
+
+A stop while the replay reads history holds the replay too. A pause while it reads history lets it read on, and once
+it has delivered the history the replay is held instead of handing over. The wrapped model keeps the subscription
+paused, and `resumeSubscription(subscriptionId)` or `start(true)` runs the replay again.
+
+When the replay fails before it has delivered the history, the pause holds it as in the table. A pause that comes
+while the replay hands over waits until the handover has ended. When the wrapped model resumed the subscription, the
+pause then pauses it there, and when the handover failed, the pause holds the replay.
+
+During the handover the subscription is running and no longer catching up. When the wrapped model already runs the
+subscription by the time the replay hands over, the replay ends without running again, and that is logged at `ERROR`
+too.
+
+Subscribing again through the catch-up model, with the id of a subscription made through it that the wrapped model
+holds running or paused, throws `DuplicateSubscriptionIdException` from `subscribe(..)`. In 0.33.0 a subscribe that
+replays history first ran that replay into the new subscription's action and could change the checkpoint stored for
+the id, and only its `waitUntilStarted()` threw the exception, once the replay handed over. Catch it where you call
+`subscribe(..)`.
+
+There is no recipe for this change. Where a subscription resumes from and when a subscribe is refused are runtime
+behavior that a rewrite of the source cannot see.
