@@ -2592,8 +2592,9 @@ In 0.33.0 the MongoDB model went live from the present there and skipped the eve
 already delivered after that position, up to the event store's head.
 
 `resumeSubscription(subscriptionId)` and `start(true)` replay this way, and `resumeSubscription(subscriptionId, startAt)`
-doesn't. To find out whether any subscription would replay, `start(true)` reads the stored position of the
-subscriptions made through the catch-up model on every start. When one would, the wrapped model starts without
+doesn't. To find out whether any subscription would replay, `start(true)` reads the stored positions of the
+subscriptions made through the catch-up model that the wrapped model holds paused, and stops at the first one that
+would replay. When one would, the wrapped model starts without
 resuming anything, and the catch-up model then resumes each subscription the wrapped model holds paused. A wrapped
 model that can't list its subscriptions only gets the ones made through the catch-up model resumed, and the others
 stay paused.
@@ -2623,15 +2624,28 @@ When the replay fails before it has delivered the history, the pause holds it as
 while the replay hands over waits until the handover has ended. When the wrapped model resumed the subscription, the
 pause then pauses it there, and when the handover failed, the pause holds the replay.
 
+A `resumeSubscription(subscriptionId)` on the catch-up model while the replay reads history drops a pause asked
+before it, so the replay hands over and the subscription runs. Through `CompetingConsumerSubscriptionModel` that
+resume throws `SubscriptionAlreadyRunningException` instead, because the catch-up model reports the subscription as
+both running and paused until the replay has ended. The pause then holds the replay once it has delivered the
+history, and a second `resumeSubscription(subscriptionId)` runs the replay again.
+
 During the handover the subscription is running and no longer catching up. When the wrapped model already runs the
 subscription by the time the replay hands over, the replay ends without running again, and that is logged at `ERROR`
 too.
 
-Subscribing again through the catch-up model, with the id of a subscription made through it that the wrapped model
-holds running or paused, throws `DuplicateSubscriptionIdException` from `subscribe(..)`. In 0.33.0 a subscribe that
+Subscribing again through the catch-up model, with the id of a subscription made through it that is running or
+paused, throws `DuplicateSubscriptionIdException` from `subscribe(..)`, before anything kept for the existing
+subscription changes. That includes a subscription whose replay still reads history, hands over, waits to run again
+or is held, whether a subscribe or a resume started that replay, and whichever mode either subscription uses. After
+`cancelSubscription(subscriptionId)` the id can be subscribed again, and so can the id of a subscription whose
+subscribe ran a replay that failed before the wrapped model got the subscription.
+
+In 0.33.0 a second subscribe while the first subscription still replayed history was accepted, and both delivered
+events to their own action until one of them ended. Once the wrapped model held the subscription, a subscribe that
 replays history first ran that replay into the new subscription's action and could change the checkpoint stored for
-the id, and only its `waitUntilStarted()` threw the exception, once the replay handed over. Catch it where you call
-`subscribe(..)`.
+the id, and only its `waitUntilStarted()` threw the exception, once the replay handed over. Catch the exception where
+you call `subscribe(..)`.
 
 There is no recipe for this change. Where a subscription resumes from and when a subscribe is refused are runtime
 behavior that a rewrite of the source cannot see.

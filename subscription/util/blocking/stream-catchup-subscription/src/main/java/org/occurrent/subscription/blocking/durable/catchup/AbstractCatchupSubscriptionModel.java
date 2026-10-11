@@ -197,22 +197,30 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         return subscribeAndRemember(subscriptionId, filter, startAt, action, true);
     }
 
-    // Locked, so a cancel comes either before the subscription is made, or after it is remembered and removes it.
-    // Remembered after subscribing, since a subscription that starts live cancels any catch-up for the id once the
-    // live delegate has it. A subscription made here that the live delegate holds is refused before anything kept for
-    // it changes, since the live delegate refuses it too, at the latest when a replay hands over. Asked before the
-    // lock, so a subscribe that comes while a replay for the id hands over isn't refused here, and its own replay
-    // fails once it hands over.
+    // Under the handover lock, so a cancel, a handover, a replay run again or another subscribe for the id comes either
+    // before the refusal is decided or after the subscription is remembered.
     private Subscription subscribeAndRemember(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
-        SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
-        if (subscribed.containsKey(subscriptionId) && (liveDelegate.isRunning(subscriptionId) || liveDelegate.isPaused(subscriptionId))) {
-            throw new DuplicateSubscriptionIdException(subscriptionId);
-        }
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            if (isInUse(subscriptionId)) {
+                throw new DuplicateSubscriptionIdException(subscriptionId);
+            }
             Subscription subscription = subscribe(subscriptionId, filter, startAt, action, holdPaused);
             subscribed.put(subscriptionId, new Subscribed(this, filter, startAt, action));
             return subscription;
         }
+    }
+
+    // Running or paused means a replay for the id reads history, hands over, waits to run again or is held, or the live
+    // delegate runs or holds paused a subscription made through this model or another child of the same dispatcher. A
+    // cancelled one is not, and neither is one whose subscribe ran a replay that failed before the live delegate got it.
+    private boolean isInUse(String subscriptionId) {
+        CatchupAttempt running = currentAttempt.get(subscriptionId);
+        if (running != null && !running.abandoned()) {
+            return true;
+        }
+        Subscribed made = subscribed.get(subscriptionId);
+        SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
+        return made != null && (made.owner().hasParkedReplay(subscriptionId) || liveDelegate.isRunning(subscriptionId) || liveDelegate.isPaused(subscriptionId));
     }
 
     /**
@@ -375,6 +383,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * When the position stored for the subscription is one a catch-up replays from, such as the position another
      * node's catch-up stored while it replayed, this replays from there before the live delegate resumes it, as
      * {@link #replayToResume(String)} describes.
+     * <p>
+     * A pause asked while a replay for the subscription still reads history is dropped, so the replay hands over and
+     * the subscription runs.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
@@ -555,7 +566,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     /**
      * Pauses {@code subscriptionId}. Takes the handover lock, so a pause that comes while a finishing replay hands over
-     * waits until the handover has gone live or failed.
+     * waits until the handover has gone live, failed, or held the replay.
      * <p>
      * While a replay a subscribe started still runs, the subscription is paused once the live delegate has it. While a
      * replay a resume started still runs, the replay is held when it hands over, and the live delegate keeps the
@@ -569,7 +580,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             CatchupAttempt running = currentAttempt.get(subscriptionId);
             if (running != null && running.backingOff) {
                 hold(subscriptionId, running);
-            } else if (isReplayingToResume(subscriptionId) || runningCatchupSubscriptions.containsKey(subscriptionId)) {
+            } else if (runningCatchupSubscriptions.containsKey(subscriptionId)) {
                 // Recorded for the handover, or for runAgainAfter when the replay fails first. The replay itself keeps
                 // running until the handover since interrupting and resuming it would require persisting the exact
                 // replay cursor, which this class does not do.
@@ -1541,9 +1552,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     logFailure(subscriptionId, failure, "it runs again once the subscription is resumed or this model started");
                     return null;
                 }
-                if (pauseRequestedDuringCatchup.remove(subscriptionId) != null || Thread.currentThread().isInterrupted()) {
+                boolean pauseAsked = pauseRequestedDuringCatchup.remove(subscriptionId) != null;
+                if (pauseAsked || Thread.currentThread().isInterrupted()) {
                     attempt.backingOff = false;
                     hold(subscriptionId, attempt);
+                    if (failure == null && !pauseAsked) {
+                        log.error("The catch-up replay for subscription {} was interrupted while it waited to run again, so it runs again once the subscription is resumed.", subscriptionId);
+                    }
                     logFailure(subscriptionId, failure, "it runs again once the subscription is resumed");
                     return null;
                 }

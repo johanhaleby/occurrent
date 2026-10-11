@@ -386,13 +386,17 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * before the live delegate resumes it. The live delegate can't open its live feed at such a position, and would
      * resume from its own position instead, past events nobody delivered to the subscription. The replay can deliver
      * events this node already delivered.
+     * <p>
+     * A pause asked while a replay for the subscription still reads history is dropped, so the replay hands over and
+     * the subscription runs.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         if (presentCatchupModels().anyMatch(model -> model.stopped) && isPaused(subscriptionId)) {
             start(false);
         }
-        AbstractCatchupSubscriptionModel parkedIn = presentCatchupModels().filter(model -> model.hasParkedReplay(subscriptionId)).findFirst().orElse(null);
+        presentCatchupModels().forEach(model -> model.pauseRequestedDuringCatchup.remove(subscriptionId));
+        AbstractCatchupSubscriptionModel parkedIn =presentCatchupModels().filter(model -> model.hasParkedReplay(subscriptionId)).findFirst().orElse(null);
         if (parkedIn != null) {
             Subscription relaunched = parkedIn.relaunchParkedReplay(subscriptionId);
             if (relaunched != null) {

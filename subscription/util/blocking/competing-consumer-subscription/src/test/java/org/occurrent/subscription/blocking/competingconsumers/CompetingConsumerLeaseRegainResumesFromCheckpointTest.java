@@ -38,6 +38,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -74,6 +75,7 @@ import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
@@ -415,6 +417,77 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
         } finally {
             releaseA.countDown();
         }
+    }
+
+    @Test
+    @Timeout(120)
+    void a_resume_during_a_resume_replay_after_a_pause_is_refused_and_the_replay_is_held_until_a_second_resume_runs_it_again() throws Exception {
+        // Given B is stopped and registered, A's replay stored a position and stalls, and the lease moves to B whose resume replay stalls at h3
+        String subscriptionId = UUID.randomUUID().toString();
+        CopyOnWriteArrayList<CloudEvent> eventsA = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<CloudEvent> eventsB = new CopyOnWriteArrayList<>();
+        CountDownLatch aIsStalled = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+        CountDownLatch bIsStalled = new CountDownLatch(1);
+        CountDownLatch releaseB = new CountDownLatch(1);
+        String positionedEvents = "positioned-events-" + UUID.randomUUID();
+        SpringMongoEventStore positionedEventStore = positionedEventStore(positionedEvents);
+        SpringMongoCheckpointStorage checkpointStorage = new SpringMongoCheckpointStorage(mongoTemplate, checkpointCollection);
+        CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(checkpointStorage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        nodeA = new CompetingConsumerSubscriptionModel(new CatchupSubscriptionModel(new DurableSubscriptionModel(springModel(positionedEvents), checkpointStorage), positionedEventStore, catchupConfig), strategy);
+        nodeB = new CompetingConsumerSubscriptionModel(new CatchupSubscriptionModel(new DurableSubscriptionModel(springModel(positionedEvents), checkpointStorage), positionedEventStore, catchupConfig), strategy);
+
+        try {
+            positionedEventStore.write(streamId, serialize(new NameDefined("h1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "h1")));
+            positionedEventStore.write(streamId, serialize(new NameWasChanged("h2", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "h2")));
+            positionedEventStore.write(streamId, serialize(new NameWasChanged("h3", LocalDateTime.of(2026, 1, 1, 0, 0, 2), "name", "h3")));
+            nodeB.stop();
+            nodeB.subscribe("B", subscriptionId, null, StartAt.subscriptionModelDefault(), stallingAt("h3", eventsB, bIsStalled, releaseB));
+            nodeA.subscribe("A", subscriptionId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)), stallingAt("h2", eventsA, aIsStalled, releaseA));
+            assertThat(aIsStalled.await(10, SECONDS)).as("A's replay reaches h2").isTrue();
+            nodeB.start();
+            strategy.transferLease(subscriptionId, "A", "B");
+            assertThat(bIsStalled.await(10, SECONDS)).as("B's resume replay reaches h3").isTrue();
+
+            // When the user pauses B during the resume replay and resumes it again
+            nodeB.pauseSubscription(subscriptionId);
+            Throwable resumeFailure = catchThrowable(() -> nodeB.resumeSubscription(subscriptionId));
+
+            // Then the resume is refused because the replay still runs
+            assertThat(resumeFailure).as("the resume during the replay").isInstanceOf(SubscriptionAlreadyRunningException.class);
+
+            // And once the replay has delivered the history it is held, so what is written afterwards is not delivered
+            releaseB.countDown();
+            positionedEventStore.write(streamId, serialize(new NameWasChanged("sentinel", LocalDateTime.of(2026, 1, 1, 0, 0, 5), "name", "sentinel")));
+            await("the replay delivers the history").atMost(10, SECONDS)
+                    .untilAsserted(() -> assertThat(eventsB).extracting(CloudEvent::getId).contains("h2", "h3"));
+            await("nothing written after the pause reaches B while the replay is held").during(2, SECONDS).atMost(6, SECONDS)
+                    .untilAsserted(() -> assertThat(eventsB).extracting(CloudEvent::getId).doesNotContain("sentinel"));
+            assertThat(nodeB.isPaused(subscriptionId)).as("the subscription is held paused").isTrue();
+
+            // And a second resume runs the replay again and delivers it
+            nodeB.resumeSubscription(subscriptionId);
+            await("B delivers the sentinel after the second resume").atMost(10, SECONDS)
+                    .untilAsserted(() -> assertThat(eventsB).extracting(CloudEvent::getId).contains("sentinel"));
+            assertThat(nodeB.isPaused(subscriptionId)).as("the subscription is no longer paused").isFalse();
+        } finally {
+            releaseA.countDown();
+            releaseB.countDown();
+        }
+    }
+
+    private static Consumer<CloudEvent> stallingAt(String eventId, List<CloudEvent> received, CountDownLatch stalled, CountDownLatch release) {
+        return event -> {
+            received.add(event);
+            if (event.getId().equals(eventId) && release.getCount() > 0) {
+                stalled.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
     }
 
     @FunctionalInterface

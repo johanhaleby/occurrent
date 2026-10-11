@@ -54,11 +54,13 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 
@@ -426,16 +428,14 @@ class DcbCatchupSubscriptionModelTest {
 
         // A fresh, normally-delegating attempt for the same id, started on its own thread while the first is
         // blocked right after deciding it is still current but before its own delete runs.
+        AtomicReference<Throwable> freshFailure = new AtomicReference<>();
         Thread freshAttempt = new Thread(() -> {
             try {
+                subscription.cancelSubscription(subscriptionId);
                 subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
                 }).waitUntilStarted();
-            } catch (RuntimeException ignored) {
-                // The stale attempt above also subscribes the delegate unconditionally once its own handover
-                // decides it is still current, even though its own StartAt resolved to null for the delegate, so
-                // the two attempts' delegate subscribe calls can then collide on the in-memory model's duplicate-id
-                // check. Immaterial here, this test only cares whether the fresh attempt's own checkpoint save
-                // (asserted below) survives, and that save runs before this call, not after it.
+            } catch (Throwable e) {
+                freshFailure.set(e);
             }
         });
         freshAttempt.start();
@@ -449,6 +449,7 @@ class DcbCatchupSubscriptionModelTest {
         releaseFinishing.countDown();
         freshAttempt.join(Duration.ofSeconds(5).toMillis());
 
+        assertThat(freshFailure.get()).as("what the fresh attempt's cancel and subscribe threw").isNull();
         assertThat(freshSaved.await(5, TimeUnit.SECONDS))
                 .as("the fresh attempt must have saved its own position by the time both attempts have finished")
                 .isTrue();
@@ -458,43 +459,69 @@ class DcbCatchupSubscriptionModelTest {
                 .isNotNull();
     }
 
-    /**
-     * Copilot review on PR #839 (issue #827), a fourth finding on top of the two already fixed above, the DCB side
-     * of the same gap. Serializing only calls that go through {@code startCatchupAsync} missed {@code subscribe}'s
-     * own direct-to-live branches, which hand the id straight to the live delegate without ever starting a
-     * catch-up. A same-id catch-up still replaying, unaware a live subscribe has already claimed its id, would
-     * still subscribe the delegate itself once its replay finishes, racing the delegate subscribe the direct live
-     * subscribe already made.
-     */
     @Test
-    void a_live_subscribe_for_the_same_id_supersedes_a_still_replaying_catchups_own_delegate_subscribe() throws Exception {
+    void a_live_subscribe_for_the_same_id_while_a_catch_up_still_replays_is_refused_and_the_catch_up_goes_live_with_its_own_delegate_subscribe() throws Exception {
         appendTagged("name:1", nameDefined("event1"));
         String subscriptionId = "subscription";
         CountDownLatch replayReached = new CountDownLatch(1);
         CountDownLatch releaseReplay = new CountDownLatch(1);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
 
         DcbCatchupSubscriptionModel subscription = new DcbCatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")), new CatchupSubscriptionModelConfig(100));
 
-        Subscription staleAttempt = subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+        CatchupSubscription replaying = (CatchupSubscription) subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            received.add(nameOf(cloudEvent));
             replayReached.countDown();
             awaitLatch(releaseReplay);
         });
         assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
 
         // A live subscribe for the same id, bypassing catch-up entirely since StartAt.now() is not a DCB catch-up
-        // position, while the catch-up above is still blocked mid-replay, well before it reaches its own handover
-        // lock.
-        subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
-        }).waitUntilStarted();
-
+        // position, while the catch-up above is still blocked mid-replay
+        Throwable thrown = catchThrowable(() -> subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+        }));
         releaseReplay.countDown();
 
-        Future<Subscription> staleDelegatedSubscription = ((CatchupSubscription) staleAttempt).delegatedSubscription();
-        assertThat(staleDelegatedSubscription.get(5, TimeUnit.SECONDS))
-                .as("a live subscribe claiming an id while a same-id catch-up is still replaying must cancel that "
-                        + "catch-up's finishing tail instead of leaving it to also subscribe the delegate once its "
-                        + "replay catches up, colliding with the live subscribe that already claimed the same id")
-                .isInstanceOf(CancelledSubscription.class);
+        assertThat(thrown).as("the live subscribe for an id whose catch-up still replays").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(replaying.delegatedSubscription().get(5, TimeUnit.SECONDS))
+                .as("the catch-up keeps its own delegate subscribe instead of being cancelled by the refused live subscribe")
+                .isNotInstanceOf(CancelledSubscription.class);
+        appendTagged("name:1", nameDefined("event2"));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).containsExactly("event1", "event2"));
+        assertThat(subscription.isRunning(subscriptionId)).as("the subscription runs once the catch-up went live").isTrue();
+    }
+
+    @Test
+    void a_subscribe_for_the_same_id_while_a_dcb_replay_runs_is_refused_whichever_catch_up_it_routes_to_and_the_replay_delivers_every_event() throws Exception {
+        appendTagged("name:1", nameDefined("event1"), nameDefined("event2"));
+        String subscriptionId = "subscription";
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        CopyOnWriteArrayList<String> receivedByFirst = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> receivedByRefused = new CopyOnWriteArrayList<>();
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, eventStore, DcbCriteria.tags(Tag.parse("name:1")), new CatchupSubscriptionModelConfig(100));
+        CatchupSubscription first = (CatchupSubscription) subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            receivedByFirst.add(nameOf(cloudEvent));
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Once through the DCB catch-up, once through the stream catch-up the dispatcher routes a time start to,
+        // and once as a live subscribe
+        Throwable dcbCatchup = catchThrowable(() -> subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> receivedByRefused.add(nameOf(cloudEvent))));
+        Throwable streamCatchup = catchThrowable(() -> subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> receivedByRefused.add(nameOf(cloudEvent))));
+        Throwable live = catchThrowable(() -> subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> receivedByRefused.add(nameOf(cloudEvent))));
+        releaseReplay.countDown();
+
+        assertThat(dcbCatchup).as("the second DCB catch-up subscribe").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(streamCatchup).as("the stream catch-up subscribe for an id a DCB replay runs").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(live).as("the live subscribe").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(first.delegatedSubscription().get(5, TimeUnit.SECONDS)).as("the first catch-up hands over").isNotInstanceOf(CancelledSubscription.class);
+        await().atMost(Duration.ofSeconds(5)).until(() -> !subscription.isCatchingUp(subscriptionId));
+        appendTagged("name:1", nameDefined("event3"));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(receivedByFirst).as("what the first subscription received").containsExactly("event1", "event2", "event3"));
+        assertThat(receivedByRefused).as("what the refused subscriptions received").isEmpty();
     }
 
     @Test
@@ -726,6 +753,10 @@ class DcbCatchupSubscriptionModelTest {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);
         }
+    }
+
+    private String nameOf(CloudEvent cloudEvent) {
+        return ((NameDefined) cloudEventConverter.toDomainEvent(cloudEvent)).name();
     }
 
     private NameDefined nameDefined(String name) {

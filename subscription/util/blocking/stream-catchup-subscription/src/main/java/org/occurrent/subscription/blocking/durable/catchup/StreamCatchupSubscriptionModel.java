@@ -219,17 +219,12 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     }
 
     /**
-     * Hands {@code subscriptionId} straight to the live delegate, without a catch-up phase. Cancels any catch-up
-     * already running for this id once the live delegate has the subscription, under the same per-id lock as a
-     * finishing attempt's own handover, so that attempt is told it has been superseded instead of also subscribing the
-     * delegate for the id this call just claimed, and a subscribe the live delegate refuses doesn't cancel it.
-     * Distinct from the delegate subscribe call inside a finishing attempt's own handover, which has already gone
-     * through that lock and that decision and must not cancel itself.
+     * Hands {@code subscriptionId} straight to the live delegate, without a catch-up phase. The subscribe is refused
+     * before this while a catch-up for the id is in progress, under the same per-id lock as that catch-up's handover,
+     * and a cancelled catch-up doesn't hand over.
      */
     private Subscription subscribeLiveWithoutCatchup(String subscriptionId, StreamSubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
-        Subscription subscription = subscribeInTheWrappedModel(subscriptionId, filter, startAt, action, holdPaused);
-        cancelRunningCatchup(subscriptionId);
-        return subscription;
+        return subscribeInTheWrappedModel(subscriptionId, filter, startAt, action, holdPaused);
     }
 
     // Resolved start kinds for a stream subscription. Classifying once keeps the routing above an exhaustive switch,
