@@ -1751,6 +1751,11 @@ things change with it.
   returns `false`. `waitUntilStarted()` has already reported it started by then. In 0.33.0 it opened at the present and
   skipped the events written in between.
 
+When MongoDB's reply to `hello` has no server clock, the subscription stops, and `waitUntilStarted()` and
+`globalCheckpointAsOfNow()` fail with the reason. A server that doesn't know `hello` is asked with `isMaster`. The
+driver keeps its cluster time internal, so the model reads it by reflection, and logs a warning the first time it
+can't, unless the calling thread was interrupted. It then starts from the server's clock alone.
+
 What to do:
 
 - Make sure your handlers can receive an event they have already handled. Delivery is at least once, which already
@@ -2524,6 +2529,15 @@ The MongoDB checkpoint storages keep the time in `checkpoint` as before and put 
 A storage that keeps strings, `SpringRedisCheckpointStorage` for one, stores
 `2026-10-10T08:15:30.123Z;origin:1970-01-01T00:00:00Z;liveFrom:{"operationTime": ...}`. The live subscription's
 checkpoint replaces all of it when the catch-up reaches live delivery.
+
+A MongoDB checkpoint document in this form whose time is not an RFC 3339 time fails with an `IllegalStateException`
+when it is read.
+
+A catch-up that goes live now replaces a checkpoint the other kind of catch-up stored for the same subscription, a time
+under a position catch-up or a position under a time catch-up, with its live start. It already did that with a
+checkpoint of its own kind. This holds for `StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel`. In
+0.33.0 they passed such a checkpoint on to the MongoDB subscription model as where to start, and the model opened at
+the present instead of at the live start, which could miss the events written in between.
 
 A resume can deliver more events a second time than a position resume does. A position has a replay end that splits
 the events by when they committed. A time doesn't, since a writer can commit an event with any time at any moment. So
