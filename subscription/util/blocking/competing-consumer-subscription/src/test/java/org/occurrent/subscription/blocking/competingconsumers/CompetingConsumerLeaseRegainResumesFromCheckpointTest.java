@@ -39,6 +39,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -66,13 +67,18 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -474,6 +480,169 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
             releaseA.countDown();
             releaseB.countDown();
         }
+    }
+
+    @Test
+    @Timeout(120)
+    void a_node_that_loses_its_lease_during_its_resume_replay_stops_delivering_and_the_node_that_takes_over_delivers_what_is_left() throws Exception {
+        // Given A holds the lease and its resume replay is in the action, blocked on h3
+        TwoNodes nodes = new TwoNodes();
+        try {
+            nodes.givenAHoldsTheLeaseInItsResumeReplay();
+            nodes.write("beforeLoss", 4);
+
+            // When A loses the lease to B, and an event is written after that
+            Throwable handoverFailure = nodes.handOverFromAToB();
+            nodes.write("sentinel", 5);
+
+            // Then the handover returned without failing, while A's action is still blocked
+            assertThat(handoverFailure).as("the handover of the lease from A to B").isNull();
+            // And once the actions return, B delivers the rest of the history and what was written after the loss
+            nodes.releaseA.countDown();
+            nodes.releaseB.countDown();
+            await("B delivers the rest of the history and what was written after the loss").atMost(15, SECONDS)
+                    .untilAsserted(() -> assertThat(ids(nodes.eventsB)).contains("h3", "beforeLoss", "sentinel"));
+            // And no event is lost across the two nodes
+            assertThat(concat(nodes.eventsA, nodes.eventsB)).as("what the two nodes delivered").contains("h1", "h2", "h3", "beforeLoss", "sentinel");
+            // And A delivers nothing after it lost the lease
+            await("A delivers nothing but what its replay was in when it lost the lease").during(2, SECONDS).atMost(6, SECONDS)
+                    .untilAsserted(() -> assertThat(ids(nodes.eventsA)).containsExactly("h2", "h3"));
+            // And neither node ran its action more than once at a time
+            assertThat(nodes.maxInActionA.get()).as("the most calls of A's action in flight at once").isEqualTo(1);
+            assertThat(nodes.maxInActionB.get()).as("the most calls of B's action in flight at once").isEqualTo(1);
+            // And B holds the lease
+            assertThat(strategy.hasLock(nodes.subscriptionId, "A")).as("A holds the lease").isFalse();
+            assertThat(strategy.hasLock(nodes.subscriptionId, "B")).as("B holds the lease").isTrue();
+        } finally {
+            nodes.releaseA.countDown();
+            nodes.releaseB.countDown();
+        }
+    }
+
+    @Test
+    @Timeout(120)
+    void a_lease_loss_on_a_node_whose_resume_at_a_position_waits_for_a_blocked_replay_action_pauses_within_the_bound_and_still_gives_up_the_lease() throws Exception {
+        // Given A holds the lease and its resume replay is in the action, blocked on h3, and B's replay has ended
+        TwoNodes nodes = new TwoNodes();
+        try {
+            nodes.givenAHoldsTheLeaseInItsResumeReplay();
+            nodes.releaseB.countDown();
+            nodes.write("beforeLoss", 4);
+            Checkpoint present = requireNonNull(nodes.durableA.globalCheckpoint());
+            CompletableFuture<Subscription> repositioning = CompletableFuture.supplyAsync(() -> nodes.catchupA.resumeSubscription(nodes.subscriptionId, StartAt.checkpoint(present)));
+            Thread.sleep(1000);
+            assertThat(repositioning.isDone()).as("the resume at a position waits for the action").isFalse();
+
+            // When A loses the lease while that resume waits
+            long start = System.nanoTime();
+            Throwable lossFailure = catchThrowable(() -> strategy.loseLease(nodes.subscriptionId, "A"));
+            long waitedMillis = MILLISECONDS.convert(System.nanoTime() - start, NANOSECONDS);
+
+            // Then the loss returned without failing, within the bound the resume at a position waits for the action
+            assertThat(lossFailure).as("the loss of the lease").isNull();
+            assertThat(waitedMillis).as("the milliseconds the loss of the lease took").isLessThan(10_000L);
+            // And A gives up the lease
+            await("A gives up the lease").atMost(30, SECONDS).until(() -> !strategy.hasLock(nodes.subscriptionId, "A"));
+            // And once the action returns, the resume at a position returns without failing
+            nodes.releaseA.countDown();
+            assertThat(catchThrowable(() -> repositioning.get(10, SECONDS))).as("the resume at a position").isNull();
+            // And B delivers what was written while no node held the lease, once it is granted the lease
+            nodes.write("beforeGrant", 5);
+            strategy.grantLease(nodes.subscriptionId, "B");
+            nodes.write("sentinel", 6);
+            await("B delivers the rest of the history and what was written after the loss").atMost(15, SECONDS)
+                    .untilAsserted(() -> assertThat(ids(nodes.eventsB)).contains("h3", "beforeLoss", "beforeGrant", "sentinel"));
+            // And A delivers nothing after it lost the lease
+            await("A delivers nothing but what its replay was in when it lost the lease").during(2, SECONDS).atMost(6, SECONDS)
+                    .untilAsserted(() -> assertThat(ids(nodes.eventsA)).containsExactly("h2", "h3"));
+            assertThat(nodes.maxInActionA.get()).as("the most calls of A's action in flight at once").isEqualTo(1);
+            assertThat(nodes.maxInActionB.get()).as("the most calls of B's action in flight at once").isEqualTo(1);
+        } finally {
+            nodes.releaseA.countDown();
+            nodes.releaseB.countDown();
+        }
+    }
+
+    /**
+     * B replays from the start of the history, stalls in the action on h2 and stores the position after h1. A is stopped
+     * and registered with nothing stored. The lease then moves from B to A, whose resume replay starts at that position
+     * and stalls in the action on h3.
+     */
+    private final class TwoNodes {
+        final String subscriptionId = UUID.randomUUID().toString();
+        final CopyOnWriteArrayList<CloudEvent> eventsA = new CopyOnWriteArrayList<>();
+        final CopyOnWriteArrayList<CloudEvent> eventsB = new CopyOnWriteArrayList<>();
+        final AtomicInteger maxInActionA = new AtomicInteger();
+        final AtomicInteger maxInActionB = new AtomicInteger();
+        final CountDownLatch releaseA = new CountDownLatch(1);
+        final CountDownLatch releaseB = new CountDownLatch(1);
+        final SpringMongoEventStore positionedEventStore;
+        final DurableSubscriptionModel durableA;
+        final CatchupSubscriptionModel catchupA;
+
+        TwoNodes() {
+            String eventCollection = "positioned-events-" + UUID.randomUUID();
+            positionedEventStore = positionedEventStore(eventCollection);
+            SpringMongoCheckpointStorage checkpointStorage = new SpringMongoCheckpointStorage(mongoTemplate, checkpointCollection);
+            CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(checkpointStorage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+            durableA = new DurableSubscriptionModel(springModel(eventCollection), checkpointStorage);
+            catchupA = new CatchupSubscriptionModel(durableA, positionedEventStore, catchupConfig);
+            nodeA = new CompetingConsumerSubscriptionModel(catchupA, strategy);
+            nodeB = new CompetingConsumerSubscriptionModel(new CatchupSubscriptionModel(new DurableSubscriptionModel(springModel(eventCollection), checkpointStorage), positionedEventStore, catchupConfig), strategy);
+        }
+
+        void givenAHoldsTheLeaseInItsResumeReplay() throws Exception {
+            CountDownLatch aIsStalled = new CountDownLatch(1);
+            CountDownLatch bIsStalled = new CountDownLatch(1);
+            write("h1", 0);
+            write("h2", 1);
+            write("h3", 2);
+            nodeA.stop();
+            nodeA.subscribe("A", subscriptionId, null, StartAt.subscriptionModelDefault(), countingEntries(new AtomicInteger(), maxInActionA, stallingAt("h3", eventsA, aIsStalled, releaseA)));
+            nodeB.subscribe("B", subscriptionId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)), countingEntries(new AtomicInteger(), maxInActionB, stallingAt("h2", eventsB, bIsStalled, releaseB)));
+            assertThat(bIsStalled.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+            nodeA.start();
+            strategy.transferLease(subscriptionId, "B", "A");
+            assertThat(aIsStalled.await(10, SECONDS)).as("A's resume replay reaches h3").isTrue();
+        }
+
+        // The failure of the handover, or null when it returned within fifteen seconds without one
+        Throwable handOverFromAToB() throws InterruptedException {
+            CompletableFuture<Void> handover = CompletableFuture.runAsync(() -> strategy.transferLease(subscriptionId, "A", "B"));
+            try {
+                handover.get(15, SECONDS);
+                return null;
+            } catch (ExecutionException e) {
+                return e.getCause();
+            } catch (TimeoutException e) {
+                return e;
+            }
+        }
+
+        void write(String id, int secondsAfterStart) {
+            positionedEventStore.write(streamId, serialize(new NameWasChanged(id, LocalDateTime.of(2026, 1, 1, 0, 0, secondsAfterStart), "name", id)));
+        }
+    }
+
+    private static List<String> concat(List<CloudEvent> first, List<CloudEvent> second) {
+        List<String> all = new ArrayList<>(ids(first));
+        all.addAll(ids(second));
+        return all;
+    }
+
+    private static List<String> ids(List<CloudEvent> events) {
+        return events.stream().map(CloudEvent::getId).toList();
+    }
+
+    private static Consumer<CloudEvent> countingEntries(AtomicInteger inAction, AtomicInteger maxInAction, Consumer<CloudEvent> action) {
+        return event -> {
+            maxInAction.accumulateAndGet(inAction.incrementAndGet(), Math::max);
+            try {
+                action.accept(event);
+            } finally {
+                inAction.decrementAndGet();
+            }
+        };
     }
 
     private static Consumer<CloudEvent> stallingAt(String eventId, List<CloudEvent> received, CountDownLatch stalled, CountDownLatch release) {

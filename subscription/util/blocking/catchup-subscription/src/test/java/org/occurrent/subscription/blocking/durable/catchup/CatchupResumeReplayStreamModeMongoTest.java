@@ -49,6 +49,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -79,6 +80,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -87,6 +89,7 @@ import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -629,6 +632,230 @@ class CatchupResumeReplayStreamModeMongoTest {
         assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
     }
 
+    @Test
+    void a_resume_that_comes_while_a_resume_at_a_position_waits_for_the_action_of_a_held_replay_waits_for_it_and_the_action_never_runs_twice() throws Exception {
+        // Given a resume at a position waits for the action a held resume replay is in
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)));
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        catchupB.stop();
+        catchupB.start(false);
+        assertThat(catchupB.isPaused(subscriptionId)).as("the replay is held").isTrue();
+        Checkpoint present = requireNonNull(durableB.globalCheckpoint());
+        CompletableFuture<Subscription> repositioning = CompletableFuture.supplyAsync(() -> catchupB.resumeSubscription(subscriptionId, StartAt.checkpoint(present)));
+        waitUpTo(repositioning, 1);
+        assertThat(repositioning.isDone()).as("the resume at a position waits for the action").isFalse();
+
+        // When the subscription is resumed from another thread
+        CompletableFuture<Subscription> resuming = CompletableFuture.supplyAsync(() -> catchupB.resumeSubscription(subscriptionId));
+
+        // Then neither call returns while the action is blocked, and the action is not entered again
+        await("neither call returns while the action is blocked").during(2, SECONDS).atMost(5, SECONDS).untilAsserted(() -> {
+            assertThat(repositioning.isDone()).as("the resume at a position returned while the action was blocked").isFalse();
+            assertThat(resuming.isDone()).as("the resume returned while the action was blocked").isFalse();
+            assertThat(maxInAction.get()).as("the most calls of the action in flight at once while it was blocked").isEqualTo(1);
+            assertThat(receivedByB).as("what the action received while it was blocked").containsExactly("h2");
+        });
+        // And once the action returns, the resume at a position returns without failing
+        releaseH2.countDown();
+        assertThat(failureOf(repositioning)).as("the resume at a position").isNull();
+        // And the resume returns after it
+        assertThat(failureOf(resuming)).as("the resume that waited, which finds the subscription running").isInstanceOf(SubscriptionAlreadyRunningException.class);
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+        // And the subscription runs from the position, so what is written after it is delivered once
+        append("afterReposition", 4);
+        await("B delivers what is written after the position").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).containsExactly("h2", "afterReposition"));
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once, after the resumes").isEqualTo(1);
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
+        assertThat(catchupB.isCatchingUp(subscriptionId)).as("no replay runs").isFalse();
+    }
+
+    @Test
+    void a_start_that_resumes_and_comes_while_a_resume_at_a_position_waits_for_the_action_of_a_held_replay_waits_for_it_and_the_action_never_runs_twice() throws Exception {
+        // Given a resume at a position waits for the action a held resume replay is in
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)));
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        catchupB.stop();
+        catchupB.start(false);
+        Checkpoint present = requireNonNull(durableB.globalCheckpoint());
+        CompletableFuture<Subscription> repositioning = CompletableFuture.supplyAsync(() -> catchupB.resumeSubscription(subscriptionId, StartAt.checkpoint(present)));
+        waitUpTo(repositioning, 1);
+        assertThat(repositioning.isDone()).as("the resume at a position waits for the action").isFalse();
+
+        // When the model is started again, resuming what it holds paused, from another thread
+        CompletableFuture<Void> starting = CompletableFuture.runAsync(() -> catchupB.start(true));
+
+        // Then neither call returns while the action is blocked, and the action is not entered again
+        await("neither call returns while the action is blocked").during(2, SECONDS).atMost(5, SECONDS).untilAsserted(() -> {
+            assertThat(repositioning.isDone()).as("the resume at a position returned while the action was blocked").isFalse();
+            assertThat(starting.isDone()).as("the start returned while the action was blocked").isFalse();
+            assertThat(maxInAction.get()).as("the most calls of the action in flight at once while it was blocked").isEqualTo(1);
+            assertThat(receivedByB).as("what the action received while it was blocked").containsExactly("h2");
+        });
+        // And once the action returns, the resume at a position returns without failing
+        releaseH2.countDown();
+        assertThat(failureOf(repositioning)).as("the resume at a position").isNull();
+        // And the start returns after it
+        assertThat(failureOf(starting)).as("the start that waited").isNull();
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+        // And the subscription runs from the position, so what is written after it is delivered once
+        append("afterReposition", 4);
+        await("B delivers what is written after the position").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).containsExactly("h2", "afterReposition"));
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once, after the start").isEqualTo(1);
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
+        assertThat(catchupB.isCatchingUp(subscriptionId)).as("no replay runs").isFalse();
+    }
+
+    @Test
+    void a_resume_that_comes_right_after_a_resume_at_a_position_held_the_replay_waits_for_it_and_the_action_never_runs_twice() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)));
+        PausingLock pausingLock = new PausingLock("repositioning");
+        handoverLocksOf(catchupB).put(subscriptionId, pausingLock);
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        Checkpoint present = requireNonNull(durableB.globalCheckpoint());
+        pausingLock.armed = true;
+
+        // And a resume at a position is descheduled right after it took the replay
+        CompletableFuture<Subscription> repositioning = new CompletableFuture<>();
+        Thread.ofPlatform().name("repositioning").start(() -> {
+            try {
+                repositioning.complete(catchupB.resumeSubscription(subscriptionId, StartAt.checkpoint(present)));
+            } catch (Throwable e) {
+                repositioning.completeExceptionally(e);
+            }
+        });
+        assertThat(pausingLock.paused.await(10, SECONDS)).as("the resume at a position took the replay").isTrue();
+
+        // When the subscription is resumed from another thread
+        CompletableFuture<Subscription> resuming = CompletableFuture.supplyAsync(() -> catchupB.resumeSubscription(subscriptionId));
+
+        // Then the resume waits, and the action is not entered again
+        await("the resume does not return while the resume at a position is under way").during(2, SECONDS).atMost(5, SECONDS).untilAsserted(() -> {
+            assertThat(resuming.isDone()).as("the resume returned while the resume at a position was under way").isFalse();
+            assertThat(maxInAction.get()).as("the most calls of the action in flight at once while it was blocked").isEqualTo(1);
+            assertThat(receivedByB).as("what the action received while it was blocked").containsExactly("h2");
+        });
+        // And once the resume at a position goes on and the action returns, the resume at a position returns without failing
+        pausingLock.resume.countDown();
+        releaseH2.countDown();
+        assertThat(failureOf(repositioning)).as("the resume at a position").isNull();
+        // And the resume returns after it
+        assertThat(failureOf(resuming)).as("the resume that waited, which finds the subscription running").isInstanceOf(SubscriptionAlreadyRunningException.class);
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+        // And the subscription runs from the position, so what is written after it is delivered once
+        append("afterReposition", 4);
+        await("B delivers what is written after the position").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).containsExactly("h2", "afterReposition"));
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once, after the resumes").isEqualTo(1);
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
+        assertThat(catchupB.isCatchingUp(subscriptionId)).as("no replay runs").isFalse();
+    }
+
+    @Test
+    void a_resume_at_a_position_while_the_action_of_the_resume_replay_never_returns_fails_after_ten_seconds_and_changes_nothing() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)));
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        boolean runningBefore = catchupB.isRunning(subscriptionId);
+        boolean pausedBefore = catchupB.isPaused(subscriptionId);
+        boolean catchingUpBefore = catchupB.isCatchingUp(subscriptionId);
+        Checkpoint present = requireNonNull(durableB.globalCheckpoint());
+        append("afterReposition", 4);
+
+        // When the subscription is resumed at the present from another thread, and the action is not released within the bound
+        AtomicLong waitedMillis = new AtomicLong();
+        CompletableFuture<Subscription> repositioning = CompletableFuture.supplyAsync(() -> {
+            long start = System.nanoTime();
+            try {
+                return catchupB.resumeSubscription(subscriptionId, StartAt.checkpoint(present));
+            } finally {
+                waitedMillis.set(MILLISECONDS.convert(System.nanoTime() - start, NANOSECONDS));
+            }
+        });
+
+        // Then it fails with IllegalStateException, after the bound and not long after it
+        waitUpTo(repositioning, 30);
+        assertThat(repositioning.isDone()).as("the resume at a position gave up on the action within 30 seconds").isTrue();
+        assertThat(failureOf(repositioning)).as("the resume at a position").isInstanceOf(IllegalStateException.class).hasMessageContaining(subscriptionId);
+        assertThat(waitedMillis.get()).as("the milliseconds the resume at a position waited").isBetween(9_900L, 20_000L);
+        // And it logs at ERROR
+        assertThat(errorLog.messagesAbout(subscriptionId)).as("what was logged at ERROR for the subscription")
+                .anyMatch(message -> message.contains("was not resumed from the given position") && message.contains("10000 ms"));
+        // And the subscription is as it was
+        assertThat(catchupB.isRunning(subscriptionId)).as("running").isEqualTo(runningBefore);
+        assertThat(catchupB.isPaused(subscriptionId)).as("paused").isEqualTo(pausedBefore);
+        assertThat(catchupB.isCatchingUp(subscriptionId)).as("catching up").isEqualTo(catchingUpBefore);
+        // And the live delegate has not called the action
+        await("the live delegate does not call the action while it is blocked").during(2, SECONDS).atMost(5, SECONDS).untilAsserted(() -> {
+            assertThat(receivedByB).as("what the action received while it was blocked").containsExactly("h2");
+            assertThat(maxInAction.get()).as("the most calls of the action in flight at once while it was blocked").isEqualTo(1);
+        });
+        // And once the action returns, the replay goes on and delivers what is left, one call at a time
+        releaseH2.countDown();
+        await("B delivers the rest of the history and what was written after the position").atMost(15, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h3", "afterBRegistered", "afterReposition"));
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+    }
+
+    @Test
+    void a_resume_at_a_position_that_the_action_hands_to_another_thread_and_waits_for_fails_after_ten_seconds_and_the_replay_goes_on() throws Exception {
+        // Given an action that hands a resume at the present to another thread and waits for it when it delivers h2
+        AtomicReference<Throwable> handedOffFailure = new AtomicReference<>();
+        CountDownLatch handedOffReturned = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(event -> {
+            String name = nameOf(event);
+            receivedByB.add(name);
+            if (name.equals("h2") && handedOffReturned.getCount() > 0) {
+                Checkpoint present = requireNonNull(durableB.globalCheckpoint());
+                try {
+                    CompletableFuture.supplyAsync(() -> catchupB.resumeSubscription(subscriptionId, StartAt.checkpoint(present))).get(60, SECONDS);
+                } catch (ExecutionException e) {
+                    handedOffFailure.set(e.getCause());
+                } catch (Exception e) {
+                    handedOffFailure.set(e);
+                }
+                handedOffReturned.countDown();
+            }
+        }));
+
+        // When B is resumed from the position another node stored
+        long start = System.nanoTime();
+        catchupB.resumeSubscription(subscriptionId);
+
+        // Then the handed-off call fails with IllegalStateException, after the bound
+        assertThat(handedOffReturned.await(30, SECONDS)).as("the action got the answer of the handed-off call").isTrue();
+        long waitedMillis = MILLISECONDS.convert(System.nanoTime() - start, NANOSECONDS);
+        assertThat(handedOffFailure.get()).as("the handed-off resume at a position").isInstanceOf(IllegalStateException.class).hasMessageContaining(subscriptionId);
+        assertThat(waitedMillis).as("the milliseconds until the handed-off call failed").isBetween(9_900L, 25_000L);
+        // And it logs at ERROR
+        assertThat(errorLog.messagesAbout(subscriptionId)).as("what was logged at ERROR for the subscription")
+                .anyMatch(message -> message.contains("was not resumed from the given position"));
+        // And the subscription is not left stalled, since the replay goes on and delivers the history
+        await("B delivers the history after the stored position").atMost(15, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h2", "h3", "afterBRegistered"));
+        append("afterReplay", 4);
+        await("B delivers what is written after the replay").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("afterReplay"));
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+    }
+
     // B holds the subscription paused with nothing stored. A replays from the start and stalls in its second event,
     // with the position after the first stored. An event is written after B registered.
     private void givenAnotherNodeStoredAPosition(Consumer<CloudEvent> actionOfB) throws Exception {
@@ -706,8 +933,12 @@ class CatchupResumeReplayStreamModeMongoTest {
 
     // What the future failed with, or null when it completed normally
     private static @Nullable Throwable failureOf(CompletableFuture<?> future) throws InterruptedException, TimeoutException {
+        return failureOf(future, 10);
+    }
+
+    private static @Nullable Throwable failureOf(CompletableFuture<?> future, int seconds) throws InterruptedException, TimeoutException {
         try {
-            future.get(10, SECONDS);
+            future.get(seconds, SECONDS);
             return null;
         } catch (ExecutionException e) {
             return e.getCause();
@@ -860,6 +1091,31 @@ class CatchupResumeReplayStreamModeMongoTest {
                 armed = false;
                 inGap.countDown();
                 awaitUpTo(leaveGap, 10);
+            }
+        }
+    }
+
+    /**
+     * The handover lock of an id, except that a thread of a chosen name waits once it has given the lock up, which
+     * stands in for a scheduler that deschedules it there.
+     */
+    private static final class PausingLock extends ReentrantLock {
+        private final String threadName;
+        volatile boolean armed = false;
+        final CountDownLatch paused = new CountDownLatch(1);
+        final CountDownLatch resume = new CountDownLatch(1);
+
+        PausingLock(String threadName) {
+            this.threadName = threadName;
+        }
+
+        @Override
+        public void unlock() {
+            super.unlock();
+            if (armed && !isHeldByCurrentThread() && Thread.currentThread().getName().equals(threadName)) {
+                armed = false;
+                paused.countDown();
+                awaitUpTo(resume, 30);
             }
         }
     }
