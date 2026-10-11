@@ -2626,15 +2626,21 @@ is running and catching up, and isn't paused. A call that comes in the meantime 
 | `resumeSubscription(subscriptionId, startAt)` on the catch-up model | Ends once the subscription resumes at `startAt`, unless an earlier run of the replay is still in the subscription's action or the wrapped model fails to resume it, as described below |
 
 `StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel` implement `RepositionableSubscriptions`, as
-`CatchupSubscriptionModel` already did. `RepositionableSubscriptions.findIn(..)` finds either of them when the model it
+`CatchupSubscriptionModel` already did. `RepositionableSubscriptions.findIn(..)` finds any of the three when the model it
 wraps can resume a subscription from a given position, and finds nothing otherwise. In 0.33.0 it found the model under
-the catch-up model, and a resume at a position there didn't end the replay.
+the stream and DCB catch-up models, and a resume at a position there didn't end the replay. It found
+`CatchupSubscriptionModel` whatever it wrapped, and `resumeSubscription(subscriptionId, startAt)` then threw
+`UnsupportedOperationException` over a model that couldn't reposition. Code that finds the model through `findIn(..)`
+to resume it at a position now gets an empty `Optional` over such a model.
 
 `resumeSubscription(subscriptionId, startAt)` also ends a replay that reads history. While the replay is inside the
 subscription's action, the call holds the replay and waits up to 10 seconds for the action to return. Then the wrapped
 model resumes the subscription at `startAt`, and the replay ends once it has. When the wrapped model throws, the call
 throws the same exception, and the replay is as it was before the call. A replay that ran runs again from the last
 position it stored, and one a pause or a stop held stays held.
+
+The call doesn't store the position itself, and it didn't in 0.33.0. The position is stored with the first live
+position or the quiet save, and a restart before then resumes from the position stored earlier.
 
 While the call waits, a subscription that was running when the call began stays running.
 `isRunning(subscriptionId)` returns `true` and `isPaused(subscriptionId)` returns `false`, and a pause that comes
