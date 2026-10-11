@@ -499,8 +499,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@link RepositionableSubscriptions} the live delegate resolves to. Unlike {@link #resumeSubscription(String)}, it
      * doesn't start this model first or run a parked replay, and it never replays, also not at a position a catch-up
      * stores. The live delegate handles such a position as one it cannot open its live feed at. A replay that
-     * {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, ends first, so
-     * the position given here wins over it, and a later {@link #resumeSubscription(String)} can replay again. When that
+     * {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, is held first
+     * and ends once the live delegate has resumed the subscription, so the position given here wins over it, and a later
+     * {@link #resumeSubscription(String)} can replay again. When the live delegate throws, the replay is as it was before
+     * this call, and this throws what the live delegate threw. When the
      * replay is in the subscription's action, this holds the replay and waits up to ten seconds for the action to return
      * before the live delegate resumes the subscription, so the replay's action doesn't run alongside the action of the
      * resumed subscription. When the action doesn't return in time, this logs at {@code ERROR}, runs the replay again as
@@ -549,17 +551,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                         }
                     }
                 } catch (RuntimeException e) {
-                    try {
-                        runEach(inTheWay, ReplayInTheWay::putBack);
-                    } catch (RuntimeException putBackFailure) {
-                        e.addSuppressed(putBackFailure);
-                    }
+                    putBack(inTheWay, e);
                     throw e;
                 }
                 // Waited for with no handover lock held, since a held replay takes that lock once its action returns
                 awaitTheActions(subscriptionId, inTheWay);
+                // A held replay delivers nothing, and only a call holding the claim runs it again, so it ends only once
+                // the live delegate has resumed and is put back when that throws
+                Subscription resumed;
+                try {
+                    resumed = repositionable.resumeSubscription(subscriptionId, startAt);
+                } catch (RuntimeException e) {
+                    putBack(inTheWay, e);
+                    throw e;
+                }
                 inTheWay.forEach(ReplayInTheWay::end);
-                Subscription resumed = repositionable.resumeSubscription(subscriptionId, startAt);
                 models.forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
                 return resumed;
             } finally {
@@ -567,6 +573,15 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     repositioning.remove(subscriptionId);
                 }
             }
+        }
+    }
+
+    // Runs each replay in the way as it was before the resume at a given position held it, with what fails added to e
+    private static void putBack(List<ReplayInTheWay> inTheWay, RuntimeException e) {
+        try {
+            runEach(inTheWay, ReplayInTheWay::putBack);
+        } catch (RuntimeException putBackFailure) {
+            e.addSuppressed(putBackFailure);
         }
     }
 
@@ -1144,7 +1159,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // What a call whose claim fails did before it asked for the claim
     static final String NOTHING_CHANGED = "Nothing was changed.";
     static final String STARTED_BUT_NOT_RESUMED = "The model was stopped and is started, as a resume starts a stopped model, but the subscription wasn't resumed.";
-    static final String STARTED_BUT_NOT_RUN_AGAIN = "The model is started all the same, but the catch-up replay that its stop held for the subscription wasn't run again.";
+    static final String STARTED_BUT_NOT_RUN_AGAIN = "The catch-up replay held for the subscription wasn't run again. The call doesn't stop a model it started, and it went on to the other subscriptions first.";
     static final String STOPPED_ALL_THE_SAME = "The model is stopped all the same, and a catch-up replay for the subscription delivers no further event until start(true) or resumeSubscription runs it again.";
 
     // The lock behind the claim of subscriptionId, counting the caller as one that holds it or waits for it until it calls

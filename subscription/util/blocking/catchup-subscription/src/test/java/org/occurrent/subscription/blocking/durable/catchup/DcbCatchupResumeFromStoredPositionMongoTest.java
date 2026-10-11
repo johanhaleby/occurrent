@@ -38,8 +38,11 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
@@ -54,11 +57,15 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -66,6 +73,7 @@ import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
@@ -96,6 +104,7 @@ class DcbCatchupResumeFromStoredPositionMongoTest {
     private CloudEventConverter<DomainEvent> cloudEventConverter;
     private CatchupSubscriptionModel catchupA;
     private CatchupSubscriptionModel catchupB;
+    private DcbCatchupSubscriptionModel standaloneB;
 
     @BeforeEach
     void create_instances() {
@@ -121,6 +130,9 @@ class DcbCatchupResumeFromStoredPositionMongoTest {
         }
         if (catchupB != null) {
             catchupB.shutdown();
+        }
+        if (standaloneB != null) {
+            standaloneB.shutdown();
         }
         mongoClient.close();
     }
@@ -252,6 +264,86 @@ class DcbCatchupResumeFromStoredPositionMongoTest {
         }
     }
 
+    @Test
+    void a_resume_at_a_position_whose_live_delegate_fails_after_waiting_for_the_action_of_the_dcb_resume_replay_leaves_the_replay_running_and_it_hands_over() throws Exception {
+        // Given a DCB history, a standalone DCB catch-up for B whose live delegate fails the next resume, and another catch-up instance over one checkpoint storage
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(mongoTemplate, "storage-" + UUID.randomUUID());
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        DcbCriteria criteria = DcbCriteria.tags(Tag.parse("name:1"));
+        PauseFailingLiveModel liveOfB = new PauseFailingLiveModel(mongoTemplate, eventCollectionName);
+        DurableSubscriptionModel durableB = new DurableSubscriptionModel(liveOfB, storage);
+        catchupA = new CatchupSubscriptionModel(new DurableSubscriptionModel(springModel(), storage), eventStore, criteria, config);
+        standaloneB = new DcbCatchupSubscriptionModel(durableB, eventStore, criteria, config);
+
+        String subscriptionId = UUID.randomUUID().toString();
+        CopyOnWriteArrayList<CloudEvent> receivedByB = new CopyOnWriteArrayList<>();
+        AtomicInteger inAction = new AtomicInteger();
+        AtomicInteger maxInAction = new AtomicInteger();
+        AtomicInteger deliveredToA = new AtomicInteger();
+        CountDownLatch aIsStalled = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+        Consumer<CloudEvent> stallingA = event -> {
+            if (deliveredToA.incrementAndGet() > 1) {
+                aIsStalled.countDown();
+                awaitUninterrupted(releaseA);
+            }
+        };
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        Consumer<CloudEvent> stallingB = event -> {
+            maxInAction.accumulateAndGet(inAction.incrementAndGet(), Math::max);
+            try {
+                receivedByB.add(event);
+                if (nameOf(event).equals("h2") && inH2.getCount() > 0) {
+                    inH2.countDown();
+                    awaitUninterrupted(releaseH2);
+                }
+            } finally {
+                inAction.decrementAndGet();
+            }
+        };
+
+        try {
+            appendTagged("name:1", nameDefined("h1"));
+            appendTagged("name:1", nameDefined("h2"));
+            appendTagged("name:1", nameDefined("h3"));
+            standaloneB.subscribePaused(subscriptionId, null, StartAt.subscriptionModelDefault(), stallingB);
+            catchupA.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), stallingA);
+            assertThat(aIsStalled.await(10, SECONDS)).as("A's replay reaches its second event").isTrue();
+            appendTagged("name:1", nameDefined("afterBRegistered"));
+            Subscription handleOfTheReplay = standaloneB.resumeSubscription(subscriptionId);
+            assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+            liveOfB.failTheNextResumes(1);
+
+            // When the subscription is resumed at the present from another thread, and waits for the action
+            Checkpoint present = requireNonNull(durableB.globalCheckpoint());
+            RepositionableSubscriptions repositionable = RepositionableSubscriptions.findIn(standaloneB).orElseThrow();
+            CompletableFuture<Subscription> repositioning = CompletableFuture.supplyAsync(() -> repositionable.resumeSubscription(subscriptionId, StartAt.checkpoint(present)));
+            appendTagged("name:1", nameDefined("duringTheCall"));
+            assertThat(catchThrowable(() -> repositioning.get(1, SECONDS))).as("the resume at a position while the replay is in the action").isInstanceOf(TimeoutException.class);
+            // And the action returns, so the live delegate is asked to resume and fails
+            releaseH2.countDown();
+            Throwable failure = catchThrowable(() -> repositioning.get(10, SECONDS));
+            appendTagged("name:1", nameDefined("afterTheFailedCall"));
+
+            // Then what the live delegate threw reaches the caller
+            assertThat(failure).as("the resume at a position").isInstanceOf(ExecutionException.class)
+                    .cause().isInstanceOf(IllegalStateException.class).hasMessageContaining("The live delegate is unavailable");
+            // And the subscription runs, with its replay as it was
+            assertThat(standaloneB.isRunning(subscriptionId)).as("running after the failed resume at a position").isTrue();
+            assertThat(standaloneB.isPaused(subscriptionId)).as("paused after the failed resume at a position").isFalse();
+            // And the replay hands over, so the handle of the first resume starts
+            assertThat(handleOfTheReplay.waitUntilStarted(Duration.ofSeconds(15))).as("the handle of the replay started").isTrue();
+            // And no event is lost, whether written before the call, during it or after it
+            await("B delivers the history and what was written during and after the failed call").atMost(15, SECONDS)
+                    .untilAsserted(() -> assertThat(receivedByB).extracting(this::nameOf).contains("h2", "h3", "afterBRegistered", "duringTheCall", "afterTheFailedCall"));
+            assertThat(maxInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+        } finally {
+            releaseA.countDown();
+            releaseH2.countDown();
+        }
+    }
+
     private SpringMongoSubscriptionModel springModel() {
         return new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, TimeRepresentation.RFC_3339_STRING);
     }
@@ -280,10 +372,12 @@ class DcbCatchupResumeFromStoredPositionMongoTest {
     }
 
     /**
-     * The live delegate as it is, except that it counts the pauses it is asked for and can fail the next one.
+     * The live delegate as it is, except that it counts the pauses it is asked for and can fail the next one, and can
+     * fail a chosen number of resumes.
      */
     private static final class PauseFailingLiveModel extends SpringMongoSubscriptionModel {
         private final AtomicInteger pauseFailuresLeft = new AtomicInteger();
+        private final AtomicInteger resumeFailuresLeft = new AtomicInteger();
         final AtomicInteger pauseCalls = new AtomicInteger();
 
         PauseFailingLiveModel(MongoTemplate mongoTemplate, String eventCollection) {
@@ -292,6 +386,28 @@ class DcbCatchupResumeFromStoredPositionMongoTest {
 
         void failTheNextPause() {
             pauseFailuresLeft.set(1);
+        }
+
+        void failTheNextResumes(int times) {
+            resumeFailuresLeft.set(times);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            failIfAsked();
+            return super.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            failIfAsked();
+            return super.resumeSubscription(subscriptionId, startAt);
+        }
+
+        private void failIfAsked() {
+            if (resumeFailuresLeft.getAndUpdate(left -> left > 0 ? left - 1 : 0) > 0) {
+                throw new IllegalStateException("The live delegate is unavailable");
+            }
         }
 
         @Override
