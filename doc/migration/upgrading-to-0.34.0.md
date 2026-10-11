@@ -2616,6 +2616,11 @@ is running and catching up, and isn't paused. A call that comes in the meantime 
 | `cancelSubscription(subscriptionId)` or `shutdown()` | Ends |
 | `resumeSubscription(subscriptionId, startAt)` on `CatchupSubscriptionModel` | Ends, and the subscription resumes at `startAt` |
 
+When `resumeSubscription(subscriptionId, startAt)` ends a replay that is inside the subscription's action, it waits
+until the action returns before the wrapped model resumes the subscription at `startAt`, so the action never runs on
+two threads at once. Called from inside that action, it throws `IllegalStateException`, and the replay goes on. Call
+it from another thread.
+
 A stop while the replay reads history holds the replay too. A pause while it reads history lets it read on, and once
 it has delivered the history the replay is held instead of handing over. The wrapped model keeps the subscription
 paused, and `resumeSubscription(subscriptionId)` or `start(true)` runs the replay again.
@@ -2625,9 +2630,10 @@ while the replay hands over waits until the handover has ended. When the wrapped
 pause then pauses it there, and when the handover failed, the pause holds the replay.
 
 A `resumeSubscription(subscriptionId)` on the catch-up model while the replay reads history drops a pause asked
-before it, so the replay hands over and the subscription runs. Through `CompetingConsumerSubscriptionModel` that
-resume throws `SubscriptionAlreadyRunningException` instead, because the catch-up model reports the subscription as
-both running and paused until the replay has ended. The pause then holds the replay once it has delivered the
+before it, so the replay hands over and the subscription runs. On `StreamCatchupSubscriptionModel` that holds for a
+replay a subscribe started too, and the resume returns that replay's `Subscription`. Through
+`CompetingConsumerSubscriptionModel` that resume throws `SubscriptionAlreadyRunningException` instead, because the
+catch-up model reports the subscription as both running and paused until the replay has ended. The pause then holds the replay once it has delivered the
 history, and a second `resumeSubscription(subscriptionId)` runs the replay again.
 
 During the handover the subscription is running and no longer catching up. When the wrapped model already runs the
@@ -2646,6 +2652,11 @@ events to their own action until one of them ended. Once the wrapped model held 
 replays history first ran that replay into the new subscription's action and could change the checkpoint stored for
 the id, and only its `waitUntilStarted()` threw the exception, once the replay handed over. Catch the exception where
 you call `subscribe(..)`.
+
+A `ManualStartSubscriptionModel` keeps a subscription as started once the wrapped model's `subscribe(..)` has
+returned. When the wrapped model then throws as it resumes the subscription, such as when a catch-up model fails to
+start its live model, a second `resumeSubscription(subscriptionId)` resumes the subscription in the wrapped model. In
+0.33.0 the second call subscribed again, which the catch-up model now refuses with `DuplicateSubscriptionIdException`.
 
 There is no recipe for this change. Where a subscription resumes from and when a subscribe is refused are runtime
 behavior that a rewrite of the source cannot see.
