@@ -33,9 +33,11 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.StringJoiner;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -387,8 +389,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * resume from its own position instead, past events nobody delivered to the subscription. The replay can deliver
      * events this node already delivered.
      * <p>
-     * A pause asked while a replay for the subscription still reads history is dropped, so the replay hands over and
-     * the subscription runs.
+     * A resume while a replay for the subscription runs returns the handle of that replay. A pause asked while the replay
+     * still reads history is dropped, so the replay hands over and the subscription runs.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
@@ -396,7 +398,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
             start(false);
         }
         presentCatchupModels().forEach(model -> model.pauseRequestedDuringCatchup.remove(subscriptionId));
-        AbstractCatchupSubscriptionModel parkedIn =presentCatchupModels().filter(model -> model.hasParkedReplay(subscriptionId)).findFirst().orElse(null);
+        AbstractCatchupSubscriptionModel parkedIn = presentCatchupModels().filter(model -> model.hasParkedReplay(subscriptionId)).findFirst().orElse(null);
         if (parkedIn != null) {
             Subscription relaunched = parkedIn.relaunchParkedReplay(subscriptionId);
             if (relaunched != null) {
@@ -420,7 +422,10 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * replays, also not at a position a catch-up stores. The wrapped model handles such a position as one it cannot
      * open its live feed at. A replay that {@link #resumeSubscription(String)} started for the subscription, running
      * or waiting to run again, ends first, so the position given here wins over it, and a later
-     * {@link #resumeSubscription(String)} can replay again.
+     * {@link #resumeSubscription(String)} can replay again. When that replay is in the subscription's action, this
+     * waits until the action returns before the wrapped model resumes the subscription, so the action never runs
+     * alongside itself. Called from inside that action, it throws {@link IllegalStateException} and changes nothing,
+     * since it would wait for itself.
      * <p>
      * Once the wrapped model returns from the resume, this model is started again if a start whose live delegate threw
      * stopped it, so a subscription made afterwards replays at once. After {@link #stop()} it stays stopped.
@@ -431,7 +436,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
         RepositionableSubscriptions repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel())
                 .orElseThrow(() -> new UnsupportedOperationException(getWrappedSubscriptionModel().getClass().getSimpleName() + " is not repositionable"));
-        presentCatchupModels().forEach(model -> model.endReplayToResume(subscriptionId));
+        List<CompletableFuture<Void>> actionsReturned = presentCatchupModels().map(model -> model.endReplayToResume(subscriptionId)).toList();
+        // Waited for with no handover lock held, since an ended replay takes that lock once its action returns
+        actionsReturned.forEach(CompletableFuture::join);
         Subscription resumed = repositionable.resumeSubscription(subscriptionId, startAt);
         presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
         return resumed;

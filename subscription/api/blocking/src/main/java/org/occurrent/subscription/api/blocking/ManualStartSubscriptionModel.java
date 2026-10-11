@@ -308,6 +308,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * runs. Its {@code isRunning()} returns {@code false} until that {@code start(..)} in both cases. Every other
      * subscription {@code stop()} paused stays paused until it too is resumed. On a model that has never been started,
      * resuming one subscription starts only that one and the rest keep waiting.
+     * <p>
+     * A registration that throws as it is started can be started again. When the wrapped model took the subscription
+     * and then threw as it was asked to resume it, the subscription stays with the wrapped model, so calling this again
+     * resumes it there. After {@link #start(boolean) start(true)}, the wrapped model's own {@code start(true)} resumes it.
      *
      * @throws UnknownSubscriptionException       If neither this model nor the wrapped model has that subscription.
      * @throws SubscriptionAlreadyRunningException If the subscription is already running, including when another
@@ -334,23 +338,25 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
                     "Subscription " + subscriptionId + " is already being started by another thread.");
         }
 
+        final Subscription subscribed;
         try {
-            Subscription subscription = delegate.subscribe(subscriptionId, deferred.filter(), deferred.startAt(), deferred.action());
-            // Subscribing to a stopped model registers a paused subscription rather than a running one, so this is what
-            // makes starting work after stop(). Without it the caller is handed a subscription that never delivers.
-            if (delegate.isPaused(subscriptionId)) {
-                subscription = delegate.resumeSubscription(subscriptionId);
-            }
-            if (!keepUnlessCancelled(subscriptionId, subscription)) {
-                throw new UnknownSubscriptionException(subscriptionId);
-            }
-            reopenAfterStop();
-            return subscription;
+            subscribed = delegate.subscribe(subscriptionId, deferred.filter(), deferred.startAt(), deferred.action());
         } catch (RuntimeException e) {
             // Put it back so a subscription that failed to start can be started again, unless it was cancelled meanwhile
             registrations.replace(subscriptionId, Registration.STARTING, deferred);
             throw e;
         }
+        // Kept before it is resumed, since the wrapped model has the subscription from here on. When the resume below
+        // throws, the next resumeSubscription(..) or start(true) resumes it in the wrapped model, rather than calling a
+        // subscribe the wrapped model would refuse as a duplicate.
+        if (!keepUnlessCancelled(subscriptionId, subscribed)) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
+        // Subscribing to a stopped model registers a paused subscription rather than a running one, so this is what
+        // makes starting work after stop(). Without it the caller is handed a subscription that never delivers.
+        Subscription subscription = delegate.isPaused(subscriptionId) ? delegate.resumeSubscription(subscriptionId) : subscribed;
+        reopenAfterStop();
+        return subscription;
     }
 
     /**
