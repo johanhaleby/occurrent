@@ -193,6 +193,46 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_subscription_the_wrapped_model_took_but_failed_to_resume_is_resumed_in_the_wrapped_model_when_started_again() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        delegate.parkOnSubscribe = true;
+        delegate.failNextResume = true;
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        List<CloudEvent> received = new CopyOnWriteArrayList<>();
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), received::add);
+        assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID)).isInstanceOf(IllegalStateException.class);
+
+        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delegate.subscribeCalls).as("the wrapped model was subscribed once").hasSize(1);
+        assertThat(delegate.resumeCalls).as("the wrapped model resumed it").containsExactly(SUBSCRIPTION_ID);
+        assertThat(resumed).isSameAs(delegate.subscriptions.get(SUBSCRIPTION_ID));
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).as("running after the retry").isEqualTo(delegate.isRunning(SUBSCRIPTION_ID)).isTrue();
+        assertThat(model.isPaused(SUBSCRIPTION_ID)).as("paused after the retry").isEqualTo(delegate.isPaused(SUBSCRIPTION_ID)).isFalse();
+        delegate.feed(cloudEvent("1"));
+        assertThat(received).extracting(CloudEvent::getId).containsExactly("1");
+        model.pauseSubscription(SUBSCRIPTION_ID);
+        assertThat(delegate.paused).as("what the wrapped model holds paused after the pause").containsExactly(SUBSCRIPTION_ID);
+    }
+
+    @Test
+    void a_subscription_the_wrapped_model_took_but_failed_to_resume_answers_as_the_wrapped_model_does() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        delegate.parkOnSubscribe = true;
+        delegate.failNextResume = true;
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        Throwable failure = catchThrowable(() -> model.resumeSubscription(SUBSCRIPTION_ID));
+
+        assertThat(failure).isInstanceOf(IllegalStateException.class);
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).as("running after the failed resume").isEqualTo(delegate.isRunning(SUBSCRIPTION_ID)).isFalse();
+        assertThat(model.isPaused(SUBSCRIPTION_ID)).as("paused after the failed resume").isEqualTo(delegate.isPaused(SUBSCRIPTION_ID)).isTrue();
+        assertThatCode(() -> model.pauseSubscription(SUBSCRIPTION_ID)).as("pausing after the failed resume").doesNotThrowAnyException();
+    }
+
+    @Test
     void registering_the_same_id_twice_is_rejected() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
@@ -1554,6 +1594,7 @@ class ManualStartSubscriptionModelTest {
 
         boolean parkOnSubscribe = false;
         boolean failNextSubscribe = false;
+        boolean failNextResume = false;
         @Nullable CountDownLatch subscribeEntered = null;
         @Nullable CountDownLatch holdSubscribeUntil = null;
         @Nullable String failSubscribeFor = null;
@@ -1594,6 +1635,10 @@ class ManualStartSubscriptionModelTest {
 
         @Override
         public Subscription resumeSubscription(String subscriptionId) {
+            if (failNextResume) {
+                failNextResume = false;
+                throw new IllegalStateException("Cannot resume right now");
+            }
             if (!paused.remove(subscriptionId)) {
                 throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
             }
