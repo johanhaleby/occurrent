@@ -2437,9 +2437,29 @@ when it takes over the lease of a subscription whose catch-up another node had n
 went live from the present there and skipped the events in between, see
 [#1219](https://github.com/johanhaleby/occurrent/issues/1219). The new owner can now deliver again what the other node
 already delivered after that position, up to the event store's head. `resumeSubscription(subscriptionId)` and
-`start(true)` replay this way, and `resumeSubscription(subscriptionId, startAt)` doesn't. A replay that fails is logged
-at `ERROR` and runs again after a backoff that starts at 100 ms and doubles up to 2 seconds. When the wrapped model
+`start(true)` replay this way, and `resumeSubscription(subscriptionId, startAt)` doesn't. When the wrapped model
 can't resume a subscription from a given position, the resume throws an `IllegalStateException` that names that model.
+
+To find out whether any subscription would replay, `start(true)` reads the stored position of the subscriptions made
+through the catch-up model on every start. When one would, the wrapped model starts without resuming anything, and the
+catch-up model then resumes each subscription the wrapped model holds paused. A wrapped model that can't list its
+subscriptions only gets the ones made through the catch-up model resumed, and the others stay paused.
+
+A replay that fails is logged at `ERROR` and runs again from the last position it stored, after a backoff that starts
+at 100 ms and doubles up to 2 seconds. That includes a failure at the handover, when reading or storing the position
+throws or the wrapped model fails to resume the subscription. While the replay waits to run again, the subscription
+is running and catching up, and isn't paused. A call that comes in the meantime decides what happens to the replay:
+
+| Call while the replay waits | What happens to the replay |
+|---|---|
+| `pauseSubscription(subscriptionId)` | Held, and the subscription is paused until `resumeSubscription(subscriptionId)` or `start(true)` runs the replay again |
+| `stop()` | Held the same way, and it stays held after `start(false)` |
+| `cancelSubscription(subscriptionId)` or `shutdown()` | Ends |
+| `resumeSubscription(subscriptionId, startAt)` on `CatchupSubscriptionModel` | Ends, and the subscription resumes at `startAt` |
+
+A stop while the replay reads history holds the replay too. A pause then is applied once the replay hands over, or
+holds the replay when it fails. When the wrapped model already runs the subscription by the time the replay hands
+over, the replay ends without running again, and that is logged at `ERROR` too.
 
 `CheckpointAwareSubscriptionModel` gains `canResumeFrom(Checkpoint)`, `boolean` on the blocking stack and
 `Mono<Boolean>` on the reactor stack. It answers `true` by default, so a model of your own still compiles. The MongoDB
