@@ -606,13 +606,6 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     }
 
     @Override
-    public void cancelSubscription(String subscriptionId) {
-        cancelRunningCatchup(subscriptionId);
-        subscriptionModel.cancelSubscription(subscriptionId);
-        deletePositionFromStorage(subscriptionId);
-    }
-
-    @Override
     public void shutdown() {
         markShuttingDown();
         subscriptionModel.shutdown();

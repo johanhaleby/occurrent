@@ -2614,12 +2614,34 @@ is running and catching up, and isn't paused. A call that comes in the meantime 
 | `pauseSubscription(subscriptionId)` | Held, and the subscription is paused until `resumeSubscription(subscriptionId)` or `start(true)` runs the replay again |
 | `stop()` | Held the same way, and it stays held after `start(false)` |
 | `cancelSubscription(subscriptionId)` or `shutdown()` | Ends |
-| `resumeSubscription(subscriptionId, startAt)` on `CatchupSubscriptionModel` | Ends, and the subscription resumes at `startAt` |
+| `resumeSubscription(subscriptionId, startAt)` on `CatchupSubscriptionModel` | Ends, and the subscription resumes at `startAt`, unless an earlier run of the replay is still in the subscription's action, as described below |
 
-When `resumeSubscription(subscriptionId, startAt)` ends a replay that is inside the subscription's action, it waits
-until the action returns before the wrapped model resumes the subscription at `startAt`, so the action never runs on
-two threads at once. Called from inside that action, it throws `IllegalStateException`, and the replay goes on. Call
-it from another thread.
+`resumeSubscription(subscriptionId, startAt)` also ends a replay that reads history. While the replay is inside the
+subscription's action, the call holds the replay and waits up to 10 seconds for the action to return. Then the replay
+ends and the wrapped model resumes the subscription at `startAt`. While the call waits, `isPaused(subscriptionId)`
+returns `true`.
+
+When the action doesn't return within the 10 seconds, the call logs at `ERROR` and throws `IllegalStateException`.
+The replay then runs again, from the last position it stored, once the action has returned, and the subscription
+isn't resumed at `startAt`.
+
+Called from inside that action, on the replay's thread, `resumeSubscription(subscriptionId, startAt)` throws
+`IllegalStateException` at once, and the replay goes on. An action that passes the call to another thread and waits for
+it gets the `IllegalStateException` after the 10 seconds. Call it from a thread the action doesn't wait for.
+
+The catch-up model runs one call at a time for each subscription id. That covers `subscribe(..)`,
+`pauseSubscription(subscriptionId)`, both `resumeSubscription` methods and `cancelSubscription(subscriptionId)`. It
+also covers the part of `start(true)` and `stop()` that handles that subscription. A second call for the same id waits
+until the first has returned and then acts on what the first left. A `resumeSubscription(subscriptionId)` that comes
+while `resumeSubscription(subscriptionId, startAt)` waits for the action starts no second replay. It throws
+`SubscriptionAlreadyRunningException` once the subscription runs at `startAt`.
+
+A call that waits 10 seconds for another call for the same id logs at `ERROR` and throws `IllegalStateException`
+without changing anything. A pause, a resume or a cancel from inside the subscription's action during a replay goes
+ahead when no other call for the subscription runs, and throws `IllegalStateException` at once when one does.
+
+The calls run one at a time within one JVM, on `CatchupSubscriptionModel` and on the catch-up models it is built from.
+Across nodes, the lease of `CompetingConsumerSubscriptionModel` decides which node runs the subscription.
 
 A stop while the replay reads history holds the replay too. A pause while it reads history lets it read on, and once
 it has delivered the history the replay is held instead of handing over. The wrapped model keeps the subscription

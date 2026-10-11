@@ -129,6 +129,12 @@ class StreamCatchupResumeReplayMongoTest {
      *               isCatchingUp and isRunning, not isPaused
      * HELD          the replay is parked and isPaused, it runs again only on resumeSubscription(id) or start(true)
      *
+     * Each call below, apart from shutdown, holds the claim of the id for as long as it runs, as does the backoff timer
+     * when it decides, so the calls for one id run one at a time on the dispatcher and on its children. A call that
+     * waits 10 s for the claim logs at ERROR and throws IllegalStateException, and the state stays as it was. A call
+     * from inside the action, on a replay thread of the id, goes ahead when the claim is free and throws
+     * IllegalStateException at once when it isn't.
+     *
      * pauseSubscription
      *   LIVE          the live delegate pauses
      *   REPLAYING     the pause is recorded for the handover, a second one changes nothing
@@ -144,8 +150,11 @@ class StreamCatchupResumeReplayMongoTest {
      *   HELD          goes to REPLAYING
      * resumeSubscription(id, startAt) on the dispatcher
      *   LIVE          the live delegate repositions
-     *   other states  the replay ends, then the live delegate repositions once the action the replay is in has returned,
-     *                 and from inside that action it throws IllegalStateException
+     *   other states  the replay goes to HELD while the call waits up to 10 s for the action the replay is in to
+     *                 return, then the replay ends and the live delegate repositions. When the action doesn't return in
+     *                 time, a replay the call took to HELD goes to REPLAYING, its new attempt waiting for that action,
+     *                 and the call logs at ERROR and throws IllegalStateException. From inside the action, on the replay
+     *                 thread, it throws IllegalStateException and changes nothing
      * cancelSubscription
      *   every state   the replay is gone
      * stop()
@@ -168,7 +177,7 @@ class StreamCatchupResumeReplayMongoTest {
      * replay or handover fails, logged at ERROR
      *   REPLAYING     goes to BACKING_OFF, or to HELD when stopped or a pause was asked
      *   HANDING_OVER  the same, decided before the handover lock is released
-     * backoff timer wakes, decided under the lock
+     * backoff timer wakes, decided under the claim and the lock
      *   BACKING_OFF   goes to REPLAYING, or to HELD when stopped or paused, or is gone when cancelled, repositioned or shut down
      * the replay thread is interrupted while it waits to run again
      *   BACKING_OFF   goes to HELD, logged at ERROR
