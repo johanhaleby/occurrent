@@ -27,6 +27,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
@@ -35,10 +36,15 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
+import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
+import org.occurrent.subscription.blocking.durable.catchup.StartAtTime;
+import org.occurrent.subscription.blocking.durable.catchup.StreamCatchupSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -53,18 +59,24 @@ import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
+import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
@@ -89,6 +101,7 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
 
     private SpringMongoEventStore eventStore;
     private MongoTemplate mongoTemplate;
+    private MongoTransactionManager mongoTransactionManager;
     private String streamId;
     private String checkpointCollection;
     private DeterministicCompetingConsumerStrategy strategy;
@@ -101,7 +114,7 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         MongoClient mongoClient = MongoClients.create(connectionString);
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
-        MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+        mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
         eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
@@ -244,10 +257,10 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
         NameWasChanged e4 = new NameWasChanged("e4", LocalDateTime.of(2026, 1, 1, 0, 0, 3), "name", "e4");
         eventStore.write(streamId, serialize(e4));
 
-        // Then, the regain reaches DurableSubscriptionModel directly, since CatchupSubscriptionModel's
-        // resumeSubscription is a plain forward that never routes through a catch-up child, so isCatchingUp stays
-        // false throughout and neither e1 (already delivered before the handover) nor e2/e3 (delivered by B) is
-        // redelivered through a replay. e4, published after the regain, still arrives normally.
+        // Then, a resume replays only when the stored checkpoint is a catch-up's position. The one stored at the
+        // regain is a change stream position, so the regain reaches DurableSubscriptionModel directly, isCatchingUp
+        // stays false throughout and neither e1 (already delivered before the handover) nor e2/e3 (delivered by B)
+        // is redelivered through a replay. e4, published after the regain, still arrives normally.
         await("A delivers e4 without redelivering e2 or e3").atMost(5, SECONDS)
                 .untilAsserted(() -> assertThat(eventsA).extracting(CloudEvent::getId).contains("e4"));
         assertThat(eventsA).extracting(CloudEvent::getId).doesNotContain("e2", "e3");
@@ -255,8 +268,172 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
                 .untilAsserted(() -> assertThat(catchupA.isCatchingUp(subscriptionId)).isFalse());
     }
 
+    @Test
+    @Timeout(120)
+    void a_lease_regain_during_the_interim_holders_catch_up_replay_still_delivers_what_was_written_while_it_was_stood_down() throws Exception {
+        // Given the starter's own composition on a store that writes global positions, so a catch-up replays by
+        // position and stores a GlobalCheckpoint, which a MongoDB model cannot read, after every event.
+        String subscriptionId = UUID.randomUUID().toString();
+        CopyOnWriteArrayList<CloudEvent> eventsA = new CopyOnWriteArrayList<>();
+        AtomicInteger deliveredToB = new AtomicInteger();
+        CountDownLatch releaseB = new CountDownLatch(1);
+        // B's replay delivers the first event and then stalls inside the handler, so it never hands over to live
+        Consumer<CloudEvent> stallingB = event -> {
+            if (deliveredToB.incrementAndGet() > 1) {
+                try {
+                    releaseB.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+        String positionedEvents = "positioned-events-" + UUID.randomUUID();
+        SpringMongoEventStore positionedEventStore = positionedEventStore(positionedEvents);
+        SpringMongoCheckpointStorage checkpointStorage = new SpringMongoCheckpointStorage(mongoTemplate, checkpointCollection);
+        CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(checkpointStorage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        nodeA = new CompetingConsumerSubscriptionModel(new CatchupSubscriptionModel(new DurableSubscriptionModel(springModel(positionedEvents), checkpointStorage), positionedEventStore, catchupConfig), strategy);
+        nodeB = new CompetingConsumerSubscriptionModel(new CatchupSubscriptionModel(new DurableSubscriptionModel(springModel(positionedEvents), checkpointStorage), positionedEventStore, catchupConfig), strategy);
+
+        try {
+            nodeA.subscribe("A", subscriptionId, null, StartAt.subscriptionModelDefault(), eventsA::add).waitUntilStarted();
+            positionedEventStore.write(streamId, serialize(new NameDefined("e1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "seed")));
+            await("A delivers the seed event").atMost(5, SECONDS).untilAsserted(() -> assertThat(eventsA).hasSize(1));
+
+            // When A is stood down, an event is written, and B starts a position replay of all history that stalls
+            // after its first event. B's replay has stored a GlobalCheckpoint for the id by then.
+            strategy.transferLease(subscriptionId, "A", "B");
+            // Below B's live start, covered only by B's replay, which B abandons below
+            NameWasChanged beforeB = new NameWasChanged("beforeB", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "written before B subscribed");
+            positionedEventStore.write(streamId, serialize(beforeB));
+            nodeB.subscribe("B", subscriptionId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)), stallingB);
+            await("B's replay stores a global checkpoint").atMost(10, SECONDS)
+                    .until(() -> checkpointStorage.exists(subscriptionId) && GlobalCheckpoint.isGlobalCheckpoint(checkpointStorage.read(subscriptionId)));
+            assertThat(GlobalCheckpoint.isGlobalCheckpoint(checkpointStorage.read(subscriptionId))).as("what A reads when it regains the lease is a global checkpoint").isTrue();
+
+            // Above B's live start, so B's live feed would have delivered it had B not been stood down
+            NameWasChanged duringB = new NameWasChanged("duringB", LocalDateTime.of(2026, 1, 1, 0, 0, 2), "name", "written during B's replay");
+            positionedEventStore.write(streamId, serialize(duringB));
+
+            // B loses the lease mid-replay and A regains it
+            strategy.transferLease(subscriptionId, "B", "A");
+
+            NameWasChanged sentinel = new NameWasChanged("sentinel", LocalDateTime.of(2026, 1, 1, 0, 0, 3), "name", "sentinel");
+            positionedEventStore.write(streamId, serialize(sentinel));
+            await("A delivers the sentinel").atMost(10, SECONDS)
+                    .untilAsserted(() -> assertThat(eventsA).extracting(CloudEvent::getId).contains("sentinel"));
+
+            // Then everything written while A was stood down reaches A. duringB is lost when A resumes at the
+            // present. beforeB is lost when A resumes from the stored checkpoint's live start, since that start is
+            // B's, and only B's abandoned replay covered what lies below it.
+            assertThat(eventsA).extracting(CloudEvent::getId).contains("beforeB", "duringB");
+        } finally {
+            releaseB.countDown();
+        }
+    }
+
+    @Test
+    @Timeout(120)
+    void a_node_registered_before_a_catch_up_stored_its_position_still_gets_the_history_after_that_position_when_the_lease_moves_to_it_through_the_stream_catch_up_model() throws Exception {
+        aNodeRegisteredBeforeACatchUpStoredItsPositionGetsEverythingAfterThatPosition(
+                StartAt.checkpoint(GlobalCheckpoint.of(0)), true,
+                (durable, store, config) -> new StreamCatchupSubscriptionModel(durable, store, config));
+    }
+
+    @Test
+    @Timeout(120)
+    void a_node_registered_before_a_catch_up_stored_its_position_still_gets_the_history_after_that_position_when_the_lease_moves_to_it_through_the_dispatching_catch_up_model() throws Exception {
+        aNodeRegisteredBeforeACatchUpStoredItsPositionGetsEverythingAfterThatPosition(
+                StartAt.checkpoint(GlobalCheckpoint.of(0)), true,
+                (durable, store, config) -> new CatchupSubscriptionModel(durable, store, config));
+    }
+
+    @Test
+    @Timeout(120)
+    void a_node_registered_before_a_time_catch_up_stored_its_time_still_gets_the_history_after_that_time_when_the_lease_moves_to_it() throws Exception {
+        aNodeRegisteredBeforeACatchUpStoredItsPositionGetsEverythingAfterThatPosition(
+                StartAtTime.offsetDateTime(OffsetDateTime.of(2025, 12, 31, 0, 0, 0, 0, UTC)), false,
+                (durable, store, config) -> new StreamCatchupSubscriptionModel(durable, store, config));
+    }
+
+    private void aNodeRegisteredBeforeACatchUpStoredItsPositionGetsEverythingAfterThatPosition(StartAt startOfA, boolean storesAGlobalCheckpoint, CatchUpModelFactory catchUpModel) throws Exception {
+        // Given the starter's own composition on a store that writes global positions, with the history written
+        String subscriptionId = UUID.randomUUID().toString();
+        CopyOnWriteArrayList<CloudEvent> eventsA = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<CloudEvent> eventsB = new CopyOnWriteArrayList<>();
+        AtomicInteger deliveredToA = new AtomicInteger();
+        CountDownLatch aIsStalled = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+        // A's replay delivers the first event and then stalls inside the handler for the second, so the checkpoint
+        // it has stored is the one after the first event
+        Consumer<CloudEvent> stallingA = event -> {
+            eventsA.add(event);
+            if (deliveredToA.incrementAndGet() > 1) {
+                aIsStalled.countDown();
+                try {
+                    releaseA.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+        String positionedEvents = "positioned-events-" + UUID.randomUUID();
+        SpringMongoEventStore positionedEventStore = positionedEventStore(positionedEvents);
+        SpringMongoCheckpointStorage checkpointStorage = new SpringMongoCheckpointStorage(mongoTemplate, checkpointCollection);
+        CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(checkpointStorage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        nodeA = new CompetingConsumerSubscriptionModel(catchUpModel.create(new DurableSubscriptionModel(springModel(positionedEvents), checkpointStorage), positionedEventStore, catchupConfig), strategy);
+        nodeB = new CompetingConsumerSubscriptionModel(catchUpModel.create(new DurableSubscriptionModel(springModel(positionedEvents), checkpointStorage), positionedEventStore, catchupConfig), strategy);
+
+        try {
+            positionedEventStore.write(streamId, serialize(new NameDefined("h1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "h1")));
+            positionedEventStore.write(streamId, serialize(new NameWasChanged("h2", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "h2")));
+            positionedEventStore.write(streamId, serialize(new NameWasChanged("h3", LocalDateTime.of(2026, 1, 1, 0, 0, 2), "name", "h3")));
+
+            // When B is stopped and subscribes with the default start while nothing is stored for the id. Its
+            // catch-up finds nothing to replay and holds the subscription paused at B's present.
+            nodeB.stop();
+            nodeB.subscribe("B", subscriptionId, null, StartAt.subscriptionModelDefault(), eventsB::add);
+
+            // A replays from the start of the history and stalls after its first event, with that position stored
+            nodeA.subscribe("A", subscriptionId, null, startOfA, stallingA);
+            assertThat(aIsStalled.await(10, SECONDS)).as("A's replay reaches its second event").isTrue();
+            assertThat(checkpointStorage.exists(subscriptionId)).as("A's replay has stored the position after its first event").isTrue();
+            assertThat(GlobalCheckpoint.isGlobalCheckpoint(checkpointStorage.read(subscriptionId))).as("what A's replay stored is a global checkpoint rather than a time").isEqualTo(storesAGlobalCheckpoint);
+
+            positionedEventStore.write(streamId, serialize(new NameWasChanged("afterBRegistered", LocalDateTime.of(2026, 1, 1, 0, 0, 3), "name", "afterBRegistered")));
+            positionedEventStore.write(streamId, serialize(new NameWasChanged("beforeHandover", LocalDateTime.of(2026, 1, 1, 0, 0, 4), "name", "beforeHandover")));
+            nodeB.start();
+
+            // The lease moves from A to B, and an event is written after it
+            strategy.transferLease(subscriptionId, "A", "B");
+            positionedEventStore.write(streamId, serialize(new NameWasChanged("sentinel", LocalDateTime.of(2026, 1, 1, 0, 0, 5), "name", "sentinel")));
+            await("B delivers the sentinel").atMost(10, SECONDS)
+                    .untilAsserted(() -> assertThat(eventsB).extracting(CloudEvent::getId).contains("sentinel"));
+
+            // Then everything after the position A's replay stored reaches B, the history A had not yet delivered
+            // included. Duplicates are fine.
+            assertThat(eventsB).extracting(CloudEvent::getId).contains("h2", "h3", "afterBRegistered", "beforeHandover", "sentinel");
+        } finally {
+            releaseA.countDown();
+        }
+    }
+
+    @FunctionalInterface
+    private interface CatchUpModelFactory {
+        SubscriptionModel create(DurableSubscriptionModel durable, SpringMongoEventStore store, CatchupSubscriptionModelConfig config);
+    }
+
     private SpringMongoSubscriptionModel springModel() {
-        return new SpringMongoSubscriptionModel(mongoTemplate, requireNonNull(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events").getCollection()), TimeRepresentation.RFC_3339_STRING);
+        return springModel(requireNonNull(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events").getCollection()));
+    }
+
+    private SpringMongoSubscriptionModel springModel(String eventCollection) {
+        return new SpringMongoSubscriptionModel(mongoTemplate, eventCollection, TimeRepresentation.RFC_3339_STRING);
+    }
+
+    private SpringMongoEventStore positionedEventStore(String eventCollection) {
+        EventStoreConfig config = new EventStoreConfig.Builder().eventStoreCollectionName(eventCollection).transactionConfig(mongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM).withStreamPosition().build();
+        return new SpringMongoEventStore(mongoTemplate, config);
     }
 
     private List<CloudEvent> serialize(DomainEvent e) {

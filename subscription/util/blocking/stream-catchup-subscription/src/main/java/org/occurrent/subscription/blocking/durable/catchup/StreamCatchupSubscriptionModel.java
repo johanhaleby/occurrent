@@ -39,7 +39,6 @@ import org.occurrent.subscription.util.predicate.EveryN;
 
 import java.time.OffsetDateTime;
 import java.util.*;
-import java.util.concurrent.Future;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -158,7 +157,6 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         if (filter != null && !(filter instanceof StreamSubscriptionFilter) && !(filter instanceof AgnosticSubscriptionFilter)) {
             throw new UnsupportedSubscriptionFilterException(filter.getClass(), "Only StreamSubscriptionFilter or AgnosticSubscriptionFilter is supported!");
         }
-        boolean positionMode = streamStoreWritesPosition();
         // A dynamic start that resolves to the model default takes the same resume decision as the default itself,
         // so a replay that stopped in the middle resumes from the position it stored instead of going live
         StartAt requestedStartAt = startAt;
@@ -187,34 +185,51 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             firstStartAt = requestedStartAt;
         }
 
+        CatchupReplay replay = replayFrom(subscriptionId, filter, startAt, action, firstStartAt);
+        if (replay == null) {
+            return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), firstStartAt, action, holdPaused);
+        }
+        return new CatchupSubscription(subscriptionId, startCatchupAsync(subscriptionId, replay, holdPaused));
+    }
+
+    @Override
+    @Nullable CatchupReplay replayToResume(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, Checkpoint stored) {
+        return replayFrom(subscriptionId, filter, startAt, action, StartAt.checkpoint(stored));
+    }
+
+    // The replay of the history from firstStartAt, or null when firstStartAt starts live. A replay that stop() cut
+    // short runs again from the last position it stored, as a restart would, so the stored position does not move back.
+    private @Nullable CatchupReplay replayFrom(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
         StreamStart streamStart = classifyStreamStart(firstStartAt, subscriptionModelContextType);
-        if (positionMode) {
+        if (streamStoreWritesPosition()) {
             return switch (streamStart) {
                 // Beginning-of-time maps to position 0 so the position catch-up replays all history.
-                case BEGINNING_OF_TIME -> streamPositionCatchup(subscriptionId, filter, startAt, action, StartAt.checkpoint(GlobalCheckpoint.of(0)), holdPaused);
-                case GLOBAL_POSITION -> streamPositionCatchup(subscriptionId, filter, startAt, action, firstStartAt, holdPaused);
+                case BEGINNING_OF_TIME -> streamPositionReplay(subscriptionId, filter, startAt, action, StartAt.checkpoint(GlobalCheckpoint.of(0)));
+                case GLOBAL_POSITION -> streamPositionReplay(subscriptionId, filter, startAt, action, firstStartAt);
                 // A specific wall-clock time has no position to map to, so replay it through the legacy time-based
                 // catch-up even on a position store.
-                case SPECIFIC_TIME -> streamTimeCatchup(subscriptionId, filter, startAt, action, firstStartAt, holdPaused);
-                case LIVE -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), firstStartAt, action, holdPaused);
+                case SPECIFIC_TIME -> streamTimeReplay(subscriptionId, filter, startAt, action, firstStartAt);
+                case LIVE -> null;
             };
         }
         return switch (streamStart) {
-            case BEGINNING_OF_TIME, SPECIFIC_TIME -> streamTimeCatchup(subscriptionId, filter, startAt, action, firstStartAt, holdPaused);
-            case GLOBAL_POSITION, LIVE -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), firstStartAt, action, holdPaused);
+            case BEGINNING_OF_TIME, SPECIFIC_TIME -> streamTimeReplay(subscriptionId, filter, startAt, action, firstStartAt);
+            case GLOBAL_POSITION, LIVE -> null;
         };
     }
 
     /**
      * Hands {@code subscriptionId} straight to the live delegate, without a catch-up phase. Cancels any catch-up
-     * already running for this id first, under the same per-id lock as a finishing attempt's own handover, so that
-     * attempt is told it has been superseded instead of also subscribing the delegate for the id this call just
-     * claimed. Distinct from the delegate subscribe call inside a finishing attempt's own handover, which has
-     * already gone through that lock and that decision and must not cancel itself.
+     * already running for this id once the live delegate has the subscription, under the same per-id lock as a
+     * finishing attempt's own handover, so that attempt is told it has been superseded instead of also subscribing the
+     * delegate for the id this call just claimed, and a subscribe the live delegate refuses doesn't cancel it.
+     * Distinct from the delegate subscribe call inside a finishing attempt's own handover, which has already gone
+     * through that lock and that decision and must not cancel itself.
      */
     private Subscription subscribeLiveWithoutCatchup(String subscriptionId, StreamSubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
+        Subscription subscription = subscribeInTheWrappedModel(subscriptionId, filter, startAt, action, holdPaused);
         cancelRunningCatchup(subscriptionId);
-        return subscribeInTheWrappedModel(subscriptionId, filter, startAt, action, holdPaused);
+        return subscription;
     }
 
     // Resolved start kinds for a stream subscription. Classifying once keeps the routing above an exhaustive switch,
@@ -252,18 +267,14 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 && GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
     }
 
-    private Subscription streamPositionCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt positionStartAt, boolean holdPaused) {
-        Future<Subscription> future = startCatchupAsync(subscriptionId, lastStored -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, resumeFrom(lastStored, positionStartAt)), holdPaused);
-        return new CatchupSubscription(subscriptionId, future);
+    private CatchupReplay streamPositionReplay(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt positionStartAt) {
+        return lastStored -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, resumeFrom(lastStored, positionStartAt));
     }
 
-    private Subscription streamTimeCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt, boolean holdPaused) {
-        Future<Subscription> future = startCatchupAsync(subscriptionId, lastStored -> startCatchupSubscription(subscriptionId, filter, startAt, action, resumeFrom(lastStored, firstStartAt)), holdPaused);
-        return new CatchupSubscription(subscriptionId, future);
+    private CatchupReplay streamTimeReplay(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
+        return lastStored -> startCatchupSubscription(subscriptionId, filter, startAt, action, resumeFrom(lastStored, firstStartAt));
     }
 
-    // A replay that stop() cut short runs again from the last position it stored, as a restart would, so the stored
-    // position does not move back
     private static StartAt resumeFrom(@Nullable Checkpoint lastStored, StartAt startAt) {
         return lastStored == null ? startAt : StartAt.checkpoint(lastStored);
     }
@@ -402,8 +413,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             // history, and a cancel would get back the position it deleted.
             subscription = new CancelledSubscription(subscriptionId);
         } else {
-            subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAtToUse, liveConsumer);
-            applyPendingPauseIfAny(subscriptionId);
+            subscription = handOver(subscriptionId, withCapabilityScope(filter), startAtToUse, liveConsumer);
         }
         return subscription;
     }

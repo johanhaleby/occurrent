@@ -23,12 +23,17 @@ import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -37,15 +42,21 @@ import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConf
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
@@ -98,6 +109,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // How many times a position replay may run again from its origin after the first replay, when the wrapped model
     // keeps losing the live start while the replay runs
     private static final int MAX_REPLAYS_AGAIN = 3;
+    // The backoff before a replay a resume started runs again after it failed, as RetryStrategy.exponentialBackoff
+    // with these values, the default of the subscription models and checkpoint storages
+    private static final Duration FIRST_BACKOFF = Duration.ofMillis(100);
+    private static final Duration MAX_BACKOFF = Duration.ofSeconds(2);
     // Who to tell about each id's catch-up boundaries, registered before the subscription that produces them.
     // Kept until this model shuts down, since the registration outlives any one catch-up: a stop and start, a
     // resume, or a cancel and re-subscribe all run another catch-up for the same id, and a recorder that stopped
@@ -113,6 +128,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // low-cardinality here, unlike a per-event or per-request key; cancelRunningCatchup never creates one for an id
     // it has not seen, so an arbitrary or unknown id passed to cancelSubscription costs nothing.
     private final ConcurrentMap<String, ReentrantLock> handoverLocks;
+    // What each subscription asked for when it was last made through this model or another child of the same
+    // dispatcher, so a resume can replay from a position a catch-up stored for it. Removed when it is cancelled.
+    private final ConcurrentMap<String, Subscribed> subscribed;
 
     protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
         this(subscriptionModel, config, subscriptionModelContextType, new SharedCatchupState());
@@ -135,6 +153,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         this.handoverLocks = sharedState.handoverLocks;
         this.currentAttempt = sharedState.currentAttempt;
         this.runningCatchupSubscriptions = sharedState.runningCatchupSubscriptions;
+        this.subscribed = sharedState.subscribed;
     }
 
     /**
@@ -148,6 +167,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final ConcurrentMap<String, ReentrantLock> handoverLocks = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, CatchupAttempt> currentAttempt = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, Subscribed> subscribed = new ConcurrentHashMap<>();
+    }
+
+    /**
+     * A subscription as it was made, and the child of a dispatcher it was made through.
+     */
+    private record Subscribed(AbstractCatchupSubscriptionModel owner, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
     }
 
     // Reports subscriptionModelContextType (the dispatcher's type when wrapped) so a caller's StartAt.dynamic
@@ -158,7 +184,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-        return subscribe(subscriptionId, filter, startAt, action, false);
+        return subscribeAndRemember(subscriptionId, filter, startAt, action, false);
     }
 
     /**
@@ -167,7 +193,25 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     @Override
     public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-        return subscribe(subscriptionId, filter, startAt, action, true);
+        return subscribeAndRemember(subscriptionId, filter, startAt, action, true);
+    }
+
+    // Locked, so a cancel comes either before the subscription is made, or after it is remembered and removes it.
+    // Remembered after subscribing, since a subscription that starts live cancels any catch-up for the id once the
+    // live delegate has it. A subscription made here that the live delegate holds is refused before anything kept for
+    // it changes, since the live delegate refuses it too, at the latest when a replay hands over. Asked before the
+    // lock, so a subscribe that comes while a replay for the id hands over isn't refused here, and its own replay
+    // fails once it hands over.
+    private Subscription subscribeAndRemember(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
+        SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
+        if (subscribed.containsKey(subscriptionId) && (liveDelegate.isRunning(subscriptionId) || liveDelegate.isPaused(subscriptionId))) {
+            throw new DuplicateSubscriptionIdException(subscriptionId);
+        }
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            Subscription subscription = subscribe(subscriptionId, filter, startAt, action, holdPaused);
+            subscribed.put(subscriptionId, new Subscribed(this, filter, startAt, action));
+            return subscription;
+        }
     }
 
     /**
@@ -200,18 +244,76 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Once a later resume of the delegate returns, the model is started again, unless a {@link #stop()} came first.
      * When the delegate throws on being asked whether it runs, the model stops again, and what the delegate threw is
      * added to the start's failure as suppressed.
+     * <p>
+     * When a subscription the live delegate holds paused would replay on {@link #resumeSubscription(String)}, the live
+     * delegate is started without resuming anything, and each subscription it holds paused is then resumed as
+     * {@link #resumeSubscription(String)} resumes it. That one replays from the stored position first, and the live
+     * delegate resumes each of the others as its own {@code resumeSubscription(String)} does, without this waiting for
+     * it to open. One that runs by the time it is resumed counts as resumed. The first resume that throws is thrown
+     * once all of them are resumed. Reading the stored positions to decide this counts as part of starting the live
+     * delegate, so when it throws, the model stops again as it does when the live delegate throws.
      */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
         StartAttempt attempt = beginStart();
+        final boolean resumeEachHere;
         try {
-            getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
+            resumeEachHere = resumeSubscriptionsAutomatically && anyResumeReplays();
+            getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && !resumeEachHere);
         } catch (Throwable e) {
             undoStart(attempt, attempt.wasStopped() && runsAfterFailedStart(getWrappedSubscriptionModel(), e));
             throw e;
         }
         if (resumeSubscriptionsAutomatically) {
             relaunchParkedReplays();
+        }
+        if (resumeEachHere) {
+            resumeEach(subscriptionsTheLiveDelegateHoldsPaused(), this::resumeSubscription);
+        }
+    }
+
+    /**
+     * Whether a subscription made through this model would replay on {@link #resumeSubscription(String)}, as
+     * {@link #replayToResume(String)} describes, or such a replay runs or waits on this model. The live delegate holds
+     * the subscription of each of them paused, and must not resume it itself.
+     */
+    boolean anyResumeReplays() {
+        return currentAttempt.values().stream().anyMatch(attempt -> attempt.owner == this && attempt.replay.resuming)
+                || parkedReplays.values().stream().anyMatch(parked -> parked.replay().resuming)
+                || subscribed.entrySet().stream().anyMatch(entry -> entry.getValue().owner() == this && replayThatResumeRuns(entry.getKey()) != null);
+    }
+
+    /**
+     * The subscriptions the live delegate holds paused, of those it lists, or of those made through this model or
+     * another child of the same dispatcher when it can't list them.
+     */
+    Set<String> subscriptionsTheLiveDelegateHoldsPaused() {
+        SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
+        Set<String> known = IntrospectableSubscriptions.findIn(liveDelegate).map(IntrospectableSubscriptions::subscriptionIds)
+                .orElseGet(() -> Set.copyOf(subscribed.keySet()));
+        return known.stream().filter(liveDelegate::isPaused).collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    /**
+     * Resumes each of {@code subscriptionIds} with {@code resume}, also when an earlier one throws, and then throws the
+     * first failure with the others added as suppressed. One that already runs, such as one whose replay handed over
+     * after it was listed, counts as resumed.
+     */
+    static void resumeEach(Set<String> subscriptionIds, Consumer<String> resume) {
+        List<RuntimeException> failures = new ArrayList<>();
+        for (String subscriptionId : subscriptionIds) {
+            try {
+                resume.accept(subscriptionId);
+            } catch (SubscriptionAlreadyRunningException ignored) {
+                // Resumed by the time this got to it, which is what this was asked to do
+            } catch (RuntimeException e) {
+                failures.add(e);
+            }
+        }
+        if (!failures.isEmpty()) {
+            RuntimeException first = failures.getFirst();
+            failures.subList(1, failures.size()).forEach(first::addSuppressed);
+            throw first;
         }
     }
 
@@ -254,15 +356,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
+    // The live delegate holds a subscription paused while a resume replays for it, and it runs all the same
     @Override
     public boolean isPaused(String subscriptionId) {
-        return pauseRequestedDuringCatchup.containsKey(subscriptionId) || parkedReplays.containsKey(subscriptionId) || getWrappedSubscriptionModel().isPaused(subscriptionId);
+        return pauseRequestedDuringCatchup.containsKey(subscriptionId) || parkedReplays.containsKey(subscriptionId)
+                || (!isReplayingToResume(subscriptionId) && getWrappedSubscriptionModel().isPaused(subscriptionId));
     }
 
     /**
      * Runs a parked replay again and passes any other subscription to the live delegate. When this model is stopped and
      * the subscription is paused, this first starts the model without resuming anything else, as resuming a
      * subscription starts the live delegate, so a subscription made afterwards replays at once.
+     * <p>
+     * When the position stored for the subscription is one a catch-up replays from, such as the position another
+     * node's catch-up stored while it replayed, this replays from there before the live delegate resumes it, as
+     * {@link #replayToResume(String)} describes.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
@@ -276,20 +384,159 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return relaunched;
             }
         }
+        Subscription replaying = replayToResume(subscriptionId);
+        if (replaying != null) {
+            return replaying;
+        }
         Subscription resumed = getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
         liveDelegateResumed();
         return resumed;
     }
 
+    /**
+     * Replays from the position stored for {@code subscriptionId} when it is one a catch-up replays from, and resumes
+     * the subscription the live delegate holds paused once the replay has delivered the history, from the live start
+     * the stored position holds, or one read before the replay when it holds none. Returns the handle, or {@code null}
+     * when this model has nothing to replay, so the live delegate resumes the subscription itself.
+     * <p>
+     * The live delegate can't open its live feed at such a position, and would resume from its own position instead,
+     * which for a subscription it never opened is the present it read when the subscription was made. The events
+     * between the stored position and that present would then be delivered to no one. Replaying delivers them, along
+     * with events this node may already have delivered, so some arrive again.
+     * <p>
+     * Asked only for a subscription made through this model or another child of the same dispatcher, that the live
+     * delegate holds paused, and whose start lets this model catch up. A resume while such a replay runs returns the
+     * handle of that replay, also one that comes while the first resume decides to replay, since both decide under the
+     * handover lock.
+     *
+     * @throws IllegalStateException when the subscription would replay but the live delegate can't resume a
+     *                               subscription from a given position. It would resume from its own position, which can
+     *                               lie past the history the replay reads, and the events in between would be lost.
+     */
+    @Nullable Subscription replayToResume(String subscriptionId) {
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            CatchupAttempt running = currentAttempt.get(subscriptionId);
+            if (running != null && running.replay.resuming) {
+                return new CatchupSubscription(subscriptionId, running.replay.result);
+            }
+            ResumeReplay resumeReplay = replayThatResumeRuns(subscriptionId);
+            if (resumeReplay == null) {
+                return null;
+            }
+            repositionableLiveDelegate(subscriptionId);
+            warnIfStoredWithoutLiveStart(subscriptionId, resumeReplay.from());
+            return new CatchupSubscription(subscriptionId, startCatchupAsync(subscriptionId, resumeReplay.replay(), false, true));
+        }
+    }
+
+    private record ResumeReplay(CatchupReplay replay, Checkpoint from) {
+    }
+
+    // The replay a resume of subscriptionId runs before the live delegate resumes it, or null when it runs none
+    private @Nullable ResumeReplay replayThatResumeRuns(String subscriptionId) {
+        Subscribed subscription = subscribed.get(subscriptionId);
+        if (subscription == null || subscription.owner() != this || shuttingDown || !getWrappedSubscriptionModel().isPaused(subscriptionId)
+                || (subscription.startAt().isDynamic() && subscription.startAt().get(generateSubscriptionModelContext()) == null)) {
+            return null;
+        }
+        Checkpoint stored = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
+        if (stored == null) {
+            return null;
+        }
+        CatchupReplay replay = replayToResume(subscriptionId, subscription.filter(), subscription.startAt(), subscription.action(), stored);
+        return replay == null ? null : new ResumeReplay(replay, stored);
+    }
+
+    /**
+     * The replay from {@code stored} that {@link #replayToResume(String)} describes, or {@code null} when {@code stored}
+     * is not a position this model replays from. This model has none.
+     */
+    @Nullable CatchupReplay replayToResume(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, Checkpoint stored) {
+        return null;
+    }
+
+    private RepositionableSubscriptions repositionableLiveDelegate(String subscriptionId) {
+        SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
+        return RepositionableSubscriptions.findIn(liveDelegate).orElseThrow(() -> new IllegalStateException("Cannot resume subscription " + subscriptionId
+                + " from the position a catch-up stored for it, because " + liveDelegate.getClass().getName() + " can't resume a subscription from a given position."
+                + " It would resume from its own position, which can lie past the history the catch-up replays, and the events in between would not be delivered."
+                + " Use a subscription model that implements " + RepositionableSubscriptions.class.getSimpleName() + "."));
+    }
+
+    boolean isReplayingToResume(String subscriptionId) {
+        CatchupAttempt running = currentAttempt.get(subscriptionId);
+        return running != null && running.replay.resuming;
+    }
+
+    // Whether this model, rather than another child of the same dispatcher, runs the replay a resume started
+    boolean replaysToResumeHere(String subscriptionId) {
+        CatchupAttempt running = currentAttempt.get(subscriptionId);
+        return running != null && running.replay.resuming && running.owner == this;
+    }
+
+    /**
+     * Hands {@code subscriptionId} over to the live delegate once its replay has delivered the history. A replay a
+     * subscribe started subscribes it there from {@code startAtToUse}. A replay a resume started resumes the
+     * subscription the live delegate holds paused, from the position {@code startAtToUse} resolves to, which stores
+     * the live start when the stored position is the catch-up's own. That subscription keeps the action it was made
+     * with, so {@code liveConsumer} goes unused and an event the replay delivered can arrive again. The replay a resume
+     * started ends once the live delegate has resumed the subscription, so what throws before that, reading or saving
+     * the position included, fails the replay, which then runs again as {@link #runAgainAfter} decides. A pause asked
+     * for during the replay pauses the subscription once it is handed over. Called with the handover lock held, on the
+     * virtual thread {@link #startCatchupAsync} started for this attempt.
+     */
+    Subscription handOver(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAtToUse, Consumer<CloudEvent> liveConsumer) {
+        CatchupAttempt attempt = Objects.requireNonNull(CURRENT_ATTEMPT.get());
+        final Subscription subscription;
+        if (attempt.replay.resuming) {
+            subscription = resumeTheLiveDelegate(subscriptionId, startAtToUse);
+            if (currentAttempt.remove(subscriptionId, attempt)) {
+                runningCatchupSubscriptions.remove(subscriptionId);
+            }
+        } else {
+            subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAtToUse, liveConsumer);
+        }
+        applyPendingPauseIfAny(subscriptionId);
+        return subscription;
+    }
+
+    // Repositioned, since a live delegate that reads no stored position resumes from where it last read, which can lie
+    // past the history the replay read
+    private Subscription resumeTheLiveDelegate(String subscriptionId, StartAt startAtToUse) {
+        SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
+        StartAt liveStart = startAtToUse.get(new SubscriptionModelContext(liveDelegate.getClass()));
+        Subscription resumed = liveStart instanceof StartAtCheckpoint
+                ? repositionableLiveDelegate(subscriptionId).resumeSubscription(subscriptionId, liveStart)
+                : liveDelegate.resumeSubscription(subscriptionId);
+        liveDelegateResumed();
+        return resumed;
+    }
+
+    /**
+     * Pauses {@code subscriptionId}, once it is handed over when its replay still runs. Takes the handover lock, so a
+     * pause that comes while a finishing replay hands over waits until the live delegate has the subscription. A replay
+     * a resume started that waits to run again after it failed is held instead, so it doesn't run again until the
+     * subscription is resumed.
+     */
     @Override
     public void pauseSubscription(String subscriptionId) {
-        if (runningCatchupSubscriptions.containsKey(subscriptionId)) {
-            // Delegate does not know this id yet, so record the request and apply it in applyPendingPauseIfAny
-            // once the live subscription exists. The replay itself keeps running until the handover since
-            // interrupting and resuming it would require persisting the exact replay cursor, which this class does not do.
-            pauseRequestedDuringCatchup.put(subscriptionId, true);
-        } else {
-            getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
+        HandoverLock lock = tryLockHandover(subscriptionId);
+        try {
+            CatchupAttempt running = currentAttempt.get(subscriptionId);
+            if (running != null && running.backingOff) {
+                hold(subscriptionId, running);
+            } else if (runningCatchupSubscriptions.containsKey(subscriptionId)) {
+                // Delegate does not know this id yet, so record the request and apply it in applyPendingPauseIfAny
+                // once the live subscription exists. The replay itself keeps running until the handover since
+                // interrupting and resuming it would require persisting the exact replay cursor, which this class does not do.
+                pauseRequestedDuringCatchup.put(subscriptionId, true);
+            } else {
+                getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
+            }
+        } finally {
+            if (lock != null) {
+                lock.close();
+            }
         }
     }
 
@@ -317,6 +564,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // it. It stores the position of an event whose action it completes, and does not complete the caller's
         // handle, which the parked replay completes.
         private volatile boolean parked = false;
+        // Set under the handover lock while a replay a resume started waits to run again after it failed, so a pause
+        // holds it instead of waiting for a handover
+        private volatile boolean backingOff = false;
         private final AbstractCatchupSubscriptionModel owner;
         private final ReplayState replay;
         // Done once the thread of every earlier attempt at this replay has returned, so none of them is still inside
@@ -348,10 +598,23 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private volatile boolean cancelled = false;
         // The last position an attempt at this replay stored, which the next attempt replays from
         private final AtomicReference<@Nullable Checkpoint> lastStored = new AtomicReference<>();
+        // Whether a resume started it, so it resumes the subscription the live delegate holds instead of subscribing it
+        private final boolean resuming;
 
-        private ReplayState(CatchupReplay catchup, CompletableFuture<Subscription> result) {
+        // How many attempts at a replay a resume started have failed in a row
+        private int failures = 0;
+
+        private ReplayState(CatchupReplay catchup, CompletableFuture<Subscription> result, boolean resuming) {
             this.catchup = catchup;
             this.result = result;
+            this.resuming = resuming;
+        }
+
+        // FIRST_BACKOFF, doubled with each failure in a row up to MAX_BACKOFF. Called with the handover lock held.
+        private Duration backoffAfterFailure() {
+            failures++;
+            long millis = FIRST_BACKOFF.toMillis() << Math.min(failures - 1, 16);
+            return Duration.ofMillis(Math.min(millis, MAX_BACKOFF.toMillis()));
         }
     }
 
@@ -438,7 +701,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * decision. The map entry is atomically removed whenever it is still this attempt's own, whether ending
      * normally, cancelled, or stopped, so an id does not linger in {@link #currentAttempt} for the rest of the
      * model's lifetime once this attempt is done with it. Left alone when a later attempt has already taken the id
-     * over, since only that later attempt may remove its own entry.
+     * over, since only that later attempt may remove its own entry. A replay a resume started keeps its entry until
+     * {@link #handOver} has resumed the live delegate, so what fails before that is handled as a failed replay.
      * <p>
      * A stopped model parks the attempt instead of ending it, so the replay runs again once this model is started or
      * the subscription resumed. Called with {@code subscriptionId}'s handover lock held.
@@ -452,11 +716,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             parkIfStillCurrent(subscriptionId, attempt);
             return false;
         }
-        if (currentAttempt.remove(subscriptionId, attempt)) {
-            runningCatchupSubscriptions.remove(subscriptionId);
-            return !attempt.abandoned();
+        if (currentAttempt.get(subscriptionId) != attempt) {
+            return false;
         }
-        return false;
+        // A replay a resume started stays current through the handover, which ends it, so a handover that throws
+        // fails the replay as a read that throws does. It no longer catches up, since its history replay has ended.
+        if (attempt.replay.resuming && !attempt.abandoned()) {
+            runningCatchupSubscriptions.remove(subscriptionId);
+            return true;
+        }
+        currentAttempt.remove(subscriptionId, attempt);
+        runningCatchupSubscriptions.remove(subscriptionId);
+        return !attempt.abandoned();
     }
 
     /**
@@ -471,18 +742,32 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * allows replays in that window runs it again too, start(false) included.
      */
     private void parkIfStillCurrent(String subscriptionId, CatchupAttempt attempt) {
-        if (currentAttempt.remove(subscriptionId, attempt)) {
-            runningCatchupSubscriptions.remove(subscriptionId);
-            if (!attempt.replay.cancelled) {
-                attempt.parked = true;
-                AbstractCatchupSubscriptionModel owner = attempt.owner;
-                owner.parkedReplays.put(subscriptionId, new ParkedReplay(attempt.replay, attempt.done));
-                // Read after the put, so a start that allows replays from here on finds this replay parked
-                if (!owner.stopped && !owner.shuttingDown) {
-                    owner.relaunchParkedReplay(subscriptionId, false);
-                }
+        if (attempt.replay.cancelled) {
+            if (currentAttempt.remove(subscriptionId, attempt)) {
+                runningCatchupSubscriptions.remove(subscriptionId);
+            }
+        } else if (hold(subscriptionId, attempt)) {
+            AbstractCatchupSubscriptionModel owner = attempt.owner;
+            // Read after the put, so a start that allows replays from here on finds this replay parked
+            if (!owner.stopped && !owner.shuttingDown) {
+                owner.relaunchParkedReplay(subscriptionId, false);
             }
         }
+    }
+
+    /**
+     * Takes {@code subscriptionId}'s replay away from {@code attempt} and parks it, if {@code attempt} is still the
+     * current one, until a resume or a start that resumes runs it again. Returns whether it did. Called with the
+     * handover lock held.
+     */
+    private boolean hold(String subscriptionId, CatchupAttempt attempt) {
+        if (!currentAttempt.remove(subscriptionId, attempt)) {
+            return false;
+        }
+        runningCatchupSubscriptions.remove(subscriptionId);
+        attempt.parked = true;
+        attempt.owner.parkedReplays.put(subscriptionId, new ParkedReplay(attempt.replay, attempt.done));
+        return true;
     }
 
     boolean hasParkedReplay(String subscriptionId) {
@@ -849,11 +1134,39 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return attempt;
             });
             pauseRequestedDuringCatchup.remove(subscriptionId);
+            subscribed.remove(subscriptionId);
             // A parked replay never runs again, and waitUntilStarted on its subscriber's handle returns false. Flagged
             // too, since the attempt that stop() took it from can still be in the subscriber's action and must not
             // store a position once that returns.
             ParkedReplay parked = parkedReplays.remove(subscriptionId);
             if (parked != null) {
+                parked.replay().cancelled = true;
+                parked.replay().result.cancel(false);
+            }
+        } finally {
+            if (lock != null) {
+                lock.close();
+            }
+        }
+    }
+
+    /**
+     * Ends a replay a resume started for {@code subscriptionId}, running or parked on this model, without touching
+     * what is kept for the subscription, so a resume at a position the caller gives wins over it. The replay stores
+     * nothing more and doesn't hand over, and a later {@link #resumeSubscription(String)} can replay again.
+     */
+    void endReplayToResume(String subscriptionId) {
+        HandoverLock lock = tryLockHandover(subscriptionId);
+        try {
+            CatchupAttempt running = currentAttempt.get(subscriptionId);
+            if (running != null && running.replay.resuming) {
+                running.replay.cancelled = true;
+                runningCatchupSubscriptions.remove(subscriptionId);
+                pauseRequestedDuringCatchup.remove(subscriptionId);
+            }
+            ParkedReplay parked = parkedReplays.get(subscriptionId);
+            if (parked != null && parked.replay().resuming) {
+                parkedReplays.remove(subscriptionId);
                 parked.replay().cancelled = true;
                 parked.replay().result.cancel(false);
             }
@@ -874,6 +1187,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         catchupListeners.clear();
         currentAttempt.clear();
         pauseRequestedDuringCatchup.clear();
+        subscribed.clear();
         parkedReplays.values().forEach(parked -> parked.replay().result.cancel(false));
         parkedReplays.clear();
     }
@@ -1056,8 +1370,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@code holdPaused}. The returned future then completes once the replay has run and handed over.
      */
     protected Future<Subscription> startCatchupAsync(String subscriptionId, CatchupReplay catchup, boolean holdPaused) {
+        return startCatchupAsync(subscriptionId, catchup, holdPaused, false);
+    }
+
+    private Future<Subscription> startCatchupAsync(String subscriptionId, CatchupReplay catchup, boolean holdPaused, boolean resuming) {
         CompletableFuture<Subscription> result = new CompletableFuture<>();
-        ReplayState replay = new ReplayState(catchup, result);
+        ReplayState replay = new ReplayState(catchup, result, resuming);
         final CatchupAttempt attempt;
         // Locked so this registration cannot land inside a still-finishing earlier attempt's own lockHandover span
         // for the same id. Unlocked, this attempt could start, and its replay could reach a checkpoint save, before
@@ -1105,12 +1423,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     private void runOnItsOwnThread(String subscriptionId, CatchupAttempt attempt) {
-        // catchup itself ends its attempt's ownership on normal completion (via endReplayIfStillCurrent), and
-        // deliberately leaves it in place when shouldKeepReplaying already turned false so a cancellation can
-        // still be told apart from a completion (see the comment on subscriptionsWasCancelledOrShutdown in the
-        // mode-specific classes). Neither path throws, so catching here only ever means the replay itself failed,
-        // and is the one place both modes share to stop such a failure from leaving the subscription looking like
-        // it is still running or catching up forever.
+        // The replay ends its attempt's ownership once it completes (in endReplayIfStillCurrent, or in handOver for a
+        // replay a resume started), and keeps it when shouldKeepReplaying already turned false, so a cancel can still
+        // be told apart from a completion. A replay or a handover that throws goes to runAgainAfter, which decides
+        // for both modes whether it runs again.
         //
         // A parked attempt does not complete the handle. The parked replay completes it once it runs again, and the
         // flag is final by the time it is read, since parking takes the attempt out of currentAttempt under the
@@ -1118,31 +1434,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         Thread.ofVirtual().name("occurrent-catchup-" + subscriptionId).start(() -> {
             CURRENT_ATTEMPT.set(attempt);
             try {
-                awaitEarlierAttempts(subscriptionId, attempt);
-                // Read once every earlier attempt has returned, so it holds the last position any of them stored
-                Subscription subscription = attempt.replay.catchup.replayFrom(attempt.replay.lastStored.get());
+                Subscription subscription = replayUntilHandedOver(subscriptionId, attempt);
                 if (!attempt.parked) {
                     attempt.replay.result.complete(subscription);
                 }
             } catch (Throwable failure) {
-                // Conditional on this attempt still being the current one: an attempt already superseded by a later
-                // resubscribe for the same id must not remove the later attempt's running marker, and by the same
-                // reasoning must not clear a pause request the later attempt's caller may have just made either.
-                boolean failedWhileCurrent;
-                try (HandoverLock ignored = lockHandover(subscriptionId)) {
-                    failedWhileCurrent = currentAttempt.remove(subscriptionId, attempt);
-                    if (failedWhileCurrent) {
-                        runningCatchupSubscriptions.remove(subscriptionId);
-                        pauseRequestedDuringCatchup.remove(subscriptionId);
-                    }
-                }
-                // Logged as well as reported, since a caller that never calls waitUntilStarted, such as the Spring
-                // Boot starter by default for a subscription that replays history, would otherwise lose the
-                // subscription without a trace. A parked, cancelled, superseded or shut down attempt is not logged,
-                // since its replay either runs again or was asked to stop.
-                if (failedWhileCurrent && !attempt.abandoned()) {
-                    log.error("The catch-up replay for subscription {} failed, so the subscription did not go live.", subscriptionId, failure);
-                }
                 if (!attempt.parked) {
                     attempt.replay.result.completeExceptionally(failure);
                 }
@@ -1151,6 +1447,117 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 attempt.earlierAttemptsDone.whenComplete((ignored, alsoIgnored) -> attempt.done.complete(null));
             }
         });
+    }
+
+    // Runs the replay, and runs it again after each failure for as long as runAgainAfter says so
+    private Subscription replayUntilHandedOver(String subscriptionId, CatchupAttempt attempt) throws Throwable {
+        while (true) {
+            try {
+                // Returns at once after the first round, since every earlier attempt has returned by then
+                awaitEarlierAttempts(subscriptionId, attempt);
+                // Read once every earlier attempt has returned, so it holds the last position any of them stored
+                return attempt.replay.catchup.replayFrom(attempt.replay.lastStored.get());
+            } catch (Throwable failure) {
+                Duration backoff = runAgainAfter(subscriptionId, attempt, failure);
+                if (backoff == null || !waitOutBackoff(subscriptionId, attempt, backoff)) {
+                    throw failure;
+                }
+            }
+        }
+    }
+
+    /**
+     * Decides what comes of an attempt whose replay or handover failed, and is asked again once its backoff has passed.
+     * Called with {@code failure} when the attempt fails, which this logs at {@code ERROR}, and with {@code null} once
+     * the backoff has passed. Returns the backoff before the replay runs again, {@link Duration#ZERO} to run it again
+     * now, or {@code null} when this attempt doesn't run it again. Taken under the handover lock, so every lifecycle
+     * call for the id either comes before this decides or finds what it decided.
+     * <p>
+     * Only a replay a resume started runs again, since the live delegate holds its subscription paused and nothing else
+     * would resume it. It runs again while it is still the current attempt, and nothing asked it to stop. A cancel, a
+     * resume at a given position or a shutdown ends it, which the caller asked for. A stop, or a pause asked for during
+     * the replay or while it waits, holds it until a resume or a start that resumes. A live delegate that already runs
+     * the subscription ends it too, since running the replay again would only hand over to it once more.
+     */
+    private @Nullable Duration runAgainAfter(String subscriptionId, CatchupAttempt attempt, @Nullable Throwable failure) {
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            CatchupAttempt owner = currentAttempt.get(subscriptionId);
+            boolean current = owner == attempt;
+            if (current && attempt.replay.resuming && !attempt.abandoned() && !shuttingDown && !(failure instanceof SubscriptionAlreadyRunningException)) {
+                if (stopped) {
+                    attempt.backingOff = false;
+                    parkIfStillCurrent(subscriptionId, attempt);
+                    logFailure(subscriptionId, failure, "it runs again once the subscription is resumed or this model started");
+                    return null;
+                }
+                if (pauseRequestedDuringCatchup.remove(subscriptionId) != null || Thread.currentThread().isInterrupted()) {
+                    attempt.backingOff = false;
+                    hold(subscriptionId, attempt);
+                    logFailure(subscriptionId, failure, "it runs again once the subscription is resumed");
+                    return null;
+                }
+                if (failure == null) {
+                    attempt.backingOff = false;
+                    // A replay run again delivers history again, as one replayUntilLiveStartHolds runs again does
+                    CatchupListener listener = catchupListeners.get(subscriptionId);
+                    if (listener != null) {
+                        listener.catchupStarted(attempt);
+                    }
+                    return Duration.ZERO;
+                }
+                attempt.backingOff = true;
+                // Put back when the handover failed, so the subscription runs and catches up until the replay ends
+                runningCatchupSubscriptions.put(subscriptionId, true);
+                Duration backoff = attempt.replay.backoffAfterFailure();
+                logFailure(subscriptionId, failure, "it runs again in " + backoff.toMillis() + " ms");
+                return backoff;
+            }
+            // Only while this attempt is still the current one, since an attempt a later subscribe for the same id
+            // superseded must not remove that attempt's running marker, nor a pause its caller asked for
+            if (current) {
+                currentAttempt.remove(subscriptionId, attempt);
+                runningCatchupSubscriptions.remove(subscriptionId);
+                pauseRequestedDuringCatchup.remove(subscriptionId);
+            }
+            // Logged as well as reported, since a caller that never calls waitUntilStarted, such as the Spring Boot
+            // starter by default for a subscription that replays history, would otherwise lose the subscription
+            // without a trace. A cancelled, superseded or shut down attempt is not logged, since it was asked to stop.
+            if (failure != null && !attempt.replay.cancelled && !shuttingDown && (owner == null || owner.replay == attempt.replay)) {
+                logFailure(subscriptionId, failure, attempt.parked ? "it runs again once the subscription is resumed or this model started"
+                        : failure instanceof SubscriptionAlreadyRunningException ? "it doesn't run again, since the wrapped subscription model already runs the subscription"
+                        : "the subscription did not go live");
+            }
+            return null;
+        }
+    }
+
+    private static void logFailure(String subscriptionId, @Nullable Throwable failure, String outcome) {
+        if (failure != null) {
+            log.error("The catch-up replay for subscription {} failed, so {}.", subscriptionId, outcome, failure);
+        }
+    }
+
+    /**
+     * Waits out {@code backoff}, or until {@code attempt} is no longer the current one, a stop came, or the model shuts
+     * down, and then asks {@link #runAgainAfter} once more. Returns whether the replay runs again now. A pause holds the
+     * attempt as soon as it comes, so this needs no polling for it.
+     */
+    private boolean waitOutBackoff(String subscriptionId, CatchupAttempt attempt, Duration backoff) {
+        long deadline = System.nanoTime() + backoff.toNanos();
+        while (currentAttempt.get(subscriptionId) == attempt && !attempt.abandoned() && !shuttingDown && !stopped) {
+            long remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+            if (remainingMillis <= 0) {
+                break;
+            }
+            try {
+                Thread.sleep(Math.min(remainingMillis, EARLIER_ATTEMPT_POLL_MILLIS));
+            } catch (InterruptedException e) {
+                // Held by runAgainAfter, so a resume runs the replay again
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return runAgainAfter(subscriptionId, attempt, null) != null;
     }
 
     /**
