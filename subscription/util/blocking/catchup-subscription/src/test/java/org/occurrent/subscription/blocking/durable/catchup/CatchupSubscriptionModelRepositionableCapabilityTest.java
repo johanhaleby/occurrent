@@ -100,9 +100,9 @@ class CatchupSubscriptionModelRepositionableCapabilityTest {
     }
 
     @ParameterizedTest
-    @MethodSource("standaloneCatchUpModels")
-    void a_standalone_catch_up_model_over_a_durable_model_over_a_live_model_that_cannot_be_repositioned_is_not_found_as_repositionable(Function<CheckpointAwareSubscriptionModel, Wired> wiring) {
-        // Given a standalone catch-up model over a durable model over a live model that cannot be repositioned
+    @MethodSource("catchUpModels")
+    void a_catch_up_model_over_a_durable_model_over_a_live_model_that_cannot_be_repositioned_is_not_found_as_repositionable(Function<CheckpointAwareSubscriptionModel, Wired> wiring) {
+        // Given a catch-up model over a durable model over a live model that cannot be repositioned
         Wired wired = wiring.apply(new DurableSubscriptionModel(notRepositionable(), new InMemoryCheckpointStorage()));
 
         // When the capability is looked up
@@ -111,21 +111,6 @@ class CatchupSubscriptionModelRepositionableCapabilityTest {
         // Then nothing is found
         assertThat(found).as("the repositionable model found").isEmpty();
         assertThat(wired.held().hasCapability(RepositionableSubscriptions.class)).as("has the capability").isFalse();
-    }
-
-    @ParameterizedTest
-    @MethodSource("dispatchingCatchUpModels")
-    void the_dispatching_catch_up_model_over_a_durable_model_over_a_live_model_that_cannot_be_repositioned_is_still_found_as_repositionable_and_refuses_the_resume_at_a_position_naming_the_live_model(Function<CheckpointAwareSubscriptionModel, Wired> wiring) {
-        // Given a dispatching catch-up model over a durable model over a live model that cannot be repositioned
-        Wired wired = wiring.apply(new DurableSubscriptionModel(notRepositionable(), new InMemoryCheckpointStorage()));
-
-        // When the capability is looked up, and the subscription is resumed at a position through what is found
-        Optional<RepositionableSubscriptions> found = RepositionableSubscriptions.findIn(wired.held());
-        Throwable failure = catchThrowable(() -> found.orElseThrow().resumeSubscription("id", StartAt.subscriptionModelDefault()));
-
-        // Then the dispatching model itself is found, and the resume is refused as unsupported, naming the live model
-        assertThat(found.orElse(null)).as("the repositionable model found").isSameAs(wired.found());
-        assertThat(failure).as("the resume at a position").isInstanceOf(UnsupportedOperationException.class).hasMessage("DurableSubscriptionModel is not repositionable");
     }
 
     @ParameterizedTest

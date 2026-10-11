@@ -31,12 +31,14 @@ import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.StringJoiner;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -446,8 +448,10 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * {@link #resumeSubscription(String)}, it doesn't start this model first or run a parked replay, and it never
      * replays, also not at a position a catch-up stores. The wrapped model handles such a position as one it cannot
      * open its live feed at. A replay that {@link #resumeSubscription(String)} started for the subscription, running
-     * or waiting to run again, ends first, so the position given here wins over it, and a later
-     * {@link #resumeSubscription(String)} can replay again. When that replay is in the subscription's action, this
+     * or waiting to run again, is held first and ends once the wrapped model has resumed the subscription, so the
+     * position given here wins over it, and a later {@link #resumeSubscription(String)} can replay again. When the
+     * wrapped model throws, the replay is as it was before this call, and this throws what the wrapped model threw.
+     * When the replay is in the subscription's action, this
      * holds the replay and waits up to ten seconds for the action to return before the wrapped model resumes the
      * subscription, so the replay's action doesn't run alongside the action of the resumed subscription. When the
      * action doesn't return in time, this logs at {@code ERROR}, runs the replay again as it was and throws
@@ -463,12 +467,27 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * <p>
      * Once the wrapped model returns from the resume, this model is started again if a start whose live delegate threw
      * stopped it, so a subscription made afterwards replays at once. After {@link #stop()} it stays stopped.
+     * <p>
+     * {@link RepositionableSubscriptions#findIn} finds this model only when the wrapped model is repositionable.
      *
      * @throws UnsupportedOperationException if the wrapped model is not itself repositionable.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
         return anyCatchupModel().resumeSubscription(subscriptionId, startAt, presentCatchupModels().toList(), () -> isRunning(subscriptionId) && !isPaused(subscriptionId));
+    }
+
+    /**
+     * Answers {@link RepositionableSubscriptions} only when the wrapped model has it, since
+     * {@link #resumeSubscription(String, StartAt)} resumes the subscription there, so this model is found where the
+     * wrapped model would be, and nothing is found where nothing was. Answers every other capability as any model does.
+     */
+    @Override
+    public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
+        if (type == RepositionableSubscriptions.class && !getWrappedSubscriptionModel().hasCapability(RepositionableSubscriptions.class)) {
+            return Optional.empty();
+        }
+        return SubscriptionModel.super.capability(type);
     }
 
     @Override

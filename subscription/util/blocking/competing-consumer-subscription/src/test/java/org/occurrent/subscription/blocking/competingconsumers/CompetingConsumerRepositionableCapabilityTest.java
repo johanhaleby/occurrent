@@ -108,17 +108,18 @@ class CompetingConsumerRepositionableCapabilityTest {
 
     @ParameterizedTest
     @MethodSource("dispatcherWirings")
-    void a_competing_consumer_model_over_the_dispatching_catch_up_model_over_a_live_model_that_cannot_be_repositioned_still_finds_the_dispatching_model_and_its_resume_at_a_position_is_refused_naming_the_live_model(Wiring wiring) {
+    void a_competing_consumer_model_over_the_dispatching_catch_up_model_over_a_live_model_that_cannot_be_repositioned_finds_nothing_while_the_dispatching_model_refuses_a_resume_at_a_position_naming_the_live_model(Wiring wiring) {
         // Given a competing consumer model over the dispatching model over a durable model over a live model that cannot be repositioned
         SubscriptionModel wrapped = wiring.wrapping().apply(new DurableSubscriptionModel(live(false), new InMemoryCheckpointStorage()));
         CompetingConsumerSubscriptionModel competingConsumer = new CompetingConsumerSubscriptionModel(wrapped, new NoLeases());
 
-        // When the capability is looked up, and the subscription is resumed at a position through what is found
+        // When the capability is looked up, and the subscription is resumed at a position directly on the dispatching model
         Optional<RepositionableSubscriptions> found = RepositionableSubscriptions.findIn(competingConsumer);
-        Throwable failure = catchThrowable(() -> found.orElseThrow().resumeSubscription("id", StartAt.subscriptionModelDefault()));
+        assertThat(wrapped).as("the dispatching model").isInstanceOf(RepositionableSubscriptions.class);
+        Throwable failure = catchThrowable(() -> ((RepositionableSubscriptions) wrapped).resumeSubscription("id", StartAt.subscriptionModelDefault()));
 
-        // Then the dispatching model is found, and the resume is refused as unsupported, naming the live model
-        assertThat(found.orElse(null)).as("the repositionable model found").isSameAs(wrapped);
+        // Then nothing is found, and the resume on the dispatching model is refused as unsupported, naming the live model
+        assertThat(found).as("the repositionable model found").isEmpty();
         assertThat(failure).as("the resume at a position").isInstanceOf(UnsupportedOperationException.class).hasMessage("DurableSubscriptionModel is not repositionable");
     }
 
