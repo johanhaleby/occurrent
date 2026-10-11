@@ -50,6 +50,7 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -70,6 +71,7 @@ import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
@@ -133,6 +135,7 @@ class CatchupResumeReplayStreamModeMongoTest {
     private final ErrorLog errorLog = new ErrorLog();
     private final Logger modelLogger = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
     private final CountDownLatch releaseA = new CountDownLatch(1);
+    private final CountDownLatch releaseTheClaim = new CountDownLatch(1);
     private final String subscriptionId = UUID.randomUUID().toString();
     private final CopyOnWriteArrayList<String> receivedByB = new CopyOnWriteArrayList<>();
     private final AtomicInteger inAction = new AtomicInteger();
@@ -167,6 +170,7 @@ class CatchupResumeReplayStreamModeMongoTest {
         errorLog.stop();
         storage.unblock();
         releaseA.countDown();
+        releaseTheClaim.countDown();
         if (catchupA != null) {
             catchupA.shutdown();
         }
@@ -854,6 +858,247 @@ class CatchupResumeReplayStreamModeMongoTest {
         await("B delivers what is written after the replay").atMost(10, SECONDS)
                 .untilAsserted(() -> assertThat(receivedByB).contains("afterReplay"));
         assertThat(maxInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+    }
+
+    @Test
+    void the_subscription_reads_as_running_and_not_paused_while_a_resume_at_a_position_through_the_dispatcher_waits_for_the_action_of_the_replay_it_holds() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)));
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+
+        // When the subscription is resumed at the present from another thread, and waits for the action
+        Checkpoint present = requireNonNull(durableB.globalCheckpoint());
+        CompletableFuture<Subscription> repositioning = CompletableFuture.supplyAsync(() -> catchupB.resumeSubscription(subscriptionId, StartAt.checkpoint(present)));
+        waitUpTo(repositioning, 1);
+
+        // Then the subscription reads as running and not paused, since it runs once the resume has returned
+        assertThat(repositioning.isDone()).as("the resume at a position returned while the replay was in the action").isFalse();
+        assertThat(catchupB.isRunning(subscriptionId)).as("running while the resume at a position waits").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("paused while the resume at a position waits").isFalse();
+        // And it still does once the resume has returned
+        releaseH2.countDown();
+        repositioning.get(10, SECONDS);
+        assertThat(catchupB.isRunning(subscriptionId)).as("running once the resume at a position returned").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("paused once the resume at a position returned").isFalse();
+    }
+
+    @Test
+    void a_subscription_that_reads_as_paused_because_a_stop_held_its_replay_in_the_action_still_reads_as_paused_while_a_resume_at_a_position_waits_for_the_action_and_runs_once_the_resume_has_returned() throws Exception {
+        // Given B's resume replay is blocked in the action on h2, and a stop has held it
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)));
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        catchupB.stop();
+        catchupB.start(false);
+        boolean runningBefore = catchupB.isRunning(subscriptionId);
+        assertThat(catchupB.isPaused(subscriptionId)).as("the replay is held").isTrue();
+
+        // When the subscription is resumed at the present from another thread, and waits for the action
+        Checkpoint present = requireNonNull(durableB.globalCheckpoint());
+        CompletableFuture<Subscription> repositioning = CompletableFuture.supplyAsync(() -> catchupB.resumeSubscription(subscriptionId, StartAt.checkpoint(present)));
+        waitUpTo(repositioning, 1);
+
+        // Then the subscription reads as it did before, since it did not run
+        assertThat(repositioning.isDone()).as("the resume at a position returned while the held replay was in the action").isFalse();
+        assertThat(catchupB.isPaused(subscriptionId)).as("paused while the resume at a position waits").isTrue();
+        assertThat(catchupB.isRunning(subscriptionId)).as("running while the resume at a position waits").isEqualTo(runningBefore);
+        // And it runs once the action has returned and the resume has returned
+        releaseH2.countDown();
+        repositioning.get(10, SECONDS);
+        assertThat(catchupB.isRunning(subscriptionId)).as("running once the resume at a position returned").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("paused once the resume at a position returned").isFalse();
+    }
+
+    @Test
+    void a_resume_of_a_stopped_model_that_cannot_get_the_claim_of_the_subscription_says_the_model_was_started_and_leaves_the_subscription_paused() throws Exception {
+        // Given a subscription on a stopped model, and another call that holds the claim of the subscription for longer than a call waits
+        givenTwoNodes();
+        append("h1", 0);
+        catchupB.subscribe(subscriptionId, StartAt.subscriptionModelDefault(), event -> receivedByB.add(nameOf(event)));
+        await("the live delegate runs the subscription").atMost(10, SECONDS).until(() -> liveOfB.isRunning(subscriptionId));
+        catchupB.stop();
+        assertThat(liveOfB.isRunning()).as("the live delegate runs before the resume").isFalse();
+        holdTheClaimOf(subscriptionId);
+
+        // When the subscription is resumed
+        Throwable resume = catchThrowable(() -> catchupB.resumeSubscription(subscriptionId));
+
+        // Then the resume fails with IllegalStateException that says the model was started, not that nothing was changed
+        assertThat(resume).as("the resume").isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(subscriptionId).hasMessageContaining("started").hasMessageNotContaining("Nothing was changed");
+        // And the model is started, with the subscription not resumed
+        assertThat(liveOfB.isRunning()).as("the live delegate runs after the resume").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is paused").isTrue();
+        // And it logs the same at ERROR
+        assertThat(errorLog.messagesAbout(subscriptionId)).as("what was logged at ERROR for the subscription")
+                .anyMatch(message -> message.contains("10000 ms") && message.contains("started"));
+        // And once the other call returns, a resume resumes the subscription
+        releaseTheClaim.countDown();
+        catchupB.resumeSubscription(subscriptionId);
+        append("afterResume", 4);
+        await("B delivers what is written after the resume").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("afterResume"));
+    }
+
+    @Test
+    void a_stop_that_cannot_get_the_claim_of_a_subscription_says_the_model_is_stopped_and_a_start_that_resumes_delivers_the_rest_of_the_history() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, and another call holds the claim of the subscription for longer than a call waits
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)));
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        holdTheClaimOf(subscriptionId);
+
+        // When the model is stopped
+        Throwable stop = catchThrowable(() -> catchupB.stop());
+
+        // Then the stop fails with IllegalStateException that says the model is stopped, not that nothing was changed
+        assertThat(stop).as("the stop").isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(subscriptionId).hasMessageContaining("stopped").hasMessageNotContaining("Nothing was changed");
+        // And the live delegate is stopped
+        assertThat(liveOfB.isRunning()).as("the live delegate runs after the stop").isFalse();
+        // And it logs the same at ERROR
+        assertThat(errorLog.messagesAbout(subscriptionId)).as("what was logged at ERROR for the subscription")
+                .anyMatch(message -> message.contains("10000 ms") && message.contains("stopped"));
+        // And once the other call and the action return, the replay is held having delivered nothing more
+        releaseTheClaim.countDown();
+        releaseH2.countDown();
+        await("the replay is held").atMost(10, SECONDS).until(() -> catchupB.isPaused(subscriptionId));
+        assertThat(receivedByB).as("what the action received").containsExactly("h2");
+        // And a start that resumes delivers the rest of the history and what is written afterwards, one call at a time
+        catchupB.start(true);
+        append("afterStart", 4);
+        await("B delivers the rest of the history and what was written after the start").atMost(15, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h2", "h3", "afterBRegistered", "afterStart"));
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+    }
+
+    @Test
+    void a_start_that_resumes_and_cannot_get_the_claim_of_a_parked_replay_says_the_model_was_started_and_still_resumes_the_other_subscriptions() throws Exception {
+        // Given B's resume replay of one subscription is parked by a stop, with another call holding its claim for longer than a call waits
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        CopyOnWriteArrayList<String> receivedByOther = new CopyOnWriteArrayList<>();
+        String other = subscriptionId + "-other";
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)));
+        catchupB.subscribePaused(other, null, StartAt.subscriptionModelDefault(), event -> receivedByOther.add(nameOf(event)));
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        catchupB.stop();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the replay is held").isTrue();
+        holdTheClaimOf(subscriptionId);
+
+        // When the model is started with the subscriptions resumed
+        Throwable start = catchThrowable(() -> catchupB.start(true));
+        append("afterStart", 4);
+
+        // Then the start fails with IllegalStateException that says the model was started, not that nothing was changed
+        // And the model is started, with the other subscription resumed
+        assertSoftly(softly -> {
+            softly.assertThat(start).as("the start").isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining(subscriptionId).hasMessageContaining("started").hasMessageNotContaining("Nothing was changed");
+            softly.assertThat(liveOfB.isRunning()).as("the live delegate runs after the start").isTrue();
+            softly.assertThat(liveOfB.isRunning(other)).as("the other subscription runs after the start").isTrue();
+        });
+        // And the other subscription delivers what is written after the start
+        await("the other subscription delivers what is written after the start").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByOther).contains("afterStart"));
+        // And the parked replay delivered nothing more, but runs when it is resumed once the other call has returned
+        assertThat(receivedByB).as("what the action of the parked replay received").containsExactly("h2");
+        releaseTheClaim.countDown();
+        releaseH2.countDown();
+        catchupB.resumeSubscription(subscriptionId);
+        await("B delivers the rest of the history").atMost(15, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h2", "h3", "afterBRegistered"));
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+    }
+
+    @Test
+    void a_pause_and_a_cancel_that_cannot_get_the_claim_of_a_subscription_say_nothing_was_changed_and_leave_the_subscription_running() throws Exception {
+        // Given a running subscription, and another call that holds its claim for longer than a call waits
+        givenTwoNodes();
+        append("h1", 0);
+        catchupB.subscribe(subscriptionId, StartAt.subscriptionModelDefault(), event -> receivedByB.add(nameOf(event)));
+        await("the live delegate runs the subscription").atMost(10, SECONDS).until(() -> liveOfB.isRunning(subscriptionId));
+        holdTheClaimOf(subscriptionId);
+
+        // When the subscription is paused and cancelled
+        CompletableFuture<Void> pausing = CompletableFuture.runAsync(() -> catchupB.pauseSubscription(subscriptionId));
+        CompletableFuture<Void> cancelling = CompletableFuture.runAsync(() -> catchupB.cancelSubscription(subscriptionId));
+
+        // Then both fail with IllegalStateException that says nothing was changed
+        assertThat(failureOf(pausing, 30)).as("the pause").isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(subscriptionId).hasMessageContaining("Nothing was changed");
+        assertThat(failureOf(cancelling, 30)).as("the cancel").isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(subscriptionId).hasMessageContaining("Nothing was changed");
+        // And they log it at ERROR
+        assertThat(errorLog.messagesAbout(subscriptionId)).as("what was logged at ERROR for the subscription")
+                .hasSize(2).allMatch(message -> message.contains("10000 ms"));
+        // And the subscription runs as it did, and delivers what is written afterwards
+        assertThat(catchupB.isRunning(subscriptionId)).as("running").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("paused").isFalse();
+        append("afterTheCalls", 4);
+        await("B delivers what is written after the calls").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("afterTheCalls"));
+    }
+
+    @Test
+    void no_claim_is_left_behind_after_subscriptions_are_made_paused_resumed_and_cancelled_and_after_unknown_ids_are_cancelled_and_paused() throws Exception {
+        // Given a history
+        givenTwoNodes();
+        append("h1", 0);
+
+        // When subscriptions are made, paused, resumed and cancelled, and unknown ids are cancelled and paused
+        for (int i = 0; i < 25; i++) {
+            String id = subscriptionId + "-dynamic-" + i;
+            catchupB.subscribe(id, StartAt.checkpoint(GlobalCheckpoint.of(0)), event -> {
+            });
+            await("the replay of " + id + " has handed over").atMost(10, SECONDS).until(() -> !catchupB.isCatchingUp(id) && liveOfB.isRunning(id));
+            catchupB.pauseSubscription(id);
+            catchupB.resumeSubscription(id);
+            await("the replay of " + id + " has handed over again").atMost(10, SECONDS).until(() -> !catchupB.isCatchingUp(id) && liveOfB.isRunning(id));
+            catchupB.cancelSubscription(id);
+        }
+        for (int i = 0; i < 100; i++) {
+            String unknown = subscriptionId + "-unknown-" + i;
+            catchupB.cancelSubscription(unknown);
+            assertThatThrownBy(() -> catchupB.pauseSubscription(unknown)).as("the pause of an unknown subscription").isInstanceOf(UnknownSubscriptionException.class);
+        }
+
+        // Then the calls have left no claim behind
+        assertThat(claimsOf(catchupB)).as("the claims left").isEmpty();
+    }
+
+    // Holds the claim of the subscription on another thread until releaseTheClaim is counted down
+    private void holdTheClaimOf(String id) throws Exception {
+        AbstractCatchupSubscriptionModel child = childOf(catchupB);
+        CountDownLatch held = new CountDownLatch(1);
+        Thread.ofPlatform().daemon().start(() -> {
+            try (AbstractCatchupSubscriptionModel.Claim ignored = child.claim(id)) {
+                held.countDown();
+                awaitUninterrupted(releaseTheClaim);
+            }
+        });
+        assertThat(held.await(5, SECONDS)).as("the other call holds the claim of " + id).isTrue();
+    }
+
+    private static AbstractCatchupSubscriptionModel childOf(CatchupSubscriptionModel dispatcher) throws Exception {
+        Field child = CatchupSubscriptionModel.class.getDeclaredField("streamCatchupSubscriptionModel");
+        child.setAccessible(true);
+        return (AbstractCatchupSubscriptionModel) child.get(dispatcher);
+    }
+
+    // The claims the children of the dispatcher share, which hold an entry for each subscription some call holds or waits for
+    private static Map<?, ?> claimsOf(CatchupSubscriptionModel dispatcher) throws Exception {
+        Field claims = AbstractCatchupSubscriptionModel.class.getDeclaredField("lifecycleClaims");
+        claims.setAccessible(true);
+        return (Map<?, ?>) claims.get(childOf(dispatcher));
     }
 
     // B holds the subscription paused with nothing stored. A replays from the start and stalls in its second event,

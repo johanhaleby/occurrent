@@ -59,6 +59,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -73,6 +74,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import static java.time.ZoneOffset.UTC;
@@ -82,6 +85,7 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.SoftAssertions.assertSoftly;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
@@ -521,7 +525,7 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
 
     @Test
     @Timeout(120)
-    void a_lease_loss_on_a_node_whose_resume_at_a_position_waits_for_a_blocked_replay_action_pauses_within_the_bound_and_still_gives_up_the_lease() throws Exception {
+    void a_lease_loss_on_a_node_whose_resume_at_a_position_waits_for_a_blocked_replay_action_pauses_the_wrapped_model_within_the_bound_and_gives_up_the_lease_while_the_resume_at_a_position_fails() throws Exception {
         // Given A holds the lease and its resume replay is in the action, blocked on h3, and B's replay has ended
         TwoNodes nodes = new TwoNodes();
         try {
@@ -530,7 +534,9 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
             nodes.write("beforeLoss", 4);
             Checkpoint present = requireNonNull(nodes.durableA.globalCheckpoint());
             CompletableFuture<Subscription> repositioning = CompletableFuture.supplyAsync(() -> nodes.catchupA.resumeSubscription(nodes.subscriptionId, StartAt.checkpoint(present)));
-            Thread.sleep(1000);
+            assertThat(becomesTrueWithin(10, () -> claimIsHeld(nodes))).as("the resume at a position holds the claim of the subscription").isTrue();
+            // This wait is the margin for the 10 s bound asserted below, not sequencing
+            Thread.sleep(3000);
             assertThat(repositioning.isDone()).as("the resume at a position waits for the action").isFalse();
 
             // When A loses the lease while that resume waits
@@ -541,11 +547,21 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
             // Then the loss returned without failing, within the bound the resume at a position waits for the action
             assertThat(lossFailure).as("the loss of the lease").isNull();
             assertThat(waitedMillis).as("the milliseconds the loss of the lease took").isLessThan(10_000L);
+            // And the model A wraps is paused
+            assertSoftly(softly -> {
+                softly.assertThat(nodes.catchupA.isPaused(nodes.subscriptionId)).as("paused in the model A wraps").isTrue();
+                softly.assertThat(nodeA.isPaused(nodes.subscriptionId)).as("paused in A").isTrue();
+            });
             // And A gives up the lease
             await("A gives up the lease").atMost(30, SECONDS).until(() -> !strategy.hasLock(nodes.subscriptionId, "A"));
-            // And once the action returns, the resume at a position returns without failing
+            // And the resume at a position failed, as the action did not return within the bound
+            Throwable repositionFailure = catchThrowable(() -> repositioning.get(10, SECONDS));
+            assertThat(repositionFailure).as("the resume at a position").isInstanceOf(ExecutionException.class).hasCauseInstanceOf(IllegalStateException.class);
+            assertThat(repositionFailure.getCause()).as("why the resume at a position failed").hasMessageContaining(nodes.subscriptionId).hasMessageContaining("10000 ms");
+            // And once the action returns, the model A wraps stops running the subscription and stays paused
             nodes.releaseA.countDown();
-            assertThat(catchThrowable(() -> repositioning.get(10, SECONDS))).as("the resume at a position").isNull();
+            assertThat(becomesTrueWithin(15, () -> !nodes.catchupA.isRunning(nodes.subscriptionId))).as("the model A wraps stops running the subscription once the action returned").isTrue();
+            assertThat(nodes.catchupA.isPaused(nodes.subscriptionId)).as("paused in the model A wraps once the action returned").isTrue();
             // And B delivers what was written while no node held the lease, once it is granted the lease
             nodes.write("beforeGrant", 5);
             strategy.grantLease(nodes.subscriptionId, "B");
@@ -557,6 +573,59 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
                     .untilAsserted(() -> assertThat(ids(nodes.eventsA)).containsExactly("h2", "h3"));
             assertThat(nodes.maxInActionA.get()).as("the most calls of A's action in flight at once").isEqualTo(1);
             assertThat(nodes.maxInActionB.get()).as("the most calls of B's action in flight at once").isEqualTo(1);
+        } finally {
+            nodes.releaseA.countDown();
+            nodes.releaseB.countDown();
+        }
+    }
+
+    @Test
+    @Timeout(120)
+    void a_lease_loss_on_a_node_whose_resume_at_a_position_waits_for_a_blocked_replay_action_that_returns_during_the_wait_leaves_the_wrapped_model_paused_and_delivers_nothing_more() throws Exception {
+        // Given A holds the lease and its resume replay is in the action, blocked on h3, and B's replay has ended
+        TwoNodes nodes = new TwoNodes();
+        try {
+            nodes.givenAHoldsTheLeaseInItsResumeReplay();
+            nodes.releaseB.countDown();
+            nodes.write("beforeLoss", 4);
+            Checkpoint present = requireNonNull(nodes.durableA.globalCheckpoint());
+            CompletableFuture<Subscription> repositioning = CompletableFuture.supplyAsync(() -> nodes.catchupA.resumeSubscription(nodes.subscriptionId, StartAt.checkpoint(present)));
+            assertThat(becomesTrueWithin(10, () -> claimIsHeld(nodes))).as("the resume at a position holds the claim of the subscription").isTrue();
+            assertThat(repositioning.isDone()).as("the resume at a position waits for the action").isFalse();
+
+            // When A loses the lease while that resume waits, and the action returns during the wait
+            CompletableFuture<Void> loss = CompletableFuture.runAsync(() -> strategy.loseLease(nodes.subscriptionId, "A"));
+            // Waits up to 5 s for the loss to queue for the claim
+            becomesTrueWithin(5, () -> claimHasQueuedThreads(nodes));
+            nodes.releaseA.countDown();
+
+            // Then the resume at a position returns without failing
+            assertThat(catchThrowable(() -> repositioning.get(15, SECONDS))).as("the resume at a position").isNull();
+            // And the loss of the lease returned without failing
+            assertThat(catchThrowable(() -> loss.get(15, SECONDS))).as("the loss of the lease").isNull();
+            // And the model A wraps is paused and does not run the subscription
+            assertSoftly(softly -> {
+                softly.assertThat(nodes.catchupA.isPaused(nodes.subscriptionId)).as("paused in the model A wraps").isTrue();
+                softly.assertThat(nodes.catchupA.isRunning(nodes.subscriptionId)).as("running in the model A wraps").isFalse();
+                softly.assertThat(nodeA.isPaused(nodes.subscriptionId)).as("paused in A").isTrue();
+            });
+            // And A has given up the lease
+            assertThat(strategy.hasLock(nodes.subscriptionId, "A")).as("A holds the lease").isFalse();
+            // And B delivers what was written while no node held the lease, once it is granted the lease
+            nodes.write("beforeGrant", 5);
+            strategy.grantLease(nodes.subscriptionId, "B");
+            nodes.write("sentinel", 6);
+            await("B delivers the rest of the history and what was written after the loss").atMost(15, SECONDS)
+                    .untilAsserted(() -> assertThat(ids(nodes.eventsB)).contains("h3", "beforeLoss", "beforeGrant", "sentinel"));
+            // And A delivers nothing after it lost the lease
+            await("A delivers nothing but what its replay was in when it lost the lease").during(2, SECONDS).atMost(6, SECONDS)
+                    .untilAsserted(() -> assertThat(ids(nodes.eventsA)).containsExactly("h2", "h3"));
+            // And B holds the lease, and neither node ran its action more than once at a time
+            assertThat(strategy.hasLock(nodes.subscriptionId, "B")).as("B holds the lease").isTrue();
+            assertThat(nodes.maxInActionA.get()).as("the most calls of A's action in flight at once").isEqualTo(1);
+            assertThat(nodes.maxInActionB.get()).as("the most calls of B's action in flight at once").isEqualTo(1);
+            // And no event is lost across the two nodes
+            assertThat(concat(nodes.eventsA, nodes.eventsB)).as("what the two nodes delivered").contains("h1", "h2", "h3", "beforeLoss", "beforeGrant", "sentinel");
         } finally {
             nodes.releaseA.countDown();
             nodes.releaseB.countDown();
@@ -622,6 +691,56 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
         void write(String id, int secondsAfterStart) {
             positionedEventStore.write(streamId, serialize(new NameWasChanged(id, LocalDateTime.of(2026, 1, 1, 0, 0, secondsAfterStart), "name", id)));
         }
+    }
+
+    private static boolean claimIsHeld(TwoNodes nodes) {
+        ReentrantLock claim = claimOf(nodes);
+        return claim != null && claim.isLocked();
+    }
+
+    private static boolean claimHasQueuedThreads(TwoNodes nodes) {
+        ReentrantLock claim = claimOf(nodes);
+        return claim != null && claim.hasQueuedThreads();
+    }
+
+    // The claim lock of the subscription in the catch-up model A wraps, or null when it has none
+    private static ReentrantLock claimOf(TwoNodes nodes) {
+        Object child = readField(nodes.catchupA, "streamCatchupSubscriptionModel");
+        if (child == null) {
+            child = readField(nodes.catchupA, "dcbCatchupSubscriptionModel");
+        }
+        Map<?, ?> claims = (Map<?, ?>) readField(requireNonNull(child), "lifecycleClaims");
+        Object claim = claims.get(nodes.subscriptionId);
+        if (claim == null || claim instanceof ReentrantLock) {
+            return (ReentrantLock) claim;
+        }
+        return (ReentrantLock) readField(claim, "lock");
+    }
+
+    private static Object readField(Object target, String name) {
+        for (Class<?> type = target.getClass(); type != null; type = type.getSuperclass()) {
+            try {
+                Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                return field.get(target);
+            } catch (NoSuchFieldException e) {
+                // Look in the superclass
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+        throw new IllegalStateException(target.getClass() + " has no field " + name);
+    }
+
+    private static boolean becomesTrueWithin(int seconds, BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.nanoTime() + SECONDS.toNanos(seconds);
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() > deadline) {
+                return false;
+            }
+            Thread.sleep(25);
+        }
+        return true;
     }
 
     private static List<String> concat(List<CloudEvent> first, List<CloudEvent> second) {
