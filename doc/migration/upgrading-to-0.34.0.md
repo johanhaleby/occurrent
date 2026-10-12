@@ -2625,6 +2625,10 @@ is running and catching up, and isn't paused. A call that comes in the meantime 
 | `cancelSubscription(subscriptionId)` or `shutdown()` | Ends |
 | `resumeSubscription(subscriptionId, startAt)` on the catch-up model | Ends once the subscription resumes at `startAt`, unless an earlier run of the replay is still in the subscription's action or the wrapped model fails to resume it, as described below |
 
+When the `CatchupListener` registered for the subscription throws as the replay starts or runs again, the replay is
+held as a pause holds it, and that is logged at `ERROR`. `resumeSubscription(subscriptionId)` or `start(true)` runs it
+again.
+
 `StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel` implement `RepositionableSubscriptions`, as
 `CatchupSubscriptionModel` already did. `RepositionableSubscriptions.findIn(..)` finds any of the three when the model it
 wraps can resume a subscription from a given position, and finds nothing otherwise. In 0.33.0 it found the model under
@@ -2637,7 +2641,8 @@ to resume it at a position now gets an empty `Optional` over such a model.
 subscription's action, the call holds the replay and waits up to 10 seconds for the action to return. Then the wrapped
 model resumes the subscription at `startAt`, and the replay ends once it has. When the wrapped model throws, the call
 throws the same exception, and the replay is as it was before the call. A replay that ran runs again from the last
-position it stored, and one a pause or a stop held stays held.
+position it stored, and one a pause or a stop held stays held. When the `CatchupListener` throws as the replay that ran
+is put back, that replay is held instead, and that is logged at `ERROR`.
 
 The call doesn't store the position itself, and it didn't in 0.33.0. The position is stored with the first live
 position or the quiet save, and a restart before then resumes from the position stored earlier.
@@ -2691,6 +2696,14 @@ paused, and `resumeSubscription(subscriptionId)` or `start(true)` runs the repla
 When the replay fails before it has delivered the history, the pause holds it as in the table. A pause that comes
 while the replay hands over waits until the handover has ended. When the wrapped model resumed the subscription, the
 pause then pauses it there, and when the handover failed, the pause holds the replay.
+
+A `pauseSubscription(subscriptionId)` on `CatchupSubscriptionModel` during the replay a subscribe started now goes to
+the catch-up model that runs the replay, as it already did on `StreamCatchupSubscriptionModel`. The replay reads on,
+and once it has delivered the history, the wrapped model gets the subscription and pauses it. In 0.33.0 the pause went
+to the wrapped model, which doesn't have the subscription until the replay hands over. So a competing consumer that
+lost its lease during the first catch-up of a subscription couldn't pause it in the model it wraps. Pausing a replay
+that is held, such as one a stop held, throws `SubscriptionNotRunningException`, since the subscription reads as
+paused.
 
 A `resumeSubscription(subscriptionId)` on the catch-up model while the replay reads history drops a pause asked
 before it, so the replay hands over and the subscription runs. On `StreamCatchupSubscriptionModel` that holds for a
