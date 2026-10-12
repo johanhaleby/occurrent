@@ -17,6 +17,12 @@
 package org.occurrent.subscription.mongodb.internal;
 
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoConnectionPoolClearedException;
+import com.mongodb.MongoNodeIsRecoveringException;
+import com.mongodb.MongoNotPrimaryException;
+import com.mongodb.MongoServerException;
+import com.mongodb.MongoSocketException;
+import com.mongodb.MongoTimeoutException;
 import org.bson.*;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.CatchupTimeCheckpoint;
@@ -39,6 +45,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
@@ -217,6 +224,27 @@ public class MongoCommons {
         // Spring translates the driver's exception into one of its own and keeps the driver's as the cause
         for (Throwable cause = throwable; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
             if (cause instanceof MongoCommandException mongoCommandException && mongoCommandException.getErrorCode() == CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // The error codes the driver itself retries a read on (6, 7, 89, 91, 134, 189, 262, 9001, 10107, 11600, 11602, 13435, 13436).
+    // The driver's own check is not public.
+    private static final Set<Integer> TRANSIENT_ERROR_CODES = Set.of(6, 7, 89, 91, 134, 189, 262, 9001, 10107, 11600, 11602, 13435, 13436);
+
+    /**
+     * Whether {@code throwable} is a failure that can go away on its own, such as a lost connection, a server selection
+     * timeout, a primary that stepped down, or a command that failed with an error code that the driver retries a read
+     * on. Anything else, such as a refused command or a malformed resume token, stays the same on every attempt.
+     */
+    public static boolean isTransientFailure(Throwable throwable) {
+        // Spring translates the driver's exception into one of its own and keeps the driver's as the cause
+        for (Throwable cause = throwable; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof MongoSocketException || cause instanceof MongoTimeoutException || cause instanceof MongoNotPrimaryException
+                    || cause instanceof MongoNodeIsRecoveringException || cause instanceof MongoConnectionPoolClearedException
+                    || (cause instanceof MongoServerException serverException && TRANSIENT_ERROR_CODES.contains(serverException.getCode()))) {
                 return true;
             }
         }

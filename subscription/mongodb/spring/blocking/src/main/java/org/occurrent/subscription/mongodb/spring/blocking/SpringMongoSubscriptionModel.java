@@ -291,8 +291,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
     /**
      * Opens a change stream at {@code checkpoint} and closes it again. Answers {@code false} when MongoDB refuses to
-     * open it because the oplog no longer reaches back to {@code checkpoint}. Any other failure is logged at warn level
-     * and retried with the model's {@code RetryStrategy}, and thrown when that strategy gives up or doesn't retry.
+     * open it because the oplog no longer reaches back to {@code checkpoint}. A transient failure, such as a lost
+     * connection, is logged at warn level and retried with the model's {@code RetryStrategy}, and thrown when that
+     * strategy gives up or doesn't retry. Any other failure is logged at warn level and thrown at once.
      */
     @Override
     public boolean canResumeFrom(Checkpoint checkpoint) {
