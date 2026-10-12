@@ -1262,6 +1262,67 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     @Test
+    @Timeout(30)
+    void a_catch_up_listener_that_fails_when_the_replay_runs_again_because_the_live_start_was_lost_holds_the_replay_and_a_resume_runs_it_and_hands_over() {
+        // Given a history, a live start the model loses during the first replay, and a listener that fails the second time a catch-up starts
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        List<DomainEvent> history = List.of(nameDefined("event1"), nameDefined("event2"), nameDefined("event3"));
+        history.forEach(event -> write(eventStore, event));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, new StringBasedCheckpoint("live start read now"));
+        model.losesEveryLiveStart = true;
+        AtomicInteger starts = new AtomicInteger();
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        Logger catchupLog = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        catchupLog.addAppender(logged);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore, new CatchupSubscriptionModelConfig(100));
+        subscription.listenForCatchup("subscription", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                if (starts.incrementAndGet() == 2) {
+                    throw new IllegalStateException("The listener failed");
+                }
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+            }
+        });
+        try {
+            // When the subscription is made, so the replay runs again once the model lost the live start
+            Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
+
+            // Then the replay is held, so the subscription reads as paused and not running
+            await().untilAsserted(() -> assertThat(subscription.hasParkedReplay("subscription")).as("the replay is held").isTrue());
+            assertAll(
+                    () -> assertThat(subscription.isPaused("subscription")).as("paused").isTrue(),
+                    () -> assertThat(subscription.isRunning("subscription")).as("running").isFalse(),
+                    () -> assertThat(subscription.isCatchingUp("subscription")).as("catching up").isFalse(),
+                    () -> assertThat(model.liveStarts).as("nothing handed over").isEmpty()
+            );
+            // And the failure of the listener is logged at ERROR
+            assertThat(logged.list).filteredOn(event -> event.getLevel() == Level.ERROR && event.getFormattedMessage().contains("subscription")
+                    && event.getFormattedMessage().contains("catch-up listener")).hasSize(1);
+            // And a resume, once the model has the live start, runs the replay again and hands over
+            model.losesEveryLiveStart = false;
+            Subscription resumed = subscription.resumeSubscription("subscription");
+            assertThat(resumed.waitUntilStarted(Duration.ofSeconds(15))).as("the replay handed over").isTrue();
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(15))).as("the handle the subscribe returned started").isTrue();
+            assertThat(received).as("the history").containsAll(history);
+            assertThat(model.liveStarts).as("handed over once").hasSize(1);
+            assertThat(subscription.isPaused("subscription")).as("paused after the resume").isFalse();
+            // And what is written after the hand over is delivered
+            NameDefined afterHandOver = nameDefined("afterHandOver");
+            write(eventStore, afterHandOver);
+            await().untilAsserted(() -> assertThat(received).contains(afterHandOver));
+        } finally {
+            catchupLog.detachAppender(logged);
+            subscription.shutdown();
+        }
+    }
+
+    @Test
     void a_resume_from_a_stored_live_start_replays_no_further_than_the_stored_replay_end() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
         List<DomainEvent> history = List.of(nameDefined("event1"), nameDefined("event2"), nameDefined("event3"), nameDefined("event4"));

@@ -632,6 +632,60 @@ class CompetingConsumerLeaseRegainResumesFromCheckpointTest {
         }
     }
 
+    @Test
+    @Timeout(120)
+    void a_node_that_loses_its_lease_during_the_replay_its_subscribe_started_pauses_the_replay_so_it_delivers_nothing_after_the_history_and_delivers_what_it_missed_once_it_regains_the_lease() throws Exception {
+        // Given A holds the lease and its replay, which its subscribe started, is in the action blocked on h3, the last of the history
+        String subscriptionId = UUID.randomUUID().toString();
+        CopyOnWriteArrayList<CloudEvent> eventsA = new CopyOnWriteArrayList<>();
+        CountDownLatch aIsStalled = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+        String eventCollection = "positioned-events-" + UUID.randomUUID();
+        SpringMongoEventStore positionedEventStore = positionedEventStore(eventCollection);
+        SpringMongoCheckpointStorage checkpointStorage = new SpringMongoCheckpointStorage(mongoTemplate, checkpointCollection);
+        CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(checkpointStorage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        DurableSubscriptionModel durableA = new DurableSubscriptionModel(springModel(eventCollection), checkpointStorage);
+        CatchupSubscriptionModel catchupA = new CatchupSubscriptionModel(durableA, positionedEventStore, catchupConfig);
+        nodeA = new CompetingConsumerSubscriptionModel(catchupA, strategy);
+
+        try {
+            positionedEventStore.write(streamId, serialize(new NameDefined("h1", LocalDateTime.of(2026, 1, 1, 0, 0), "name", "h1")));
+            positionedEventStore.write(streamId, serialize(new NameWasChanged("h2", LocalDateTime.of(2026, 1, 1, 0, 0, 1), "name", "h2")));
+            positionedEventStore.write(streamId, serialize(new NameWasChanged("h3", LocalDateTime.of(2026, 1, 1, 0, 0, 2), "name", "h3")));
+            nodeA.subscribe("A", subscriptionId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)), stallingAt("h3", eventsA, aIsStalled, releaseA));
+            assertThat(aIsStalled.await(10, SECONDS)).as("A's replay reaches h3").isTrue();
+
+            // When A loses the lease during the replay, and the action returns
+            Throwable lossFailure = catchThrowable(() -> strategy.loseLease(subscriptionId, "A"));
+            boolean pausedInTheModelAWraps = catchupA.isPaused(subscriptionId);
+            releaseA.countDown();
+
+            // Then the loss of the lease returned without failing
+            assertThat(lossFailure).as("the loss of the lease").isNull();
+            // And the model A wraps is paused
+            assertSoftly(softly -> {
+                softly.assertThat(pausedInTheModelAWraps).as("paused in the model A wraps").isTrue();
+                softly.assertThat(nodeA.isPaused(subscriptionId)).as("paused in A").isTrue();
+            });
+            // And once the action returned the replay hands over, and the model A wraps holds the subscription paused
+            await("the model A wraps holds the subscription paused after the replay handed over").atMost(10, SECONDS)
+                    .until(() -> !catchupA.isCatchingUp(subscriptionId) && durableA.isPaused(subscriptionId));
+            assertThat(ids(eventsA)).as("what A delivered").containsExactly("h1", "h2", "h3");
+            // And what is written after that is not delivered to A while it is stood down
+            positionedEventStore.write(streamId, serialize(new NameWasChanged("whileStoodDown", LocalDateTime.of(2026, 1, 1, 0, 0, 3), "name", "whileStoodDown")));
+            await("A delivers nothing after the history while it is stood down").during(2, SECONDS).atMost(6, SECONDS)
+                    .untilAsserted(() -> assertThat(ids(eventsA)).containsExactly("h1", "h2", "h3"));
+            // And once A regains the lease it delivers what it missed, and what is written after that
+            strategy.grantLease(subscriptionId, "A");
+            positionedEventStore.write(streamId, serialize(new NameWasChanged("sentinel", LocalDateTime.of(2026, 1, 1, 0, 0, 4), "name", "sentinel")));
+            await("A delivers what it missed and the sentinel after it regained the lease").atMost(15, SECONDS)
+                    .untilAsserted(() -> assertThat(ids(eventsA)).contains("whileStoodDown", "sentinel"));
+            assertThat(nodeA.isPaused(subscriptionId)).as("A is no longer paused").isFalse();
+        } finally {
+            releaseA.countDown();
+        }
+    }
+
     /**
      * B replays from the start of the history, stalls in the action on h2 and stores the position after h1. A is stopped
      * and registered with nothing stored. The lease then moves from B to A, whose resume replay starts at that position
