@@ -30,6 +30,7 @@ import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
@@ -675,10 +676,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         return running != null && running.replay.resuming && !running.abandoned();
     }
 
-    // Whether this model, rather than another child of the same dispatcher, runs the replay a resume started
-    boolean replaysToResumeHere(String subscriptionId) {
+    // Whether this model, rather than another child of the same dispatcher, runs or holds a replay for the subscription,
+    // whether a subscribe or a resume started it
+    boolean runsReplayHere(String subscriptionId) {
         CatchupAttempt running = currentAttempt.get(subscriptionId);
-        return running != null && running.replay.resuming && running.owner == this;
+        return (running != null && running.owner == this) || parkedReplays.containsKey(subscriptionId);
     }
 
     /**
@@ -762,7 +764,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * While a replay a subscribe started still runs, the subscription is paused once the live delegate has it. While a
      * replay a resume started still runs, the replay is held when it hands over, and the live delegate keeps the
      * subscription paused. When that replay waits to run again after it failed, it is held at once. A held replay runs
-     * again once the subscription is resumed.
+     * again once the subscription is resumed. It reads as paused, so pausing it throws
+     * {@link SubscriptionNotRunningException}.
      */
     @Override
     public void pauseSubscription(String subscriptionId) {
@@ -777,6 +780,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             CatchupAttempt running = currentAttempt.get(subscriptionId);
             if (running != null && running.backingOff) {
                 hold(subscriptionId, running);
+            } else if (parkedReplays.containsKey(subscriptionId)) {
+                // Refused here, since the live delegate doesn't have the subscription yet when a subscribe started the
+                // replay, and would throw UnknownSubscriptionException
+                throw new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " is already paused.");
             } else if (runningCatchupSubscriptions.containsKey(subscriptionId)) {
                 // Recorded for the handover, or for runAgainAfter when the replay fails first. The replay itself keeps
                 // running until the handover since interrupting and resuming it would require persisting the exact
@@ -1425,15 +1432,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 subscriptionId, replayed.describeOrigin(), liveFrom.asString());
         S again = replayed.fromOrigin(captureLiveResumeCheckpoint(delegatedStartAt));
         // Told only while this attempt still owns the id, as on registration, so an attempt that lost the id cannot
-        // reset what its replacement told the listener
+        // reset what its replacement told the listener. One the listener fails is held, and hands nothing over, as a
+        // stopped one does.
         CatchupAttempt attempt = CURRENT_ATTEMPT.get();
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
             if (currentAttempt.get(subscriptionId) != attempt) {
                 return null;
             }
-            CatchupListener listener = catchupListeners.get(subscriptionId);
-            if (listener != null) {
-                listener.catchupStarted(attempt);
+            if (!tellCatchupStarted(subscriptionId, attempt)) {
+                hold(subscriptionId, attempt);
+                return null;
             }
         }
         return again;
@@ -1886,19 +1894,33 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // Sent here, inside the same lock that takes ownership of the id and before the attempt's thread starts, so
         // it always precedes anything this attempt delivers. Before the attempt is registered, so one the listener
         // fails is never registered without a thread to run it.
-        CatchupListener listener = catchupListeners.get(subscriptionId);
-        if (listener != null) {
-            try {
-                listener.catchupStarted(attempt);
-            } catch (RuntimeException e) {
-                parkedReplays.put(subscriptionId, new ParkedReplay(replay, earlierAttemptsDone));
-                log.error("The catch-up listener for subscription {} failed when its replay started, so the replay is held and runs again once the subscription is resumed or this model started.", subscriptionId, e);
-                return null;
-            }
+        if (!tellCatchupStarted(subscriptionId, attempt)) {
+            parkedReplays.put(subscriptionId, new ParkedReplay(replay, earlierAttemptsDone));
+            return null;
         }
         runningCatchupSubscriptions.put(subscriptionId, true);
         currentAttempt.put(subscriptionId, attempt);
         return attempt;
+    }
+
+    /**
+     * Tells the {@link CatchupListener} of {@code subscriptionId} that {@code attempt} starts to replay, and returns
+     * false when it throws, which is logged at {@code ERROR}. The caller then holds the replay, so it runs again once
+     * the subscription is resumed or this model started, and no attempt stays registered without a thread to run it.
+     * Called with the handover lock held.
+     */
+    private boolean tellCatchupStarted(String subscriptionId, CatchupAttempt attempt) {
+        CatchupListener listener = catchupListeners.get(subscriptionId);
+        if (listener == null) {
+            return true;
+        }
+        try {
+            listener.catchupStarted(attempt);
+            return true;
+        } catch (RuntimeException e) {
+            log.error("The catch-up listener for subscription {} failed when its replay started, so the replay is held and runs again once the subscription is resumed or this model started.", subscriptionId, e);
+            return false;
+        }
     }
 
     private void runOnItsOwnThread(String subscriptionId, CatchupAttempt attempt) {
@@ -1957,8 +1979,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * <p>
      * Only a replay a resume started runs again, since the live delegate holds its subscription paused and nothing else
      * would resume it. It runs again while it is still the current attempt, and nothing asked it to stop. A cancel, a
-     * resume at a given position or a shutdown ends it, which the caller asked for. A stop, or a pause asked for during
-     * the replay or while it waits, holds it until a resume or a start that resumes. A live delegate that already runs
+     * resume at a given position or a shutdown ends it, which the caller asked for. A stop, a pause asked for during the
+     * replay or while it waits, or a {@link CatchupListener} that throws as the replay runs again, holds it until a
+     * resume or a start that resumes. A live delegate that already runs
      * the subscription ends it too, since running the replay again would only hand over to it once more.
      */
     private @Nullable Duration runAgainAfter(String subscriptionId, CatchupAttempt attempt, @Nullable Throwable failure) {
@@ -1985,9 +2008,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 if (failure == null) {
                     attempt.backingOff = false;
                     // A replay run again delivers history again, as one replayUntilLiveStartHolds runs again does
-                    CatchupListener listener = catchupListeners.get(subscriptionId);
-                    if (listener != null) {
-                        listener.catchupStarted(attempt);
+                    if (!tellCatchupStarted(subscriptionId, attempt)) {
+                        hold(subscriptionId, attempt);
+                        return null;
                     }
                     return Duration.ZERO;
                 }

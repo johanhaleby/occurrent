@@ -492,12 +492,13 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
 
     @Override
     public void pauseSubscription(String subscriptionId) {
-        // The live delegate holds the subscription of a replay a resume started paused, so the catch-up running that
-        // replay takes the pause and holds the replay. Decided under the claim the children share, so no other call for
-        // the subscription moves the replay between the decision and the pause. The child's own pause takes the handover
-        // lock, so a pause that comes while the replay hands over waits until the handover has gone live or failed.
+        // The live delegate doesn't have the subscription of a replay a subscribe started, and holds the one of a replay a
+        // resume started paused, so the catch-up that runs or holds the replay takes the pause. Decided under the claim
+        // the children share, so no other call for the subscription moves the replay between the decision and the
+        // pause. The child's own pause takes the handover lock, so a pause that comes while the replay hands over waits
+        // until the handover has gone live or failed.
         try (AbstractCatchupSubscriptionModel.Claim ignored = claim(subscriptionId)) {
-            AbstractCatchupSubscriptionModel replaying = presentCatchupModels().filter(model -> model.replaysToResumeHere(subscriptionId)).findFirst().orElse(null);
+            AbstractCatchupSubscriptionModel replaying = presentCatchupModels().filter(model -> model.runsReplayHere(subscriptionId)).findFirst().orElse(null);
             if (replaying != null) {
                 replaying.pauseSubscription(subscriptionId);
             } else {
