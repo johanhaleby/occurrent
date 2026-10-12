@@ -20,8 +20,8 @@ env:
   MVN: -B -ntp -Dmaven.repo.local=${{ github.workspace }}/.m2repo
   # Budget for one shard's tests, in seconds. Roughly 20% over the slowest shard the split below
   # targets, so ordinary runner variance stays quiet and a subtree that actually grew does not.
-  # Exceeding it warns, never fails: nothing here is close to the 20 minute shard timeout, and a
-  # timing gate that can redden an unrelated push would just get ignored.
+  # Exceeding it warns, never fails: a timing gate that can redden an unrelated push would just get
+  # ignored.
   SHARD_BUDGET_SECONDS: 240
   # Private mirror of the Docker Hub images the tests need, so a Docker Hub outage cannot fail a run.
   # Images keep their Docker Hub repository and tag under this prefix, so mongo:8.0 is mirrored as
@@ -237,7 +237,11 @@ jobs:
           # single most expensive module in the build. It shares the shard with framework/annotations and
           # the framework/spring-boot-autoconfigure aggregate (common, blocking, reactor), both cheap
           # enough to ride along without pushing the shard over budget.
-          - { name: framework,                   paths: "framework/spring-boot-starter-mongodb framework/annotations framework/spring-boot-autoconfigure" }
+          #
+          # The in-memory and reactor subscription modules, the Redis subscription and the two eventstore leaves
+          # (`eventstore/migration`, `eventstore/inmemory`) lodge here, so the reactor subscription utilities can have a
+          # shard of their own below and the count stays at 10.
+          - { name: framework,                   paths: "framework/spring-boot-starter-mongodb framework/annotations framework/spring-boot-autoconfigure subscription/api subscription/core subscription/inmemory subscription/synchronous/reactor subscription/push/reactor subscription/redis eventstore/migration eventstore/inmemory" }
           # `eventstore/mongodb/spring` lodges here, so the blocking competing consumer can have a shard of its own and
           # the count stays at 10.
           - { name: dsl,                         paths: "dsl eventstore/mongodb/spring" }
@@ -261,10 +265,9 @@ jobs:
           # in here.
           - { name: subscription-util-blocking,  paths: "subscription/util/blocking/durable-subscription subscription/util/blocking/stream-catchup-subscription subscription/util/blocking/catchup-subscription subscription/synchronous/blocking subscription/push/blocking" }
           - { name: competing-consumer-blocking, paths: "subscription/util/blocking/competing-consumer-subscription" }
-          # `args` applies to every path in a shard, so the two `eventstore` lodgers are here rather
-          # than in an `example` shard. Parking them next to a rerun flag they do not need would
-          # retry a genuine failure twice before reporting it.
-          - { name: subscription-rest,           paths: "subscription/api subscription/core subscription/inmemory subscription/util/reactor subscription/synchronous/reactor subscription/push/reactor subscription/redis eventstore/migration eventstore/inmemory" }
+          # The reactor subscription utilities are slow enough that, next to anything else, they came within a minute of
+          # the 20 minute shard timeout, so they have a shard of their own.
+          - { name: subscription-util-reactor,   paths: "subscription/util/reactor" }
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK ${{ matrix.java }}
