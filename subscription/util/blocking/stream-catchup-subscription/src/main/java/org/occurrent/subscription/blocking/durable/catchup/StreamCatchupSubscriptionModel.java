@@ -64,6 +64,11 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * <p>
  * Delivery is at-least-once, with the same handover and clock-skew-safe reconciliation guarantees documented on
  * the dispatcher.
+ * <p>
+ * The subscription model this wraps must not call any method of this model from inside its own
+ * {@code cancelSubscription}, {@code pauseSubscription}, {@code resumeSubscription}, {@code start} or {@code stop}, and
+ * its {@code isPaused} and {@code isRunning} must answer truthfully at every moment. What this model does over a
+ * wrapped model that breaks either rule is unspecified.
  */
 @NullMarked
 public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {

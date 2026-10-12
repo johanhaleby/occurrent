@@ -974,6 +974,7 @@ setting of its own, `CatchupThenLiveOptions.dedupCacheSize`, and this section do
 
 There is no recipe for this change. Nothing in your source code declares a requirement that an event arrives once, so
 there is nothing a rewrite could search for.
+
 ## 10. Events `updateEvent` damaged before 0.34.0 need a one-off repair
 
 There is no recipe for this. It is not a code change, it is stored data that needs fixing, and only if your
@@ -2613,6 +2614,11 @@ The replay needs a wrapped model that can resume a subscription from a given pos
 over either of them works. Over any other wrapped model, a resume that would replay throws an `IllegalStateException`
 that names that model, where 0.33.0 had that model resume the subscription from its own position.
 
+The wrapped model must not call any method of the catch-up model from inside its own `cancelSubscription(..)`,
+`pauseSubscription(..)`, `resumeSubscription(..)`, `start(..)` or `stop()`, and its `isPaused(..)` and `isRunning(..)`
+must answer truthfully at every moment. What the catch-up model does over a wrapped model that breaks either rule is
+unspecified.
+
 A replay that fails is logged at `ERROR` and runs again from the last position it stored, after a backoff that starts
 at 100 ms and doubles up to 2 seconds. That includes a failure at the handover, when reading or storing the position
 throws or the wrapped model fails to resume the subscription. While the replay waits to run again, the subscription
@@ -2628,9 +2634,7 @@ is running and catching up, and isn't paused. A call that comes in the meantime 
 When the wrapped model throws from `cancelSubscription(subscriptionId)`, the cancel throws the same exception and
 keeps the stored position. The replay it ended stays ended. While the wrapped model still holds the
 subscription paused, a later `resumeSubscription(subscriptionId)` replays from a position a catch-up stored, as any
-resume does. A `resumeSubscription(subscriptionId)` that the wrapped model calls from inside its own cancel, on the
-thread that cancels, throws `IllegalStateException` when it would replay that way, because the wrapped model would
-resume the subscription past that position instead. Resume it once the cancel has returned.
+resume does.
 
 When the cancel ended a replay that was still in the subscription's action or reading history, no resume and no
 `start(true)` lets the action run until that replay's thread has returned. That holds from the moment the cancel

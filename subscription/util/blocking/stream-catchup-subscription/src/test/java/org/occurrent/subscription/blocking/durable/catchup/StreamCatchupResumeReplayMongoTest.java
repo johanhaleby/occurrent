@@ -2229,6 +2229,35 @@ class StreamCatchupResumeReplayMongoTest {
     }
 
     @Test
+    void a_resume_on_the_cancelling_thread_inside_a_failing_cancel_that_reports_the_subscription_as_not_paused_is_refused_when_it_would_replay_from_the_position_another_node_stored() throws Exception {
+        // Given B holds the subscription paused, with the position another node stored, and the live delegate resumes the subscription on the cancelling thread as it fails the cancel, reporting the subscription as not paused
+        AtomicReference<@Nullable Throwable> resumeInTheCancel = new AtomicReference<>();
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)),
+                durable -> new UnpausingCancelFailingModel(durable, () -> resumeInTheCancel.set(catchThrowable(() -> catchupB.resumeSubscription(subscriptionId)))));
+        ((UnpausingCancelFailingModel) catchupB.getWrappedSubscriptionModel()).endTheCancel();
+        Checkpoint storedByAnotherNode = requireNonNull(storage.read(subscriptionId));
+
+        // When the subscription is cancelled
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").isInstanceOf(IllegalStateException.class).hasMessageContaining(UnpausingCancelFailingModel.UNAVAILABLE);
+
+        // Then the resume inside the cancel was refused, and says that a cancel of the subscription is under way
+        assertThat(resumeInTheCancel.get()).as("what the resume inside the cancel threw").isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(subscriptionId).hasMessageContaining("a cancel of it is under way");
+        // And the live delegate still holds the subscription paused, with the position another node stored
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is paused").isTrue();
+        assertThat(storage.read(subscriptionId)).as("the position stored for the subscription").isEqualTo(storedByAnotherNode);
+        assertThat(receivedByB).as("what B received").isEmpty();
+        // And a resume once the cancel has returned replays from the position another node stored
+        catchupB.resumeSubscription(subscriptionId);
+        append("afterTheResume", 4);
+        await("B delivers the history after the stored position and what is written after the resume").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("afterTheResume"));
+        assertThat(receivedByB).as("what B received").contains("h2", "h3", "afterBRegistered", "afterTheResume");
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
+    }
+
+    @Test
     void a_start_that_resumes_while_a_failing_cancel_reports_the_subscription_as_not_paused_until_it_throws_replays_it_from_the_position_another_node_stored() throws Exception {
         // Given B holds the subscription paused, with the position another node stored, B is stopped, and the live delegate reports the subscription as not paused while it fails the cancel
         givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)), UnpausingCancelFailingModel::new);
@@ -2285,6 +2314,23 @@ class StreamCatchupResumeReplayMongoTest {
         CopyOnWriteArrayList<String> receivedByDuplicate = new CopyOnWriteArrayList<>();
         assertSubscribingTheIdAgainIsRefused(receivedByDuplicate);
         assertThat(receivedByDuplicate).as("what the refused subscriptions received").isEmpty();
+    }
+
+    @Test
+    void a_subscribe_on_the_cancelling_thread_inside_a_cancel_that_succeeds_keeps_the_position_stored_for_the_subscription_when_the_cancel_returns() throws Exception {
+        // Given B holds the subscription paused, and the live delegate subscribes the same id on the cancelling thread once it has cancelled
+        AtomicReference<@Nullable Throwable> subscribeInTheCancel = new AtomicReference<>();
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)), durable -> new CancelFollowedByModel(durable,
+                () -> subscribeInTheCancel.set(catchThrowable(() -> catchupB.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), event -> receivedByB.add(nameOf(event)))))));
+
+        // When the subscription is cancelled
+        assertThat(catchThrowable(() -> catchupB.cancelSubscription(subscriptionId))).as("what the cancel threw").isNull();
+
+        // Then the subscribe inside the cancel was accepted, and the subscription runs
+        assertThat(subscribeInTheCancel.get()).as("what the subscribe inside the cancel threw").isNull();
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        // And the position the subscribe stored is still there
+        assertThat(storage.read(subscriptionId)).as("the position stored for the subscription").isNotNull();
     }
 
     @Test
@@ -3377,9 +3423,17 @@ class StreamCatchupResumeReplayMongoTest {
         private volatile boolean reportsNotPaused;
         private volatile @Nullable Thread whenAskedBy;
         private volatile @Nullable Runnable whenAsked;
+        private final Runnable inTheCancel;
 
         UnpausingCancelFailingModel(CheckpointAwareSubscriptionModel delegate) {
+            this(delegate, () -> {
+            });
+        }
+
+        // Runs the step in the first cancel, while the subscription reads as not paused
+        UnpausingCancelFailingModel(CheckpointAwareSubscriptionModel delegate, Runnable inTheCancel) {
             super(delegate);
+            this.inTheCancel = inTheCancel;
         }
 
         void endTheCancel() {
@@ -3398,6 +3452,7 @@ class StreamCatchupResumeReplayMongoTest {
             if (failed.compareAndSet(false, true)) {
                 reportsNotPaused = true;
                 inCancel.countDown();
+                inTheCancel.run();
                 awaitUninterrupted(endCancel);
                 reportsNotPaused = false;
                 throw new IllegalStateException(UNAVAILABLE);

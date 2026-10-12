@@ -107,6 +107,12 @@ import java.util.stream.Stream;
  * separate {@code stream-catchup-subscription} module this class depends on. A stream-only store that wants to avoid
  * the DCB dependency altogether can use {@link StreamCatchupSubscriptionModel} directly as the DCB-free variant.
  * </p>
+ * <p>
+ * The subscription model this wraps must not call any method of this model from inside its own
+ * {@code cancelSubscription}, {@code pauseSubscription}, {@code resumeSubscription}, {@code start} or {@code stop}, and
+ * its {@code isPaused} and {@code isRunning} must answer truthfully at every moment. What this model does over a
+ * wrapped model that breaks either rule is unspecified.
+ * </p>
  */
 @NullMarked
 public class CatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions, RepositionableSubscriptions {
@@ -420,11 +426,6 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * {@link #pauseSubscription(String)} or {@link #cancelSubscription(String)} for the subscription that comes meanwhile
      * doesn't run until it returns, and a {@link #stop()} can be held up the same way.
      * <p>
-     * Called from inside the live delegate's cancel of the subscription, on the thread that cancels, it throws
-     * {@link IllegalStateException} without resuming the subscription when it would replay from a position a catch-up
-     * stored, since the live delegate would resume the subscription past that position. Resume it once the cancel has
-     * returned.
-     * <p>
      * A resume while a replay for the subscription runs returns the handle of that replay. A pause asked while the replay
      * still reads history is dropped, so the replay hands over and the subscription runs.
      * <p>
@@ -536,10 +537,13 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         // Neither mode is known ahead of time for a bare subscriptionId, so tell both inner models to drop their own
         // bookkeeping for it (a no-op on whichever one wasn't running it) and cancel the shared live delegate once.
         try (AbstractCatchupSubscriptionModel.Claim ignored = claim(subscriptionId)) {
-            anyCatchupModel().cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {
+            boolean nothingKept = anyCatchupModel().cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {
                 presentCatchupModels().forEach(model -> model.cancelRunningCatchup(subscriptionId));
                 subscriptionModel.cancelSubscription(subscriptionId);
             });
+            if (!nothingKept) {
+                return;
+            }
             // Position storage is shared config, not per-mode state. Either inner model's config deletes the same
             // storage entry, so delegate to whichever is present instead of deleting twice.
             if (streamCatchupSubscriptionModel != null) {
