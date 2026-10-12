@@ -542,8 +542,8 @@ public class MongoCommons {
 
     /**
      * Whether a change stream opened at {@code resolved}, a start position that is already resolved, starts at the
-     * present. It does for {@code StartAt.now()}, for the model default, and for a checkpoint that holds neither a
-     * resume token nor an operation time, since
+     * present. It does for {@code StartAt.now()}, for the model default, and for a checkpoint that is not a change
+     * stream position, such as a catch-up's position ({@code GlobalCheckpoint}) or a time, since
      * {@link #applyStartPosition(Object, BiFunction, BiFunction, StartAt, SubscriptionModelContext)} opens at the
      * present for that one too.
      */

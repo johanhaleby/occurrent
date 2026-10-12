@@ -95,6 +95,10 @@ differently, so read them first.
 - [Section 28](#28-a-time-based-catch-up-reads-its-live-start-before-the-replay). A catch-up by event time gets the
   same fix as section 26. Rolling back to 0.33.0 with a `CheckpointStorage` that keeps strings, such as
   `SpringRedisCheckpointStorage`, then makes `subscribe(..)` throw for that subscription.
+- [Section 29](#29-a-blocking-subscription-that-resumes-from-another-nodes-catch-up-position-replays-from-it). A
+  blocking catch-up subscription that resumes from the position another node's catch-up stored replays from there,
+  so some events arrive twice. Subscribing again through the catch-up model with the id of a subscription that is
+  running or paused throws `DuplicateSubscriptionIdException`.
 
 ### Competing consumers
 
@@ -970,6 +974,7 @@ setting of its own, `CatchupThenLiveOptions.dedupCacheSize`, and this section do
 
 There is no recipe for this change. Nothing in your source code declares a requirement that an event arrives once, so
 there is nothing a rewrite could search for.
+
 ## 10. Events `updateEvent` damaged before 0.34.0 need a one-off repair
 
 There is no recipe for this. It is not a code change, it is stored data that needs fixing, and only if your
@@ -2584,3 +2589,192 @@ that parses the stored time itself fails on the new form, so read it with `Catch
 
 There is no recipe for this change. What is stored and when a resume delivers again is runtime behavior that a rewrite
 of the source cannot see.
+
+## 29. A blocking subscription that resumes from another node's catch-up position replays from it
+
+On the blocking stack, `CatchupSubscriptionModel` and `StreamCatchupSubscriptionModel` now replay from the position
+another node's catch-up stored when a subscription resumes from it. That is what a competing consumer does when it
+takes over the lease of a subscription whose catch-up another node had not finished, and the blocking MongoDB Spring
+Boot starter builds a competing consumer over `CatchupSubscriptionModel`.
+
+In 0.33.0 the MongoDB model went live from the present there and skipped the events in between, see
+[#1219](https://github.com/johanhaleby/occurrent/issues/1219). The new owner can now deliver again what the other node
+already delivered after that position, up to the event store's head.
+
+`resumeSubscription(subscriptionId)` and `start(true)` replay this way, and `resumeSubscription(subscriptionId, startAt)`
+doesn't. To find out whether any subscription would replay, `start(true)` reads the stored positions of the
+subscriptions made through the catch-up model that the wrapped model holds paused, and stops at the first one that
+would replay. When one would, the wrapped model starts without
+resuming anything, and the catch-up model then resumes each subscription the wrapped model holds paused. A wrapped
+model that can't list its subscriptions only gets the ones made through the catch-up model resumed, and the others
+stay paused.
+
+The replay needs a wrapped model that can resume a subscription from a given position, one that implements
+`RepositionableSubscriptions` or wraps one that does. Both MongoDB models implement it, so `DurableSubscriptionModel`
+over either of them works. Over any other wrapped model, a resume that would replay throws an `IllegalStateException`
+that names that model, where 0.33.0 had that model resume the subscription from its own position.
+
+The wrapped model must not call any method of the catch-up model from inside its own `cancelSubscription(..)`,
+`pauseSubscription(..)`, `resumeSubscription(..)`, `start(..)` or `stop()`, and its `isPaused(..)` and `isRunning(..)`
+must answer truthfully at every moment. What the catch-up model does over a wrapped model that breaks either rule is
+unspecified.
+
+A replay that fails is logged at `ERROR` and runs again from the last position it stored, after a backoff that starts
+at 100 ms and doubles up to 2 seconds. That includes a failure at the handover, when reading or storing the position
+throws or the wrapped model fails to resume the subscription. While the replay waits to run again, the subscription
+is running and catching up, and isn't paused. A call that comes in the meantime decides what happens to the replay:
+
+| Call while the replay waits | What happens to the replay |
+|---|---|
+| `pauseSubscription(subscriptionId)` | Held, and the subscription is paused until `resumeSubscription(subscriptionId)` or `start(true)` runs the replay again |
+| `stop()` | Held the same way, and it stays held after `start(false)` |
+| `cancelSubscription(subscriptionId)` or `shutdown()` | Ends |
+| `resumeSubscription(subscriptionId, startAt)` on the catch-up model | Ends once the subscription resumes at `startAt`, unless an earlier run of the replay is still in the subscription's action or the wrapped model fails to resume it, as described below |
+
+When the wrapped model throws from `cancelSubscription(subscriptionId)`, the cancel throws the same exception and
+keeps the stored position. The replay it ended stays ended. While the wrapped model still holds the
+subscription paused, a later `resumeSubscription(subscriptionId)` replays from a position a catch-up stored, as any
+resume does.
+
+When the cancel ended a replay that was still in the subscription's action or reading history, no resume and no
+`start(true)` lets the action run until that replay's thread has returned. That holds from the moment the cancel
+starts, whether the cancel throws or not, and also when a `stop()` came before, during or after it, so the action
+doesn't run on two threads at once. After a cancel that went through, a resume throws as it does for a subscription
+that was never made.
+
+A replay that `resumeSubscription(subscriptionId)` starts waits on its own thread. A
+`resumeSubscription(subscriptionId)` that has no catch-up position to replay from, and
+`resumeSubscription(subscriptionId, startAt)`, wait up to 10 seconds before the wrapped model resumes the subscription.
+When the replay hasn't returned by then, they throw `IllegalStateException` without resuming it. Such a resume is a
+call for the subscription that runs while it waits, so a `pauseSubscription(subscriptionId)`,
+`cancelSubscription(subscriptionId)` or `stop()` that comes meanwhile waits for it, as described below.
+
+`start(true)` resumes such a subscription the way `resumeSubscription(subscriptionId)` does. While a cancel is under
+way, or a replay a cancel ended hasn't returned, it starts the wrapped model without resuming anything and then
+resumes each subscription the wrapped model holds paused, one at a time. A subscription whose cancel is under way
+while `start(true)` lists them is resumed once that cancel has returned, also when the wrapped model reports it as not
+paused during its own cancel. One whose cancelled replay doesn't return
+holds up the ones after it for up to 10 seconds, and `start(true)` throws its `IllegalStateException` once the others
+are resumed. A subscription cancelled before its turn is skipped.
+
+When the `CatchupListener` registered for the subscription throws as the replay starts or runs again, an `Error`
+included, the replay is held and that is logged at `ERROR`. The subscription then reads as paused, and
+`resumeSubscription(subscriptionId)` or `start(true)` runs the replay again.
+
+`StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel` implement `RepositionableSubscriptions`, as
+`CatchupSubscriptionModel` already did. `RepositionableSubscriptions.findIn(..)` finds any of the three when the model it
+wraps can resume a subscription from a given position, and finds nothing otherwise. In 0.33.0 it found the model under
+the stream and DCB catch-up models, and a resume at a position there didn't end the replay. It found
+`CatchupSubscriptionModel` whatever it wrapped, and `resumeSubscription(subscriptionId, startAt)` then threw
+`UnsupportedOperationException` over a model that couldn't reposition. Code that finds the model through `findIn(..)`
+to resume it at a position now gets an empty `Optional` over such a model.
+
+`resumeSubscription(subscriptionId, startAt)` also ends a replay that reads history. While the replay is inside the
+subscription's action, the call holds the replay and waits up to 10 seconds for the action to return. Then the wrapped
+model resumes the subscription at `startAt`, and the replay ends once it has. When the wrapped model throws, the call
+throws the same exception, and the replay is as it was before the call. A replay that ran runs again from the last
+position it stored, and one a pause or a stop held stays held. When the `CatchupListener` throws as the replay that ran
+is put back, that replay is held instead, and that is logged at `ERROR`.
+
+The call doesn't store the position itself, and it didn't in 0.33.0. The position is stored with the first live
+position or the quiet save, and a restart before then resumes from the position stored earlier.
+
+While the call waits, a subscription that was running when the call began stays running.
+`isRunning(subscriptionId)` returns `true` and `isPaused(subscriptionId)` returns `false`, and a pause that comes
+meanwhile pauses the subscription once the call has returned. A subscription that was paused when the call began
+reads as paused until the call returns.
+
+A `CompetingConsumerSubscriptionModel` that loses the lease while the call waits pauses the subscription the same
+way, so its pause can wait up to 10 seconds. With the MongoDB lease strategy, the next lease change for that
+subscription reaches the node only once that pause has returned. A resume at a position reached through
+`RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` goes to the catch-up model under it,
+and the call doesn't check whether this node holds the subscription's lease.
+
+When the replay doesn't return from the action or the history read within the 10 seconds, the call logs at `ERROR`
+and throws `IllegalStateException`. The replay then runs again, from the last position it stored, once it has
+returned, and the subscription isn't resumed at `startAt`. When running the replay again throws, the
+`IllegalStateException` says the replay couldn't be run again and has that failure as suppressed. When the model was
+stopped meanwhile, or the `CatchupListener` throws as the replay starts again, the replay is held instead and the
+subscription reads as paused. The `IllegalStateException` then says the replay is still held, and
+`resumeSubscription(subscriptionId)` or `start(true)` runs it again.
+
+Called from inside that action, on the replay's thread, `resumeSubscription(subscriptionId, startAt)` throws
+`IllegalStateException` at once, and the replay goes on. An action that passes the call to another thread and waits for
+it gets the `IllegalStateException` after the 10 seconds. Call it from a thread the action doesn't wait for.
+
+The catch-up model runs one call at a time for each subscription id. That covers `subscribe(..)`,
+`pauseSubscription(subscriptionId)`, both `resumeSubscription` methods and `cancelSubscription(subscriptionId)`. It
+also covers the part of `start(true)` and `stop()` that handles that subscription. A second call for the same id waits
+until the first has returned and then acts on what the first left. A `resumeSubscription(subscriptionId)` that comes
+while `resumeSubscription(subscriptionId, startAt)` waits for the action starts no second replay. It throws
+`SubscriptionAlreadyRunningException` once the subscription runs at `startAt`.
+
+A call that waits 10 seconds for another call for the same id logs at `ERROR` and throws `IllegalStateException`.
+It changes nothing for the subscription after that, and the message says what the call did before it waited:
+
+| Call that gives up | What it did before it waited |
+|---|---|
+| `pauseSubscription(subscriptionId)`, `cancelSubscription(subscriptionId)`, `subscribe(..)`, `resumeSubscription(subscriptionId, startAt)` | Nothing |
+| `resumeSubscription(subscriptionId)` on a stopped model | Started the model, without resuming the subscription |
+| `stop()` | Stopped the model. A replay for the subscription delivers nothing more until `start(true)` or `resumeSubscription(subscriptionId)` runs it again |
+| `start(true)` | Started the model and resumed the other subscriptions, without running the replay held for the subscription |
+
+A pause, a resume or a cancel from inside the subscription's action during a replay goes
+ahead when no other call for the subscription runs, and throws `IllegalStateException` at once when one does.
+
+The calls run one at a time within one JVM, on `CatchupSubscriptionModel` and on the catch-up models it is built from.
+Across nodes, the lease of `CompetingConsumerSubscriptionModel` decides which node runs the subscription.
+
+A stop while the replay reads history holds the replay too. A pause while it reads history lets it read on, and once
+it has delivered the history the replay is held instead of handing over. The wrapped model keeps the subscription
+paused, and `resumeSubscription(subscriptionId)` or `start(true)` runs the replay again.
+
+When the replay fails before it has delivered the history, the pause holds it as in the table. A pause that comes
+while the replay hands over waits until the handover has ended. When the wrapped model resumed the subscription, the
+pause then pauses it there, and when the handover failed, the pause holds the replay.
+
+A `pauseSubscription(subscriptionId)` on `CatchupSubscriptionModel` during the replay a subscribe started now goes to
+the catch-up model that runs the replay, as it already did on `StreamCatchupSubscriptionModel`. The replay reads on,
+and once it has delivered the history, the wrapped model gets the subscription and pauses it. When the wrapped model
+throws instead, the replay ends and the pause is dropped with it, so the subscription doesn't read as paused, and a
+later subscribe with the same id isn't paused by it. A pause that comes while
+the replay hands over waits until the wrapped model has the subscription. When the wrapped model throws instead of
+taking it, the replay ends, and the pause goes to the wrapped model, which doesn't have the subscription. In 0.33.0 the pause went
+to the wrapped model, which doesn't have the subscription until the replay hands over. So a competing consumer that
+lost its lease during the first catch-up of a subscription couldn't pause it in the model it wraps.
+
+On `CatchupSubscriptionModel`, and on `StreamCatchupSubscriptionModel` or `DcbCatchupSubscriptionModel` used on its
+own, pausing a replay that is held, such as one a stop held, throws `SubscriptionNotRunningException`, since the
+subscription reads as paused.
+
+A `resumeSubscription(subscriptionId)` on the catch-up model while the replay reads history drops a pause asked
+before it, so the replay hands over and the subscription runs. On `StreamCatchupSubscriptionModel` that holds for a
+replay a subscribe started too, and the resume returns that replay's `Subscription`. Through
+`CompetingConsumerSubscriptionModel` that resume throws `SubscriptionAlreadyRunningException` instead, because the
+catch-up model reports the subscription as both running and paused until the replay has ended. The pause then holds the replay once it has delivered the
+history, and a second `resumeSubscription(subscriptionId)` runs the replay again.
+
+During the handover the subscription is running and no longer catching up. When the wrapped model already runs the
+subscription by the time the replay hands over, the replay ends without running again, and that is logged at `ERROR`
+too.
+
+Subscribing again through the catch-up model, with the id of a subscription made through it that is running or
+paused, throws `DuplicateSubscriptionIdException` from `subscribe(..)`, before anything kept for the existing
+subscription changes. That includes a subscription whose replay still reads history, hands over, waits to run again
+or is held, whether a subscribe or a resume started that replay, and whichever mode either subscription uses. After
+`cancelSubscription(subscriptionId)` the id can be subscribed again, and so can the id of a subscription whose
+subscribe ran a replay that failed before the wrapped model got the subscription.
+
+In 0.33.0 a second subscribe while the first subscription still replayed history was accepted, and both delivered
+events to their own action until one of them ended. Once the wrapped model held the subscription, a subscribe that
+replays history first ran that replay into the new subscription's action and could change the checkpoint stored for
+the id, and only its `waitUntilStarted()` threw the exception, once the replay handed over. Catch the exception where
+you call `subscribe(..)`.
+
+A `ManualStartSubscriptionModel` keeps a subscription as started once the wrapped model's `subscribe(..)` has
+returned. When the wrapped model then throws as it resumes the subscription, such as when a catch-up model fails to
+start its live model, a second `resumeSubscription(subscriptionId)` resumes the subscription in the wrapped model. In
+0.33.0 the second call subscribed again, which the catch-up model now refuses with `DuplicateSubscriptionIdException`.
+
+There is no recipe for this change. Where a subscription resumes from and when a subscribe is refused are runtime
+behavior that a rewrite of the source cannot see.

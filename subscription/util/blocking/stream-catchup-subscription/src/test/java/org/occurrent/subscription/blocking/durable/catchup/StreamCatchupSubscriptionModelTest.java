@@ -64,6 +64,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -694,17 +695,16 @@ class StreamCatchupSubscriptionModelTest {
         assertThat(reachedFinishing.await(5, TimeUnit.SECONDS)).isTrue();
 
         // A fresh, normally-delegating attempt for the same id, started on its own thread while the first is
-        // blocked right after deciding it is still current but before its own delete runs.
+        // blocked right after deciding it is still current but before its own delete runs. It cancels the first
+        // subscription before it subscribes again, since a subscribe for an id that is in use is refused.
+        AtomicReference<Throwable> freshFailure = new AtomicReference<>();
         Thread freshAttempt = new Thread(() -> {
             try {
+                subscription.cancelSubscription(subscriptionId);
                 subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
                 }).waitUntilStarted();
-            } catch (RuntimeException ignored) {
-                // The stale attempt above also subscribes the delegate unconditionally once its own handover
-                // decides it is still current, even though its own StartAt resolved to null for the delegate, so
-                // the two attempts' delegate subscribe calls can then collide on the in-memory model's duplicate-id
-                // check. Immaterial here, this test only cares whether the fresh attempt's own checkpoint save
-                // (asserted below) survives, and that save runs before this call, not after it.
+            } catch (Throwable e) {
+                freshFailure.set(e);
             }
         });
         freshAttempt.start();
@@ -718,6 +718,7 @@ class StreamCatchupSubscriptionModelTest {
         releaseFinishing.countDown();
         freshAttempt.join(Duration.ofSeconds(5).toMillis());
 
+        assertThat(freshFailure.get()).as("what the fresh attempt's cancel and subscribe threw").isNull();
         assertThat(freshSaved.await(5, TimeUnit.SECONDS))
                 .as("the fresh attempt must have saved its own position by the time both attempts have finished")
                 .isTrue();
@@ -776,9 +777,16 @@ class StreamCatchupSubscriptionModelTest {
         });
         assertThat(reachedFinishing.await(5, TimeUnit.SECONDS)).isTrue();
 
-        Thread freshAttempt = new Thread(() ->
+        AtomicReference<Throwable> freshFailure = new AtomicReference<>();
+        Thread freshAttempt = new Thread(() -> {
+            try {
+                subscription.cancelSubscription(subscriptionId);
                 subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
-                }).waitUntilStarted());
+                }).waitUntilStarted();
+            } catch (Throwable e) {
+                freshFailure.set(e);
+            }
+        });
         freshAttempt.start();
 
         freshSaved.await(500, TimeUnit.MILLISECONDS);
@@ -786,6 +794,7 @@ class StreamCatchupSubscriptionModelTest {
         releaseFinishing.countDown();
         freshAttempt.join(Duration.ofSeconds(5).toMillis());
 
+        assertThat(freshFailure.get()).as("what the fresh attempt's cancel and subscribe threw").isNull();
         assertThat(freshSaved.await(5, TimeUnit.SECONDS))
                 .as("the fresh attempt must have saved its own position by the time both attempts have finished")
                 .isTrue();
@@ -795,42 +804,131 @@ class StreamCatchupSubscriptionModelTest {
                 .isNotNull();
     }
 
-    /**
-     * Copilot review on PR #839 (issue #827), a fourth finding on top of the two already fixed above. Both of those
-     * only serialize a call that goes through {@code startCatchupAsync}, but several branches of {@code subscribe}
-     * hand the id straight to the live delegate without ever starting a catch-up, bypassing the handover lock
-     * entirely. A same-id catch-up still replaying, unaware a live subscribe has already claimed its id, would
-     * still subscribe the delegate itself once its replay finishes, racing the delegate subscribe the direct live
-     * subscribe already made.
-     */
     @Test
-    void a_live_subscribe_for_the_same_id_supersedes_a_still_replaying_catchups_own_delegate_subscribe() throws Exception {
+    void a_live_subscribe_for_the_same_id_while_a_catch_up_still_replays_is_refused_and_the_catch_up_goes_live_with_its_own_delegate_subscribe() throws Exception {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
         write(eventStore, nameDefined("event1"));
         String subscriptionId = "subscription";
         CountDownLatch replayReached = new CountDownLatch(1);
         CountDownLatch releaseReplay = new CountDownLatch(1);
-
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
-
-        CatchupSubscription staleAttempt = (CatchupSubscription) subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+        CatchupSubscription replaying = (CatchupSubscription) subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            received.add(nameOf(cloudEvent));
             replayReached.countDown();
             awaitLatch(releaseReplay);
         });
         assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
 
         // A live subscribe for the same id, classified LIVE by StartAt.now() so it bypasses catch-up entirely,
-        // while the catch-up above is still blocked mid-replay, well before it reaches its own handover lock.
-        subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
-        }).waitUntilStarted();
-
+        // while the catch-up above is still blocked mid-replay
+        Throwable thrown = catchThrowable(() -> subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+        }));
         releaseReplay.countDown();
 
-        assertThat(staleAttempt.delegatedSubscription().get(5, TimeUnit.SECONDS))
-                .as("a live subscribe claiming an id while a same-id catch-up is still replaying must cancel that "
-                        + "catch-up's finishing tail instead of leaving it to also subscribe the delegate once its "
-                        + "replay catches up, colliding with the live subscribe that already claimed the same id")
-                .isInstanceOf(CancelledSubscription.class);
+        assertThat(thrown).as("the live subscribe for an id whose catch-up still replays").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(replaying.delegatedSubscription().get(5, TimeUnit.SECONDS))
+                .as("the catch-up keeps its own delegate subscribe instead of being cancelled by the refused live subscribe")
+                .isNotInstanceOf(CancelledSubscription.class);
+        write(eventStore, nameDefined("event2"));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).containsExactly("event1", "event2"));
+        assertThat(subscription.isRunning(subscriptionId)).as("the subscription runs once the catch-up went live").isTrue();
+    }
+
+    @Test
+    void a_second_catch_up_subscribe_for_the_same_id_while_the_first_still_replays_is_refused_and_the_first_delivers_every_event() throws Exception {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        write(eventStore, nameDefined("event2"));
+        String subscriptionId = "subscription";
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        CopyOnWriteArrayList<String> receivedByFirst = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> receivedBySecond = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        CatchupSubscription first = (CatchupSubscription) subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            receivedByFirst.add(nameOf(cloudEvent));
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        Throwable thrown = catchThrowable(() -> subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> receivedBySecond.add(nameOf(cloudEvent))));
+        releaseReplay.countDown();
+
+        assertThat(thrown).as("the second catch-up subscribe for an id whose catch-up still replays").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(first.delegatedSubscription().get(5, TimeUnit.SECONDS)).as("the first catch-up hands over").isNotInstanceOf(CancelledSubscription.class);
+        write(eventStore, nameDefined("event3"));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(receivedByFirst).as("what the first subscription received").containsExactly("event1", "event2", "event3"));
+        assertThat(receivedBySecond).as("what the refused subscription received").isEmpty();
+    }
+
+    @Test
+    void a_subscribe_for_the_same_id_after_a_cancel_while_the_first_catch_up_still_replays_is_accepted_and_delivers() throws Exception {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        write(eventStore, nameDefined("event2"));
+        String subscriptionId = "subscription";
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        CopyOnWriteArrayList<String> receivedBySecond = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        CatchupSubscription first = (CatchupSubscription) subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        subscription.cancelSubscription(subscriptionId);
+        Subscription second = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> receivedBySecond.add(nameOf(cloudEvent)));
+        assertThat(second.waitUntilStarted(Duration.ofSeconds(5))).as("the second subscription started").isTrue();
+        releaseReplay.countDown();
+
+        assertThat(first.delegatedSubscription().get(5, TimeUnit.SECONDS)).as("the cancelled catch-up does not hand over").isInstanceOf(CancelledSubscription.class);
+        write(eventStore, nameDefined("event3"));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(receivedBySecond).containsExactly("event1", "event2", "event3"));
+        assertThat(subscription.isRunning(subscriptionId)).as("the second subscription runs").isTrue();
+    }
+
+    @Test
+    void a_subscribe_for_the_same_id_while_the_catch_up_waits_to_run_on_a_stopped_model_is_refused_and_a_start_that_resumes_runs_the_catch_up() throws Exception {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        String subscriptionId = "subscription";
+        CopyOnWriteArrayList<String> receivedByFirst = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> receivedBySecond = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        subscription.stop();
+        CatchupSubscription first = (CatchupSubscription) subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> receivedByFirst.add(nameOf(cloudEvent)));
+        assertThat(subscription.isPaused(subscriptionId)).as("the catch-up waits to run").isTrue();
+
+        Throwable thrown = catchThrowable(() -> subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> receivedBySecond.add(nameOf(cloudEvent))));
+        subscription.start(true);
+
+        assertThat(thrown).as("the second subscribe for an id whose catch-up waits to run").isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(first.delegatedSubscription().get(5, TimeUnit.SECONDS)).as("the first catch-up hands over").isNotInstanceOf(CancelledSubscription.class);
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(receivedByFirst).as("what the first subscription received").containsExactly("event1"));
+        assertThat(receivedBySecond).as("what the refused subscription received").isEmpty();
+    }
+
+    @Test
+    void a_subscribe_for_the_same_id_while_the_catch_up_is_held_paused_is_refused_and_a_resume_runs_the_catch_up() throws Exception {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        String subscriptionId = "subscription";
+        CopyOnWriteArrayList<String> receivedByFirst = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> receivedBySecond = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        CatchupSubscription first = (CatchupSubscription) subscription.subscribePaused(subscriptionId, null, StartAtTime.beginningOfTime(), cloudEvent -> receivedByFirst.add(nameOf(cloudEvent)));
+        assertThat(subscription.isPaused(subscriptionId)).as("the catch-up is held paused").isTrue();
+
+        Throwable thrown = catchThrowable(() -> subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> receivedBySecond.add(nameOf(cloudEvent))));
+        assertThat(thrown).as("the second subscribe for an id whose catch-up is held paused").isInstanceOf(DuplicateSubscriptionIdException.class);
+        subscription.resumeSubscription(subscriptionId);
+
+        assertThat(first.delegatedSubscription().get(5, TimeUnit.SECONDS)).as("the first catch-up hands over").isNotInstanceOf(CancelledSubscription.class);
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(receivedByFirst).as("what the first subscription received").containsExactly("event1"));
+        assertThat(receivedBySecond).as("what the refused subscription received").isEmpty();
     }
 
     /**
@@ -1164,6 +1262,67 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     @Test
+    @Timeout(30)
+    void a_catch_up_listener_that_fails_when_the_replay_runs_again_because_the_live_start_was_lost_holds_the_replay_and_a_resume_runs_it_and_hands_over() {
+        // Given a history, a live start the model loses during the first replay, and a listener that fails the second time a catch-up starts
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        List<DomainEvent> history = List.of(nameDefined("event1"), nameDefined("event2"), nameDefined("event3"));
+        history.forEach(event -> write(eventStore, event));
+        CheckpointAwareInMemorySubscriptionModel model = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, new StringBasedCheckpoint("live start read now"));
+        model.losesEveryLiveStart = true;
+        AtomicInteger starts = new AtomicInteger();
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        Logger catchupLog = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        catchupLog.addAppender(logged);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(model, eventStore, new CatchupSubscriptionModelConfig(100));
+        subscription.listenForCatchup("subscription", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                if (starts.incrementAndGet() == 2) {
+                    throw new IllegalStateException("The listener failed");
+                }
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+            }
+        });
+        try {
+            // When the subscription is made, so the replay runs again once the model lost the live start
+            Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
+
+            // Then the replay is held, so the subscription reads as paused and not running
+            await().untilAsserted(() -> assertThat(subscription.hasParkedReplay("subscription")).as("the replay is held").isTrue());
+            assertAll(
+                    () -> assertThat(subscription.isPaused("subscription")).as("paused").isTrue(),
+                    () -> assertThat(subscription.isRunning("subscription")).as("running").isFalse(),
+                    () -> assertThat(subscription.isCatchingUp("subscription")).as("catching up").isFalse(),
+                    () -> assertThat(model.liveStarts).as("nothing handed over").isEmpty()
+            );
+            // And the failure of the listener is logged at ERROR
+            assertThat(logged.list).filteredOn(event -> event.getLevel() == Level.ERROR && event.getFormattedMessage().contains("subscription")
+                    && event.getFormattedMessage().contains("catch-up listener")).hasSize(1);
+            // And a resume, once the model has the live start, runs the replay again and hands over
+            model.losesEveryLiveStart = false;
+            Subscription resumed = subscription.resumeSubscription("subscription");
+            assertThat(resumed.waitUntilStarted(Duration.ofSeconds(15))).as("the replay handed over").isTrue();
+            assertThat(started.waitUntilStarted(Duration.ofSeconds(15))).as("the handle the subscribe returned started").isTrue();
+            assertThat(received).as("the history").containsAll(history);
+            assertThat(model.liveStarts).as("handed over once").hasSize(1);
+            assertThat(subscription.isPaused("subscription")).as("paused after the resume").isFalse();
+            // And what is written after the hand over is delivered
+            NameDefined afterHandOver = nameDefined("afterHandOver");
+            write(eventStore, afterHandOver);
+            await().untilAsserted(() -> assertThat(received).contains(afterHandOver));
+        } finally {
+            catchupLog.detachAppender(logged);
+            subscription.shutdown();
+        }
+    }
+
+    @Test
     void a_resume_from_a_stored_live_start_replays_no_further_than_the_stored_replay_end() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
         List<DomainEvent> history = List.of(nameDefined("event1"), nameDefined("event2"), nameDefined("event3"), nameDefined("event4"));
@@ -1482,6 +1641,10 @@ class StreamCatchupSubscriptionModelTest {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);
         }
+    }
+
+    private String nameOf(CloudEvent cloudEvent) {
+        return ((NameDefined) cloudEventConverter.toDomainEvent(cloudEvent)).name();
     }
 
     private NameDefined nameDefined(String name) {

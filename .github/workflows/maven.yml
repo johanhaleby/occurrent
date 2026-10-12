@@ -231,7 +231,6 @@ jobs:
           # `application` lodges here: it needs a MongoDB container anyway, so it starts cheaper
           # next to a subtree that already booted one than it does in a shard of its own.
           - { name: subscription-mongodb-spring, paths: "subscription/mongodb/spring application" }
-          - { name: eventstore-spring,           paths: "eventstore/mongodb/spring" }
           # Everything that talks to MongoDB through the driver rather than through Spring.
           - { name: mongodb-native,              paths: "eventstore/mongodb/native subscription/mongodb/native eventstore/api eventstore/mongodb/common eventstore/mongodb/dcb-common subscription/mongodb/common testing/mongodb" }
           # Listed per module, not as the framework aggregator, because the blocking starter is the
@@ -239,7 +238,9 @@ jobs:
           # the framework/spring-boot-autoconfigure aggregate (common, blocking, reactor), both cheap
           # enough to ride along without pushing the shard over budget.
           - { name: framework,                   paths: "framework/spring-boot-starter-mongodb framework/annotations framework/spring-boot-autoconfigure" }
-          - { name: dsl,                         paths: "dsl" }
+          # `eventstore/mongodb/spring` lodges here, so the blocking competing consumer can have a shard of its own and
+          # the count stays at 10.
+          - { name: dsl,                         paths: "dsl eventstore/mongodb/spring" }
           # misc is the deliberate junk drawer: whatever is too small to shard on its own. The
           # reactive Spring Boot starter is here because the blocking one nearly fills a shard by
           # itself, so the two cannot share.
@@ -255,7 +256,11 @@ jobs:
           # retry as a backstop for residual timing flakiness.
           - { name: example-domain,              paths: "example/domain", args: "-Dsurefire.rerunFailingTestsCount=2" }
           - { name: example-projection,          paths: "example/projection example/forwarder example/snapshot example/saga example/broker", args: "-Dsurefire.rerunFailingTestsCount=2" }
-          - { name: subscription-util-blocking,  paths: "subscription/util/blocking subscription/synchronous/blocking subscription/push/blocking" }
+          # The blocking subscription utilities are listed one by one, because the competing consumer among them is slow
+          # enough to need the shard of its own below. The bare `subscription/util/blocking` prefix would pull it back
+          # in here.
+          - { name: subscription-util-blocking,  paths: "subscription/util/blocking/durable-subscription subscription/util/blocking/stream-catchup-subscription subscription/util/blocking/catchup-subscription subscription/synchronous/blocking subscription/push/blocking" }
+          - { name: competing-consumer-blocking, paths: "subscription/util/blocking/competing-consumer-subscription" }
           # `args` applies to every path in a shard, so the two `eventstore` lodgers are here rather
           # than in an `example` shard. Parking them next to a rerun flag they do not need would
           # retry a genuine failure twice before reporting it.

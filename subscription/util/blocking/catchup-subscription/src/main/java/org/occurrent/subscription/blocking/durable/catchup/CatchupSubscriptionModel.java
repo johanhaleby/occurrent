@@ -31,10 +31,14 @@ import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.StringJoiner;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -102,6 +106,12 @@ import java.util.stream.Stream;
  * not need {@code eventstore-api-dcb} on its classpath, since {@link StreamCatchupSubscriptionModel} lives in the
  * separate {@code stream-catchup-subscription} module this class depends on. A stream-only store that wants to avoid
  * the DCB dependency altogether can use {@link StreamCatchupSubscriptionModel} directly as the DCB-free variant.
+ * </p>
+ * <p>
+ * The subscription model this wraps must not call any method of this model from inside its own
+ * {@code cancelSubscription}, {@code pauseSubscription}, {@code resumeSubscription}, {@code start} or {@code stop}, and
+ * its {@code isPaused} and {@code isRunning} must answer truthfully at every moment. What this model does over a
+ * wrapped model that breaks either rule is unspecified.
  * </p>
  */
 @NullMarked
@@ -290,11 +300,24 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     }
 
     // stopReplay() rather than a child's own stop(), which would reach the shared live delegate once per child. The
-    // children have to be told so a replay already in flight stops delivering and is parked.
+    // children have to be told so a replay already in flight stops delivering and is parked. A child that fails to park
+    // a replay doesn't keep the others or the live delegate from stopping.
     @Override
     public void stop() {
-        presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::stopReplay);
-        getWrappedSubscriptionModel().stop();
+        List<Runnable> steps = new ArrayList<>();
+        presentCatchupModels().forEach(model -> steps.add(model::stopReplay));
+        steps.add(getWrappedSubscriptionModel()::stop);
+        AbstractCatchupSubscriptionModel.runEach(steps, Runnable::run);
+    }
+
+    // The claim is shared by every child, so any of them hands it out
+    private AbstractCatchupSubscriptionModel.Claim claim(String subscriptionId) {
+        return anyCatchupModel().claim(subscriptionId);
+    }
+
+    // Any child, for what every child shares
+    private AbstractCatchupSubscriptionModel anyCatchupModel() {
+        return presentCatchupModels().findFirst().orElseThrow();
     }
 
     // beginStart() rather than a child's own start(), for the same reason stop() uses stopReplay(). The parked replays
@@ -302,21 +325,38 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // resuming automatically, as the delegate itself resumes only then. When the delegate's start throws, each child
     // that was stopped stops again, unless the delegate runs, or another start or stop of that child, or a resume of
     // the delegate, came in the meantime. The delegate is asked whether it runs once, before any child takes its lock.
+    // When a subscription the delegate holds paused would replay on resumeSubscription(..), a replay that a cancel ended
+    // for one hasn't returned yet, or a cancel is under way, the delegate starts without resuming anything and each
+    // subscription it holds paused, or that a cancel is under way for while they are listed, is resumed as
+    // resumeSubscription(..) resumes it, one at a time, as a child's own start does. The children share the
+    // count of cancels started, so each child's check sees a cancel under way while that child reads.
+    // Reading the stored positions to decide that is part of starting, so a read that throws stops each child again as
+    // a delegate that throws does.
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
         Map<AbstractCatchupSubscriptionModel, AbstractCatchupSubscriptionModel.StartAttempt> attempts = new LinkedHashMap<>();
         presentCatchupModels().forEach(model -> attempts.put(model, model.beginStart()));
+        final AbstractCatchupSubscriptionModel replaysOnResume;
         try {
-            getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
+            replaysOnResume = resumeSubscriptionsAutomatically
+                    ? presentCatchupModels().filter(AbstractCatchupSubscriptionModel::anyResumeReplays).findFirst().orElse(null)
+                    : null;
+            getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically && replaysOnResume == null);
         } catch (Throwable e) {
             boolean liveDelegateRuns = attempts.values().stream().anyMatch(AbstractCatchupSubscriptionModel.StartAttempt::wasStopped)
                     && AbstractCatchupSubscriptionModel.runsAfterFailedStart(getWrappedSubscriptionModel(), e);
-            attempts.forEach((model, attempt) -> model.undoStart(attempt, liveDelegateRuns));
+            attempts.forEach((model, attempt) -> model.undoStart(attempt, liveDelegateRuns, e));
             throw e;
         }
+        // Each also when an earlier one throws, so a parked replay whose claim fails holds up no other subscription
+        List<Runnable> resumes = new ArrayList<>();
         if (resumeSubscriptionsAutomatically) {
-            presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::relaunchParkedReplays);
+            resumes.add(() -> AbstractCatchupSubscriptionModel.runEach(presentCatchupModels().toList(), AbstractCatchupSubscriptionModel::relaunchParkedReplays));
         }
+        if (replaysOnResume != null) {
+            resumes.add(() -> AbstractCatchupSubscriptionModel.resumeEach(replaysOnResume.subscriptionsTheLiveDelegateHoldsPaused(), this::resumeSubscription));
+        }
+        AbstractCatchupSubscriptionModel.runEach(resumes, Runnable::run);
     }
 
     // Asks the catch-up children too, because a replay is running before the live delegate has registered the
@@ -358,10 +398,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 .reduce(Boolean.TRUE, (a1, b1) -> a1 && b1);
     }
 
+    // Not paused while resumeSubscription(String, StartAt) runs for a subscription that ran, which reads as running until then
     @Override
     public boolean isPaused(String subscriptionId) {
-        return presentCatchupModels().anyMatch(model -> model.isPaused(subscriptionId))
-                || getWrappedSubscriptionModel().isPaused(subscriptionId);
+        return !anyCatchupModel().isRepositioning(subscriptionId) && (presentCatchupModels().anyMatch(model -> model.isPaused(subscriptionId))
+                || (presentCatchupModels().noneMatch(model -> model.isReplayingToResume(subscriptionId)) && getWrappedSubscriptionModel().isPaused(subscriptionId)));
     }
 
     /**
@@ -369,69 +410,147 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * subscription to the live delegate. When this model is stopped and the subscription is paused, this first starts
      * the model without resuming anything else, as resuming a subscription starts the live delegate, so a subscription
      * made afterwards replays at once, whichever mode it uses.
+     * <p>
+     * When the position stored for the subscription is one a catch-up replays from, such as the position another
+     * node's catch-up stored while it replayed, the catch-up the subscription was made through replays from there
+     * before the live delegate resumes it. The live delegate can't open its live feed at such a position, and would
+     * resume from its own position instead, past events nobody delivered to the subscription. The replay can deliver
+     * events this node already delivered.
+     * <p>
+     * After a {@link #cancelSubscription(String)} that threw, the replay that cancel ended can still be in the
+     * subscription's action or in a read of the history, also when a {@link #stop()} came before or after the cancel. A
+     * replay this starts waits on its own thread until that replay has returned. When this doesn't replay, it waits up
+     * to ten seconds for that replay to return before the live delegate resumes the subscription, and throws
+     * {@link IllegalStateException} without resuming it when the replay hasn't returned by then, or at once when called
+     * from inside the action. Like every other call for the subscription it runs alone, so a
+     * {@link #pauseSubscription(String)} or {@link #cancelSubscription(String)} for the subscription that comes meanwhile
+     * doesn't run until it returns, and a {@link #stop()} can be held up the same way.
+     * <p>
+     * A resume while a replay for the subscription runs returns the handle of that replay. A pause asked while the replay
+     * still reads history is dropped, so the replay hands over and the subscription runs.
+     * <p>
+     * When another call for the subscription still runs after ten seconds, this throws {@link IllegalStateException}
+     * without resuming the subscription. A model that was stopped is started by then.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
-        if (presentCatchupModels().anyMatch(model -> model.stopped) && isPaused(subscriptionId)) {
+        // Started before the claim is taken, since a start that fails parks the replays of other ids under their claims
+        boolean started = presentCatchupModels().anyMatch(model -> model.stopped) && isPaused(subscriptionId);
+        if (started) {
             start(false);
         }
-        AbstractCatchupSubscriptionModel parkedIn = presentCatchupModels().filter(model -> model.hasParkedReplay(subscriptionId)).findFirst().orElse(null);
-        if (parkedIn != null) {
-            Subscription relaunched = parkedIn.relaunchParkedReplay(subscriptionId);
-            if (relaunched != null) {
-                return relaunched;
+        String whatChanged = started ? AbstractCatchupSubscriptionModel.STARTED_BUT_NOT_RESUMED : AbstractCatchupSubscriptionModel.NOTHING_CHANGED;
+        try (AbstractCatchupSubscriptionModel.Claim ignored = anyCatchupModel().claim(subscriptionId, whatChanged)) {
+            presentCatchupModels().forEach(model -> model.pauseRequestedDuringCatchup.remove(subscriptionId));
+            AbstractCatchupSubscriptionModel parkedIn = presentCatchupModels().filter(model -> model.hasParkedReplay(subscriptionId)).findFirst().orElse(null);
+            if (parkedIn != null) {
+                Subscription relaunched = parkedIn.relaunchParkedReplay(subscriptionId);
+                if (relaunched != null) {
+                    return relaunched;
+                }
             }
+            for (AbstractCatchupSubscriptionModel model : presentCatchupModels().toList()) {
+                Subscription replaying = model.replayToResume(subscriptionId, whatChanged);
+                if (replaying != null) {
+                    return replaying;
+                }
+            }
+            anyCatchupModel().awaitTheCancelledReplay(subscriptionId, whatChanged);
+            Subscription resumed = getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
+            presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
+            return resumed;
         }
-        Subscription resumed = getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
-        presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
-        return resumed;
     }
 
     /**
      * Forwards to whichever {@link RepositionableSubscriptions} the wrapped model resolves to. Unlike
-     * {@link #resumeSubscription(String)}, it doesn't start this model first or run a parked replay. Catch-up is never
-     * re-triggered by a resume at an explicit position. It stays what it already was, a one-time replay driven from
-     * {@code subscribe}, not something a lease regain can turn back on.
+     * {@link #resumeSubscription(String)}, it doesn't start this model first or run a parked replay, and it never
+     * replays, also not at a position a catch-up stores. The wrapped model handles such a position as one it cannot
+     * open its live feed at. A replay that {@link #resumeSubscription(String)} started for the subscription, running
+     * or waiting to run again, is held first and ends once the wrapped model has resumed the subscription, so the
+     * position given here wins over it, and a later {@link #resumeSubscription(String)} can replay again. When the
+     * wrapped model throws, a replay this held runs again as it was, and this throws what the wrapped model threw. When
+     * the replay is in the subscription's action or reads history, this holds the replay and waits up to ten seconds for
+     * it to return before the wrapped model resumes the subscription, so the replay's action doesn't run alongside the
+     * action of the resumed subscription. After a {@link #cancelSubscription(String)} that threw, it
+     * waits the same way for the replay that cancel ended, which nothing runs again, also when a {@link #stop()} came
+     * before or after the cancel. When the replay doesn't return in time, this logs at {@code ERROR}, runs a replay it
+     * held again as it was and throws {@link IllegalStateException}, with what running it again threw added as
+     * suppressed. A replay this held stays held instead of running again when this model was stopped meanwhile or the
+     * {@link CatchupListener} throws as it starts, and the {@link IllegalStateException} says so. It runs again on a
+     * resume or a start that resumes. Called from inside the action, on the replay's own thread, this throws
+     * {@link IllegalStateException} at once and changes nothing. An action that hands the call to another thread and
+     * waits for it fails once the ten seconds have passed.
+     * <p>
+     * Like every other call that changes the subscription, it runs alone. A pause, resume, cancel or subscribe for the
+     * same id waits until it returns, for up to ten seconds, and then acts on what it left. While it runs, a subscription
+     * that read as running when it began reads as running and not paused, also while it waits for the action, so a
+     * caller that pauses what runs calls {@link #pauseSubscription(String)}, which pauses it once this has returned. One
+     * that read as paused reads as paused until this returns.
      * <p>
      * Once the wrapped model returns from the resume, this model is started again if a start whose live delegate threw
      * stopped it, so a subscription made afterwards replays at once. After {@link #stop()} it stays stopped.
+     * <p>
+     * {@link RepositionableSubscriptions#findIn} finds this model only when the wrapped model is repositionable.
      *
      * @throws UnsupportedOperationException if the wrapped model is not itself repositionable.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
-        Subscription resumed = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel())
-                .orElseThrow(() -> new UnsupportedOperationException(getWrappedSubscriptionModel().getClass().getSimpleName() + " is not repositionable"))
-                .resumeSubscription(subscriptionId, startAt);
-        presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
-        return resumed;
+        return anyCatchupModel().resumeSubscription(subscriptionId, startAt, presentCatchupModels().toList(), () -> isRunning(subscriptionId) && !isPaused(subscriptionId));
+    }
+
+    /**
+     * Answers {@link RepositionableSubscriptions} only when the wrapped model has it, since
+     * {@link #resumeSubscription(String, StartAt)} resumes the subscription there, so this model is found where the
+     * wrapped model would be, and nothing is found where nothing was. Answers every other capability as any model does.
+     */
+    @Override
+    public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
+        if (type == RepositionableSubscriptions.class && !getWrappedSubscriptionModel().hasCapability(RepositionableSubscriptions.class)) {
+            return Optional.empty();
+        }
+        return SubscriptionModel.super.capability(type);
     }
 
     @Override
     public void pauseSubscription(String subscriptionId) {
-        getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
+        // The live delegate doesn't have the subscription of a replay a subscribe started, and holds the one of a replay a
+        // resume started paused, so the catch-up that runs or holds the replay takes the pause. Decided under the claim
+        // the children share, so no other call for the subscription moves the replay between the decision and the
+        // pause, and under the handover lock they share, so a pause that comes while the replay hands over waits until
+        // the live delegate has the subscription or the handover has failed. A replay a subscribe started stops
+        // counting as one this model runs before the live delegate has the subscription.
+        try (AbstractCatchupSubscriptionModel.Claim ignored = claim(subscriptionId);
+             AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = anyCatchupModel().tryLockHandover(subscriptionId)) {
+            AbstractCatchupSubscriptionModel replaying = presentCatchupModels().filter(model -> model.runsReplayHere(subscriptionId)).findFirst().orElse(null);
+            if (replaying != null) {
+                replaying.pauseSubscription(subscriptionId);
+            } else {
+                getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
+            }
+        }
     }
 
     @Override
     public void cancelSubscription(String subscriptionId) {
         // Neither mode is known ahead of time for a bare subscriptionId, so tell both inner models to drop their own
         // bookkeeping for it (a no-op on whichever one wasn't running it) and cancel the shared live delegate once.
-        if (streamCatchupSubscriptionModel != null) {
-            streamCatchupSubscriptionModel.cancelRunningCatchup(subscriptionId);
-        }
-        if (dcbCatchupSubscriptionModel != null) {
-            dcbCatchupSubscriptionModel.cancelRunningCatchup(subscriptionId);
-        }
-        if (agnosticCatchupSubscriptionModel != null) {
-            agnosticCatchupSubscriptionModel.cancelRunningCatchup(subscriptionId);
-        }
-        subscriptionModel.cancelSubscription(subscriptionId);
-        // Position storage is shared config, not per-mode state; either inner model's config deletes the same
-        // storage entry, so delegate to whichever is present instead of deleting twice.
-        if (streamCatchupSubscriptionModel != null) {
-            streamCatchupSubscriptionModel.deletePositionFromStorage(subscriptionId);
-        } else if (dcbCatchupSubscriptionModel != null) {
-            dcbCatchupSubscriptionModel.deletePositionFromStorage(subscriptionId);
+        try (AbstractCatchupSubscriptionModel.Claim ignored = claim(subscriptionId)) {
+            boolean nothingKept = anyCatchupModel().cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {
+                presentCatchupModels().forEach(model -> model.cancelRunningCatchup(subscriptionId));
+                subscriptionModel.cancelSubscription(subscriptionId);
+            });
+            if (!nothingKept) {
+                return;
+            }
+            // Position storage is shared config, not per-mode state. Either inner model's config deletes the same
+            // storage entry, so delegate to whichever is present instead of deleting twice.
+            if (streamCatchupSubscriptionModel != null) {
+                streamCatchupSubscriptionModel.deletePositionFromStorage(subscriptionId);
+            } else if (dcbCatchupSubscriptionModel != null) {
+                dcbCatchupSubscriptionModel.deletePositionFromStorage(subscriptionId);
+            }
         }
     }
 

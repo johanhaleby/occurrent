@@ -129,19 +129,21 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
     }
 
-    private Subscription startLiveDcbSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAtToUse, Consumer<CloudEvent> action, @Nullable BoundedIdCache<CatchupEventKey> cache) {
-        return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, dcbLiveConsumer(action, cache));
+    @Override
+    @Nullable CatchupReplay replayToResume(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, Checkpoint stored) {
+        StartAt storedStartAt = StartAt.checkpoint(stored);
+        if (!isDcbCatchupPosition(storedStartAt)) {
+            return null;
+        }
+        return lastStored -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, lastStored == null ? storedStartAt : StartAt.checkpoint(lastStored));
     }
 
     /**
-     * Hands {@code subscriptionId} straight to the live delegate, without a catch-up phase. Cancels any catch-up
-     * already running for this id first, under the same per-id lock as a finishing attempt's own handover, so that
-     * attempt is told it has been superseded instead of also subscribing the delegate for the id this call just
-     * claimed. Distinct from {@link #startLiveDcbSubscription}'s own use inside a finishing attempt's handover,
-     * which has already gone through that lock and that decision and must not cancel itself.
+     * Hands {@code subscriptionId} straight to the live delegate, without a catch-up phase. The subscribe is refused
+     * before this while a catch-up for the id is in progress, under the same per-id lock as that catch-up's handover,
+     * and a cancelled catch-up doesn't hand over.
      */
     private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, boolean holdPaused) {
-        cancelRunningCatchup(subscriptionId);
         return subscribeInTheWrappedModel(subscriptionId, filter, startAt, dcbLiveConsumer(action, null), holdPaused);
     }
 
@@ -198,7 +200,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // the gap after this attempt decided it was still current but before it finished acting on that, either
         // losing the cancellation or having a fresh attempt's checkpoint save wiped out by this attempt's late
         // delete a few lines down.
-        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+        return handOverUnderLock(subscriptionId, () -> {
             // endReplayIfStillCurrent checks stopped and shuttingDown as well as whether this attempt is still the
             // current one, so a stop() before this point parks this attempt's replay instead of handing it over. A
             // later attempt can have taken over just before this call, and only an attempt that ends its own
@@ -242,11 +244,10 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                 // history, and a cancel would get back the position it deleted.
                 subscription = new CancelledSubscription(subscriptionId);
             } else {
-                subscription = startLiveDcbSubscription(subscriptionId, filter, startAtToUse, action, catchupPhaseCache);
-                applyPendingPauseIfAny(subscriptionId);
+                subscription = handOver(subscriptionId, filter, startAtToUse, dcbLiveConsumer(action, catchupPhaseCache));
             }
             return subscription;
-        }
+        });
     }
 
     // One pass of the position replay from replayStart
@@ -305,13 +306,6 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             return false;
         }
         return GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
-    }
-
-    @Override
-    public void cancelSubscription(String subscriptionId) {
-        cancelRunningCatchup(subscriptionId);
-        subscriptionModel.cancelSubscription(subscriptionId);
-        deletePositionFromStorage(subscriptionId);
     }
 
     @Override
