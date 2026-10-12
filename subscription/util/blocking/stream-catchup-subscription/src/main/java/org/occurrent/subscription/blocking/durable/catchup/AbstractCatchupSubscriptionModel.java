@@ -1215,11 +1215,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // How many times it ran again from its origin before it handed over, counting replaysAgainBefore
         private volatile int replaysAgain;
 
-        private ReplayState(String subscriptionId, CatchupReplay catchup, CompletableFuture<Subscription> result, boolean resuming, @Nullable HandedOver takenOver) {
+        private ReplayState(String subscriptionId, CatchupReplay catchup, CompletableFuture<Subscription> result, boolean resuming, @Nullable HandedOver takenOver,
+                            boolean takeoversFollow) {
             this.catchup = catchup;
             this.result = result;
             this.resuming = resuming;
-            this.handle = takenOver == null ? new LiveHandle(subscriptionId) : takenOver.replay().handle;
+            this.handle = takenOver == null ? new LiveHandle(subscriptionId, takeoversFollow) : takenOver.replay().handle;
             this.replaysAgainBefore = takenOver == null ? 0 : takenOver.replay().replaysAgain + 1;
         }
 
@@ -1244,11 +1245,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // Longer than any wait that ends, so a wait at least this long never ends on its own
         private static final Duration FOREVER = Duration.ofNanos(Long.MAX_VALUE / 2);
         private final String id;
+        // False when the live delegate can't have a takeover follow, so a wait gives it the caller's whole timeout
+        private final boolean takeoversFollow;
         // Completed with the subscription the live delegate got, or with what ended the takeover's replay
         private volatile CompletableFuture<Subscription> live = new CompletableFuture<>();
 
-        private LiveHandle(String id) {
+        private LiveHandle(String id, boolean takeoversFollow) {
             this.id = id;
+            this.takeoversFollow = takeoversFollow;
         }
 
         CompletableFuture<Subscription> live() {
@@ -1279,6 +1283,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
         @Override
         public boolean waitUntilStarted(Duration timeout) {
+            if (!takeoversFollow) {
+                return new CatchupSubscription(id, live).waitUntilStarted(timeout);
+            }
             boolean forever = timeout.compareTo(FOREVER) >= 0;
             long deadline = forever ? 0 : System.nanoTime() + timeout.toNanos();
             while (true) {
@@ -2497,7 +2504,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private Future<Subscription> startCatchupAsync(String subscriptionId, CatchupReplay catchup, boolean holdPaused, boolean resuming, CompletableFuture<Void> earlierAttemptsDone,
                                                    @Nullable HandedOver takenOver) {
         CompletableFuture<Subscription> result = new CompletableFuture<>();
-        ReplayState replay = new ReplayState(subscriptionId, catchup, result, resuming, takenOver);
+        ReplayState replay = new ReplayState(subscriptionId, catchup, result, resuming, takenOver, takesOverLostLiveStarts());
         if (takenOver != null) {
             replay.handle.follow(result);
         }
