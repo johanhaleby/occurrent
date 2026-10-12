@@ -46,6 +46,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
@@ -85,6 +86,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -148,7 +150,7 @@ class CatchupResumeReplayStreamModeMongoTest {
     private final Logger modelLogger = (Logger) LoggerFactory.getLogger(AbstractCatchupSubscriptionModel.class);
     private final CountDownLatch releaseA = new CountDownLatch(1);
     private final CountDownLatch releaseTheClaim = new CountDownLatch(1);
-    private final String subscriptionId = UUID.randomUUID().toString();
+    private final String subscriptionId = aSubscriptionIdThatAnotherIdPrecedes();
     private final CopyOnWriteArrayList<String> receivedByB = new CopyOnWriteArrayList<>();
     private final AtomicInteger inAction = new AtomicInteger();
     private final AtomicInteger maxInAction = new AtomicInteger();
@@ -1988,6 +1990,46 @@ class CatchupResumeReplayStreamModeMongoTest {
         assertTheSubscriptionRuns();
     }
 
+    @Test
+    void a_start_through_the_dispatcher_that_is_held_up_reading_the_position_of_another_subscription_does_not_let_the_live_delegate_resume_a_subscription_whose_cancel_the_live_delegate_fails_meanwhile() throws Exception {
+        // Given B holds the subscription paused, with the position another node stored, and a second subscription that a start that resumes reads the position of first
+        AtomicReference<CompletableFuture<Void>> starting = new AtomicReference<>();
+        AtomicReference<Thread> startingThread = new AtomicReference<>();
+        Runnable letTheStartReadOnAndWaitForIt = () -> {
+            storage.releaseTheHeldRead();
+            awaitParkedIn(requireNonNull(starting.get()), startingThread, "tryLockWithin");
+        };
+        SubscriptionFilter filter = AgnosticSubscriptionFilter.filter(Filter.all());
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)), durable -> new CancelFailingModel(durable, letTheStartReadOnAndWaitForIt), filter);
+        String otherId = requireNonNull(anIdIteratedBefore(subscriptionId));
+        catchupB.subscribePaused(otherId, filter, StartAt.subscriptionModelDefault(), event -> {
+        });
+        storage.delete(otherId);
+        assertThat(subscribedOf(catchupB).keySet()).as("the subscriptions B holds, in the order a start reads them").containsExactly(otherId, subscriptionId);
+        assertThat(storage.read(otherId)).as("what is stored for the other subscription").isNull();
+        catchupB.stop();
+        storage.holdTheNextReadOf(otherId);
+
+        // When B is started with the subscriptions resumed, and it reads the position of the other subscription first
+        starting.set(CompletableFuture.runAsync(() -> {
+            startingThread.set(Thread.currentThread());
+            catchupB.start(true);
+        }));
+        assertThat(storage.heldRead.await(10, SECONDS)).as("the start reads the position stored for the other subscription").isTrue();
+        // And the live delegate fails to cancel the subscription meanwhile, and something is written afterwards
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        append("afterTheRace", 4);
+
+        // Then the start returns without failing
+        assertThat(failureOf(requireNonNull(starting.get()))).as("what the start threw").isNull();
+        // And the subscription replays from the position the other node stored, instead of the live delegate resuming it from its own
+        await("B delivers what is written after the race").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("afterTheRace"));
+        assertThat(receivedByB).as("what B received").contains("h2", "h3", "afterBRegistered", "afterTheRace");
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
+    }
+
     private <T> CompletableFuture<T> callFromAnotherThreadUntilItWaitsIn(Supplier<T> call, String method) {
         AtomicReference<Thread> callingThread = new AtomicReference<>();
         CompletableFuture<T> calling = CompletableFuture.supplyAsync(() -> {
@@ -2058,6 +2100,38 @@ class CatchupResumeReplayStreamModeMongoTest {
         return (AbstractCatchupSubscriptionModel) child.get(dispatcher);
     }
 
+    // The subscriptions the children of the dispatcher share, in the order the dispatcher reads them
+    private static ConcurrentMap<String, ?> subscribedOf(CatchupSubscriptionModel dispatcher) throws Exception {
+        Field subscribed = AbstractCatchupSubscriptionModel.class.getDeclaredField("subscribed");
+        subscribed.setAccessible(true);
+        return (ConcurrentMap<String, ?>) subscribed.get(childOf(dispatcher));
+    }
+
+    // An id that a ConcurrentHashMap holding exactly it and the given id iterates first, as the map of what B's subscriptions were made with
+    // does, or null for an id in the first bin of the map, which no other id precedes
+    private static @Nullable String anIdIteratedBefore(String id) {
+        for (int attempt = 0; attempt < 1_000; attempt++) {
+            String candidate = UUID.randomUUID().toString();
+            ConcurrentMap<String, Boolean> map = new ConcurrentHashMap<>();
+            map.put(id, true);
+            map.put(candidate, true);
+            if (map.keySet().iterator().next().equals(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    // A subscription id that another id is iterated before, so a test can make a subscription that a start reads the position of first
+    private static String aSubscriptionIdThatAnotherIdPrecedes() {
+        while (true) {
+            String id = UUID.randomUUID().toString();
+            if (anIdIteratedBefore(id) != null) {
+                return id;
+            }
+        }
+    }
+
     // The claims the children of the dispatcher share, which hold an entry for each subscription some call holds or waits for
     private static Map<?, ?> claimsOf(CatchupSubscriptionModel dispatcher) throws Exception {
         Field claims = AbstractCatchupSubscriptionModel.class.getDeclaredField("lifecycleClaims");
@@ -2089,6 +2163,11 @@ class CatchupResumeReplayStreamModeMongoTest {
 
     // As above, over a live delegate of B made from the durable one
     private void givenAnotherNodeStoredAPosition(Consumer<CloudEvent> actionOfB, Function<DurableSubscriptionModel, CheckpointAwareSubscriptionModel> liveDelegateOfB) throws Exception {
+        givenAnotherNodeStoredAPosition(actionOfB, liveDelegateOfB, null);
+    }
+
+    // As above, with the subscription made with the filter
+    private void givenAnotherNodeStoredAPosition(Consumer<CloudEvent> actionOfB, Function<DurableSubscriptionModel, CheckpointAwareSubscriptionModel> liveDelegateOfB, @Nullable SubscriptionFilter filter) throws Exception {
         givenTwoNodes(liveDelegateOfB);
         AtomicInteger deliveredToA = new AtomicInteger();
         CountDownLatch aIsStalled = new CountDownLatch(1);
@@ -2101,8 +2180,8 @@ class CatchupResumeReplayStreamModeMongoTest {
         append("h1", 0);
         append("h2", 1);
         append("h3", 2);
-        catchupB.subscribePaused(subscriptionId, null, StartAt.subscriptionModelDefault(), actionOfB);
-        catchupA.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), stallingA);
+        catchupB.subscribePaused(subscriptionId, filter, StartAt.subscriptionModelDefault(), actionOfB);
+        catchupA.subscribe(subscriptionId, filter, StartAt.checkpoint(GlobalCheckpoint.of(0)), stallingA);
         assertThat(aIsStalled.await(10, SECONDS)).as("A's replay reaches its second event").isTrue();
         assertThat(GlobalCheckpoint.isGlobalCheckpoint(storage.read(subscriptionId))).as("what A's replay stored is a global checkpoint").isTrue();
         append("afterBRegistered", 3);
@@ -2655,6 +2734,9 @@ class CatchupResumeReplayStreamModeMongoTest {
         private volatile @Nullable CountDownLatch holdUntil;
         final CountDownLatch blocked = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
+        private final AtomicReference<@Nullable String> readToHold = new AtomicReference<>();
+        final CountDownLatch heldRead = new CountDownLatch(1);
+        private final CountDownLatch releaseHeldRead = new CountDownLatch(1);
         private final AtomicInteger handoverReadFailuresLeft = new AtomicInteger();
         final AtomicInteger handoverReadFailures = new AtomicInteger();
 
@@ -2673,9 +2755,19 @@ class CatchupResumeReplayStreamModeMongoTest {
             blockOn = predicate;
         }
 
+        // The next read of the subscription, by any thread, waits until releaseTheHeldRead(), and later reads of it do not
+        void holdTheNextReadOf(String subscriptionId) {
+            readToHold.set(subscriptionId);
+        }
+
+        void releaseTheHeldRead() {
+            releaseHeldRead.countDown();
+        }
+
         void unblock() {
             blockOn = thread -> false;
             release.countDown();
+            releaseHeldRead.countDown();
         }
 
         // The next reads made while a resume replay hands over to the live delegate throw
@@ -2692,6 +2784,11 @@ class CatchupResumeReplayStreamModeMongoTest {
             if (handoverReadFailuresLeft.get() > 0 && handsOverToTheLiveDelegate() && handoverReadFailuresLeft.getAndUpdate(left -> left > 0 ? left - 1 : 0) > 0) {
                 handoverReadFailures.incrementAndGet();
                 throw new IllegalStateException("The storage is unavailable");
+            }
+            String toHold = readToHold.get();
+            if (subscriptionId.equals(toHold) && readToHold.compareAndSet(toHold, null)) {
+                heldRead.countDown();
+                awaitUninterrupted(releaseHeldRead);
             }
             if (blockOn.test(Thread.currentThread())) {
                 CountDownLatch until = holdUntil;
