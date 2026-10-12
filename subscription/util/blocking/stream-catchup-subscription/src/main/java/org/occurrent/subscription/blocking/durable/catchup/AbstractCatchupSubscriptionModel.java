@@ -677,10 +677,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     // Whether this model, rather than another child of the same dispatcher, runs or holds a replay for the subscription,
-    // whether a subscribe or a resume started it
+    // whether a subscribe or a resume started it. A cancelled replay that has not returned yet doesn't count.
     boolean runsReplayHere(String subscriptionId) {
         CatchupAttempt running = currentAttempt.get(subscriptionId);
-        return (running != null && running.owner == this) || parkedReplays.containsKey(subscriptionId);
+        return (running != null && running.owner == this && !running.abandoned()) || parkedReplays.containsKey(subscriptionId);
     }
 
     /**
@@ -778,7 +778,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         HandoverLock lock = tryLockHandover(subscriptionId);
         try {
             CatchupAttempt running = currentAttempt.get(subscriptionId);
-            if (running != null && running.backingOff) {
+            if (running != null && running.backingOff && !running.abandoned()) {
                 hold(subscriptionId, running);
             } else if (parkedReplays.containsKey(subscriptionId)) {
                 // Refused here, since the live delegate doesn't have the subscription yet when a subscribe started the
@@ -1917,7 +1917,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try {
             listener.catchupStarted(attempt);
             return true;
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
             log.error("The catch-up listener for subscription {} failed when its replay started, so the replay is held and runs again once the subscription is resumed or this model started.", subscriptionId, e);
             return false;
         }
@@ -1941,13 +1941,29 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 }
             } catch (Throwable failure) {
                 if (!attempt.parked) {
-                    attempt.replay.result.completeExceptionally(failure);
+                    try {
+                        endUndecidedAttempt(subscriptionId, attempt, failure);
+                    } finally {
+                        attempt.replay.result.completeExceptionally(failure);
+                    }
                 }
             } finally {
                 CURRENT_ATTEMPT.remove();
                 attempt.earlierAttemptsDone.whenComplete((ignored, alsoIgnored) -> attempt.done.complete(null));
             }
         });
+    }
+
+    // A failure runAgainAfter didn't decide on leaves the attempt current. Ending it here lets a resume start the replay
+    // anew instead of returning its failed handle.
+    private void endUndecidedAttempt(String subscriptionId, CatchupAttempt attempt, Throwable failure) {
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            if (currentAttempt.remove(subscriptionId, attempt)) {
+                runningCatchupSubscriptions.remove(subscriptionId);
+                pauseRequestedDuringCatchup.remove(subscriptionId);
+                logFailure(subscriptionId, failure, "it ended");
+            }
+        }
     }
 
     // Runs the replay, and runs it again after each failure for as long as runAgainAfter says so
