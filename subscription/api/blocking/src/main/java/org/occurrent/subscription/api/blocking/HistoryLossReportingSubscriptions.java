@@ -18,6 +18,7 @@ package org.occurrent.subscription.api.blocking;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.HistoryLossHandling;
 
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
@@ -30,6 +31,10 @@ import java.util.function.BooleanSupplier;
  * restarted subscription delivers an event, the stored checkpoint is still the position that was lost, so a process that stops
  * in between restarts from that lost position again. It then restarts from wherever the history has reached by that
  * time, and skips every event written in between even though those events are still there to be read.
+ * <p>
+ * A listener can also take a subscription whose history was lost over, before the model restarts it or stops
+ * delivering to it, as {@link HistoryLossListener#handleHistoryLoss(String, Checkpoint)} describes. A catch-up
+ * subscription model does so when the lost position is the one its replay handed over, and replays again.
  * <p>
  * Not every subscription model implements this, so reach it with {@link #findIn(SubscriptionModelCapability)}.
  */
@@ -69,10 +74,35 @@ public interface HistoryLossReportingSubscriptions extends SubscriptionModelCapa
     }
 
     /**
-     * Told the position a subscription restarts from after its history was lost.
+     * Asked what the model does with a subscription whose history was lost, and told the position the subscription
+     * restarts from when the model restarts it.
      */
     @FunctionalInterface
     interface HistoryLossListener {
+        /**
+         * Asked what the model does with {@code subscriptionId} once its history is lost, before the model does
+         * anything else about the loss, whether or not the model restarts subscriptions after lost history. The model
+         * asks each listener in the order they were added, and the first that answers
+         * {@link HistoryLossHandling#takeOver(Runnable)} takes the subscription over. The model then pauses it and
+         * runs the task as that method describes, and neither restarts it nor tells any listener the position it would
+         * have restarted from. When every listener answers {@link HistoryLossHandling#leaveToSubscriptionModel()}, the
+         * model goes on as it would without them.
+         * <p>
+         * Called on the thread that reads the subscription, without any lock of the model, so answer from what you
+         * already hold in memory. A listener that throws fails that attempt, which the model tries again as its retry
+         * strategy says, and asks again.
+         * <p>
+         * Answers {@link HistoryLossHandling#leaveToSubscriptionModel()} unless overridden.
+         *
+         * @param subscriptionId The subscription that lost its history.
+         * @param lostFrom       The position the subscription opened at, or the position it had read to when it had
+         *                       read past that one.
+         * @return What the model does with the subscription.
+         */
+        default HistoryLossHandling handleHistoryLoss(String subscriptionId, Checkpoint lostFrom) {
+            return HistoryLossHandling.leaveToSubscriptionModel();
+        }
+
         /**
          * Called before the subscription restarts from {@code restartedFrom}. A listener that throws fails that restart
          * attempt, which the model tries again as its retry strategy says, as for any other failure to restart. Each

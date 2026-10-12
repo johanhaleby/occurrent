@@ -108,10 +108,12 @@ import java.util.stream.Stream;
  * the DCB dependency altogether can use {@link StreamCatchupSubscriptionModel} directly as the DCB-free variant.
  * </p>
  * <p>
- * The subscription model this wraps must not call any method of this model from inside its own
- * {@code cancelSubscription}, {@code pauseSubscription}, {@code resumeSubscription}, {@code start} or {@code stop}, and
- * its {@code isPaused} and {@code isRunning} must answer truthfully at every moment. What this model does over a
- * wrapped model that breaks either rule is unspecified.
+ * The subscription model this wraps must not call any method of this model from inside its own {@code subscribe},
+ * {@code subscribePaused}, {@code cancelSubscription}, {@code pauseSubscription}, {@code resumeSubscription},
+ * {@code start} or {@code stop}. Its {@code isPaused}, {@code isRunning} and {@code canResumeFrom}, and the
+ * {@code subscriptionIds} of its {@link org.occurrent.subscription.api.blocking.IntrospectableSubscriptions} when it
+ * has one, must answer truthfully at every moment. What this model does over a wrapped model that breaks either rule
+ * is unspecified.
  * </p>
  */
 @NullMarked

@@ -35,6 +35,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
+import org.occurrent.subscription.HistoryLossHandling;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -92,7 +93,8 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <p>
  * Every method that changes which subscriptions are known is called with the model's monitor held, the one
  * {@link #ChangeStreamSubscriptions the constructor} is given, except {@link #start(boolean)}, {@link #stop()} and
- * {@link #shutdown()}, which take it themselves. The threads that read the change streams never take it. Nothing
+ * {@link #shutdown()}, which take it themselves. The threads that read the change streams take it only to pause a
+ * subscription a history loss listener takes over, and wait for no action while they hold it. Nothing
  * waits for an action to return, or for the executor to shut down, while it holds the monitor or a lock of this class,
  * since a virtual thread that waits in a monitor keeps its carrier thread on JDK 21 to 23. So a pause returns the wait
  * for the running action to the model, which runs it once it has let go of its monitor. A pause, a cancel and a
@@ -385,6 +387,7 @@ public final class ChangeStreamSubscriptions {
         AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
         Consumer<CloudEvent> action = internalSubscription.action;
         MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = null;
+        OpenedAt openedAt = null;
         try {
             ChangeStreamIterable<Document> changeStreamDocuments = model.watch(internalSubscription.pipeline);
             if (batchSize != null) {
@@ -395,6 +398,7 @@ public final class ChangeStreamSubscriptions {
             }
             SubscriptionModelContext subscriptionModelContext = subscriptionModelContext();
             StartAt openingPosition = MongoCommons.resolveOpeningPosition(currentStartAt, subscriptionModelContext, this::currentOperationTime);
+            openedAt = new OpenedAt(openingPosition, currentStartAt.get());
             ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, openingPosition, subscriptionModelContext);
             cursor = changeStreamDocumentsAtPosition.cursor();
             if (!internalSubscription.opened(cursor)) {
@@ -440,6 +444,9 @@ public final class ChangeStreamSubscriptions {
                 log.error("Checkpoint write for subscription {} was refused: {}. A node with a newer lease has already written this subscription's checkpoint, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it. The refused write was for an event, or for a position reached while no event matched.", subscriptionId, e.getMessage(), e);
                 throw e;
             } else if (isChangeStreamHistoryLost(e)) {
+                if (takenOverAfterHistoryLoss(subscriptionId, internalSubscription, openedAt, e)) {
+                    return;
+                }
                 if (restartSubscriptionsOnChangeStreamHistoryLost) {
                     StartAt restartPosition = restartPositionAfterHistoryLost(subscriptionId, internalSubscription, e);
                     if (restartPosition != null) {
@@ -505,6 +512,79 @@ public final class ChangeStreamSubscriptions {
         Checkpoint quietPosition = new MongoResumeTokenCheckpoint(resumeToken);
         if (internalSubscription.movedWhileOpenTo(StartAt.checkpoint(quietPosition))) {
             quietPositionConsumers.forEach(consumer -> consumer.accept(quietPosition));
+        }
+    }
+
+    // Where this attempt opened the change stream, and what currentStartAt held right after, so a loss of history can
+    // tell whether the position it lost is the one it opened at
+    private record OpenedAt(StartAt openingPosition, StartAt tracked) {
+    }
+
+    // The position the subscription opened at while nothing has moved it since, and otherwise the fixed position it has
+    // moved to. Null when neither is a checkpoint, such as a change stream opened at the present without an operation
+    // time, which has no position to lose. The dynamic position is never evaluated again here, since its supplier can
+    // read and write the checkpoint storage
+    private static @Nullable Checkpoint lostFrom(AtomicReference<StartAt> currentStartAt, @Nullable OpenedAt openedAt) {
+        StartAt current = currentStartAt.get();
+        if (openedAt != null && current == openedAt.tracked()) {
+            return openedAt.openingPosition() instanceof StartAtCheckpoint position ? position.checkpoint : null;
+        }
+        return !current.isDynamic() && current instanceof StartAtCheckpoint position ? position.checkpoint : null;
+    }
+
+    // Asks the listeners in the order they were added, and the first that takes the subscription over gets it. A
+    // listener that throws fails this attempt, so the retry asks again. True when a listener took the subscription
+    // over, whether or not the run was still current to pause
+    private boolean takenOverAfterHistoryLoss(String subscriptionId, InternalSubscription internalSubscription, @Nullable OpenedAt openedAt, RuntimeException historyLost) {
+        Checkpoint lostFrom = lostFrom(internalSubscription.currentStartAt, openedAt);
+        if (lostFrom == null || historyLossListeners.isEmpty()) {
+            return false;
+        }
+        HistoryLossHandling.TakeOver takeOver = null;
+        try {
+            for (HistoryLossListener listener : historyLossListeners) {
+                if (listener.handleHistoryLoss(subscriptionId, lostFrom) instanceof HistoryLossHandling.TakeOver taken) {
+                    takeOver = taken;
+                    break;
+                }
+            }
+        } catch (RuntimeException e) {
+            e.addSuppressed(historyLost);
+            log.warn("There was not enough oplog to resume subscription {} from {}, and a listener failed when asked what to do about it, so it is not restarted yet. Its retry strategy decides whether to ask again.",
+                    subscriptionId, lostFrom.asString(), e);
+            throw e;
+        }
+        if (takeOver == null) {
+            return false;
+        }
+        if (!pausedAfterHistoryLoss(subscriptionId, internalSubscription)) {
+            log.debug("There was not enough oplog to resume subscription {} from {}, and a listener took it over, but it was paused, resumed or cancelled meanwhile, so the takeover is dropped.",
+                    subscriptionId, lostFrom.asString(), historyLost);
+            return true;
+        }
+        log.warn("There was not enough oplog to resume subscription {} from {}, so it is paused and a listener takes it over.", subscriptionId, lostFrom.asString(), historyLost);
+        try {
+            takeOver.afterPause().run();
+        } catch (RuntimeException e) {
+            log.error("The listener that took subscription {} over after its history was lost failed once it was paused, so it stays paused. Resuming it starts it again.", subscriptionId, e);
+        }
+        return true;
+    }
+
+    // Under the model's monitor, which every pause, resume and cancel holds, so the subscription is in one of the two
+    // maps at every moment and a cancel can't come between the two steps. Only while it is still on this run, as for
+    // forget(..). Closes the cursor as a pause does, and waits for no action while the monitor is held
+    private boolean pausedAfterHistoryLoss(String subscriptionId, InternalSubscription internalSubscription) {
+        synchronized (monitor) {
+            if (shutdown || !runningSubscriptions.remove(subscriptionId, internalSubscription)) {
+                return false;
+            }
+            try {
+                internalSubscription.close();
+            } finally {
+                pausedSubscriptions.put(subscriptionId, internalSubscription);
+            }
+            return true;
         }
     }
 
@@ -575,8 +655,7 @@ public final class ChangeStreamSubscriptions {
     }
 
     // Only while the subscription is still on this run. A pause and a resume in the meantime started a new run, which
-    // has not lost anything. Runs on the executor thread without the model's monitor, which the threads that read the
-    // change streams never take.
+    // has not lost anything. Runs on the executor thread without the model's monitor.
     private void forget(String subscriptionId, InternalSubscription internalSubscription) {
         runningSubscriptions.remove(subscriptionId, internalSubscription);
     }

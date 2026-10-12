@@ -2398,10 +2398,16 @@ and tells you to size the oplog. On the blocking stack `waitUntilStarted()` thro
 for the longest rebuild, and for the longest time a catch-up can be stopped in the middle of a replay, if you want to
 avoid both.
 
-The check once the replay is done and the change stream that live delivery opens are two calls. A live start the
-oplog drops between them is still handed over, and with `occurrent.subscription.mongodb.restart-on-change-stream-history-lost`
-true, the Spring Boot starter's default, the MongoDB model then goes live from the present and skips the events in
-between. A larger oplog makes that less likely too.
+The check once the replay is done and the change stream that live delivery opens are two calls, and the oplog can
+drop the live start between them. The MongoDB subscription models then ask the catch-up what to do before they
+restart the subscription from the present or end it, whatever `occurrent.subscription.mongodb.restart-on-change-stream-history-lost`
+says. The catch-up takes the subscription over, logs a warning, and replays again from the position its replay first
+started from, with a new live start. That replay counts toward the 4 above. When it is the takeover's replay that gives
+up, the blocking catch-up logs the failure at `ERROR` and replays again after a backoff of up to 2 seconds, and
+`waitUntilStarted()` keeps waiting. A reactor catch-up with a subscription id logs it at `ERROR` and keeps the
+subscription paused, and resuming it replays again. A wrapped model of your own handles a lost live start as it would
+without the catch-up, unless it implements `HistoryLossReportingSubscriptions` and `RepositionableSubscriptions` as the
+MongoDB models do.
 
 On the reactor stack the checkpoint stored during the replay stays stored after the catch-up reaches live delivery,
 until `ReactorDurableSubscriptionModel` stores the position of a live event or saves the subscription's quiet
@@ -2558,8 +2564,10 @@ not, key the work by the CloudEvent id before upgrading.
 A long time replay now depends on the oplog. In 0.33.0 it read its live start once it was done, so the oplog never had
 to reach back over the whole replay. Now a live start that MongoDB drops from its oplog, while the subscription is
 stopped or while the replay runs, makes the catch-up replay again from the time its replay first started from, with a
-new live start, and log a warning. When the live start is gone after 4 replays in a row, the catch-up fails with an
-`IllegalStateException` that tells you to size the oplog, as section 26 describes for a position catch-up. Size the
+new live start, and log a warning. So does a live start MongoDB drops after the check once the replay is done and
+before live delivery opens its change stream, as section 26 describes. When the live start is gone after 4 replays in
+a row, the catch-up fails with an `IllegalStateException` that tells you to size the oplog, as section 26 describes for
+a position catch-up. Size the
 oplog for the longest time replay, and for the longest time a catch-up can be stopped in the middle of one.
 
 A time stored by 0.33.0 has no live start, and none can be worked out afterwards. It resumes with a live start read at
@@ -2614,10 +2622,11 @@ The replay needs a wrapped model that can resume a subscription from a given pos
 over either of them works. Over any other wrapped model, a resume that would replay throws an `IllegalStateException`
 that names that model, where 0.33.0 had that model resume the subscription from its own position.
 
-The wrapped model must not call any method of the catch-up model from inside its own `cancelSubscription(..)`,
-`pauseSubscription(..)`, `resumeSubscription(..)`, `start(..)` or `stop()`, and its `isPaused(..)` and `isRunning(..)`
-must answer truthfully at every moment. What the catch-up model does over a wrapped model that breaks either rule is
-unspecified.
+The wrapped model must not call any method of the catch-up model from inside its own `subscribe(..)`,
+`subscribePaused(..)`, `cancelSubscription(..)`, `pauseSubscription(..)`, `resumeSubscription(..)`, `start(..)` or
+`stop()`. Its `isPaused(..)`, `isRunning(..)` and `canResumeFrom(..)`, and the `subscriptionIds()` of its
+`IntrospectableSubscriptions` when it has one, must answer truthfully at every moment. What the catch-up model does
+over a wrapped model that breaks either rule is unspecified.
 
 A replay that fails is logged at `ERROR` and runs again from the last position it stored, after a backoff that starts
 at 100 ms and doubles up to 2 seconds. That includes a failure at the handover, when reading or storing the position
@@ -2652,8 +2661,7 @@ call for the subscription that runs while it waits, so a `pauseSubscription(subs
 `start(true)` resumes such a subscription the way `resumeSubscription(subscriptionId)` does. While a cancel is under
 way, or a replay a cancel ended hasn't returned, it starts the wrapped model without resuming anything and then
 resumes each subscription the wrapped model holds paused, one at a time. A subscription whose cancel is under way
-while `start(true)` lists them is resumed once that cancel has returned, also when the wrapped model reports it as not
-paused during its own cancel. One whose cancelled replay doesn't return
+while `start(true)` lists them is resumed once that cancel has returned. One whose cancelled replay doesn't return
 holds up the ones after it for up to 10 seconds, and `start(true)` throws its `IllegalStateException` once the others
 are resumed. A subscription cancelled before its turn is skipped.
 
