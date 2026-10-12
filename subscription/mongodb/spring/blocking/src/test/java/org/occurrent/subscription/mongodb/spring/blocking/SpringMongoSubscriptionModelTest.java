@@ -981,6 +981,52 @@ public class SpringMongoSubscriptionModelTest {
             }
         }
 
+        @Test
+        void resuming_at_the_present_while_the_present_at_subscribe_is_being_recorded_does_not_deliver_what_was_written_before_the_resume() throws InterruptedException {
+            assertWhatWasWrittenBeforeAResumeAtThePresentIsNotDelivered(subscribedAt -> StartAt.now());
+        }
+
+        @Test
+        void resuming_at_the_very_start_the_subscription_was_made_with_while_the_present_at_subscribe_is_being_recorded_does_not_deliver_what_was_written_before_the_resume() throws InterruptedException {
+            assertWhatWasWrittenBeforeAResumeAtThePresentIsNotDelivered(subscribedAt -> subscribedAt);
+        }
+
+        private void assertWhatWasWrittenBeforeAResumeAtThePresentIsNotDelivered(Function<StartAt, StartAt> repositionTo) throws InterruptedException {
+            // Given
+            HoldTheFirstPing firstPing = new HoldTheFirstPing();
+            ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+            SpringMongoSubscriptionModel model = null;
+            try (MongoClient listeningClient = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).addCommandListener(firstPing).build())) {
+                MongoTemplate listeningTemplate = new MongoTemplate(listeningClient, requireNonNull(connectionString.getDatabase()));
+                model = new SpringMongoSubscriptionModel(listeningTemplate, eventCollectionName, timeRepresentation);
+                LocalDateTime now = LocalDateTime.now();
+                CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+                String subscriptionId = UUID.randomUUID().toString();
+                StartAt subscribedAt = StartAt.now();
+                model.subscribePaused(subscriptionId, null, subscribedAt, state::add);
+                assertThat(firstPing.held.await(5, SECONDS)).as("the reply to the ping that records the present is held").isTrue();
+
+                // When
+                NameDefined backlog = new NameDefined(UUID.randomUUID().toString(), now, "name", "backlog");
+                mongoEventStore.write("1", 0, serialize(backlog));
+                Subscription resumed = model.resumeSubscription(subscriptionId, repositionTo.apply(subscribedAt));
+                firstPing.release();
+                resumed.waitUntilStarted(Duration.ofSeconds(10));
+                NameWasChanged after = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "after");
+                mongoEventStore.write("1", 1, serialize(after));
+                await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                        assertThat(state).extracting(CloudEvent::getId).contains(after.eventId()));
+
+                // Then what was written before the resume at the present is not delivered, though the present at subscribe was read before it was written
+                assertThat(state).extracting(CloudEvent::getId).as("the events delivered after a resume at the present").doesNotContain(backlog.eventId());
+            } finally {
+                firstPing.release();
+                if (model != null) {
+                    model.shutdown();
+                }
+            }
+        }
+
         private Checkpoint globalPositionCheckpoint(Checkpoint liveStart) {
             return GlobalCheckpoint.parse(new StringBasedCheckpoint(GlobalCheckpoint.of(5, liveStart, 0, 7).asString()));
         }
