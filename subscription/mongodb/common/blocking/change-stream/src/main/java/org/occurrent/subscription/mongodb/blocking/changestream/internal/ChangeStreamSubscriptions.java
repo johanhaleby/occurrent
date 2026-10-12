@@ -71,6 +71,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -237,8 +238,9 @@ public final class ChangeStreamSubscriptions {
             throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");
         }
 
-        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
-        PresentAtSubscribe presentAtSubscribe = new PresentAtSubscribe(cancelled -> recordThePresent(subscriptionId, currentStartAt, cancelled));
+        StartAt subscribedAt = ownInstanceOf(startAt);
+        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(subscribedAt);
+        PresentAtSubscribe presentAtSubscribe = new PresentAtSubscribe(subscribedAt, (present, cancelled) -> recordThePresent(subscriptionId, currentStartAt, present, cancelled));
         InternalSubscription internalSubscription = new InternalSubscription(log, currentStartAt, action, changeStreamPipeline, presentAtSubscribe);
         // Known from here on rather than once its change stream opens, so a pause or a cancel reaches it while MongoDB
         // cannot be reached, and a wrapper asking which subscriptions the model runs gets the right answer. On a
@@ -263,6 +265,16 @@ public final class ChangeStreamSubscriptions {
         return model.subscription(subscriptionId, internalSubscription.firstStartedLatch);
     }
 
+    // A position of the subscription's own, so a resume given the very instance subscribe was given isn't taken for the
+    // position the subscription was made with
+    private static StartAt ownInstanceOf(StartAt startAt) {
+        return switch (startAt) {
+            case StartAt.Now ignored -> StartAt.now();
+            case StartAt.Default ignored -> StartAt.subscriptionModelDefault();
+            default -> startAt;
+        };
+    }
+
     private SubscriptionModelContext subscriptionModelContext() {
         return new SubscriptionModelContext(modelClass);
     }
@@ -279,9 +291,9 @@ public final class ChangeStreamSubscriptions {
     // present is left as it is. Retried like opening a change stream, and a pause doesn't end it, so an outage that
     // ends while the subscription is paused loses nothing. A cancel or a shutdown stops it before the next attempt
     // rather than interrupting it, since the thread it runs on belongs to the executor and runs other subscriptions.
-    private void recordThePresent(String subscriptionId, AtomicReference<StartAt> currentStartAt, BooleanSupplier cancelled) {
+    private void recordThePresent(String subscriptionId, AtomicReference<StartAt> currentStartAt, PresentAtSubscribe present, BooleanSupplier cancelled) {
         try {
-            executeWithRetry(() -> pinThePresent(currentStartAt), RETRYABLE.and(__ -> !cancelled.getAsBoolean() && !Thread.currentThread().isInterrupted()), retryStrategy).run();
+            executeWithRetry(() -> pinThePresent(currentStartAt, present), RETRYABLE.and(__ -> !cancelled.getAsBoolean() && !Thread.currentThread().isInterrupted()), retryStrategy).run();
         } catch (RuntimeException e) {
             if (cancelled.getAsBoolean() || shutdown || e instanceof MongoInterruptedException || Thread.currentThread().isInterrupted()) {
                 log.debug("Stopped asking MongoDB for its operation time for subscription {} because it was cancelled or the model shut down.", subscriptionId, e);
@@ -298,7 +310,7 @@ public final class ChangeStreamSubscriptions {
     // Records the present for a dynamic position without evaluating it, so it's evaluated once, when the change stream
     // opens, and answers the recorded present if it resolves to the present then. A supplier that writes, such as
     // the one saving a durable subscription's first checkpoint, then writes once
-    private void pinThePresent(AtomicReference<StartAt> currentStartAt) {
+    private void pinThePresent(AtomicReference<StartAt> currentStartAt, PresentAtSubscribe present) {
         if (!needsThePresent(currentStartAt.get())) {
             return;
         }
@@ -306,10 +318,12 @@ public final class ChangeStreamSubscriptions {
         if (operationTime == null) {
             return;
         }
-        // Recorded on whatever position is there once the answer arrives, such as one a resume put there meanwhile
-        // that falls back to the position it replaced, rather than asked for again when the position has changed. A
-        // later answer would skip what was written in between, while this earlier one can only deliver an event again.
-        currentStartAt.updateAndGet(tracked -> needsThePresent(tracked) ? MongoCommons.pinnedTo(tracked, operationTime) : tracked);
+        // Recorded on the position the subscription was made with, and kept for a position a resume put there meanwhile
+        // that falls back to it, rather than asked for again. A later answer would skip what was written in between,
+        // while this earlier one can only deliver an event again. A position the resume asked for itself is left as it
+        // is, so one at the present opens at the present its change stream reads when it opens.
+        present.answered(operationTime);
+        currentStartAt.updateAndGet(present::pinnedIfSubscribedAt);
     }
 
     private static boolean needsThePresent(StartAt position) {
@@ -769,7 +783,7 @@ public final class ChangeStreamSubscriptions {
         if (internalSubscription == null) {
             throw new SubscriptionNotRunningException(subscriptionId);
         }
-        UnaryOperator<StartAt> reposition = repositioning(subscriptionId, repositionTo);
+        UnaryOperator<StartAt> reposition = repositioning(subscriptionId, repositionTo, internalSubscription.presentAtSubscribe);
         running = true;
 
         // Shares the same currentStartAt reference so a resume continues from the last change-stream document
@@ -796,8 +810,9 @@ public final class ChangeStreamSubscriptions {
 
     // Replaces the position the subscription has read to with repositionTo, or keeps it when repositionTo is a
     // checkpoint the change stream can't open at. A dynamic repositionTo is resolved when the change stream opens, as
-    // any dynamic position is, and the position it replaced stands in for it whenever it resolves to such a checkpoint.
-    private @Nullable UnaryOperator<StartAt> repositioning(String subscriptionId, @Nullable StartAt repositionTo) {
+    // any dynamic position is, and the position it replaced stands in for it whenever it resolves to such a checkpoint,
+    // with the present asked for at subscribe when that is the position the subscription was made with.
+    private @Nullable UnaryOperator<StartAt> repositioning(String subscriptionId, @Nullable StartAt repositionTo, PresentAtSubscribe present) {
         if (repositionTo == null) {
             return null;
         }
@@ -812,7 +827,7 @@ public final class ChangeStreamSubscriptions {
             StartAt resolved = repositionTo.get(ctx);
             if (notAChangeStreamPosition(resolved) instanceof Checkpoint unreadable) {
                 logResumingFromTheTrackedPosition(subscriptionId, unreadable);
-                return tracked;
+                return present.pinnedIfSubscribedAt(tracked);
             }
             return resolved;
         });
@@ -907,19 +922,33 @@ public final class ChangeStreamSubscriptions {
     // asked on the executor right after subscribe(..) on a stopped model, or by the first run that gets to it. A pause
     // doesn't stop it.
     private static final class PresentAtSubscribe {
-        private final Consumer<BooleanSupplier> question;
+        private final StartAt subscribedAt;
+        private final BiConsumer<PresentAtSubscribe, BooleanSupplier> question;
+        private volatile @Nullable BsonTimestamp answer;
         private volatile FutureTask<Void> asking;
         private volatile boolean cancelled;
         // Set by the first run to get here, whether it waits for the answer or not
         private volatile boolean reached;
 
-        PresentAtSubscribe(Consumer<BooleanSupplier> question) {
+        PresentAtSubscribe(StartAt subscribedAt, BiConsumer<PresentAtSubscribe, BooleanSupplier> question) {
+            this.subscribedAt = subscribedAt;
             this.question = question;
             this.asking = newQuestion();
         }
 
         void ask() {
             asking.run();
+        }
+
+        void answered(BsonTimestamp operationTime) {
+            answer = operationTime;
+        }
+
+        // position set to open at the answer when it is the position the subscription was made with and opens at the
+        // present, and position as it is otherwise
+        StartAt pinnedIfSubscribedAt(StartAt position) {
+            BsonTimestamp operationTime = answer;
+            return position == subscribedAt && operationTime != null && needsThePresent(position) ? MongoCommons.pinnedTo(position, operationTime) : position;
         }
 
         // Without an interrupt, since the question runs on an executor thread that a later task reuses, and some
@@ -986,7 +1015,7 @@ public final class ChangeStreamSubscriptions {
         }
 
         private FutureTask<Void> newQuestion() {
-            return new FutureTask<>(() -> question.accept(() -> cancelled), null);
+            return new FutureTask<>(() -> question.accept(this, () -> cancelled), null);
         }
     }
 
