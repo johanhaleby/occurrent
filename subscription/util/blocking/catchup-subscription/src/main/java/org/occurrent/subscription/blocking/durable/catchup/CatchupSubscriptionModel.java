@@ -319,9 +319,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // resuming automatically, as the delegate itself resumes only then. When the delegate's start throws, each child
     // that was stopped stops again, unless the delegate runs, or another start or stop of that child, or a resume of
     // the delegate, came in the meantime. The delegate is asked whether it runs once, before any child takes its lock.
-    // When a subscription the delegate holds paused would replay on resumeSubscription(..), the delegate starts without
-    // resuming anything and each subscription it holds paused is resumed as resumeSubscription(..) resumes it, as a
-    // child's own start does. Reading the stored positions to decide that is part of starting, so a read that throws
+    // When a subscription the delegate holds paused would replay on resumeSubscription(..), or a replay that a cancel
+    // that threw ended for one can still be in its action, the delegate starts without resuming anything and each
+    // subscription it holds paused is resumed as resumeSubscription(..) resumes it, as a child's own start does. Reading the stored positions to decide that is part of starting, so a read that throws
     // stops each child again as a delegate that throws does.
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
@@ -408,6 +408,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * resume from its own position instead, past events nobody delivered to the subscription. The replay can deliver
      * events this node already delivered.
      * <p>
+     * After a {@link #cancelSubscription(String)} that threw, the replay that cancel ended can still be in the
+     * subscription's action, also when a {@link #stop()} came before or after the cancel. A replay this starts waits on
+     * its own thread until that replay is out of the action. When this doesn't replay, it waits up to ten seconds before
+     * the live delegate resumes the subscription, and throws {@link IllegalStateException} without resuming it when the
+     * action hasn't returned by then, or at once when called from inside that action.
+     * <p>
      * A resume while a replay for the subscription runs returns the handle of that replay. A pause asked while the replay
      * still reads history is dropped, so the replay hands over and the subscription runs.
      * <p>
@@ -437,6 +443,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                     return replaying;
                 }
             }
+            anyCatchupModel().awaitTheCancelledReplay(subscriptionId, started ? AbstractCatchupSubscriptionModel.STARTED_BUT_NOT_RESUMED : AbstractCatchupSubscriptionModel.NOTHING_CHANGED);
             Subscription resumed = getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
             presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
             return resumed;
@@ -453,10 +460,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * wrapped model throws, the replay is as it was before this call, and this throws what the wrapped model threw.
      * When the replay is in the subscription's action, this
      * holds the replay and waits up to ten seconds for the action to return before the wrapped model resumes the
-     * subscription, so the replay's action doesn't run alongside the action of the resumed subscription. When the
-     * action doesn't return in time, this logs at {@code ERROR}, runs the replay again as it was and throws
-     * {@link IllegalStateException}. Called from inside that action, on the replay's own thread, it throws
-     * {@link IllegalStateException} at once and changes nothing. An action that hands the call to another thread and
+     * subscription, so the replay's action doesn't run alongside the action of the resumed subscription. After a
+     * {@link #cancelSubscription(String)} that threw, it waits the same way for the replay that cancel ended, which
+     * nothing runs again, also when a {@link #stop()} came before or after the cancel. When the action doesn't return
+     * in time, this logs at {@code ERROR}, runs a replay it held again as it was and throws
+     * {@link IllegalStateException}, with what running it again threw added as suppressed. Called from inside that
+     * action, on the replay's own thread, it throws {@link IllegalStateException} at once and changes nothing. An action that hands the call to another thread and
      * waits for it fails once the ten seconds have passed.
      * <p>
      * Like every other call that changes the subscription, it runs alone. A pause, resume, cancel or subscribe for the

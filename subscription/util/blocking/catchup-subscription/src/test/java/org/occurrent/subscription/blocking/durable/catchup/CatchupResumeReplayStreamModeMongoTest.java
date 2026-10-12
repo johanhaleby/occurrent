@@ -98,6 +98,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
@@ -1755,6 +1756,160 @@ class CatchupResumeReplayStreamModeMongoTest {
 
         // Then the new replay doesn't run the action while the cancelled replay is in it
         assertTheNewReplayWaitsForTheCancelledReplayInTheAction(releaseH2);
+    }
+
+    @Test
+    void a_resume_at_a_position_after_a_failed_cancel_and_a_stop_waits_for_the_cancelled_resume_replay_to_leave_the_action() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, and the live delegate fails the cancel while holding the subscription paused
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)), CancelFailingModel::new);
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+
+        // When the cancel fails, the model is stopped and started, and the subscription is resumed at the present from another thread
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        catchupB.stop();
+        catchupB.start(false);
+        CompletableFuture<Subscription> repositioning = resumeAtThePresentFromAnotherThread();
+        append("duringTheHold", 4);
+
+        // Then the resume does not return, and the action is not called again, while the cancelled replay is in it
+        assertTheCallWaitsForTheCancelledReplayInTheAction(repositioning);
+        // And once the cancelled replay has left the action, the resume returns and the subscription runs
+        assertTheSubscriptionRunsOnceTheCancelledReplayHasLeftTheAction(repositioning, releaseH2);
+    }
+
+    @Test
+    void a_resume_at_a_position_after_a_stop_and_a_failed_cancel_waits_for_the_cancelled_resume_replay_to_leave_the_action() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, and the live delegate fails the cancel while holding the subscription paused
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)), CancelFailingModel::new);
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+
+        // When the model is stopped, the cancel fails, the model is started, and the subscription is resumed at the present from another thread
+        catchupB.stop();
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        catchupB.start(false);
+        CompletableFuture<Subscription> repositioning = resumeAtThePresentFromAnotherThread();
+        append("duringTheHold", 4);
+
+        // Then the resume does not return, and the action is not called again, while the cancelled replay is in it
+        assertTheCallWaitsForTheCancelledReplayInTheAction(repositioning);
+        // And once the cancelled replay has left the action, the resume returns and the subscription runs
+        assertTheSubscriptionRunsOnceTheCancelledReplayHasLeftTheAction(repositioning, releaseH2);
+    }
+
+    @Test
+    void a_resume_that_does_not_replay_because_the_stored_position_is_gone_waits_for_the_cancelled_resume_replay_to_leave_the_action() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, and the live delegate fails the cancel while holding the subscription paused
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)), CancelFailingModel::new);
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+
+        // When the model is stopped, the cancel fails, and the position stored for the subscription is gone, so the resume has nothing to replay from
+        catchupB.stop();
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        storage.delete(subscriptionId);
+        CompletableFuture<Subscription> resuming = callFromAnotherThreadUntilItWaitsIn(() -> catchupB.resumeSubscription(subscriptionId), "awaitTheCancelledReplay");
+        append("duringTheHold", 4);
+
+        // Then the resume does not return, and the live delegate does not call the action, while the cancelled replay is in it
+        assertTheCallWaitsForTheCancelledReplayInTheAction(resuming);
+        // And once the cancelled replay has left the action, the resume returns and the subscription runs
+        assertTheSubscriptionRunsOnceTheCancelledReplayHasLeftTheAction(resuming, releaseH2);
+    }
+
+    @Test
+    void a_start_that_resumes_does_not_let_the_live_delegate_resume_a_subscription_whose_cancelled_resume_replay_is_still_in_the_action() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, and the live delegate fails the cancel while holding the subscription paused
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)), CancelFailingModel::new);
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+
+        // When the cancel fails, the model is stopped, the position stored for the subscription is gone, and the model is started with the subscriptions resumed
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        catchupB.stop();
+        storage.delete(subscriptionId);
+        CompletableFuture<Void> starting = callFromAnotherThreadUntilItWaitsIn(() -> {
+            catchupB.start(true);
+            return null;
+        }, "awaitTheCancelledReplay");
+        append("duringTheHold", 4);
+
+        // Then the start does not return, and the live delegate does not call the action, while the cancelled replay is in it
+        assertTheCallWaitsForTheCancelledReplayInTheAction(starting);
+        // And once the cancelled replay has left the action, the start returns and the subscription runs
+        assertTheSubscriptionRunsOnceTheCancelledReplayHasLeftTheAction(starting, releaseH2);
+    }
+
+    @Test
+    void a_resume_at_a_position_from_inside_the_action_of_a_cancelled_resume_replay_that_a_stop_took_away_throws_at_once_and_changes_nothing() throws Exception {
+        // Given B's resume replay is in the action on h2, which waits for a signal and then resumes the subscription at the present
+        AtomicReference<Throwable> thrownInsideTheAction = new AtomicReference<>();
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch resumeFromInside = new CountDownLatch(1);
+        CountDownLatch resumedFromInside = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(event -> {
+            String name = nameOf(event);
+            receivedByB.add(name);
+            if (name.equals("h2") && inH2.getCount() > 0) {
+                inH2.countDown();
+                awaitUninterrupted(resumeFromInside);
+                Checkpoint present = requireNonNull(durableB.globalCheckpoint());
+                thrownInsideTheAction.set(catchThrowable(() -> catchupB.resumeSubscription(subscriptionId, StartAt.checkpoint(present))));
+                resumedFromInside.countDown();
+            }
+        }, CancelFailingModel::new);
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        catchupB.stop();
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        catchupB.start(false);
+
+        // When the action resumes the subscription at the present
+        resumeFromInside.countDown();
+        assertThat(resumedFromInside.await(10, SECONDS)).as("the call from inside the action returned").isTrue();
+
+        // Then the call threw IllegalStateException at once, and the subscription is as it was
+        assertThat(thrownInsideTheAction.get()).as("what the resume from inside the action threw").isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(subscriptionId).hasMessageContaining("from inside its own action");
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is paused").isTrue();
+    }
+
+    private <T> CompletableFuture<T> callFromAnotherThreadUntilItWaitsIn(Supplier<T> call, String method) {
+        AtomicReference<Thread> callingThread = new AtomicReference<>();
+        CompletableFuture<T> calling = CompletableFuture.supplyAsync(() -> {
+            callingThread.set(Thread.currentThread());
+            return call.get();
+        });
+        awaitParkedIn(calling, callingThread, method);
+        return calling;
+    }
+
+    private void assertTheCallWaitsForTheCancelledReplayInTheAction(CompletableFuture<?> call) {
+        await("the call waits and the action is not called again while the cancelled replay is in it").during(1, SECONDS).atMost(5, SECONDS)
+                .untilAsserted(() -> assertSoftly(softly -> {
+                    softly.assertThat(call).as("the call that waits for the cancelled replay").isNotDone();
+                    softly.assertThat(maxInAction.get()).as("the most calls of the action in flight at once while the cancelled replay was in it").isEqualTo(1);
+                }));
+    }
+
+    private void assertTheSubscriptionRunsOnceTheCancelledReplayHasLeftTheAction(CompletableFuture<?> call, CountDownLatch releaseCancelledReplay) throws Exception {
+        releaseCancelledReplay.countDown();
+        assertThat(failureOf(call)).as("what the call that waited threw").isNull();
+        append("afterResume", 5);
+        await("B delivers what is written after the resume").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("afterResume"));
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
     }
 
     private void assertTheNewReplayWaitsForTheCancelledReplayInTheAction(CountDownLatch releaseCancelledReplay) {

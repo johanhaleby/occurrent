@@ -2628,9 +2628,15 @@ is running and catching up, and isn't paused. A call that comes in the meantime 
 When the wrapped model throws from `cancelSubscription(subscriptionId)`, the cancel throws the same exception and
 keeps the stored position. The replay it ended stays ended. While the wrapped model still holds the
 subscription paused, a later `resumeSubscription(subscriptionId)` replays from a position a catch-up stored, as any
-resume does. When the cancel ended a replay that was still in the subscription's action, the new replay waits until
-that one has returned, also when a `stop()` came before or after the cancel, so the action doesn't run on two threads
-at once.
+resume does.
+
+When the cancel ended a replay that was still in the subscription's action, no later resume lets the action run until
+that replay has returned, also when a `stop()` came before or after the cancel, so the action doesn't run on two
+threads at once. A replay that `resumeSubscription(subscriptionId)` starts waits on its own thread. A
+`resumeSubscription(subscriptionId)` that has no catch-up position to replay from, and
+`resumeSubscription(subscriptionId, startAt)`, wait up to 10 seconds before the wrapped model resumes the subscription.
+When the action hasn't returned by then, they throw `IllegalStateException` without resuming it. `start(true)` resumes
+such a subscription the way `resumeSubscription(subscriptionId)` does.
 
 When the `CatchupListener` registered for the subscription throws as the replay starts or runs again, an `Error`
 included, the replay is held and that is logged at `ERROR`. The subscription then reads as paused, and
@@ -2667,7 +2673,8 @@ and the call doesn't check whether this node holds the subscription's lease.
 
 When the action doesn't return within the 10 seconds, the call logs at `ERROR` and throws `IllegalStateException`.
 The replay then runs again, from the last position it stored, once the action has returned, and the subscription
-isn't resumed at `startAt`.
+isn't resumed at `startAt`. When running the replay again throws, the `IllegalStateException` says the replay couldn't
+be run again and has that failure as suppressed.
 
 Called from inside that action, on the replay's thread, `resumeSubscription(subscriptionId, startAt)` throws
 `IllegalStateException` at once, and the replay goes on. An action that passes the call to another thread and waits for
