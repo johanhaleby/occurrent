@@ -2625,6 +2625,11 @@ is running and catching up, and isn't paused. A call that comes in the meantime 
 | `cancelSubscription(subscriptionId)` or `shutdown()` | Ends |
 | `resumeSubscription(subscriptionId, startAt)` on the catch-up model | Ends once the subscription resumes at `startAt`, unless an earlier run of the replay is still in the subscription's action or the wrapped model fails to resume it, as described below |
 
+When the wrapped model throws from `cancelSubscription(subscriptionId)`, the cancel throws the same exception and
+keeps the stored position. The replay it ended stays ended. While the wrapped model still holds the
+subscription paused, a later `resumeSubscription(subscriptionId)` replays from a position a catch-up stored, as any
+resume does.
+
 When the `CatchupListener` registered for the subscription throws as the replay starts or runs again, an `Error`
 included, the replay is held and that is logged at `ERROR`. The subscription then reads as paused, and
 `resumeSubscription(subscriptionId)` or `start(true)` runs the replay again.
@@ -2699,7 +2704,9 @@ pause then pauses it there, and when the handover failed, the pause holds the re
 
 A `pauseSubscription(subscriptionId)` on `CatchupSubscriptionModel` during the replay a subscribe started now goes to
 the catch-up model that runs the replay, as it already did on `StreamCatchupSubscriptionModel`. The replay reads on,
-and once it has delivered the history, the wrapped model gets the subscription and pauses it. In 0.33.0 the pause went
+and once it has delivered the history, the wrapped model gets the subscription and pauses it. A pause that comes while
+the replay hands over waits until the wrapped model has the subscription. When the wrapped model throws instead of
+taking it, the replay ends, and the pause goes to the wrapped model, which doesn't have the subscription. In 0.33.0 the pause went
 to the wrapped model, which doesn't have the subscription until the replay hands over. So a competing consumer that
 lost its lease during the first catch-up of a subscription couldn't pause it in the model it wraps.
 
