@@ -17,6 +17,8 @@
 package org.occurrent.subscription.mongodb.spring.blocking;
 
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoSocketReadException;
+import com.mongodb.ServerAddress;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -25,6 +27,7 @@ import org.bson.Document;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
@@ -36,9 +39,19 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.io.IOException;
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.IntConsumer;
+
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 
 @Testcontainers
 @Timeout(240)
@@ -92,8 +105,75 @@ class SpringMongoSubscriptionModelCanResumeFromTest {
 
     @Test
     void throws_when_the_server_refuses_the_checkpoint_for_another_reason() {
+        useModelWhoseProbe(RetryStrategy.none(), new AtomicInteger(), attempt -> { });
         Checkpoint malformed = new MongoResumeTokenCheckpoint(new org.bson.BsonDocument("_data", new org.bson.BsonString("00")));
 
         assertThatThrownBy(() -> subscriptionModel.canResumeFrom(malformed)).hasRootCauseInstanceOf(MongoCommandException.class);
+    }
+
+    @Test
+    void retries_a_transient_failure_of_the_probe_and_answers_true_for_a_checkpoint_the_oplog_still_reaches() {
+        AtomicInteger probes = new AtomicInteger();
+        useModelWhoseProbe(RetryStrategy.fixed(Duration.ofMillis(10)), probes, failOnTheFirstAttempt(transientFailure()));
+        Checkpoint checkpoint = requireNonNull(subscriptionModel.globalCheckpoint());
+
+        AtomicReference<Boolean> answer = new AtomicReference<>();
+        Throwable thrown = catchThrowable(() -> answer.set(subscriptionModel.canResumeFrom(checkpoint)));
+
+        assertThat(thrown).isNull();
+        assertThat(answer).hasValue(true);
+        assertThat(probes).hasValue(2);
+    }
+
+    @Test
+    void throws_a_transient_failure_of_the_probe_when_the_retry_strategy_does_not_retry() {
+        AtomicInteger probes = new AtomicInteger();
+        MongoSocketReadException failure = transientFailure();
+        useModelWhoseProbe(RetryStrategy.none(), probes, failOnTheFirstAttempt(failure));
+        Checkpoint checkpoint = requireNonNull(subscriptionModel.globalCheckpoint());
+
+        assertThatThrownBy(() -> subscriptionModel.canResumeFrom(checkpoint)).isSameAs(failure);
+        assertThat(probes).hasValue(1);
+    }
+
+    @Test
+    void answers_false_without_retrying_the_probe_when_the_oplog_no_longer_reaches_the_checkpoint() {
+        AtomicInteger probes = new AtomicInteger();
+        useModelWhoseProbe(RetryStrategy.fixed(Duration.ofMillis(10)).maxAttempts(5), probes, attempt -> { });
+        MongoOperationTimeCheckpoint checkpoint = (MongoOperationTimeCheckpoint) requireNonNull(subscriptionModel.globalCheckpoint());
+        ChangeStreamHistory.dropHistoryFrom(mongoDBContainer, DATABASE, checkpoint.operationTime);
+
+        AtomicReference<Boolean> answer = new AtomicReference<>();
+        Throwable thrown = catchThrowable(() -> answer.set(subscriptionModel.canResumeFrom(checkpoint)));
+
+        assertThat(thrown).isNull();
+        assertThat(answer).hasValue(false);
+        assertThat(probes).hasValue(1);
+    }
+
+    private static MongoSocketReadException transientFailure() {
+        return new MongoSocketReadException("Prematurely reached end of stream", new ServerAddress(), new IOException("connection reset"));
+    }
+
+    private static IntConsumer failOnTheFirstAttempt(RuntimeException failure) {
+        return attempt -> {
+            if (attempt == 1) {
+                throw failure;
+            }
+        };
+    }
+
+    // Swaps in a model whose probes are numbered from 1 and reported to beforeProbe before they run
+    private void useModelWhoseProbe(RetryStrategy retryStrategy, AtomicInteger probes, IntConsumer beforeProbe) {
+        subscriptionModel.shutdown();
+        MongoTemplate observed = spy(new MongoTemplate(mongoClient, DATABASE));
+        doAnswer(invocation -> {
+            Document command = invocation.getArgument(0, Document.class);
+            if (command.containsKey("aggregate")) {
+                beforeProbe.accept(probes.incrementAndGet());
+            }
+            return invocation.callRealMethod();
+        }).when(observed).executeCommand(any(Document.class));
+        subscriptionModel = new SpringMongoSubscriptionModel(observed, "events", TimeRepresentation.RFC_3339_STRING, retryStrategy);
     }
 }

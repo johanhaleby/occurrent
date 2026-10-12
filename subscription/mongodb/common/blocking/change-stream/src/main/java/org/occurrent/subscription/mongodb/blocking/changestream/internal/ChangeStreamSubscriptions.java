@@ -280,6 +280,16 @@ public final class ChangeStreamSubscriptions {
     }
 
     /**
+     * Answers whether MongoDB still has the history back to {@code checkpoint}. A failure other than lost history is
+     * retried with the model's retry strategy and thrown when the strategy gives up. A strategy that doesn't retry
+     * throws it at once. Lost history answers {@code false} and is never retried.
+     */
+    public boolean canResumeFrom(String collectionName, Checkpoint checkpoint) {
+        Supplier<Boolean> probe = () -> MongoCommons.canResumeFrom(collectionName, checkpoint, model::runCommand);
+        return executeWithRetry(probe, RETRYABLE.and(__ -> !Thread.currentThread().isInterrupted()), retryStrategy).get();
+    }
+
+    /**
      * Throws when the model can't open a change stream at {@code startAt}.
      */
     public void checkStartPosition(StartAt startAt) {

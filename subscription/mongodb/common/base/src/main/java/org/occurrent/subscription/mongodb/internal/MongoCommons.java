@@ -226,7 +226,7 @@ public class MongoCommons {
     /**
      * A blocking subscription model's {@code canResumeFrom(..)}. Runs {@link #changeStreamHistoryProbe(String, Checkpoint)}
      * through {@code runCommand} and answers {@code false} only when MongoDB refuses it because the oplog no longer
-     * reaches back to {@code checkpoint}. Any other failure is thrown.
+     * reaches back to {@code checkpoint}. Any other failure is thrown, and the caller decides whether to retry it.
      */
     public static boolean canResumeFrom(String collectionName, Checkpoint checkpoint, Function<Document, Document> runCommand) {
         Optional<Document> probe = changeStreamHistoryProbe(collectionName, checkpoint);
