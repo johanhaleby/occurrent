@@ -2625,9 +2625,9 @@ is running and catching up, and isn't paused. A call that comes in the meantime 
 | `cancelSubscription(subscriptionId)` or `shutdown()` | Ends |
 | `resumeSubscription(subscriptionId, startAt)` on the catch-up model | Ends once the subscription resumes at `startAt`, unless an earlier run of the replay is still in the subscription's action or the wrapped model fails to resume it, as described below |
 
-When the `CatchupListener` registered for the subscription throws as the replay starts or runs again, the replay is
-held as a pause holds it, and that is logged at `ERROR`. `resumeSubscription(subscriptionId)` or `start(true)` runs it
-again.
+When the `CatchupListener` registered for the subscription throws as the replay starts or runs again, an `Error`
+included, the replay is held and that is logged at `ERROR`. The subscription then reads as paused, and
+`resumeSubscription(subscriptionId)` or `start(true)` runs the replay again.
 
 `StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel` implement `RepositionableSubscriptions`, as
 `CatchupSubscriptionModel` already did. `RepositionableSubscriptions.findIn(..)` finds any of the three when the model it
@@ -2701,9 +2701,11 @@ A `pauseSubscription(subscriptionId)` on `CatchupSubscriptionModel` during the r
 the catch-up model that runs the replay, as it already did on `StreamCatchupSubscriptionModel`. The replay reads on,
 and once it has delivered the history, the wrapped model gets the subscription and pauses it. In 0.33.0 the pause went
 to the wrapped model, which doesn't have the subscription until the replay hands over. So a competing consumer that
-lost its lease during the first catch-up of a subscription couldn't pause it in the model it wraps. Pausing a replay
-that is held, such as one a stop held, throws `SubscriptionNotRunningException`, since the subscription reads as
-paused.
+lost its lease during the first catch-up of a subscription couldn't pause it in the model it wraps.
+
+On `CatchupSubscriptionModel`, and on `StreamCatchupSubscriptionModel` or `DcbCatchupSubscriptionModel` used on its
+own, pausing a replay that is held, such as one a stop held, throws `SubscriptionNotRunningException`, since the
+subscription reads as paused.
 
 A `resumeSubscription(subscriptionId)` on the catch-up model while the replay reads history drops a pause asked
 before it, so the replay hands over and the subscription runs. On `StreamCatchupSubscriptionModel` that holds for a
