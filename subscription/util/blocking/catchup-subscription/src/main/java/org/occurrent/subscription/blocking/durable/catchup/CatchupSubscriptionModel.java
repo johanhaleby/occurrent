@@ -321,9 +321,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // the delegate, came in the meantime. The delegate is asked whether it runs once, before any child takes its lock.
     // When a subscription the delegate holds paused would replay on resumeSubscription(..), a replay that a cancel ended
     // for one hasn't returned yet, or a cancel is under way, the delegate starts without resuming anything and each
-    // subscription it holds paused is resumed as resumeSubscription(..) resumes it, one at a time, as a child's own start
-    // does. Reading the stored positions to decide that is part of starting, so a read that throws stops each child again
-    // as a delegate that throws does.
+    // subscription it holds paused, or that a cancel is under way for while they are listed, is resumed as
+    // resumeSubscription(..) resumes it, one at a time, as a child's own start does. The children share the
+    // count of cancels started, so each child's check sees a cancel under way while that child reads.
+    // Reading the stored positions to decide that is part of starting, so a read that throws stops each child again as
+    // a delegate that throws does.
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
         Map<AbstractCatchupSubscriptionModel, AbstractCatchupSubscriptionModel.StartAttempt> attempts = new LinkedHashMap<>();
@@ -418,6 +420,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * {@link #pauseSubscription(String)} or {@link #cancelSubscription(String)} for the subscription that comes meanwhile
      * doesn't run until it returns, and a {@link #stop()} can be held up the same way.
      * <p>
+     * Called from inside the live delegate's cancel of the subscription, on the thread that cancels, it throws
+     * {@link IllegalStateException} without resuming the subscription when it would replay from a position a catch-up
+     * stored, since the live delegate would resume the subscription past that position. Resume it once the cancel has
+     * returned.
+     * <p>
      * A resume while a replay for the subscription runs returns the handle of that replay. A pause asked while the replay
      * still reads history is dropped, so the replay hands over and the subscription runs.
      * <p>
@@ -431,8 +438,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         if (started) {
             start(false);
         }
-        try (AbstractCatchupSubscriptionModel.Claim ignored = anyCatchupModel().claim(subscriptionId,
-                started ? AbstractCatchupSubscriptionModel.STARTED_BUT_NOT_RESUMED : AbstractCatchupSubscriptionModel.NOTHING_CHANGED)) {
+        String whatChanged = started ? AbstractCatchupSubscriptionModel.STARTED_BUT_NOT_RESUMED : AbstractCatchupSubscriptionModel.NOTHING_CHANGED;
+        try (AbstractCatchupSubscriptionModel.Claim ignored = anyCatchupModel().claim(subscriptionId, whatChanged)) {
             presentCatchupModels().forEach(model -> model.pauseRequestedDuringCatchup.remove(subscriptionId));
             AbstractCatchupSubscriptionModel parkedIn = presentCatchupModels().filter(model -> model.hasParkedReplay(subscriptionId)).findFirst().orElse(null);
             if (parkedIn != null) {
@@ -442,12 +449,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
                 }
             }
             for (AbstractCatchupSubscriptionModel model : presentCatchupModels().toList()) {
-                Subscription replaying = model.replayToResume(subscriptionId);
+                Subscription replaying = model.replayToResume(subscriptionId, whatChanged);
                 if (replaying != null) {
                     return replaying;
                 }
             }
-            anyCatchupModel().awaitTheCancelledReplay(subscriptionId, started ? AbstractCatchupSubscriptionModel.STARTED_BUT_NOT_RESUMED : AbstractCatchupSubscriptionModel.NOTHING_CHANGED);
+            anyCatchupModel().awaitTheCancelledReplay(subscriptionId, whatChanged);
             Subscription resumed = getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
             presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::liveDelegateResumed);
             return resumed;

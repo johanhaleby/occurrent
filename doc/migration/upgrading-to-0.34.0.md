@@ -2628,7 +2628,9 @@ is running and catching up, and isn't paused. A call that comes in the meantime 
 When the wrapped model throws from `cancelSubscription(subscriptionId)`, the cancel throws the same exception and
 keeps the stored position. The replay it ended stays ended. While the wrapped model still holds the
 subscription paused, a later `resumeSubscription(subscriptionId)` replays from a position a catch-up stored, as any
-resume does.
+resume does. A `resumeSubscription(subscriptionId)` that the wrapped model calls from inside its own cancel, on the
+thread that cancels, throws `IllegalStateException` when it would replay that way, because the wrapped model would
+resume the subscription past that position instead. Resume it once the cancel has returned.
 
 When the cancel ended a replay that was still in the subscription's action or reading history, no resume and no
 `start(true)` lets the action run until that replay's thread has returned. That holds from the moment the cancel
@@ -2645,7 +2647,9 @@ call for the subscription that runs while it waits, so a `pauseSubscription(subs
 
 `start(true)` resumes such a subscription the way `resumeSubscription(subscriptionId)` does. While a cancel is under
 way, or a replay a cancel ended hasn't returned, it starts the wrapped model without resuming anything and then
-resumes each subscription the wrapped model holds paused, one at a time. One whose cancelled replay doesn't return
+resumes each subscription the wrapped model holds paused, one at a time. A subscription whose cancel is under way
+while `start(true)` lists them is resumed once that cancel has returned, also when the wrapped model reports it as not
+paused during its own cancel. One whose cancelled replay doesn't return
 holds up the ones after it for up to 10 seconds, and `start(true)` throws its `IllegalStateException` once the others
 are resumed. A subscription cancelled before its turn is skipped.
 

@@ -50,6 +50,7 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
@@ -1991,6 +1992,93 @@ class CatchupResumeReplayStreamModeMongoTest {
     }
 
     @Test
+    void a_resume_through_the_dispatcher_on_the_cancelling_thread_inside_a_failing_cancel_is_refused_when_it_would_replay_from_the_position_another_node_stored() throws Exception {
+        // Given B holds the subscription paused, with the position another node stored, and the live delegate resumes the subscription on the cancelling thread as it fails the cancel
+        AtomicReference<@Nullable Throwable> resumeInTheCancel = new AtomicReference<>();
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)),
+                durable -> new CancelFailingModel(durable, () -> resumeInTheCancel.set(catchThrowable(() -> catchupB.resumeSubscription(subscriptionId)))));
+
+        // When the subscription is cancelled
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").isInstanceOf(IllegalStateException.class).hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+
+        // Then the resume inside the cancel was refused, and says that a cancel of the subscription is under way
+        assertThat(resumeInTheCancel.get()).as("what the resume inside the cancel threw").isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(subscriptionId).hasMessageContaining("a cancel of it is under way");
+        // And the live delegate still holds the subscription paused
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is paused").isTrue();
+        assertThat(receivedByB).as("what B received").isEmpty();
+        // And a resume once the cancel has returned replays from the position another node stored
+        catchupB.resumeSubscription(subscriptionId);
+        append("afterTheResume", 4);
+        await("B delivers the history after the stored position and what is written after the resume").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("afterTheResume"));
+        assertThat(receivedByB).as("what B received").contains("h2", "h3", "afterBRegistered", "afterTheResume");
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
+    }
+
+    @Test
+    void a_start_through_the_dispatcher_that_resumes_while_a_failing_cancel_reports_the_subscription_as_not_paused_until_it_throws_replays_it_from_the_position_another_node_stored() throws Exception {
+        // Given B holds the subscription paused, with the position another node stored, B is stopped, and the live delegate reports the subscription as not paused while it fails the cancel
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)), UnpausingCancelFailingModel::new);
+        UnpausingCancelFailingModel liveDelegate = (UnpausingCancelFailingModel) catchupB.getWrappedSubscriptionModel();
+        catchupB.stop();
+        CompletableFuture<Void> cancelling = CompletableFuture.runAsync(() -> catchupB.cancelSubscription(subscriptionId));
+        assertThat(liveDelegate.inCancel.await(10, SECONDS)).as("the live delegate is in the cancel").isTrue();
+
+        // When a start that resumes comes on another thread, and the cancel ends after the start has asked whether the subscription is paused
+        CompletableFuture<Void> starting = new CompletableFuture<>();
+        Thread starter = Thread.ofPlatform().name("start-with-resume").unstarted(() -> {
+            try {
+                catchupB.start(true);
+                starting.complete(null);
+            } catch (Throwable e) {
+                starting.completeExceptionally(e);
+            }
+        });
+        liveDelegate.endTheCancelWhenAskedByTheStartOf(starter, () -> {
+            liveDelegate.endTheCancel();
+            waitUpTo(cancelling, 10);
+        });
+        starter.start();
+        awaitParkedIn(starting, new AtomicReference<>(starter), "tryLockWithin");
+        liveDelegate.endTheCancel();
+        append("afterTheRace", 4);
+
+        // Then the cancel threw what the live delegate made it
+        assertThat(failureOf(cancelling)).as("the cancel").isInstanceOf(IllegalStateException.class).hasMessageContaining(UnpausingCancelFailingModel.UNAVAILABLE);
+        // And the start returned without failing
+        assertThat(failureOf(starting)).as("what the start threw").isNull();
+        // And the subscription replays from the position another node stored, instead of the live delegate resuming it from its own
+        await("B delivers what is written after the race").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("afterTheRace"));
+        assertThat(receivedByB).as("what B received").contains("h2", "h3", "afterBRegistered", "afterTheRace");
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
+    }
+
+    @Test
+    void a_subscribe_through_the_dispatcher_on_the_cancelling_thread_inside_a_cancel_that_succeeds_is_still_remembered_when_the_cancel_returns() throws Exception {
+        // Given B holds the subscription paused, and the live delegate subscribes the same id on the cancelling thread once it has cancelled
+        AtomicReference<@Nullable Throwable> subscribeInTheCancel = new AtomicReference<>();
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)), durable -> new CancelFollowedByModel(durable,
+                () -> subscribeInTheCancel.set(catchThrowable(() -> catchupB.subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), event -> receivedByB.add(nameOf(event)))))));
+
+        // When the subscription is cancelled
+        assertThat(catchThrowable(() -> catchupB.cancelSubscription(subscriptionId))).as("what the cancel threw").isNull();
+
+        // Then the subscribe inside the cancel was accepted, and the subscription runs
+        assertThat(subscribeInTheCancel.get()).as("what the subscribe inside the cancel threw").isNull();
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        // And subscribing the id again with a catch-up is refused, as it is for a subscription made outside a cancel
+        CopyOnWriteArrayList<String> receivedByDuplicate = new CopyOnWriteArrayList<>();
+        assertThatThrownBy(() -> catchupB.subscribe(subscriptionId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)), event -> receivedByDuplicate.add(nameOf(event))))
+                .as("a subscribe that catches up")
+                .isInstanceOf(DuplicateSubscriptionIdException.class);
+        assertThat(receivedByDuplicate).as("what the refused subscription received").isEmpty();
+    }
+
+    @Test
     void a_start_through_the_dispatcher_that_is_held_up_reading_the_position_of_another_subscription_does_not_let_the_live_delegate_resume_a_subscription_whose_cancel_the_live_delegate_fails_meanwhile() throws Exception {
         // Given B holds the subscription paused, with the position another node stored, and a second subscription that a start that resumes reads the position of first
         AtomicReference<CompletableFuture<Void>> starting = new AtomicReference<>();
@@ -2496,6 +2584,167 @@ class CatchupResumeReplayStreamModeMongoTest {
         @Override
         public boolean canResumeFrom(Checkpoint checkpoint) {
             return delegate.canResumeFrom(checkpoint);
+        }
+
+        @Override
+        public SubscriptionModel getWrappedSubscriptionModel() {
+            return delegate;
+        }
+    }
+
+    /**
+     * Passes everything on to the model it is made over, and says nothing about being a wrapper of it.
+     */
+    private static class DelegatingModel implements CheckpointAwareSubscriptionModel {
+        final CheckpointAwareSubscriptionModel delegate;
+
+        DelegatingModel(CheckpointAwareSubscriptionModel delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribePaused(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public void stop() {
+            delegate.stop();
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            delegate.start(resumeSubscriptionsAutomatically);
+        }
+
+        @Override
+        public boolean isRunning() {
+            return delegate.isRunning();
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return delegate.isRunning(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return delegate.isPaused(subscriptionId);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return delegate.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            delegate.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            delegate.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+        }
+
+        @Override
+        public @Nullable Checkpoint globalCheckpoint() {
+            return delegate.globalCheckpoint();
+        }
+
+        @Override
+        public boolean canResumeFrom(Checkpoint checkpoint) {
+            return delegate.canResumeFrom(checkpoint);
+        }
+    }
+
+    /**
+     * A wrapper of the model it is made over, whose first cancel reports every subscription as not paused until it is
+     * ended, and then throws without reaching that model, so the model still holds the subscription paused. Every later
+     * cancel goes through.
+     */
+    private static final class UnpausingCancelFailingModel extends DelegatingModel implements SubscriptionModelWrapper {
+        static final String UNAVAILABLE = "The live delegate cannot cancel";
+        final CountDownLatch inCancel = new CountDownLatch(1);
+        private final CountDownLatch endCancel = new CountDownLatch(1);
+        private final AtomicBoolean failed = new AtomicBoolean();
+        private volatile boolean reportsNotPaused;
+        private volatile @Nullable Thread whenAskedBy;
+        private volatile @Nullable Runnable whenAsked;
+
+        UnpausingCancelFailingModel(CheckpointAwareSubscriptionModel delegate) {
+            super(delegate);
+        }
+
+        void endTheCancel() {
+            endCancel.countDown();
+        }
+
+        // Runs the step once, on the thread, when it asks whether a subscription is paused for the decision whether any resume replays,
+        // after the answer is read and before it is returned
+        void endTheCancelWhenAskedByTheStartOf(Thread thread, Runnable step) {
+            whenAsked = step;
+            whenAskedBy = thread;
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            if (failed.compareAndSet(false, true)) {
+                reportsNotPaused = true;
+                inCancel.countDown();
+                awaitUninterrupted(endCancel);
+                reportsNotPaused = false;
+                throw new IllegalStateException(UNAVAILABLE);
+            }
+            super.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            boolean paused = !reportsNotPaused && super.isPaused(subscriptionId);
+            Runnable step = whenAsked;
+            if (step != null && Thread.currentThread() == whenAskedBy
+                    && StackWalker.getInstance().walk(frames -> frames.anyMatch(frame -> frame.getMethodName().equals("anyResumeReplays")))) {
+                whenAsked = null;
+                step.run();
+            }
+            return paused;
+        }
+
+        @Override
+        public SubscriptionModel getWrappedSubscriptionModel() {
+            return delegate;
+        }
+    }
+
+    /**
+     * A wrapper of the model it is made over, whose first cancel runs a step once that model has cancelled.
+     */
+    private static final class CancelFollowedByModel extends DelegatingModel implements SubscriptionModelWrapper {
+        private final AtomicBoolean followed = new AtomicBoolean();
+        private final Runnable afterTheCancel;
+
+        CancelFollowedByModel(CheckpointAwareSubscriptionModel delegate, Runnable afterTheCancel) {
+            super(delegate);
+            this.afterTheCancel = afterTheCancel;
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            super.cancelSubscription(subscriptionId);
+            if (followed.compareAndSet(false, true)) {
+                afterTheCancel.run();
+            }
         }
 
         @Override
