@@ -2690,7 +2690,7 @@ subscription reaches the node only once that pause has returned. A resume at a p
 `RepositionableSubscriptions.findIn(..)` on a `CompetingConsumerSubscriptionModel` goes to the catch-up model under it,
 and the call doesn't check whether this node holds the subscription's lease.
 
-When the replay doesn't return from the action or the history read within the 10 seconds, the call logs at `ERROR`
+When the replay doesn't return from the action, the history read or the check of its live start within the 10 seconds, the call logs at `ERROR`
 and throws `IllegalStateException`. The replay then runs again, from the last position it stored, once it has
 returned, and the subscription isn't resumed at `startAt`. When running the replay again throws, the
 `IllegalStateException` says the replay couldn't be run again and has that failure as suppressed. When the model was

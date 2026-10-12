@@ -280,6 +280,30 @@ public final class ChangeStreamSubscriptions {
     }
 
     /**
+     * Answers whether MongoDB still has the history back to {@code checkpoint}. A transient failure, such as a lost
+     * connection, is retried with the model's retry strategy until it succeeds, the strategy gives up, the model shuts
+     * down or the thread is interrupted, and then it is thrown. An interrupt during the backoff throws a
+     * {@code RuntimeException} that wraps the failure. A strategy that doesn't retry throws it at once, and so does any
+     * other failure. Every failed attempt is logged at warn level, or at debug level once the model shuts down. Lost
+     * history answers {@code false} and is never retried.
+     */
+    public boolean canResumeFrom(String collectionName, Checkpoint checkpoint) {
+        Supplier<Boolean> probe = () -> {
+            try {
+                return MongoCommons.canResumeFrom(collectionName, checkpoint, model::runCommand);
+            } catch (RuntimeException e) {
+                if (shutdown) {
+                    log.debug("The model is shutting down, so asking MongoDB whether collection {} can resume from checkpoint {} stops with {}.", collectionName, checkpoint.asString(), e.getClass().getName(), e);
+                } else {
+                    log.warn("Asking MongoDB whether collection {} can resume from checkpoint {} failed with {}: {}. It is asked again only when the failure is transient and the retry strategy retries.", collectionName, checkpoint.asString(), e.getClass().getName(), e.getMessage(), e);
+                }
+                throw e;
+            }
+        };
+        return executeWithRetry(probe, RETRYABLE.and(MongoCommons::isTransientFailure).and(__ -> !Thread.currentThread().isInterrupted()), retryStrategy).get();
+    }
+
+    /**
      * Throws when the model can't open a change stream at {@code startAt}.
      */
     public void checkStartPosition(StartAt startAt) {
