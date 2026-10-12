@@ -1453,7 +1453,8 @@ class ReactorDurableSubscriptionModelCancelCompletionTest {
                 // The cancelled subscription only, which this wrapped model keeps counting once it is cancelled
                 assertThat(wrapped.subscribedIds).as("subscriptions handed to the wrapped model").hasSize(1);
             } else {
-                assertThat(model.isRunning(SUBSCRIPTION_ID)).as("whether the subscription runs").isFalse();
+                // The id is dropped on another thread, after the handle has failed
+                await().atMost(TIMEOUT).untilAsserted(() -> assertThat(model.isRunning(SUBSCRIPTION_ID)).as("whether the subscription runs").isFalse());
             }
         } finally {
             releaseWriteBack.countDown();
