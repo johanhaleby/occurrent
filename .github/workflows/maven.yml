@@ -18,10 +18,9 @@ env:
   # upload/download-artifact). Unquoted expansion is intentional: the value word-splits into
   # separate mvn arguments.
   MVN: -B -ntp -Dmaven.repo.local=${{ github.workspace }}/.m2repo
-  # Budget for one shard's tests, in seconds. Roughly 20% over the slowest shard the split below
-  # targets, so ordinary runner variance stays quiet and a subtree that actually grew does not.
-  # Exceeding it warns, never fails: nothing here is close to the 20 minute shard timeout, and a
-  # timing gate that can redden an unrelated push would just get ignored.
+  # Per-shard warning threshold for test time, in seconds. Most shards exceed it today, so a warning
+  # no longer means a shard grew. Exceeding it warns and never fails, because a timing gate that can redden an
+  # unrelated push would just get ignored.
   SHARD_BUDGET_SECONDS: 240
   # Private mirror of the Docker Hub images the tests need, so a Docker Hub outage cannot fail a run.
   # Images keep their Docker Hub repository and tag under this prefix, so mongo:8.0 is mirrored as
@@ -234,10 +233,14 @@ jobs:
           # Everything that talks to MongoDB through the driver rather than through Spring.
           - { name: mongodb-native,              paths: "eventstore/mongodb/native subscription/mongodb/native eventstore/api eventstore/mongodb/common eventstore/mongodb/dcb-common subscription/mongodb/common testing/mongodb" }
           # Listed per module, not as the framework aggregator, because the blocking starter is the
-          # single most expensive module in the build. It shares the shard with framework/annotations and
-          # the framework/spring-boot-autoconfigure aggregate (common, blocking, reactor), both cheap
-          # enough to ride along without pushing the shard over budget.
-          - { name: framework,                   paths: "framework/spring-boot-starter-mongodb framework/annotations framework/spring-boot-autoconfigure" }
+          # single most expensive module in the build. The rest of the shard is lodgers. They are framework/annotations,
+          # the framework/spring-boot-autoconfigure aggregate (common, blocking, reactor), and the subscription
+          # and eventstore modules that no other shard claims (`subscription/api`, `subscription/core`,
+          # `subscription/inmemory`, the reactor synchronous and push modules, `subscription/redis`,
+          # `eventstore/migration` and `eventstore/inmemory`). The last group lodges here so the reactor
+          # subscription utilities can have a shard of their own below and the count stays at 10. That last group
+          # added about 150 seconds, and the shard was already over SHARD_BUDGET_SECONDS before it.
+          - { name: framework,                   paths: "framework/spring-boot-starter-mongodb framework/annotations framework/spring-boot-autoconfigure subscription/api subscription/core subscription/inmemory subscription/synchronous/reactor subscription/push/reactor subscription/redis eventstore/migration eventstore/inmemory" }
           # `eventstore/mongodb/spring` lodges here, so the blocking competing consumer can have a shard of its own and
           # the count stays at 10.
           - { name: dsl,                         paths: "dsl eventstore/mongodb/spring" }
@@ -261,10 +264,11 @@ jobs:
           # in here.
           - { name: subscription-util-blocking,  paths: "subscription/util/blocking/durable-subscription subscription/util/blocking/stream-catchup-subscription subscription/util/blocking/catchup-subscription subscription/synchronous/blocking subscription/push/blocking" }
           - { name: competing-consumer-blocking, paths: "subscription/util/blocking/competing-consumer-subscription" }
-          # `args` applies to every path in a shard, so the two `eventstore` lodgers are here rather
-          # than in an `example` shard. Parking them next to a rerun flag they do not need would
-          # retry a genuine failure twice before reporting it.
-          - { name: subscription-rest,           paths: "subscription/api subscription/core subscription/inmemory subscription/util/reactor subscription/synchronous/reactor subscription/push/reactor subscription/redis eventstore/migration eventstore/inmemory" }
+          # The reactor subscription utilities take about 970 seconds of test time, so about 1010 seconds per job. Next to
+          # the other subscription modules they took up to 1134 seconds of test time and one job was cancelled at the
+          # 20 minute shard timeout, so they have a shard of their own.
+          # That gives about 3 minutes before the timeout.
+          - { name: subscription-util-reactor,   paths: "subscription/util/reactor" }
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK ${{ matrix.java }}
