@@ -1624,6 +1624,152 @@ class CatchupResumeReplayStreamModeMongoTest {
         assertThat(claimsOf(catchupB)).as("the claims left").isEmpty();
     }
 
+    @Test
+    void a_start_that_resumes_still_resumes_the_other_subscriptions_when_resuming_one_of_them_throws_an_error() throws Exception {
+        // Given B holds three subscriptions paused, one of which replays from the position another node stored
+        String firstOther = subscriptionId + "-first";
+        String secondOther = subscriptionId + "-second";
+        CopyOnWriteArrayList<String> receivedByOthers = new CopyOnWriteArrayList<>();
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)));
+        catchupB.subscribePaused(firstOther, null, StartAt.subscriptionModelDefault(), event -> receivedByOthers.add(nameOf(event)));
+        catchupB.subscribePaused(secondOther, null, StartAt.subscriptionModelDefault(), event -> receivedByOthers.add(nameOf(event)));
+        catchupB.stop();
+        // And the live delegate throws an error for the first subscription the start resumes through it
+        AssertionError error = new AssertionError("The live delegate broke");
+        liveOfB.throwOnTheNextResumeOn(Thread.currentThread(), error);
+
+        // When B is started with the subscriptions resumed
+        Throwable start = catchThrowable(() -> catchupB.start(true));
+        append("afterStart", 4);
+
+        // Then the error reaches the caller
+        assertThat(start).as("the start").isSameAs(error);
+        // And the subscription that replays is resumed
+        await("B delivers the history after the stored position").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h2", "h3", "afterBRegistered", "afterStart"));
+        // And the subscription the error did not hit is resumed, so one of the two others runs
+        await("the subscription the error did not hit delivers what is written after the start").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByOthers).contains("afterStart"));
+        assertThat(Stream.of(firstOther, secondOther).filter(liveOfB::isRunning).count()).as("the subscriptions of the two others that run after the start").isEqualTo(1);
+        assertThat(liveOfB.resumeFailures.get()).as("the resumes of the live delegate that threw").isEqualTo(1);
+    }
+
+    @Test
+    void a_pause_during_a_replay_a_subscribe_started_does_not_outlive_a_handover_that_fails_so_the_subscription_does_not_read_as_paused() throws Exception {
+        // Given a pause came during a replay a subscribe started, and the live delegate then failed the handover
+        givenAPauseDuringASubscribeReplayWhoseHandoverFailed();
+
+        // When the subscription is asked about
+        boolean paused = catchupB.isPaused(subscriptionId);
+
+        // Then it does not read as paused
+        assertThat(paused).as("the subscription reads as paused after the handover failed").isFalse();
+    }
+
+    @Test
+    void a_subscribe_for_the_id_after_a_replay_a_subscribe_started_failed_to_hand_over_is_not_held_paused_by_a_pause_asked_during_that_replay() throws Exception {
+        // Given a pause came during a replay a subscribe started, and the live delegate then failed the handover
+        givenAPauseDuringASubscribeReplayWhoseHandoverFailed();
+
+        // When the id is subscribed again, and an event is written
+        CopyOnWriteArrayList<String> received2 = new CopyOnWriteArrayList<>();
+        catchupB.subscribe(subscriptionId, StartAt.subscriptionModelDefault(), event -> received2.add(nameOf(event)));
+        append("live", 5);
+
+        // Then the new subscription delivers it
+        await("the second subscription delivers what is written after it was made").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(received2).as("delivered to the second subscription").contains("live"));
+        assertThat(catchupB.isPaused(subscriptionId)).as("the new subscription is not paused").isFalse();
+    }
+
+    // The replay a subscribe started is in the action on h1 when the pause comes, and goes on to hand over to a live
+    // delegate whose first subscribe throws
+    private void givenAPauseDuringASubscribeReplayWhoseHandoverFailed() throws Exception {
+        givenTwoNodes(SubscribeFailingModel::new);
+        append("h1", 0);
+        append("h2", 1);
+        CountDownLatch inH1 = new CountDownLatch(1);
+        CountDownLatch releaseH1 = new CountDownLatch(1);
+        catchupB.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), recording("h1", inH1, releaseH1));
+        assertThat(inH1.await(10, SECONDS)).as("B's replay reaches h1").isTrue();
+        catchupB.pauseSubscription(subscriptionId);
+        releaseH1.countDown();
+        await("the handover is logged as one that did not go live").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(errorLog.messagesAbout(subscriptionId)).as("what was logged at ERROR").anyMatch(message -> message.contains("did not go live")));
+    }
+
+    @Test
+    void a_resume_after_a_cancel_that_came_while_the_resume_replay_was_in_the_action_is_refused_as_for_an_id_that_was_never_subscribed() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(recording("h2", inH2, releaseH2));
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        Throwable neverSubscribed = catchThrowable(() -> catchupB.resumeSubscription(subscriptionId + "-never-subscribed"));
+        assertThat(neverSubscribed).as("a resume of an id that was never subscribed").isNotNull();
+
+        // When the subscription is cancelled while the replay is in the action, and then resumed
+        catchupB.cancelSubscription(subscriptionId);
+        Throwable resume = catchThrowable(() -> catchupB.resumeSubscription(subscriptionId));
+        releaseH2.countDown();
+
+        // Then the resume fails as the resume of an id that was never subscribed does
+        assertThat(resume).as("the resume after the cancel").isInstanceOf(neverSubscribed.getClass());
+        // And the cancelled replay delivers nothing more once its action returns
+        await("the cancelled replay delivers nothing more").during(1, SECONDS).atMost(5, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).as("what the action received").containsExactly("h2"));
+    }
+
+    @Test
+    void a_resume_after_a_stop_and_a_failed_cancel_does_not_run_the_action_while_the_cancelled_resume_replay_is_still_in_it() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, and the live delegate fails the cancel while holding the subscription paused
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)), CancelFailingModel::new);
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+
+        // When the model is stopped, the cancel fails, and the subscription is resumed
+        catchupB.stop();
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        catchupB.resumeSubscription(subscriptionId);
+
+        // Then the new replay doesn't run the action while the cancelled replay is in it
+        assertTheNewReplayWaitsForTheCancelledReplayInTheAction(releaseH2);
+    }
+
+    @Test
+    void a_resume_after_a_failed_cancel_and_a_stop_does_not_run_the_action_while_the_cancelled_resume_replay_is_still_in_it() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, and the live delegate fails the cancel while holding the subscription paused
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)), CancelFailingModel::new);
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+
+        // When the cancel fails, the model is stopped, and the subscription is resumed
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        catchupB.stop();
+        catchupB.resumeSubscription(subscriptionId);
+
+        // Then the new replay doesn't run the action while the cancelled replay is in it
+        assertTheNewReplayWaitsForTheCancelledReplayInTheAction(releaseH2);
+    }
+
+    private void assertTheNewReplayWaitsForTheCancelledReplayInTheAction(CountDownLatch releaseCancelledReplay) {
+        await("the new replay stays out of the action while the cancelled replay is in it").during(1, SECONDS).atMost(5, SECONDS)
+                .untilAsserted(() -> assertThat(maxInAction.get()).as("the most calls of the action in flight at once while the cancelled replay was in it").isEqualTo(1));
+        // And the new replay delivers once the cancelled replay has left the action, with what is written after that
+        releaseCancelledReplay.countDown();
+        append("afterResume", 4);
+        await("B delivers the history after the stored position and what is written after the resume").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h3", "afterBRegistered", "afterResume"));
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
+    }
+
     // Holds the claim of the subscription on another thread until releaseTheClaim is counted down
     private void holdTheClaimOf(String id) throws Exception {
         AbstractCatchupSubscriptionModel child = childOf(catchupB);
@@ -1907,6 +2053,93 @@ class CatchupResumeReplayStreamModeMongoTest {
     }
 
     /**
+     * A wrapper of the model it is made over, whose first subscribe throws without reaching that model. Every other call,
+     * and every later subscribe, goes through.
+     */
+    private static final class SubscribeFailingModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
+        static final String UNAVAILABLE = "The live delegate cannot subscribe";
+        private final CheckpointAwareSubscriptionModel delegate;
+        private final AtomicBoolean failed = new AtomicBoolean();
+
+        SubscribeFailingModel(CheckpointAwareSubscriptionModel delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            delegate.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            if (failed.compareAndSet(false, true)) {
+                throw new IllegalStateException(UNAVAILABLE);
+            }
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribePaused(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public void stop() {
+            delegate.stop();
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            delegate.start(resumeSubscriptionsAutomatically);
+        }
+
+        @Override
+        public boolean isRunning() {
+            return delegate.isRunning();
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return delegate.isRunning(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return delegate.isPaused(subscriptionId);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return delegate.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            delegate.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+        }
+
+        @Override
+        public @Nullable Checkpoint globalCheckpoint() {
+            return delegate.globalCheckpoint();
+        }
+
+        @Override
+        public boolean canResumeFrom(Checkpoint checkpoint) {
+            return delegate.canResumeFrom(checkpoint);
+        }
+
+        @Override
+        public SubscriptionModel getWrappedSubscriptionModel() {
+            return delegate;
+        }
+    }
+
+    /**
      * The live delegate as it is, except that the first question whether a subscription is paused fails on a chosen
      * thread, and that a chosen number of resumes fail.
      */
@@ -1915,6 +2148,8 @@ class CatchupResumeReplayStreamModeMongoTest {
         private volatile @Nullable Thread failIsPausedOn;
         private final AtomicInteger resumeFailuresLeft = new AtomicInteger();
         private volatile @Nullable Error resumeError;
+        private volatile @Nullable Thread resumeErrorOn;
+        private volatile @Nullable Error resumeErrorOnThread;
         final AtomicInteger resumeFailures = new AtomicInteger();
 
         void failTheNextResumes(int times) {
@@ -1925,7 +2160,19 @@ class CatchupResumeReplayStreamModeMongoTest {
             resumeError = error;
         }
 
+        void throwOnTheNextResumeOn(Thread thread, Error error) {
+            resumeErrorOnThread = error;
+            resumeErrorOn = thread;
+        }
+
         private void failIfAsked() {
+            Error errorOnThread = resumeErrorOnThread;
+            if (errorOnThread != null && Thread.currentThread() == resumeErrorOn) {
+                resumeErrorOn = null;
+                resumeErrorOnThread = null;
+                resumeFailures.incrementAndGet();
+                throw errorOnThread;
+            }
             Error error = resumeError;
             if (error != null) {
                 resumeError = null;

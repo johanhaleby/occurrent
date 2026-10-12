@@ -2628,7 +2628,9 @@ is running and catching up, and isn't paused. A call that comes in the meantime 
 When the wrapped model throws from `cancelSubscription(subscriptionId)`, the cancel throws the same exception and
 keeps the stored position. The replay it ended stays ended. While the wrapped model still holds the
 subscription paused, a later `resumeSubscription(subscriptionId)` replays from a position a catch-up stored, as any
-resume does.
+resume does. When the cancel ended a replay that was still in the subscription's action, the new replay waits until
+that one has returned, also when a `stop()` came before or after the cancel, so the action doesn't run on two threads
+at once.
 
 When the `CatchupListener` registered for the subscription throws as the replay starts or runs again, an `Error`
 included, the replay is held and that is logged at `ERROR`. The subscription then reads as paused, and
@@ -2704,7 +2706,9 @@ pause then pauses it there, and when the handover failed, the pause holds the re
 
 A `pauseSubscription(subscriptionId)` on `CatchupSubscriptionModel` during the replay a subscribe started now goes to
 the catch-up model that runs the replay, as it already did on `StreamCatchupSubscriptionModel`. The replay reads on,
-and once it has delivered the history, the wrapped model gets the subscription and pauses it. A pause that comes while
+and once it has delivered the history, the wrapped model gets the subscription and pauses it. When the wrapped model
+throws instead, the replay ends and the pause is dropped with it, so the subscription doesn't read as paused, and a
+later subscribe with the same id isn't paused by it. A pause that comes while
 the replay hands over waits until the wrapped model has the subscription. When the wrapped model throws instead of
 taking it, the replay ends, and the pause goes to the wrapped model, which doesn't have the subscription. In 0.33.0 the pause went
 to the wrapped model, which doesn't have the subscription until the replay hands over. So a competing consumer that
