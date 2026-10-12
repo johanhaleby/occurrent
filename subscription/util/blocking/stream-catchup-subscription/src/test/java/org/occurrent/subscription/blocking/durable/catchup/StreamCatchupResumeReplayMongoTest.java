@@ -933,6 +933,94 @@ class StreamCatchupResumeReplayMongoTest {
         assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused after the start that resumes").isFalse();
     }
 
+    @Test
+    void a_catch_up_listener_that_throws_an_error_when_a_failed_resume_replay_runs_again_holds_the_replay_and_a_later_resume_runs_it() throws Exception {
+        // Given the handover of the resume replay fails once, and the listener throws an Error the second time a catch-up starts, which is when the replay runs again after its backoff
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)));
+        ErrorThrowingCatchupListener listener = new ErrorThrowingCatchupListener(2);
+        catchupB.listenForCatchup(subscriptionId, listener);
+        storage.failTheNextHandoverReads(1);
+
+        // When the subscription is resumed
+        catchupB.resumeSubscription(subscriptionId);
+        await("the listener is told the replay runs again").atMost(10, SECONDS).until(() -> listener.starts.get() >= 2);
+
+        // Then the replay is held, so the subscription reads as paused and not running
+        await("the replay is held").atMost(10, SECONDS).untilAsserted(() -> assertThat(catchupB.isPaused(subscriptionId)).isTrue());
+        assertThat(catchupB.hasParkedReplay(subscriptionId)).as("the replay is held").isTrue();
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription runs").isFalse();
+        assertThat(catchupB.isCatchingUp(subscriptionId)).as("the replay runs").isFalse();
+        // And the Error of the listener is logged at ERROR
+        assertThat(errorLog.messagesAbout(subscriptionId)).as("what was logged at ERROR about the listener").filteredOn(message -> message.contains("catch-up listener")).hasSize(1);
+        // And what is written while the replay is held is not delivered
+        append("afterHeld", 4);
+        await("nothing written while the replay is held reaches B").during(2, SECONDS).atMost(6, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).doesNotContain("afterHeld"));
+        // And a resume, with the listener no longer throwing, runs the replay and delivers it
+        catchupB.resumeSubscription(subscriptionId);
+        await("B delivers what was written while the replay was held").atMost(15, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h2", "h3", "afterBRegistered", "afterHeld"));
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused after the resume").isFalse();
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running after the resume").isTrue();
+        assertThat(storage.handoverReadFailures.get()).as("the read in the handover failed once").isEqualTo(1);
+        assertThat(listener.starts.get()).as("the catch-ups the listener was told about").isEqualTo(3);
+    }
+
+    @Test
+    void a_resume_after_a_catch_up_listener_threw_an_error_when_a_failed_resume_replay_ran_again_delivers_what_was_written_after_the_error() throws Exception {
+        // Given the handover of the resume replay fails once, and the listener throws an Error the second time a catch-up starts, which is when the replay runs again after its backoff
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)));
+        ErrorThrowingCatchupListener listener = new ErrorThrowingCatchupListener(2);
+        catchupB.listenForCatchup(subscriptionId, listener);
+        storage.failTheNextHandoverReads(1);
+        catchupB.resumeSubscription(subscriptionId);
+        await("the listener is told the replay runs again").atMost(10, SECONDS).until(() -> listener.starts.get() >= 2);
+
+        // When an event is written after the Error, and the subscription is resumed
+        append("afterTheError", 4);
+        Subscription resumed = catchupB.resumeSubscription(subscriptionId);
+
+        // Then the resume runs the replay again, so it delivers the history and what was written after the Error
+        await("B delivers what was written after the Error").atMost(15, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h2", "h3", "afterBRegistered", "afterTheError"));
+        assertThat(resumed.waitUntilStarted(Duration.ofSeconds(15))).as("the replay the resume ran handed over").isTrue();
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running after the resume").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused after the resume").isFalse();
+    }
+
+    @Test
+    void a_pause_that_comes_after_a_cancel_of_a_resume_replay_that_waits_to_run_again_does_not_hold_the_cancelled_replay_so_a_new_subscribe_for_the_id_runs_and_can_be_paused() throws Exception {
+        // Given the storage fails the first read the handover of the resume replay makes, and the replay thread
+        // is descheduled right after it has given up the handover lock, so the replay waits to run again
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)));
+        GapLock gapLock = new GapLock(storage);
+        handoverLocksOf(catchupB).put(subscriptionId, gapLock);
+        storage.failTheNextHandoverReads(1);
+        gapLock.armed = true;
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(gapLock.inGap.await(10, SECONDS)).as("the handover failed and the replay thread gave up the lock").isTrue();
+
+        // When the subscription is cancelled and then paused while the replay waits, and the id is subscribed again
+        catchupB.cancelSubscription(subscriptionId);
+        catchThrowable(() -> catchupB.pauseSubscription(subscriptionId));
+        gapLock.leaveGap.countDown();
+        CopyOnWriteArrayList<String> receivedByNew = new CopyOnWriteArrayList<>();
+        catchupB.subscribe(subscriptionId, StartAt.now(), event -> receivedByNew.add(nameOf(event)));
+
+        // Then the cancelled replay was not held, so the new subscription is not paused
+        assertThat(catchupB.hasParkedReplay(subscriptionId)).as("the cancelled replay is held").isFalse();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the new subscription is paused").isFalse();
+        assertThat(catchupB.isRunning(subscriptionId)).as("the new subscription runs").isTrue();
+        // And it delivers what is written after it started
+        append("afterTheSubscribe", 4);
+        await("the new subscription delivers what was written after it started").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByNew).contains("afterTheSubscribe"));
+        // And a pause of it succeeds and pauses it
+        assertThatCode(() -> catchupB.pauseSubscription(subscriptionId)).as("the pause of the new subscription").doesNotThrowAnyException();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the new subscription is paused after the pause").isTrue();
+        assertThat(receivedByB).as("what the cancelled subscription received").doesNotContain("afterTheSubscribe");
+    }
+
     // The subscription is resumed at the present from another thread, which returns once it waits for the action of the replay it holds
     private CompletableFuture<Subscription> resumeAtThePresentFromAnotherThread() {
         RepositionableSubscriptions found = RepositionableSubscriptions.findIn(catchupB).orElseThrow();
@@ -1957,6 +2045,29 @@ class StreamCatchupResumeReplayMongoTest {
         public void catchupStarted(Object episode) {
             if (starts.incrementAndGet() == failOnStart) {
                 throw new IllegalStateException("The listener failed");
+            }
+        }
+
+        @Override
+        public void historyRead(Object episode) {
+        }
+    }
+
+    /**
+     * Throws an Error the chosen time it is told a catch-up started, and counts how many times it is told.
+     */
+    private static final class ErrorThrowingCatchupListener implements CatchupListener {
+        private final int failOnStart;
+        final AtomicInteger starts = new AtomicInteger();
+
+        ErrorThrowingCatchupListener(int failOnStart) {
+            this.failOnStart = failOnStart;
+        }
+
+        @Override
+        public void catchupStarted(Object episode) {
+            if (starts.incrementAndGet() == failOnStart) {
+                throw new AssertionError("The listener failed with an Error");
             }
         }
 

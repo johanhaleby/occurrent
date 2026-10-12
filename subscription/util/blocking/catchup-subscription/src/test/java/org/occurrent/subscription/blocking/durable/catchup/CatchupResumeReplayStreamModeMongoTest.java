@@ -1329,6 +1329,40 @@ class CatchupResumeReplayStreamModeMongoTest {
         assertThat(listener.starts.get()).as("the catch-ups the listener was told about").isEqualTo(3);
     }
 
+    @Test
+    void a_pause_through_the_dispatcher_that_comes_after_a_cancel_of_a_resume_replay_that_waits_to_run_again_does_not_hold_the_cancelled_replay_so_a_new_subscribe_for_the_id_runs_and_can_be_paused() throws Exception {
+        // Given the storage fails the first read the handover of the resume replay makes, and the replay thread
+        // is descheduled right after it has given up the handover lock, so the replay waits to run again
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)));
+        GapLock gapLock = new GapLock(storage);
+        handoverLocksOf(catchupB).put(subscriptionId, gapLock);
+        storage.failTheNextHandoverReads(1);
+        gapLock.armed = true;
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(gapLock.inGap.await(10, SECONDS)).as("the handover failed and the replay thread gave up the lock").isTrue();
+
+        // When the subscription is cancelled and then paused while the replay waits, and the id is subscribed again
+        catchupB.cancelSubscription(subscriptionId);
+        catchThrowable(() -> catchupB.pauseSubscription(subscriptionId));
+        gapLock.leaveGap.countDown();
+        CopyOnWriteArrayList<String> receivedByNew = new CopyOnWriteArrayList<>();
+        catchupB.subscribe(subscriptionId, StartAt.now(), event -> receivedByNew.add(nameOf(event)));
+
+        // Then the cancelled replay was not held, so the new subscription is not paused
+        assertThat(childOf(catchupB).hasParkedReplay(subscriptionId)).as("the cancelled replay is held").isFalse();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the new subscription is paused").isFalse();
+        assertThat(catchupB.isRunning(subscriptionId)).as("the new subscription runs").isTrue();
+        // And it delivers what is written after it started
+        append("afterTheSubscribe", 4);
+        await("the new subscription delivers what was written after it started").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByNew).contains("afterTheSubscribe"));
+        // And a pause of it succeeds and pauses it
+        Throwable secondPauseFailure = catchThrowable(() -> catchupB.pauseSubscription(subscriptionId));
+        assertThat(secondPauseFailure).as("the pause of the new subscription").isNull();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the new subscription is paused after the pause").isTrue();
+        assertThat(receivedByB).as("what the cancelled subscription received").doesNotContain("afterTheSubscribe");
+    }
+
     // The subscription is resumed at the present from another thread, which returns once it waits for the action of the replay it holds
     private CompletableFuture<Subscription> resumeAtThePresentFromAnotherThread() {
         Checkpoint present = requireNonNull(durableB.globalCheckpoint());
