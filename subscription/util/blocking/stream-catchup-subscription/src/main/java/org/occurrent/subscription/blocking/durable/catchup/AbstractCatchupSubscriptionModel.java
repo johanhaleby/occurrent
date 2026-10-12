@@ -31,6 +31,7 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
@@ -54,6 +55,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
@@ -173,6 +175,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // What each subscription asked for when it was last made through this model or another child of the same
     // dispatcher, so a resume can replay from a position a catch-up stored for it. Removed when it is cancelled.
     private final ConcurrentMap<String, Subscribed> subscribed;
+    // The replays a cancel that hasn't returned yet ended for each id. Kept from before the cancel takes them away until
+    // it returns, and then moved to what is kept for the subscription when the cancel threw, so start(true) and every
+    // resume find them all through the cancel, also while nothing is kept for the subscription.
+    private final ConcurrentMap<String, CancelUnderWay> cancelsUnderWay;
 
     protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
         this(subscriptionModel, config, subscriptionModelContextType, new SharedCatchupState());
@@ -198,15 +204,17 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         this.subscribed = sharedState.subscribed;
         this.lifecycleClaims = sharedState.lifecycleClaims;
         this.repositioning = sharedState.repositioning;
+        this.cancelsUnderWay = sharedState.cancelsUnderWay;
     }
 
     /**
      * The per-id registries {@link #handoverLocks}, {@link #currentAttempt}, {@link #runningCatchupSubscriptions},
-     * {@link #subscribed}, {@link #lifecycleClaims} and {@link #repositioning} bundled into one unit, so a dispatcher sharing them across its
-     * children shares all of them together rather than risking one shared and another forgotten. They need to move
-     * together. The lock alone only keeps two children's handovers from running at the same instant, it does not stop
-     * a stale one, once it finally runs, from still finding itself "current" in a registry only it can see, and a claim
-     * private to each child would let two children's calls for the same id run at once.
+     * {@link #subscribed}, {@link #lifecycleClaims}, {@link #repositioning} and {@link #cancelsUnderWay} bundled into
+     * one unit, so a dispatcher sharing them across its children shares all of them together rather than risking one
+     * shared and another forgotten. They need to move together. The lock alone only keeps two children's handovers from
+     * running at the same instant, it does not stop a stale one, once it finally runs, from still finding itself
+     * "current" in a registry only it can see, and a claim private to each child would let two children's calls for the
+     * same id run at once.
      */
     static final class SharedCatchupState {
         private final ConcurrentMap<String, ReentrantLock> handoverLocks = new ConcurrentHashMap<>();
@@ -215,6 +223,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         private final ConcurrentMap<String, Subscribed> subscribed = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, ClaimLock> lifecycleClaims = new ConcurrentHashMap<>();
         private final Set<String> repositioning = ConcurrentHashMap.newKeySet();
+        private final ConcurrentMap<String, CancelUnderWay> cancelsUnderWay = new ConcurrentHashMap<>();
+    }
+
+    // The replays a cancel that hasn't returned yet ended for one id, added to under the handover lock of the id by the
+    // cancel that holds its claim
+    private static final class CancelUnderWay {
+        private volatile CompletableFuture<Void> replaysReturned;
+
+        private CancelUnderWay(CompletableFuture<Void> replaysReturned) {
+            this.replaysReturned = replaysReturned;
+        }
+
+        private void add(CompletableFuture<Void> replayReturned) {
+            replaysReturned = CompletableFuture.allOf(replaysReturned, replayReturned);
+        }
     }
 
     // The lock behind a claim, and how many threads hold it or wait for it
@@ -227,8 +250,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * A subscription as it was made, and the child of a dispatcher it was made through.
      *
-     * @param cancelledReplayReturned Done once no replay a cancel that threw ended for the subscription is in its action
-     *                                any more, so a later resume doesn't run the action alongside it
+     * @param cancelledReplayReturned Done once the thread of every replay a cancel that threw ended for the subscription
+     *                                has returned, so a later resume doesn't run the action alongside it
      */
     private record Subscribed(AbstractCatchupSubscriptionModel owner, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action,
                               CompletableFuture<Void> cancelledReplayReturned) {
@@ -321,15 +344,17 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * When the delegate throws on being asked whether it runs, the model stops again, and what the delegate threw is
      * added to the start's failure as suppressed.
      * <p>
-     * When a subscription the live delegate holds paused would replay on {@link #resumeSubscription(String)}, or a replay
-     * that a cancel that threw ended for one can still be in its action, the live delegate is started without resuming
-     * anything, and each subscription it holds paused is then resumed as {@link #resumeSubscription(String)} resumes it.
-     * One that replays does so from the stored position first, one whose cancelled replay is still in the action waits
-     * for it as {@link #resumeSubscription(String)} does, and the live delegate resumes each of the others as its own
-     * {@code resumeSubscription(String)} does, without this waiting for it to open. One that runs by the time it is
-     * resumed counts as resumed. The first resume that throws is thrown
-     * once all of them are resumed. Reading the stored positions to decide this counts as part of starting the live
-     * delegate, so when it throws, the model stops again as it does when the live delegate throws.
+     * When a subscription the live delegate holds paused would replay on {@link #resumeSubscription(String)}, a replay
+     * that a cancel ended for one hasn't returned yet, or a {@link #cancelSubscription(String)} is under way, the live
+     * delegate is started without resuming anything, and each subscription it holds paused is then resumed as
+     * {@link #resumeSubscription(String)} resumes it, one at a time. One that replays does so from the stored position
+     * first, one whose cancelled replay hasn't returned waits for it as {@link #resumeSubscription(String)} does, and the
+     * live delegate resumes each of the others as its own {@code resumeSubscription(String)} does, without this waiting
+     * for it to open. One whose cancelled replay doesn't return holds up the ones after it for up to ten seconds, and
+     * its resume then throws {@link IllegalStateException}. One that runs by the time it is resumed counts as resumed,
+     * and one cancelled by then is skipped. The first resume that throws is thrown once all of them are resumed. Reading
+     * the stored positions to decide this counts as part of starting the live delegate, so when it throws, the model
+     * stops again as it does when the live delegate throws.
      */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
@@ -355,12 +380,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * Whether a subscription made through this model would replay on {@link #resumeSubscription(String)}, as
      * {@link #replayToResume(String)} describes, or such a replay runs or waits on this model, or a replay a cancel that
-     * threw ended for one can still be in the action. The live delegate holds the subscription of each of them paused,
-     * and must not resume it itself.
+     * threw ended for one hasn't returned yet, or a cancel of any subscription is under way. The live delegate holds the
+     * subscription of each of them paused, and must not resume it itself.
      */
     boolean anyResumeReplays() {
+        // Read in the order a cancel moves a replay through them, so a cancel that runs meanwhile can't move it past
+        // every read. It puts the cancel under way before it takes the replay away, and keeps the subscription again,
+        // when it throws, before it removes the cancel under way.
         return currentAttempt.values().stream().anyMatch(attempt -> attempt.owner == this && attempt.replay.resuming)
                 || parkedReplays.values().stream().anyMatch(parked -> parked.replay().resuming)
+                || !cancelsUnderWay.isEmpty()
                 || subscribed.entrySet().stream().anyMatch(entry -> entry.getValue().owner() == this
                 && (!entry.getValue().cancelledReplayReturned().isDone() || replayThatResumeRuns(entry.getKey()) != null));
     }
@@ -379,7 +408,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * Resumes each of {@code subscriptionIds} with {@code resume}, also when an earlier one throws, and then throws the
      * first failure with the others added as suppressed. One that already runs, such as one whose replay handed over
-     * after it was listed, counts as resumed.
+     * after it was listed, counts as resumed. One the live delegate no longer knows, such as one cancelled after it was
+     * listed, is skipped.
      */
     static void resumeEach(Set<String> subscriptionIds, Consumer<String> resume) {
         runEach(subscriptionIds, subscriptionId -> {
@@ -387,6 +417,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 resume.accept(subscriptionId);
             } catch (SubscriptionAlreadyRunningException ignored) {
                 // Resumed by the time this got to it, which is what this was asked to do
+            } catch (UnknownSubscriptionException ignored) {
+                // Cancelled by the time this got to it, so nothing is left to resume
             }
         });
     }
@@ -490,10 +522,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@link #replayToResume(String)} describes.
      * <p>
      * After a {@link #cancelSubscription(String)} that threw, the replay that cancel ended can still be in the
-     * subscription's action, also when a {@link #stop()} came before or after the cancel. A replay this starts waits on
-     * its own thread until that replay is out of the action. When this doesn't replay, it waits up to ten seconds before
-     * the live delegate resumes the subscription, and throws {@link IllegalStateException} without resuming it when the
-     * action hasn't returned by then, or at once when called from inside that action.
+     * subscription's action or in a read of the history, also when a {@link #stop()} came before or after the cancel. A
+     * replay this starts waits on its own thread until that replay has returned. When this doesn't replay, it waits up
+     * to ten seconds for that replay to return before the live delegate resumes the subscription, and throws
+     * {@link IllegalStateException} without resuming it when the replay hasn't returned by then, or at once when called
+     * from inside the action. Like every other call for the subscription it runs alone, so a
+     * {@link #pauseSubscription(String)} or {@link #cancelSubscription(String)} for the subscription that comes meanwhile
+     * doesn't run until it returns, and a {@link #stop()} can be held up the same way.
      * <p>
      * A resume while a replay for the subscription runs returns the handle of that replay. A pause asked while the replay
      * still reads history is dropped, so the replay hands over and the subscription runs.
@@ -534,16 +569,18 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * stores. The live delegate handles such a position as one it cannot open its live feed at. A replay that
      * {@link #resumeSubscription(String)} started for the subscription, running or waiting to run again, is held first
      * and ends once the live delegate has resumed the subscription, so the position given here wins over it, and a later
-     * {@link #resumeSubscription(String)} can replay again. When the live delegate throws, the replay is as it was before
-     * this call, and this throws what the live delegate threw. When the
-     * replay is in the subscription's action, this holds the replay and waits up to ten seconds for the action to return
-     * before the live delegate resumes the subscription, so the replay's action doesn't run alongside the action of the
-     * resumed subscription. After a {@link #cancelSubscription(String)} that threw, it waits the same way for the replay
-     * that cancel ended, which nothing runs again, also when a {@link #stop()} came before or after the cancel. When the
-     * action doesn't return in time, this logs at {@code ERROR}, runs a replay it held again as it was and throws
-     * {@link IllegalStateException}, with what running it again threw added as suppressed. Called from inside that
-     * action, on the replay's own thread, it throws {@link IllegalStateException} at once and changes nothing. An action
-     * that hands the call to another thread and waits for it fails once the ten seconds have passed.
+     * {@link #resumeSubscription(String)} can replay again. When the live delegate throws, a replay this held runs again
+     * as it was, and this throws what the live delegate threw. When the replay is in the subscription's action or reads
+     * history, this holds the replay and waits up to ten seconds for it to return before the live delegate resumes the
+     * subscription, so the replay's action doesn't run alongside the action of the resumed subscription. After a
+     * {@link #cancelSubscription(String)} that threw, it waits the same way for the replay that cancel
+     * ended, which nothing runs again, also when a {@link #stop()} came before or after the cancel. When the replay
+     * doesn't return in time, this logs at {@code ERROR}, runs a replay it held again as it was and throws
+     * {@link IllegalStateException}, with what running it again threw added as suppressed. A replay this held stays held
+     * instead of running again when this model was stopped meanwhile or the {@link CatchupListener} throws as it starts,
+     * and the {@link IllegalStateException} says so. It runs again on a resume or a start that resumes. Called from
+     * inside the action, on the replay's own thread, this throws {@link IllegalStateException} at once and changes
+     * nothing. An action that hands the call to another thread and waits for it fails once the ten seconds have passed.
      * <p>
      * Like every other call that changes the subscription, it runs alone. A pause, resume, cancel or subscribe for the
      * same id waits until it returns, for up to ten seconds, and then acts on what it left. While it runs, a subscription
@@ -1110,6 +1147,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@code resuming} also undoes a pause asked for before it was parked.
      */
     private @Nullable Subscription relaunchParkedReplay(String subscriptionId, boolean resuming) {
+        RunAgain runAgain = runParkedReplayAgain(subscriptionId, resuming);
+        return runAgain == null ? null : new CatchupSubscription(subscriptionId, runAgain.replay().result);
+    }
+
+    /**
+     * Runs {@code subscriptionId}'s parked replay again as {@link #relaunchParkedReplay(String, boolean)} does, and
+     * returns it with whether it runs, or {@code null} when this model has no parked replay for it. It stays parked when
+     * this model is stopped by then or the {@link CatchupListener} throws as it starts.
+     */
+    private @Nullable RunAgain runParkedReplayAgain(String subscriptionId, boolean resuming) {
         final CatchupAttempt attempt;
         final ParkedReplay parked;
         // Locked, so a cancelRunningCatchup either finds the replay still parked or finds the attempt that runs it
@@ -1126,7 +1173,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         if (attempt != null) {
             runOnItsOwnThread(subscriptionId, attempt);
         }
-        return new CatchupSubscription(subscriptionId, parked.replay().result);
+        return new RunAgain(parked.replay(), attempt != null);
+    }
+
+    private record RunAgain(ReplayState replay, boolean runs) {
     }
 
     /**
@@ -1525,7 +1575,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     /**
      * Cancels the catch-up of {@code subscriptionId} and the subscription in the live delegate, and deletes its stored
      * position. Returns without waiting for a replay that is in the subscriber's action, which stores nothing more once
-     * it returns.
+     * it returns. While this runs, {@link #start(boolean) start(true)} doesn't let the live delegate resume the
+     * subscription itself.
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
@@ -1543,25 +1594,36 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * live delegate, and remembers the subscription again as it was made when {@code cancel} throws. The live delegate
      * can still hold the subscription paused then, and a later {@link #resumeSubscription(String)} replays from the
      * position stored for it instead of leaving the live delegate to resume from its own. A replay the cancel ended
-     * doesn't run again, and no later resume of the subscription lets the action run until that replay is out of it,
-     * also when a stop held it before the cancel or takes it away after. Called with the {@link #claim} held.
+     * doesn't run again. From the moment the cancel starts until the thread of that replay has returned, no resume of
+     * the subscription and no {@link #start(boolean) start(true)} lets the action run, whether the cancel succeeds or
+     * throws, also when a stop held the replay before the cancel or takes it away after. Called with the {@link #claim}
+     * held.
      */
     void cancelKeepingWhatWasSubscribedOnFailure(String subscriptionId, Runnable cancel) {
         Subscribed made = subscribed.get(subscriptionId);
-        // Read before the cancel takes the replay away
-        @Nullable Subscribed kept = made == null ? null : new Subscribed(made.owner(), made.filter(), made.startAt(), made.action(),
-                CompletableFuture.allOf(made.cancelledReplayReturned(), made.owner().replayReturned(subscriptionId)));
+        CancelUnderWay underWay = new CancelUnderWay(made == null ? CompletableFuture.completedFuture(null) : made.cancelledReplayReturned());
+        // Before the cancel takes the replay away, so start(true) and every resume find it all through the cancel. A
+        // cancel the live delegate's cancel makes for the same id on this thread adds to the one already under way.
+        CancelUnderWay outer = cancelsUnderWay.putIfAbsent(subscriptionId, underWay);
+        CancelUnderWay current = outer == null ? underWay : outer;
         try {
             cancel.run();
         } catch (RuntimeException | Error e) {
-            if (made != null && kept != null) {
+            if (made != null) {
+                // Before the cancel under way is removed, so one of them always has the replay
+                Subscribed kept = new Subscribed(made.owner(), made.filter(), made.startAt(), made.action(), current.replaysReturned);
                 subscribed.compute(subscriptionId, (id, now) -> now == null || now == made ? kept : now);
             }
             throw e;
+        } finally {
+            if (outer == null) {
+                cancelsUnderWay.remove(subscriptionId, underWay);
+            }
         }
     }
 
-    // Done once no attempt at the replay that runs or is held for subscriptionId on this model is in the action any more
+    // Done once the thread of every attempt at the replay that runs or is held for subscriptionId on this model has
+    // returned
     private CompletableFuture<Void> replayReturned(String subscriptionId) {
         CatchupAttempt running = currentAttempt.get(subscriptionId);
         ParkedReplay parked = parkedReplays.get(subscriptionId);
@@ -1583,6 +1645,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // are then no-ops with or without a lock, including for an arbitrary or unknown id a caller passes here.
         HandoverLock lock = tryLockHandover(subscriptionId);
         try {
+            // Read under the lock that a replay run again registers under, so an attempt that runs the replay again
+            // just before this is waited for too
+            CancelUnderWay underWay = cancelsUnderWay.get(subscriptionId);
+            if (underWay != null) {
+                underWay.add(replayReturned(subscriptionId));
+            }
             runningCatchupSubscriptions.remove(subscriptionId);
             // Flags whichever attempt is currently registered, atomically with respect to a concurrent resubscribe
             // for the same id, instead of removing or replacing the entry: a dual-mode dispatcher calls this on both
@@ -1615,9 +1683,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * Takes a replay a resume started for {@code subscriptionId} away from its attempt and holds it, when it runs on this
      * model, so it delivers nothing more, and returns it, or one already held on this model, as a replay in the way of a
      * resume at a position the caller gives. A replay that a cancel that threw ended for a subscription made through this
-     * model, which nothing runs again, is returned as one to wait for. Returns {@code null} when there is none. Called
-     * with the {@link #claim} held, so no other lifecycle call can run the held replay again before the caller ends it or
-     * puts it back.
+     * model, or that a cancel still under way ended, which nothing runs again, is returned as one to wait for. Returns
+     * {@code null} when there is none. Called with the {@link #claim} held, so no other lifecycle call can run the held
+     * replay again before the caller ends it or puts it back.
      *
      * @throws IllegalStateException when called from inside the subscriber's action, on the thread of a replay for
      *                               {@code subscriptionId}, while there is a replay in the way. Nothing is changed then,
@@ -1653,15 +1721,24 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
-    // Done once no replay a cancel that threw ended for a subscription made through this model is in the action any more
+    // Done once the thread of every replay has returned that a cancel under way ended for subscriptionId, or a cancel that
+    // threw ended for a subscription made through this model
     private CompletableFuture<Void> cancelledReplayReturned(String subscriptionId) {
         Subscribed made = subscribed.get(subscriptionId);
-        return made == null || made.owner() != this ? CompletableFuture.completedFuture(null) : made.cancelledReplayReturned();
+        return CompletableFuture.allOf(made == null || made.owner() != this ? CompletableFuture.completedFuture(null) : made.cancelledReplayReturned(),
+                replaysACancelUnderWayEnded(subscriptionId));
+    }
+
+    // Done once the thread of every replay a cancel under way ended for subscriptionId has returned, and done when no
+    // cancel for it is under way
+    private CompletableFuture<Void> replaysACancelUnderWayEnded(String subscriptionId) {
+        CancelUnderWay underWay = cancelsUnderWay.get(subscriptionId);
+        return underWay == null ? CompletableFuture.completedFuture(null) : underWay.replaysReturned;
     }
 
     /**
      * A replay a resume started that {@link #holdReplayToResume} found in the way of a resume at a given position.
-     * {@code actionReturned} completes once no attempt at it is still in the subscriber's action.
+     * {@code actionReturned} completes once the thread of every attempt at it has returned.
      */
     final class ReplayInTheWay {
         private final String subscriptionId;
@@ -1690,19 +1767,24 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             }
         }
 
-        // Runs a replay the resume held again, so it is as it was before. Its next attempt waits on its own thread for
-        // the action of the attempt the resume held to return.
-        void putBack() {
-            if (heldByTheResume) {
-                relaunchParkedReplay(subscriptionId, false);
+        // Runs a replay the resume held again, so it is as it was before, and returns whether it is. Its next attempt
+        // waits on its own thread for the thread of the attempt the resume held to return. It stays held when this model
+        // is stopped by then or the CatchupListener throws as it starts.
+        boolean putBack() {
+            if (!heldByTheResume) {
+                return true;
             }
+            RunAgain runAgain = runParkedReplayAgain(subscriptionId, false);
+            return runAgain != null && runAgain.runs();
         }
     }
 
     /**
-     * Waits at most {@link #LIFECYCLE_WAIT} until no replay in {@code inTheWay} is in the subscriber's action. When one
-     * still is, puts each of them back as it was, logs at {@code ERROR} and throws {@link IllegalStateException}, with
-     * what putting one back threw added as suppressed.
+     * Waits at most {@link #LIFECYCLE_WAIT} until every replay in {@code inTheWay} has returned. When one hasn't, puts
+     * each of them back as it was, logs at {@code ERROR} and throws {@link IllegalStateException}. The exception says
+     * nothing was changed only when each of them runs as it did before. It says so when one is still held, because this
+     * model was stopped or the {@link CatchupListener} threw as it started, and when one couldn't be run again, with what
+     * putting it back threw added as suppressed.
      */
     static void awaitTheActions(String subscriptionId, List<ReplayInTheWay> inTheWay) {
         CompletableFuture<Void> actionsReturned = CompletableFuture.allOf(inTheWay.stream().map(replay -> replay.actionReturned).toArray(CompletableFuture[]::new));
@@ -1710,42 +1792,52 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             return;
         }
         Throwable putBackFailure = null;
+        AtomicBoolean allRunAsBefore = new AtomicBoolean(true);
         try {
-            runEach(inTheWay, ReplayInTheWay::putBack);
+            runEach(inTheWay, replay -> {
+                if (!replay.putBack()) {
+                    allRunAsBefore.set(false);
+                }
+            });
         } catch (RuntimeException | Error e) {
             putBackFailure = e;
         }
-        String whatChanged = putBackFailure == null ? NOTHING_CHANGED
-                : "A catch-up replay this call held for the subscription couldn't be run again, and the suppressed exception says why.";
-        IllegalStateException timedOut = new IllegalStateException("Cannot resume subscription " + subscriptionId + " from the given position, because the action of its catch-up replay didn't return within "
+        String whatChanged = putBackFailure != null ? "A catch-up replay this call held for the subscription couldn't be run again, and the suppressed exception says why."
+                : !allRunAsBefore.get() ? "A catch-up replay this call held for the subscription is still held, because the model was stopped or the catch-up listener threw as the replay started again."
+                + " It runs again once the subscription is resumed or the model started."
+                : NOTHING_CHANGED;
+        IllegalStateException timedOut = new IllegalStateException("Cannot resume subscription " + subscriptionId + " from the given position, because its catch-up replay didn't return from the action or the history read within "
                 + LIFECYCLE_WAIT.toMillis() + " ms. " + whatChanged);
         if (putBackFailure != null) {
             timedOut.addSuppressed(putBackFailure);
         }
-        log.error("Subscription {} was not resumed from the given position, because the action of its catch-up replay didn't return within {} ms. {}",
+        log.error("Subscription {} was not resumed from the given position, because its catch-up replay didn't return from the action or the history read within {} ms. {}",
                 subscriptionId, LIFECYCLE_WAIT.toMillis(), whatChanged);
         throw timedOut;
     }
 
     /**
-     * Waits at most {@link #LIFECYCLE_WAIT} until no replay a cancel that threw ended for {@code subscriptionId} is in
-     * the subscriber's action, before the live delegate resumes the subscription without a replay. When one still is,
-     * logs at {@code ERROR} and throws {@link IllegalStateException}, as it does at once when called from inside that
-     * action. {@code whatChanged} says what the caller did before, which the log and the exception repeat.
+     * Waits at most {@link #LIFECYCLE_WAIT} until every replay has returned that a cancel that threw, or a cancel still
+     * under way, ended for {@code subscriptionId}, before the live delegate resumes the subscription without a replay.
+     * When one hasn't, logs at {@code ERROR} and throws {@link IllegalStateException}, as it does at once when called
+     * from inside the action. {@code whatChanged} says what the caller did before, which the log and the exception
+     * repeat.
      */
     void awaitTheCancelledReplay(String subscriptionId, String whatChanged) {
         Subscribed made = subscribed.get(subscriptionId);
-        if (made == null || made.cancelledReplayReturned().isDone()) {
+        CompletableFuture<Void> cancelledReplayReturned = CompletableFuture.allOf(made == null ? CompletableFuture.completedFuture(null) : made.cancelledReplayReturned(),
+                replaysACancelUnderWayEnded(subscriptionId));
+        if (cancelledReplayReturned.isDone()) {
             return;
         }
         if (replaysOnTheCallingThread(subscriptionId)) {
             throw new IllegalStateException("Cannot resume subscription " + subscriptionId + " from inside its own action while a cancelled catch-up replay is in it,"
                     + " because the subscription model would deliver events to the action while the replay is still in it. Resume it from another thread. " + whatChanged);
         }
-        if (!completesWithin(made.cancelledReplayReturned(), LIFECYCLE_WAIT)) {
-            log.error("Subscription {} was not resumed, because the action of its cancelled catch-up replay didn't return within {} ms. {}",
+        if (!completesWithin(cancelledReplayReturned, LIFECYCLE_WAIT)) {
+            log.error("Subscription {} was not resumed, because its cancelled catch-up replay didn't return from the action or the history read within {} ms. {}",
                     subscriptionId, LIFECYCLE_WAIT.toMillis(), whatChanged);
-            throw new IllegalStateException("Cannot resume subscription " + subscriptionId + ", because the action of its cancelled catch-up replay didn't return within "
+            throw new IllegalStateException("Cannot resume subscription " + subscriptionId + ", because its cancelled catch-up replay didn't return from the action or the history read within "
                     + LIFECYCLE_WAIT.toMillis() + " ms. " + whatChanged);
         }
     }

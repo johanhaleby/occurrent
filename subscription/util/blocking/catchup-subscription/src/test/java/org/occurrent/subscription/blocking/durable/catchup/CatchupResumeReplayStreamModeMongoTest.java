@@ -1883,6 +1883,111 @@ class CatchupResumeReplayStreamModeMongoTest {
         assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is paused").isTrue();
     }
 
+    @Test
+    void a_start_that_resumes_from_another_thread_inside_a_failing_cancel_does_not_let_the_live_delegate_resume_a_subscription_whose_parked_resume_replay_is_in_the_action() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, a stop has parked it, and the live delegate starts the model on another thread, with the subscriptions resumed, as it fails the cancel
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        AtomicReference<CompletableFuture<?>> startingInTheCancel = new AtomicReference<>();
+        Runnable startFromAnotherThread = () -> startingInTheCancel.set(callFromAnotherThreadUntilItWaitsIn(() -> {
+            catchupB.start(true);
+            return null;
+        }, "tryLockWithin"));
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)), durable -> new CancelFailingModel(durable, startFromAnotherThread));
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        catchupB.stop();
+
+        // When the subscription is cancelled, and something is written afterwards
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        append("duringTheHold", 4);
+
+        // Then the action is not called again while the cancelled replay is in it
+        assertTheActionIsNotCalledAgainWhileTheCancelledReplayIsInIt();
+        // And once the cancelled replay has left the action, the start returns and the subscription runs
+        assertTheSubscriptionRunsOnceTheCancelledReplayHasLeftTheAction(requireNonNull(startingInTheCancel.get()), releaseH2);
+    }
+
+    @Test
+    void a_start_that_resumes_from_another_thread_inside_a_cancel_that_succeeds_returns_without_failing_and_resumes_nothing() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, a stop has parked it, and the live delegate starts the model on another thread, with the subscriptions resumed, as it cancels
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        AtomicReference<CompletableFuture<?>> startingInTheCancel = new AtomicReference<>();
+        Runnable startFromAnotherThread = () -> startingInTheCancel.set(callFromAnotherThreadUntilItWaitsIn(() -> {
+            catchupB.start(true);
+            return null;
+        }, "tryLockWithin"));
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)), durable -> new CancelFailingModel(durable, startFromAnotherThread, false));
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        catchupB.stop();
+
+        // When the subscription is cancelled, and something is written afterwards
+        assertThat(catchThrowable(() -> catchupB.cancelSubscription(subscriptionId))).as("what the cancel threw").isNull();
+        append("afterTheCancel", 4);
+
+        // Then the action is not called again while the cancelled replay is in it
+        assertTheActionIsNotCalledAgainWhileTheCancelledReplayIsInIt();
+        // And once the cancelled replay has left the action, the start has returned without failing
+        releaseH2.countDown();
+        assertThat(failureOf(requireNonNull(startingInTheCancel.get()))).as("what the start threw").isNull();
+        // And the subscription is gone, so nothing written after the cancel reaches B
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription runs").isFalse();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is paused").isFalse();
+        await("nothing written after the cancel reaches B").during(2, SECONDS).atMost(6, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).doesNotContain("afterTheCancel"));
+        assertThat(maxInAction.get()).as("the most calls of the action in flight at once").isEqualTo(1);
+    }
+
+    @Test
+    void a_resume_from_another_thread_inside_a_failing_cancel_waits_for_the_cancelled_resume_replay_to_leave_the_action() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, the position stored for the subscription is gone, and the live delegate resumes the subscription on another thread as it fails the cancel
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        AtomicReference<CompletableFuture<?>> resumingInTheCancel = new AtomicReference<>();
+        Runnable resumeFromAnotherThread = () -> resumingInTheCancel.set(callFromAnotherThreadUntilItWaitsIn(() -> catchupB.resumeSubscription(subscriptionId), "tryLockWithin"));
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)), durable -> new CancelFailingModel(durable, resumeFromAnotherThread));
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        storage.delete(subscriptionId);
+
+        // When the subscription is cancelled, and something is written afterwards
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        append("duringTheHold", 4);
+
+        // Then the resume does not return, and the live delegate does not call the action, while the cancelled replay is in it
+        assertTheCallWaitsForTheCancelledReplayInTheAction(requireNonNull(resumingInTheCancel.get()));
+        // And once the cancelled replay has left the action, the resume returns and the subscription runs
+        assertTheSubscriptionRunsOnceTheCancelledReplayHasLeftTheAction(requireNonNull(resumingInTheCancel.get()), releaseH2);
+    }
+
+    @Test
+    void a_resume_on_the_cancelling_thread_inside_a_failing_cancel_waits_for_the_cancelled_resume_replay_to_leave_the_action() throws Exception {
+        // Given B's resume replay is in the action, blocked on h2, the position stored for the subscription is gone, and the live delegate resumes the subscription on the cancelling thread as it fails the cancel
+        CountDownLatch inH2 = new CountDownLatch(1);
+        CountDownLatch releaseH2 = new CountDownLatch(1);
+        givenAnotherNodeStoredAPosition(countingEntries(recording("h2", inH2, releaseH2)),
+                durable -> new CancelFailingModel(durable, () -> catchupB.resumeSubscription(subscriptionId)));
+        catchupB.resumeSubscription(subscriptionId);
+        assertThat(inH2.await(10, SECONDS)).as("B's replay reaches h2").isTrue();
+        storage.delete(subscriptionId);
+
+        // When the subscription is cancelled from another thread, and something is written afterwards
+        CompletableFuture<Void> cancelling = callFromAnotherThreadUntilItWaitsIn(() -> {
+            catchupB.cancelSubscription(subscriptionId);
+            return null;
+        }, "awaitTheCancelledReplay");
+        append("duringTheHold", 4);
+
+        // Then the cancel does not return, and the live delegate does not call the action, while the cancelled replay is in it
+        assertTheCallWaitsForTheCancelledReplayInTheAction(cancelling);
+        // And once the cancelled replay has left the action, the cancel fails as the live delegate made it, and the subscription runs
+        releaseH2.countDown();
+        assertThat(failureOf(cancelling)).as("the cancel").isInstanceOf(IllegalStateException.class).hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        assertTheSubscriptionRuns();
+    }
+
     private <T> CompletableFuture<T> callFromAnotherThreadUntilItWaitsIn(Supplier<T> call, String method) {
         AtomicReference<Thread> callingThread = new AtomicReference<>();
         CompletableFuture<T> calling = CompletableFuture.supplyAsync(() -> {
@@ -1891,6 +1996,11 @@ class CatchupResumeReplayStreamModeMongoTest {
         });
         awaitParkedIn(calling, callingThread, method);
         return calling;
+    }
+
+    private void assertTheActionIsNotCalledAgainWhileTheCancelledReplayIsInIt() {
+        await("the action is not called again while the cancelled replay is in it").during(1, SECONDS).atMost(5, SECONDS)
+                .untilAsserted(() -> assertThat(maxInAction.get()).as("the most calls of the action in flight at once while the cancelled replay was in it").isEqualTo(1));
     }
 
     private void assertTheCallWaitsForTheCancelledReplayInTheAction(CompletableFuture<?> call) {
@@ -1904,6 +2014,10 @@ class CatchupResumeReplayStreamModeMongoTest {
     private void assertTheSubscriptionRunsOnceTheCancelledReplayHasLeftTheAction(CompletableFuture<?> call, CountDownLatch releaseCancelledReplay) throws Exception {
         releaseCancelledReplay.countDown();
         assertThat(failureOf(call)).as("what the call that waited threw").isNull();
+        assertTheSubscriptionRuns();
+    }
+
+    private void assertTheSubscriptionRuns() {
         append("afterResume", 5);
         await("B delivers what is written after the resume").atMost(10, SECONDS)
                 .untilAsserted(() -> assertThat(receivedByB).contains("afterResume"));
@@ -2121,22 +2235,39 @@ class CatchupResumeReplayStreamModeMongoTest {
     }
 
     /**
-     * A wrapper of the model it is made over, whose first cancel throws without reaching that model, so the model still
-     * holds the subscription. Every other call, and every later cancel, goes through.
+     * A wrapper of the model it is made over, whose first cancel runs a step and then throws without reaching that model,
+     * so the model still holds the subscription. Every other call, and every later cancel, goes through.
      */
     private static final class CancelFailingModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
         static final String UNAVAILABLE = "The live delegate cannot cancel";
         private final CheckpointAwareSubscriptionModel delegate;
         private final AtomicBoolean failed = new AtomicBoolean();
+        private final Runnable beforeItFails;
+        private final boolean failsTheCancel;
 
         CancelFailingModel(CheckpointAwareSubscriptionModel delegate) {
+            this(delegate, () -> {
+            });
+        }
+
+        CancelFailingModel(CheckpointAwareSubscriptionModel delegate, Runnable beforeItFails) {
+            this(delegate, beforeItFails, true);
+        }
+
+        // With failsTheCancel false, the first cancel runs the step and then goes through like every other
+        CancelFailingModel(CheckpointAwareSubscriptionModel delegate, Runnable beforeItFails, boolean failsTheCancel) {
             this.delegate = delegate;
+            this.beforeItFails = beforeItFails;
+            this.failsTheCancel = failsTheCancel;
         }
 
         @Override
         public void cancelSubscription(String subscriptionId) {
             if (failed.compareAndSet(false, true)) {
-                throw new IllegalStateException(UNAVAILABLE);
+                beforeItFails.run();
+                if (failsTheCancel) {
+                    throw new IllegalStateException(UNAVAILABLE);
+                }
             }
             delegate.cancelSubscription(subscriptionId);
         }
