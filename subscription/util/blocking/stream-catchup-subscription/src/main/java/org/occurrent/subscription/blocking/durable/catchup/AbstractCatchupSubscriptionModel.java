@@ -2221,12 +2221,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 : !allRunAsBefore.get() ? "A catch-up replay this call held for the subscription is still held, because the model was stopped or the catch-up listener threw as the replay started again."
                 + " It runs again once the subscription is resumed or the model started."
                 : NOTHING_CHANGED;
-        IllegalStateException timedOut = new IllegalStateException("Cannot resume subscription " + subscriptionId + " from the given position, because its catch-up replay didn't return from the action or the history read within "
+        IllegalStateException timedOut = new IllegalStateException("Cannot resume subscription " + subscriptionId + " from the given position, because its catch-up replay didn't return from the action, the history read or the check of its live start within "
                 + LIFECYCLE_WAIT.toMillis() + " ms. " + whatChanged);
         if (putBackFailure != null) {
             timedOut.addSuppressed(putBackFailure);
         }
-        log.error("Subscription {} was not resumed from the given position, because its catch-up replay didn't return from the action or the history read within {} ms. {}",
+        log.error("Subscription {} was not resumed from the given position, because its catch-up replay didn't return from the action, the history read or the check of its live start within {} ms. {}",
                 subscriptionId, LIFECYCLE_WAIT.toMillis(), whatChanged);
         throw timedOut;
     }
@@ -2250,9 +2250,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                     + " because the subscription model would deliver events to the action while the replay is still in it. Resume it from another thread. " + whatChanged);
         }
         if (!completesWithin(cancelledReplayReturned, LIFECYCLE_WAIT)) {
-            log.error("Subscription {} was not resumed, because its cancelled catch-up replay didn't return from the action or the history read within {} ms. {}",
+            log.error("Subscription {} was not resumed, because its cancelled catch-up replay didn't return from the action, the history read or the check of its live start within {} ms. {}",
                     subscriptionId, LIFECYCLE_WAIT.toMillis(), whatChanged);
-            throw new IllegalStateException("Cannot resume subscription " + subscriptionId + ", because its cancelled catch-up replay didn't return from the action or the history read within "
+            throw new IllegalStateException("Cannot resume subscription " + subscriptionId + ", because its cancelled catch-up replay didn't return from the action, the history read or the check of its live start within "
                     + LIFECYCLE_WAIT.toMillis() + " ms. " + whatChanged);
         }
     }
