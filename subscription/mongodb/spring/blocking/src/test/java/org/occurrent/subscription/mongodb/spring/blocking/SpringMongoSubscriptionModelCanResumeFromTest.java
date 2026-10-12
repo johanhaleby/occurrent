@@ -16,6 +16,10 @@
 
 package org.occurrent.subscription.mongodb.spring.blocking;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoSocketReadException;
 import com.mongodb.ServerAddress;
@@ -36,14 +40,17 @@ import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.testsupport.mongodb.ChangeStreamHistory;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntConsumer;
+import java.util.stream.Collectors;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -149,6 +156,36 @@ class SpringMongoSubscriptionModelCanResumeFromTest {
         assertThat(thrown).isNull();
         assertThat(answer).hasValue(false);
         assertThat(probes).hasValue(1);
+    }
+
+    @Test
+    void logs_each_failed_probe_attempt_at_warn_with_the_collection_name() {
+        Logger modelLog = (Logger) LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        Level originalLevel = modelLog.getLevel();
+        modelLog.addAppender(appender);
+        modelLog.setLevel(Level.WARN);
+        try {
+            AtomicInteger probes = new AtomicInteger();
+            useModelWhoseProbe(RetryStrategy.fixed(Duration.ofMillis(10)), probes, failOnTheFirstAttempt(transientFailure()));
+            Checkpoint checkpoint = requireNonNull(subscriptionModel.globalCheckpoint());
+
+            subscriptionModel.canResumeFrom(checkpoint);
+        } finally {
+            modelLog.setLevel(originalLevel);
+            modelLog.detachAppender(appender);
+            appender.stop();
+        }
+
+        List<ILoggingEvent> probeFailures = appender.list.stream()
+                .filter(event -> event.getFormattedMessage().contains("collection events can resume"))
+                .collect(Collectors.toList());
+        assertThat(probeFailures).singleElement().satisfies(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage()).contains("events", "MongoSocketReadException");
+            assertThat(event.getThrowableProxy().getClassName()).isEqualTo(MongoSocketReadException.class.getName());
+        });
     }
 
     private static MongoSocketReadException transientFailure() {
