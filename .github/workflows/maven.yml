@@ -238,8 +238,8 @@ jobs:
           # and eventstore modules that no other shard claims (`subscription/api`, `subscription/core`,
           # `subscription/inmemory`, the reactor synchronous and push modules, `subscription/redis`,
           # `eventstore/migration` and `eventstore/inmemory`). The last group lodges here so the reactor
-          # subscription utilities can have a shard of their own below and the count stays at 10. Together the
-          # lodgers cost about 150 seconds on top of the starter, so this shard is over SHARD_BUDGET_SECONDS.
+          # subscription utilities can have a shard of their own below and the count stays at 10. That last group
+          # added about 150 seconds, and the shard was already over SHARD_BUDGET_SECONDS before it.
           - { name: framework,                   paths: "framework/spring-boot-starter-mongodb framework/annotations framework/spring-boot-autoconfigure subscription/api subscription/core subscription/inmemory subscription/synchronous/reactor subscription/push/reactor subscription/redis eventstore/migration eventstore/inmemory" }
           # `eventstore/mongodb/spring` lodges here, so the blocking competing consumer can have a shard of its own and
           # the count stays at 10.
