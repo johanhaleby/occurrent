@@ -495,9 +495,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         // The live delegate doesn't have the subscription of a replay a subscribe started, and holds the one of a replay a
         // resume started paused, so the catch-up that runs or holds the replay takes the pause. Decided under the claim
         // the children share, so no other call for the subscription moves the replay between the decision and the
-        // pause. The child's own pause takes the handover lock, so a pause that comes while the replay hands over waits
-        // until the handover has gone live or failed.
-        try (AbstractCatchupSubscriptionModel.Claim ignored = claim(subscriptionId)) {
+        // pause, and under the handover lock they share, so a pause that comes while the replay hands over waits until
+        // the live delegate has the subscription or the handover has failed. A replay a subscribe started stops
+        // counting as one this model runs before the live delegate has the subscription.
+        try (AbstractCatchupSubscriptionModel.Claim ignored = claim(subscriptionId);
+             AbstractCatchupSubscriptionModel.HandoverLock alsoIgnored = anyCatchupModel().tryLockHandover(subscriptionId)) {
             AbstractCatchupSubscriptionModel replaying = presentCatchupModels().filter(model -> model.runsReplayHere(subscriptionId)).findFirst().orElse(null);
             if (replaying != null) {
                 replaying.pauseSubscription(subscriptionId);
@@ -512,8 +514,10 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         // Neither mode is known ahead of time for a bare subscriptionId, so tell both inner models to drop their own
         // bookkeeping for it (a no-op on whichever one wasn't running it) and cancel the shared live delegate once.
         try (AbstractCatchupSubscriptionModel.Claim ignored = claim(subscriptionId)) {
-            presentCatchupModels().forEach(model -> model.cancelRunningCatchup(subscriptionId));
-            subscriptionModel.cancelSubscription(subscriptionId);
+            anyCatchupModel().cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {
+                presentCatchupModels().forEach(model -> model.cancelRunningCatchup(subscriptionId));
+                subscriptionModel.cancelSubscription(subscriptionId);
+            });
             // Position storage is shared config, not per-mode state. Either inner model's config deletes the same
             // storage entry, so delegate to whichever is present instead of deleting twice.
             if (streamCatchupSubscriptionModel != null) {

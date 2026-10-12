@@ -623,16 +623,19 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     @Nullable Subscription replayToResume(String subscriptionId) {
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
             CatchupAttempt running = currentAttempt.get(subscriptionId);
-            if (running != null && (running.replay.resuming || !running.abandoned())) {
+            if (running != null && !running.abandoned()) {
                 return new CatchupSubscription(subscriptionId, running.replay.result);
             }
+            // After a cancel the live delegate failed, the subscription replays again, while the replay the cancel
+            // ended may still be in the action
             ResumeReplay resumeReplay = replayThatResumeRuns(subscriptionId);
             if (resumeReplay == null) {
-                return null;
+                return running != null && running.owner == this && running.replay.resuming ? new CatchupSubscription(subscriptionId, running.replay.result) : null;
             }
             repositionableLiveDelegate(subscriptionId);
             warnIfStoredWithoutLiveStart(subscriptionId, resumeReplay.from());
-            return new CatchupSubscription(subscriptionId, startCatchupAsync(subscriptionId, resumeReplay.replay(), false, true));
+            CompletableFuture<Void> endedReplayDone = running == null ? CompletableFuture.completedFuture(null) : running.done;
+            return new CatchupSubscription(subscriptionId, startCatchupAsync(subscriptionId, resumeReplay.replay(), false, true, endedReplayDone));
         }
     }
 
@@ -1483,9 +1486,30 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     @Override
     public void cancelSubscription(String subscriptionId) {
         try (Claim ignored = claim(subscriptionId)) {
-            cancelRunningCatchup(subscriptionId);
-            subscriptionModel.cancelSubscription(subscriptionId);
+            cancelKeepingWhatWasSubscribedOnFailure(subscriptionId, () -> {
+                cancelRunningCatchup(subscriptionId);
+                subscriptionModel.cancelSubscription(subscriptionId);
+            });
             deletePositionFromStorage(subscriptionId);
+        }
+    }
+
+    /**
+     * Runs {@code cancel}, which ends the catch-up of {@code subscriptionId} and then cancels the subscription in the
+     * live delegate, and remembers the subscription again as it was made when {@code cancel} throws. The live delegate
+     * can still hold the subscription paused then, and a later {@link #resumeSubscription(String)} replays from the
+     * position stored for it instead of leaving the live delegate to resume from its own. A replay the cancel ended
+     * doesn't run again. Called with the {@link #claim} held.
+     */
+    void cancelKeepingWhatWasSubscribedOnFailure(String subscriptionId, Runnable cancel) {
+        Subscribed made = subscribed.get(subscriptionId);
+        try {
+            cancel.run();
+        } catch (RuntimeException | Error e) {
+            if (made != null) {
+                subscribed.putIfAbsent(subscriptionId, made);
+            }
+            throw e;
         }
     }
 
@@ -1849,10 +1873,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@code holdPaused}. The returned future then completes once the replay has run and handed over.
      */
     protected Future<Subscription> startCatchupAsync(String subscriptionId, CatchupReplay catchup, boolean holdPaused) {
-        return startCatchupAsync(subscriptionId, catchup, holdPaused, false);
+        return startCatchupAsync(subscriptionId, catchup, holdPaused, false, CompletableFuture.completedFuture(null));
     }
 
-    private Future<Subscription> startCatchupAsync(String subscriptionId, CatchupReplay catchup, boolean holdPaused, boolean resuming) {
+    // The replay waits on its own thread for earlierAttemptsDone, so it doesn't run the action alongside an attempt
+    // that is still in it
+    private Future<Subscription> startCatchupAsync(String subscriptionId, CatchupReplay catchup, boolean holdPaused, boolean resuming, CompletableFuture<Void> earlierAttemptsDone) {
         CompletableFuture<Subscription> result = new CompletableFuture<>();
         ReplayState replay = new ReplayState(catchup, result, resuming);
         final CatchupAttempt attempt;
@@ -1861,7 +1887,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // the earlier attempt's late checkpoint delete runs, wiping out what this attempt just wrote instead of
         // its own.
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
-            attempt = registerOrPark(subscriptionId, replay, CompletableFuture.completedFuture(null), holdPaused);
+            attempt = registerOrPark(subscriptionId, replay, earlierAttemptsDone, holdPaused);
         }
         if (attempt != null) {
             runOnItsOwnThread(subscriptionId, attempt);
@@ -1929,9 +1955,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // be told apart from a completion. A replay or a handover that throws goes to runAgainAfter, which decides
         // for both modes whether it runs again.
         //
-        // A parked attempt does not complete the handle. The parked replay completes it once it runs again, and the
-        // flag is final by the time it is read, since parking takes the attempt out of currentAttempt under the
-        // handover lock and a finishing attempt takes that lock too.
+        // A parked attempt does not complete the handle. The parked replay completes it once it runs again. Parking
+        // takes the attempt out of currentAttempt under the handover lock, and the handovers take it out under that
+        // lock before the replay returns, so the flag is final once it returns. One that fails can still be current
+        // when what decides its failure throws, so endUndecidedAttempt reads the flag again under the lock.
         Thread.ofVirtual().name("occurrent-catchup-" + subscriptionId).start(() -> {
             CURRENT_ATTEMPT.set(attempt);
             try {
@@ -1941,10 +1968,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 }
             } catch (Throwable failure) {
                 if (!attempt.parked) {
+                    boolean ended = true;
                     try {
-                        endUndecidedAttempt(subscriptionId, attempt, failure);
+                        ended = endUndecidedAttempt(subscriptionId, attempt, failure);
                     } finally {
-                        attempt.replay.result.completeExceptionally(failure);
+                        if (ended) {
+                            attempt.replay.result.completeExceptionally(failure);
+                        }
                     }
                 }
             } finally {
@@ -1955,14 +1985,17 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     // A failure runAgainAfter didn't decide on leaves the attempt current. Ending it here lets a resume start the replay
-    // anew instead of returning its failed handle.
-    private void endUndecidedAttempt(String subscriptionId, CatchupAttempt attempt, Throwable failure) {
+    // anew instead of returning its failed handle. False when a pause or a stop held the attempt before this took the
+    // lock, so the replay runs again and completes the handle then. Parking needs the attempt to be current, so it can't
+    // come after this.
+    private boolean endUndecidedAttempt(String subscriptionId, CatchupAttempt attempt, Throwable failure) {
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
             if (currentAttempt.remove(subscriptionId, attempt)) {
                 runningCatchupSubscriptions.remove(subscriptionId);
                 pauseRequestedDuringCatchup.remove(subscriptionId);
                 logFailure(subscriptionId, failure, "it ended");
             }
+            return !attempt.parked;
         }
     }
 
