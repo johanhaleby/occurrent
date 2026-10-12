@@ -93,6 +93,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
@@ -491,6 +492,67 @@ class StreamCatchupResumeReplayMongoTest {
         awaitEnded(replayThread);
         assertThat(readerOfB.failures.get()).as("the reads that failed after the cancel").isLessThanOrEqualTo(failuresAtCancel + 1);
         assertThat(receivedByB).as("nothing is delivered after the cancel").isEmpty();
+    }
+
+    @Test
+    void a_resume_after_a_cancel_that_the_live_delegate_failed_replays_from_the_position_another_node_stored() throws Exception {
+        // Given the live delegate fails the cancel while it still holds the subscription paused
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)), CancelFailingModel::new);
+
+        // When the subscription is cancelled, and then resumed
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        assertThat(GlobalCheckpoint.isGlobalCheckpoint(storage.read(subscriptionId))).as("the position another node stored is kept by the failed cancel").isTrue();
+        catchupB.resumeSubscription(subscriptionId);
+        append("afterResume", 4);
+
+        // Then the history after the stored position is delivered, with what is written after the resume
+        await("B delivers the history after the stored position and what is written after the resume").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h2", "h3", "afterBRegistered", "afterResume"));
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
+    }
+
+    @Test
+    void a_pause_that_holds_a_failed_resume_replay_before_the_failure_deciding_it_is_ended_leaves_the_replay_held_so_a_later_resume_runs_it_and_its_handle_completes() throws Exception {
+        // Given the event store fails the first read of the resume replay, and writing the log line that says it runs
+        // again throws, so the failure is not decided and the replay thread is descheduled just before it takes the
+        // handover lock to end the attempt
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)));
+        ThrowingWhenItIsToldTheReplayRunsAgain decisionLog = new ThrowingWhenItIsToldTheReplayRunsAgain(subscriptionId);
+        decisionLog.setContext(modelLogger.getLoggerContext());
+        decisionLog.start();
+        modelLogger.addAppender(decisionLog);
+        try {
+            UndecidedFailureGapLock gapLock = new UndecidedFailureGapLock(decisionLog);
+            handoverLocksOf(catchupB).put(subscriptionId, gapLock);
+            readerOfB.failTheNext(1);
+            gapLock.armed = true;
+            catchupB.resumeSubscription(subscriptionId);
+            assertThat(gapLock.inGap.await(10, SECONDS)).as("the replay thread is about to take the lock to end the attempt after the log line that says it runs again threw").isTrue();
+            Thread replayThread = requireNonNull(readerOfB.lastFailedOn, "the thread the read failed on");
+
+            // When the subscription is paused in that gap, while the replay waits to run again
+            Throwable pauseFailure = catchThrowable(() -> catchupB.pauseSubscription(subscriptionId));
+            gapLock.leaveGap.countDown();
+
+            // Then the pause returned without failing, and the subscription is paused
+            assertThat(pauseFailure).as("the pause returned without throwing").isNull();
+            assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is paused after the pause returned").isTrue();
+            awaitEnded(replayThread);
+            assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is still paused once the replay thread has ended").isTrue();
+            assertThat(receivedByB).as("nothing is delivered while the replay is held").isEmpty();
+            // And a later resume runs the replay, whose handle completes
+            Subscription resumed = catchupB.resumeSubscription(subscriptionId);
+            await("B delivers the history after the stored position").atMost(10, SECONDS)
+                    .untilAsserted(() -> assertThat(receivedByB).contains("h2", "h3", "afterBRegistered"));
+            Throwable startFailure = catchThrowable(() -> resumed.waitUntilStarted(Duration.ofSeconds(10)));
+            assertThat(startFailure).as("waiting until the resumed replay has handed over").isNull();
+            assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+            assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
+        } finally {
+            modelLogger.detachAppender(decisionLog);
+            decisionLog.stop();
+        }
     }
 
     @Test
@@ -2033,6 +2095,58 @@ class StreamCatchupResumeReplayMongoTest {
     /**
      * Fails the chosen time it is told a catch-up started, and counts how many times it is told.
      */
+    /**
+     * Drops every line, except that it throws from the first ERROR line about a subscription that says its catch-up
+     * replay runs again in some milliseconds, as a log appender that fails does. Logback doesn't catch what a custom
+     * appender throws from doAppend.
+     */
+    private static final class ThrowingWhenItIsToldTheReplayRunsAgain extends AppenderBase<ILoggingEvent> {
+        private final String subscriptionId;
+        final AtomicBoolean threw = new AtomicBoolean();
+
+        ThrowingWhenItIsToldTheReplayRunsAgain(String subscriptionId) {
+            this.subscriptionId = subscriptionId;
+        }
+
+        @Override
+        public void doAppend(ILoggingEvent event) {
+            String message = event.getFormattedMessage();
+            if (event.getLevel() == Level.ERROR && message.contains(subscriptionId) && message.contains("it runs again in") && threw.compareAndSet(false, true)) {
+                throw new IllegalStateException("The log line could not be written");
+            }
+        }
+
+        @Override
+        protected void append(ILoggingEvent event) {
+        }
+    }
+
+    /**
+     * Holds a replay thread just before it takes the handover lock for the first time since the log line that says its
+     * replay runs again threw, which is where it ends the attempt whose failure was not decided. The lock is free
+     * meanwhile, so another call can take it first.
+     */
+    private static final class UndecidedFailureGapLock extends ReentrantLock {
+        private final ThrowingWhenItIsToldTheReplayRunsAgain decisionLog;
+        volatile boolean armed = false;
+        final CountDownLatch inGap = new CountDownLatch(1);
+        final CountDownLatch leaveGap = new CountDownLatch(1);
+
+        UndecidedFailureGapLock(ThrowingWhenItIsToldTheReplayRunsAgain decisionLog) {
+            this.decisionLog = decisionLog;
+        }
+
+        @Override
+        public void lock() {
+            if (armed && !isHeldByCurrentThread() && Thread.currentThread().getName().startsWith(REPLAY_THREAD_PREFIX) && decisionLog.threw.get()) {
+                armed = false;
+                inGap.countDown();
+                awaitUpTo(leaveGap, 10);
+            }
+            super.lock();
+        }
+    }
+
     private static final class FailingCatchupListener implements CatchupListener {
         private final int failOnStart;
         final AtomicInteger starts = new AtomicInteger();
@@ -2317,6 +2431,32 @@ class StreamCatchupResumeReplayMongoTest {
         @Override
         public boolean canResumeFrom(Checkpoint checkpoint) {
             return delegate.canResumeFrom(checkpoint);
+        }
+    }
+
+    /**
+     * A wrapper of the model it is made over, whose first cancel throws without reaching that model, so the model still
+     * holds the subscription. Every later cancel goes through.
+     */
+    private static final class CancelFailingModel extends DelegatingModel implements SubscriptionModelWrapper {
+        static final String UNAVAILABLE = "The live delegate cannot cancel";
+        private final AtomicBoolean failed = new AtomicBoolean();
+
+        CancelFailingModel(CheckpointAwareSubscriptionModel delegate) {
+            super(delegate);
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            if (failed.compareAndSet(false, true)) {
+                throw new IllegalStateException(UNAVAILABLE);
+            }
+            super.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public SubscriptionModel getWrappedSubscriptionModel() {
+            return delegate;
         }
     }
 

@@ -52,10 +52,14 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
+import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
@@ -86,11 +90,13 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
@@ -217,6 +223,60 @@ class CatchupResumeReplayStreamModeMongoTest {
         append("afterPause", 4);
         await("nothing written after the pause reaches B while it is paused").during(2, SECONDS).atMost(5, SECONDS)
                 .untilAsserted(() -> assertThat(receivedByB).doesNotContain("afterPause"));
+    }
+
+    @Test
+    void a_pause_through_the_dispatcher_that_comes_while_a_replay_a_subscribe_started_hands_over_leaves_the_subscription_paused() throws Exception {
+        // Given a replay a subscribe started has delivered the history, and its handover waits for the storage
+        givenTwoNodes();
+        append("h1", 0);
+        append("h2", 1);
+        append("h3", 2);
+        CountDownLatch inH3 = new CountDownLatch(1);
+        CountDownLatch releaseH3 = new CountDownLatch(1);
+        Subscription subscription = catchupB.subscribe(subscriptionId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)), recording("h3", inH3, releaseH3));
+        assertThat(inH3.await(10, SECONDS)).as("B's replay reaches h3").isTrue();
+        storage.blockReadsOn(thread -> thread.getName().startsWith(REPLAY_THREAD_PREFIX));
+        releaseH3.countDown();
+        assertThat(storage.blocked.await(10, SECONDS)).as("the handover reads the storage").isTrue();
+        assertThat(catchupB.isCatchingUp(subscriptionId)).as("the replay has ended, and the live delegate does not have the subscription yet").isFalse();
+
+        // When the subscription is paused in that window, off the test thread since the pause may wait for the handover
+        AtomicReference<Thread> pausingThread = new AtomicReference<>();
+        CompletableFuture<Void> pausing = CompletableFuture.runAsync(() -> {
+            pausingThread.set(Thread.currentThread());
+            catchupB.pauseSubscription(subscriptionId);
+        });
+        awaitParkedIn(pausing, pausingThread, "pauseSubscription");
+        storage.unblock();
+
+        // Then the pause returned without failing
+        assertThat(failureOf(pausing)).as("the pause returned without throwing").isNull();
+        ((CatchupSubscription) subscription).delegatedSubscription().get(10, SECONDS);
+        // And the subscription is paused, and holds back what is written after the pause
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is paused after the pause returned").isTrue();
+        assertThat(receivedByB).as("the history the replay delivered").contains("h1", "h2", "h3");
+        append("afterPause", 4);
+        await("nothing written after the pause reaches B while it is paused").during(2, SECONDS).atMost(5, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).doesNotContain("afterPause"));
+    }
+
+    @Test
+    void a_resume_through_the_dispatcher_after_a_cancel_that_the_live_delegate_failed_replays_from_the_position_another_node_stored() throws Exception {
+        // Given the live delegate fails the cancel while it still holds the subscription paused
+        givenAnotherNodeStoredAPosition(event -> receivedByB.add(nameOf(event)), CancelFailingModel::new);
+
+        // When the subscription is cancelled, and then resumed
+        assertThatThrownBy(() -> catchupB.cancelSubscription(subscriptionId)).as("the cancel").hasMessageContaining(CancelFailingModel.UNAVAILABLE);
+        assertThat(GlobalCheckpoint.isGlobalCheckpoint(storage.read(subscriptionId))).as("the position another node stored is kept by the failed cancel").isTrue();
+        catchupB.resumeSubscription(subscriptionId);
+        append("afterResume", 4);
+
+        // Then the history after the stored position is delivered, with what is written after the resume
+        await("B delivers the history after the stored position and what is written after the resume").atMost(10, SECONDS)
+                .untilAsserted(() -> assertThat(receivedByB).contains("h2", "h3", "afterBRegistered", "afterResume"));
+        assertThat(catchupB.isRunning(subscriptionId)).as("the subscription is running").isTrue();
+        assertThat(catchupB.isPaused(subscriptionId)).as("the subscription is not paused").isFalse();
     }
 
     @Test
@@ -1612,6 +1672,34 @@ class CatchupResumeReplayStreamModeMongoTest {
         append("afterBRegistered", 3);
     }
 
+    // As above, over a live delegate of B made from the durable one
+    private void givenAnotherNodeStoredAPosition(Consumer<CloudEvent> actionOfB, Function<DurableSubscriptionModel, CheckpointAwareSubscriptionModel> liveDelegateOfB) throws Exception {
+        givenTwoNodes(liveDelegateOfB);
+        AtomicInteger deliveredToA = new AtomicInteger();
+        CountDownLatch aIsStalled = new CountDownLatch(1);
+        Consumer<CloudEvent> stallingA = event -> {
+            if (deliveredToA.incrementAndGet() > 1) {
+                aIsStalled.countDown();
+                awaitUninterrupted(releaseA);
+            }
+        };
+        append("h1", 0);
+        append("h2", 1);
+        append("h3", 2);
+        catchupB.subscribePaused(subscriptionId, null, StartAt.subscriptionModelDefault(), actionOfB);
+        catchupA.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), stallingA);
+        assertThat(aIsStalled.await(10, SECONDS)).as("A's replay reaches its second event").isTrue();
+        assertThat(GlobalCheckpoint.isGlobalCheckpoint(storage.read(subscriptionId))).as("what A's replay stored is a global checkpoint").isTrue();
+        append("afterBRegistered", 3);
+    }
+
+    private void givenTwoNodes(Function<DurableSubscriptionModel, CheckpointAwareSubscriptionModel> liveDelegateOfB) {
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        catchupA = new CatchupSubscriptionModel(new DurableSubscriptionModel(springModel(), storage), eventStore, config);
+        durableB = new DurableSubscriptionModel(liveOfB, storage);
+        catchupB = new CatchupSubscriptionModel(liveDelegateOfB.apply(durableB), readerOfB, config);
+    }
+
     private void givenTwoNodes() {
         CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
         catchupA = new CatchupSubscriptionModel(new DurableSubscriptionModel(springModel(), storage), eventStore, config);
@@ -1729,6 +1817,93 @@ class CatchupResumeReplayStreamModeMongoTest {
     private void append(String name, int secondsAfterStart) {
         DomainEvent event = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.of(2026, 1, 1, 0, 0, secondsAfterStart), "name", name);
         eventStore.write(UUID.randomUUID().toString(), cloudEventConverter.toCloudEvents(List.of(event)));
+    }
+
+    /**
+     * A wrapper of the model it is made over, whose first cancel throws without reaching that model, so the model still
+     * holds the subscription. Every other call, and every later cancel, goes through.
+     */
+    private static final class CancelFailingModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
+        static final String UNAVAILABLE = "The live delegate cannot cancel";
+        private final CheckpointAwareSubscriptionModel delegate;
+        private final AtomicBoolean failed = new AtomicBoolean();
+
+        CancelFailingModel(CheckpointAwareSubscriptionModel delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            if (failed.compareAndSet(false, true)) {
+                throw new IllegalStateException(UNAVAILABLE);
+            }
+            delegate.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public Subscription subscribePaused(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribePaused(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public void stop() {
+            delegate.stop();
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            delegate.start(resumeSubscriptionsAutomatically);
+        }
+
+        @Override
+        public boolean isRunning() {
+            return delegate.isRunning();
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return delegate.isRunning(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return delegate.isPaused(subscriptionId);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return delegate.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            delegate.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+        }
+
+        @Override
+        public @Nullable Checkpoint globalCheckpoint() {
+            return delegate.globalCheckpoint();
+        }
+
+        @Override
+        public boolean canResumeFrom(Checkpoint checkpoint) {
+            return delegate.canResumeFrom(checkpoint);
+        }
+
+        @Override
+        public SubscriptionModel getWrappedSubscriptionModel() {
+            return delegate;
+        }
     }
 
     /**
