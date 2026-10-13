@@ -42,14 +42,20 @@ subscription over gets it. A pause, a resume or a cancel of the subscription, or
 takeover. A listener that throws fails that attempt, and the model asks again when it tries again. A task that throws
 is logged at `ERROR`, and the subscription stays paused.
 
-`lostFrom` is the position the subscription opened at, while it has not read past it. The models don't resolve a
-dynamic `StartAt` again for it, since the catch-up's supplier reads and saves the checkpoint storage.
+`lostFrom` is the position the subscription opened at, or the position it had read to once it read past that one. The
+models don't resolve a dynamic `StartAt` again for it, since the catch-up's supplier reads and saves the checkpoint
+storage.
 
 The blocking `HistoryLossReportingSubscriptions` gets the method as a default. The reactor API gets its own
 `HistoryLossReportingSubscriptions`, which also has `subscribeFailingIfStartLost(..)`, a `subscribe(..)` whose `Flux`
 fails with the new `HistoryLostException` instead of restarting when the history no longer reaches back to its start.
 It also gets `RepositionableSubscriptions`, which the blocking API already had. `ReactorMongoSubscriptionModel`
-implements both.
+implements both. `ReactorDurableSubscriptionModel` passes both on from the model it wraps, so a catch-up above it, as in
+`ReactorCatchupSubscriptionModel` over `ReactorDurableSubscriptionModel` over `ReactorMongoSubscriptionModel`, takes
+over too. Its `resumeSubscription(id, startAt)` goes through the same bookkeeping as its other calls for the id, and
+throws `IllegalStateException` while the subscription starts again in the wrapped model or waits to be handed to it. A
+subscription handed to the wrapped model at a position stores no checkpoint before its first event, so the durable
+model stores neither the present nor the lost live start during a takeover.
 
 A catch-up records the live start it handed over for each subscription id, and takes the subscription over when the
 wrapped model loses exactly that position. A loss once the subscription has read past it is ordinary lost history and
@@ -66,10 +72,19 @@ stays with the wrapped model. After the takeover the catch-up:
 4. Answers `isRunning(id)` with `true` and `isPaused(id)` with `false` meanwhile, as for any replay in flight, so a
    competing consumer that reads them doesn't see the wrapped model's pause.
 
+The catch-up records that it takes the subscription over when it answers, before the wrapped model pauses it. Between
+that pause and `afterPause`, the subscription reads as paused. A `resumeSubscription(id)` of the catch-up in that time
+runs the takeover's replay itself, instead of resuming the wrapped model at the lost live start, and the
+`afterPause` that follows finds nothing left to do. So does a blocking `start(true)`, which resumes each such
+subscription through the catch-up. A reactor `start(true)` resumes the wrapped model, which opens at the lost live start
+and loses it again. The catch-up takes that loss over as well, and its takeover pauses the subscription before it
+replaces the live start it recorded.
+
 On the blocking stack the handle the first handover returned follows the takeover, so its `waitUntilStarted()` keeps
 waiting until the new handover has opened. On the reactor stack a named subscription's start already completes once
 the change stream is subscribed, before MongoDB has answered, so there is nothing left to wait for. A reactor takeover
-whose replay fails logs it at `ERROR`, and the subscription stays paused until it is resumed, which replays again.
+whose replay fails logs it at `ERROR`, and the subscription stays paused until it is resumed. The resume runs the
+takeover's replay again, with 3 replays again of its own, and doesn't resume the wrapped model at the lost live start.
 
 The reactor catch-up without a subscription id reads its live half through `subscribeFailingIfStartLost(..)`, and
 replays again on a `HistoryLostException` whose `lostFrom()` is the live start it handed over.
@@ -88,11 +103,6 @@ needs.
 **Have the wrapped model replay.** A MongoDB model doesn't know the event store, and the catch-up is the one that knows
 where its replay started.
 
-**Forward the reactor capabilities through `ReactorDurableSubscriptionModel`.** The reactor starters put the durable
-model above the catch-up, so the catch-up wraps `ReactorMongoSubscriptionModel` directly and needs nothing forwarded.
-Forwarding `RepositionableSubscriptions` through the durable model would resume a subscription past its own
-bookkeeping.
-
 ## Consequences
 
 - An event written between the check and the open of the change stream is delivered, in both restart modes, on both
@@ -100,7 +110,7 @@ bookkeeping.
   replay that runs again does.
 - A takeover's replay that gives up has no caller to throw at. The blocking catch-up logs the failure at `ERROR` and
   runs the replay again after a backoff of up to 2 seconds, as it does for any replay a resume started. The reactor one
-  keeps the subscription paused.
+  keeps the subscription paused until it is resumed.
 - A wrapped model of your own that implements neither capability handles a lost live start as it would without the
   catch-up.
 - `waitUntilStarted()` on the reactor stack doesn't wait for a takeover. Changing that needs `ReactorMongoSubscriptionModel`

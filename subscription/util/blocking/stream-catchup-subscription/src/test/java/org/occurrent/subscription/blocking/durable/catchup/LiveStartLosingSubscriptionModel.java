@@ -42,13 +42,16 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Opens asynchronously like a MongoDB subscription model, and loses the first live start it opens after running
  * {@code writtenInTheGap}, or every one when asked to. The handle of an open that loses the history never reads as
  * started, and a resume returns the handle of the open it makes. A listener that takes the subscription over gets it
  * paused, otherwise it restarts from the present or is forgotten. Counts the resumes it is asked for, and can hold the
- * first open and the first pause until the test lets them go.
+ * first open and the first pause until the test lets them go. It can also hold the first takeover between its pause
+ * and what it runs after the pause, and resume a subscription without a position where it lost the history, as a
+ * MongoDB subscription model does.
  */
 final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscriptionModel, HistoryLossReportingSubscriptions, RepositionableSubscriptions {
 
@@ -64,6 +67,10 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     };
     private volatile Runnable beforeTheFirstPause = () -> {
     };
+    private final AtomicBoolean firstTakeOver = new AtomicBoolean(true);
+    private volatile Runnable betweenTheFirstTakeOverPauseAndWhatFollows = () -> {
+    };
+    private volatile @Nullable Runnable resumesWhereItWasHeldOnceThisReturns;
     private final AtomicInteger liveStartsRead = new AtomicInteger();
     private final Set<Checkpoint> lost = ConcurrentHashMap.newKeySet();
     private final List<HistoryLossListener> listeners = new CopyOnWriteArrayList<>();
@@ -99,7 +106,17 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
         return this;
     }
 
-    private record Held(@Nullable SubscriptionFilter filter, Consumer<CloudEvent> action) {
+    LiveStartLosingSubscriptionModel betweenTheFirstTakeOverPauseAndWhatFollows(Runnable betweenTheFirstTakeOverPauseAndWhatFollows) {
+        this.betweenTheFirstTakeOverPauseAndWhatFollows = betweenTheFirstTakeOverPauseAndWhatFollows;
+        return this;
+    }
+
+    LiveStartLosingSubscriptionModel resumingWhereItWasHeldOnceThisReturns(Runnable beforeTheResumedOpen) {
+        this.resumesWhereItWasHeldOnceThisReturns = beforeTheResumedOpen;
+        return this;
+    }
+
+    private record Held(@Nullable SubscriptionFilter filter, Consumer<CloudEvent> action, StartAt heldAt) {
     }
 
     private static final class OpenHandle implements Subscription {
@@ -139,16 +156,25 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+        return resume(subscriptionId, held -> startAt, () -> {
+        });
+    }
+
+    private Subscription resume(String subscriptionId, Function<Held, StartAt> startAt, Runnable beforeTheOpen) {
         resumeCalls.incrementAndGet();
         Held held = paused.remove(subscriptionId);
         if (held == null) {
             throw new IllegalStateException("Subscription " + subscriptionId + " is not paused");
         }
         OpenHandle resumed = new OpenHandle(subscriptionId);
+        Runnable open = () -> {
+            beforeTheOpen.run();
+            open(subscriptionId, held.filter(), startAt.apply(held), held.action(), resumed);
+        };
         if (opensOnTheCallingThread) {
-            open(subscriptionId, held.filter(), startAt, held.action(), resumed);
+            open.run();
         } else {
-            Thread.ofVirtual().name("live-start-losing-open-" + subscriptionId).start(() -> open(subscriptionId, held.filter(), startAt, held.action(), resumed));
+            Thread.ofVirtual().name("live-start-losing-open-" + subscriptionId).start(open);
         }
         return resumed;
     }
@@ -180,7 +206,10 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
     private void historyLost(String subscriptionId, @Nullable SubscriptionFilter filter, Checkpoint lostFrom, Consumer<CloudEvent> action, OpenHandle handle) {
         for (HistoryLossListener listener : listeners) {
             if (listener.handleHistoryLoss(subscriptionId, lostFrom) instanceof HistoryLossHandling.TakeOver takeOver) {
-                paused.put(subscriptionId, new Held(filter, action));
+                paused.put(subscriptionId, new Held(filter, action, StartAt.checkpoint(lostFrom)));
+                if (firstTakeOver.compareAndSet(true, false)) {
+                    betweenTheFirstTakeOverPauseAndWhatFollows.run();
+                }
                 takeOver.afterPause().run();
                 takeOversAsked.incrementAndGet();
                 return;
@@ -247,7 +276,8 @@ final class LiveStartLosingSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
-        return resumeSubscription(subscriptionId, StartAt.now());
+        Runnable beforeTheResumedOpen = resumesWhereItWasHeldOnceThisReturns;
+        return beforeTheResumedOpen == null ? resumeSubscription(subscriptionId, StartAt.now()) : resume(subscriptionId, Held::heldAt, beforeTheResumedOpen);
     }
 
     @Override

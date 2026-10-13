@@ -130,6 +130,7 @@ class CatchupLostLiveStartDurableMongoTest {
         return Stream.of(Replay.values()).flatMap(replay -> Stream.of(true, false).flatMap(restart ->
                 Stream.of(Arguments.of(Driver.SPRING, replay, restart, true),
                         Arguments.of(Driver.SPRING, replay, restart, false),
+                        Arguments.of(Driver.NATIVE, replay, restart, true),
                         Arguments.of(Driver.NATIVE, replay, restart, false))));
     }
 

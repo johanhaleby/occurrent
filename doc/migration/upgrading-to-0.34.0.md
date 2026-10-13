@@ -2405,9 +2405,13 @@ says. The catch-up takes the subscription over, logs a warning, and replays agai
 started from, with a new live start. That replay counts toward the 4 above. When it is the takeover's replay that gives
 up, the blocking catch-up logs the failure at `ERROR` and replays again after a backoff of up to 2 seconds, and
 `waitUntilStarted()` keeps waiting. A reactor catch-up with a subscription id logs it at `ERROR` and keeps the
-subscription paused, and resuming it replays again. A wrapped model of your own handles a lost live start as it would
-without the catch-up, unless it implements `HistoryLossReportingSubscriptions` and `RepositionableSubscriptions` as the
-MongoDB models do.
+subscription paused. Resuming it runs the takeover's replay again, which can run again 3 times of its own, and doesn't
+resume the MongoDB model where it lost the history. A resume of the catch-up between the MongoDB model's pause and the
+start of the takeover's replay starts that replay, on both stacks. `ReactorDurableSubscriptionModel` passes both
+capabilities on from the model it wraps, so a reactor catch-up over it, over `ReactorMongoSubscriptionModel`, takes the
+subscription over too, and the durable model stores no position before the subscription delivers an event live. A
+wrapped model of your own handles a lost live start as it would without the catch-up, unless it implements
+`HistoryLossReportingSubscriptions` and `RepositionableSubscriptions` as the MongoDB models do.
 
 On the reactor stack the checkpoint stored during the replay stays stored after the catch-up reaches live delivery,
 until `ReactorDurableSubscriptionModel` stores the position of a live event or saves the subscription's quiet
@@ -2661,7 +2665,8 @@ call for the subscription that runs while it waits, so a `pauseSubscription(subs
 `start(true)` resumes such a subscription the way `resumeSubscription(subscriptionId)` does. While a cancel is under
 way, or a replay a cancel ended hasn't returned, it starts the wrapped model without resuming anything and then
 resumes each subscription the wrapped model holds paused, one at a time. A subscription whose cancel is under way
-while `start(true)` lists them is resumed once that cancel has returned. One whose cancelled replay doesn't return
+while `start(true)` lists them is resumed once that cancel has returned, also when the wrapped model reports it as not
+paused during its own cancel. One whose cancelled replay doesn't return
 holds up the ones after it for up to 10 seconds, and `start(true)` throws its `IllegalStateException` once the others
 are resumed. A subscription cancelled before its turn is skipped.
 

@@ -94,7 +94,8 @@ public interface HistoryLossReportingSubscriptions extends SubscriptionModelCapa
          * subscription's position after its backoff, and asks again if the history is still lost.
          *
          * @param subscriptionId The subscription that lost its history.
-         * @param lostFrom       The position the subscription opened at.
+         * @param lostFrom       The position the subscription opened at, or the position it had read to when it had
+         *                       read past that one.
          * @return What the model does with the subscription.
          */
         HistoryLossHandling handleHistoryLoss(String subscriptionId, Checkpoint lostFrom);

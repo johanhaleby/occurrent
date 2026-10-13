@@ -320,6 +320,41 @@ class StreamCatchupTakeoverLifecycleTest {
         );
     }
 
+    @ParameterizedTest(name = "storing={0}")
+    @ValueSource(booleans = {true, false})
+    @Timeout(60)
+    void a_resume_after_the_live_model_paused_the_subscription_for_the_takeover_and_before_the_takeover_starts_replays_instead_of_resuming_the_live_model_where_it_lost_the_history(boolean storing) throws InterruptedException {
+        CountDownLatch pausedForTheTakeover = new CountDownLatch(1);
+        CountDownLatch letTheTakeoverStart = new CountDownLatch(1);
+        liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> write(writtenInTheGap))
+                .betweenTheFirstTakeOverPauseAndWhatFollows(() -> {
+                    pausedForTheTakeover.countDown();
+                    awaitUnchecked(letTheTakeoverStart);
+                })
+                // Opens again where it lost the history once the takeover has started its replay, by when the catch-up no longer records that live start
+                .resumingWhereItWasHeldOnceThisReturns(() -> waitUpTo(Duration.ofSeconds(5), () -> signals.size() > 2));
+        create(storing);
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        assertThat(pausedForTheTakeover.await(10, TimeUnit.SECONDS)).as("the live model paused the subscription for the takeover").isTrue();
+
+        Subscription resumed = catchup.resumeSubscription(ID);
+        letTheTakeoverStart.countDown();
+
+        assertThat(resumed.waitUntilStarted(Duration.ofSeconds(10))).as("started once resumed").isTrue();
+        waitUpTo(Duration.ofSeconds(10), () -> signals.size() >= 4 && !liveModel.openedAt.isEmpty() || !liveModel.restartedFromThePresent.isEmpty());
+        assertAll(
+                () -> assertThat(liveModel.restartedFromThePresent).as("restarts from the present").isEmpty(),
+                () -> assertThat(liveModel.lostLiveStarts).as("the live starts the live model lost").hasSize(1),
+                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened").hasSize(1),
+                () -> assertThat(received).as("the event written in between").filteredOn(writtenInTheGap::equals).hasSize(1),
+                () -> assertThat(signals).as("the catch-up starts and has read its history once more for the takeover")
+                        .containsExactly("catchupStarted", "historyRead", "catchupStarted", "historyRead"),
+                () -> assertThat(catchup.isRunning(ID)).as("running").isTrue(),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(failedOnTheirOwnThreads).as("failures").isEmpty()
+        );
+    }
+
     /**
      * Gets the live model to lose the live start while a pause that holds the subscription for as long as the test
      * wants is under way, and another call for the subscription waits for it. The takeover is asked for in between,
