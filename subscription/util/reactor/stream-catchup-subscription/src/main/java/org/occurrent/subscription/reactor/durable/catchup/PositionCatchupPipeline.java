@@ -25,6 +25,9 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
+import org.occurrent.subscription.api.reactor.HistoryLostException;
+import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +35,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -66,8 +70,11 @@ import static java.util.Objects.requireNonNull;
  * token that leaves the change stream history (e.g. the MongoDB oplog window) during a long replay is not handed
  * over. The replay runs again from the position the first attempt started from, with a token read now, and
  * redelivers the events in between. A catch-up whose replay loses the token 4 times in a row fails instead of
- * replaying a fifth time. A token that leaves the history after that check and before the wrapped model
- * opens its change stream is still handed over, and what happens then is up to the wrapped model.
+ * replaying a fifth time. A token can still leave the history after that check, before the wrapped model opens its
+ * change stream at it. When the wrapped model has {@link HistoryLossReportingSubscriptions}, the live half is read
+ * through {@link HistoryLossReportingSubscriptions#subscribeFailingIfStartLost}, and a loss of that token runs the
+ * replay again from the position the first attempt started from, with a token read then. That counts as one of the
+ * replays run again. Any other wrapped model handles the lost history as it would without this pipeline.
  */
 @NullMarked
 final class PositionCatchupPipeline {
@@ -117,9 +124,47 @@ final class PositionCatchupPipeline {
             if (next != replayStart) {
                 return replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, next, cache, replaysAgain + 1);
             }
-            return subscriptionModel.subscribe(liveSubscriptionFilter, StartAt.checkpoint(replayStart.liveFrom()))
-                    .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(CatchupEventKey.of(cloudEvent)));
+            Checkpoint liveFrom = replayStart.liveFrom();
+            StartAt liveStartAt = StartAt.checkpoint(liveFrom);
+            Flux<CloudEvent> live = (subscriptionModel instanceof SubscriptionModelCapability capabilities ? HistoryLossReportingSubscriptions.findIn(capabilities) : Optional.<HistoryLossReportingSubscriptions>empty())
+                    .map(reporting -> reporting.subscribeFailingIfStartLost(liveSubscriptionFilter, liveStartAt))
+                    .orElseGet(() -> subscriptionModel.subscribe(liveSubscriptionFilter, liveStartAt));
+            return live
+                    .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(CatchupEventKey.of(cloudEvent)))
+                    .onErrorResume(throwable -> throwable instanceof HistoryLostException lost && samePosition(lost.lostFrom(), liveFrom),
+                            __ -> replayAgainAfterLiveStartLost(subscriptionModel, replayStart, null, replaysAgain)
+                                    .flatMapMany(again -> replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, again, cache, replaysAgain + 1)));
         })));
+    }
+
+    /**
+     * The start a replay runs again from after the wrapped model lost the history from the token {@code lost} handed
+     * over, as it opened its change stream at it. It replays from the position the first attempt started from, with a
+     * token read now. Fails with {@link IllegalStateException} instead once the replay has already run again
+     * {@value #MAX_REPLAYS_AGAIN} times, as {@link #liveStartAfterReplay} does. {@code subscriptionId} only names the
+     * subscription in the warning and the failure, and may be null.
+     */
+    Mono<ReplayStart> replayAgainAfterLiveStartLost(CheckpointAwareSubscriptionModel subscriptionModel, ReplayStart lost, @Nullable String subscriptionId, int replaysAgain) {
+        return Mono.defer(() -> {
+            if (replaysAgain >= MAX_REPLAYS_AGAIN) {
+                return Mono.error(liveStartLostEachTime(subscriptionId, replaysAgain + 1, lost.liveFrom()));
+            }
+            log.warn("The subscription model lost the history from the live start of catch-up subscription {} as it opened, so the catch-up replays again from position {} and redelivers the events in between. Live start: {}",
+                    subscriptionId == null ? "(unnamed)" : subscriptionId, lost.replayOrigin(), lost.liveFrom().asString());
+            return captureLiveToken(subscriptionModel).map(liveToken -> new ReplayStart(lost.replayOrigin(), liveToken, lost.replayOrigin(), null));
+        });
+    }
+
+    // By the string form, since a live start is a typed checkpoint where the wrapped model reads it and a
+    // StringBasedCheckpoint where a storage that keeps strings reads it back
+    static boolean samePosition(Checkpoint checkpoint, @Nullable Checkpoint other) {
+        return other != null && checkpoint.asString().equals(other.asString());
+    }
+
+    private static IllegalStateException liveStartLostEachTime(@Nullable String subscriptionId, int replays, Checkpoint lastLiveStart) {
+        return new IllegalStateException("Cannot hand catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId)
+                + " over to live delivery, because the subscription model lost the live start during or right after each of its " + replays
+                + " replays. Size the change stream history, such as the MongoDB oplog, so that it outlasts the longest replay. Last live start: " + lastLiveStart.asString());
     }
 
     /**
@@ -136,9 +181,8 @@ final class PositionCatchupPipeline {
      * instead. So a catch-up goes live only from a token the wrapped model accepted after the last replay, or fails
      * after {@value #MAX_REPLAYS_AGAIN} replays run again. It never hands over a token the wrapped model answered false
      * for, but delivers the events it replays again more than once. The check and the handover are two calls, so a
-     * token that leaves the history between them is still handed over, and what happens then is up to the wrapped
-     * model's handling of lost history. A MongoDB model that restarts on lost history skips the events in between.
-     * {@code subscriptionId} only names the subscription in the warning and the failure, and may be null.
+     * token can still leave the history between them, which {@link #replayAgainAfterLiveStartLost} deals with when
+     * the wrapped model reports it. {@code subscriptionId} only names the subscription in the warning and the failure, and may be null.
      */
     Mono<ReplayStart> liveStartAfterReplay(CheckpointAwareSubscriptionModel subscriptionModel, ReplayStart replayed, @Nullable String subscriptionId, int replaysAgain) {
         return subscriptionModel.canResumeFrom(replayed.liveFrom()).flatMap(canResume -> {
@@ -146,9 +190,7 @@ final class PositionCatchupPipeline {
                 return Mono.just(replayed);
             }
             if (replaysAgain >= MAX_REPLAYS_AGAIN) {
-                return Mono.error(new IllegalStateException("Cannot hand catch-up subscription " + (subscriptionId == null ? "(unnamed)" : subscriptionId)
-                        + " over to live delivery, because the subscription model lost the live start during each of its " + (replaysAgain + 1)
-                        + " replays. Size the change stream history, such as the MongoDB oplog, so that it outlasts the longest replay. Last live start: " + replayed.liveFrom().asString()));
+                return Mono.error(liveStartLostEachTime(subscriptionId, replaysAgain + 1, replayed.liveFrom()));
             }
             log.warn("The live start of catch-up subscription {} left the subscription model's history during the replay, so the catch-up replays again from position {} and redelivers the events in between. Live start: {}",
                     subscriptionId == null ? "(unnamed)" : subscriptionId, replayed.replayOrigin(), replayed.liveFrom().asString());

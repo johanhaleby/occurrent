@@ -193,7 +193,6 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(dcbReader, windowSize);
         PositionReplayStart handoverStart = replayUntilLiveStartHolds(subscriptionId, replayStart, delegatedStartAt,
                 start -> replayPositions(subscriptionId, action, pipeline, dcbReader, start, catchupPhaseCache, persistDuringCatchup));
-        final Checkpoint globalCheckpoint = handoverStart.liveFrom();
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
         // blocking stream catch-up. Unlocked, a cancelSubscription or a fresh subscribe for this id could land in
@@ -216,26 +215,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                 });
             }
 
-            StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
-                            cfg -> () -> {
-                                Checkpoint position = cfg.storage().read(subscriptionId);
-                                // If nothing is stored, or the stored position is a DCB position or a time (written by a
-                                // catch-up of any kind), save the live change-stream position so the wrapped subscription
-                                // resumes from there.
-                                if ((position == null || isCatchupCheckpoint(position)) && globalCheckpoint != null) {
-                                    position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
-                                } else if (position == null) {
-                                    return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
-                                }
-                                return StartAt.checkpoint(position);
-                            })
-                    .orElse(() -> {
-                        if (globalCheckpoint == null) {
-                            return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
-                        } else {
-                            return StartAt.checkpoint(globalCheckpoint);
-                        }
-                    }));
+            StartAt startAtToUse = startAtToUse(subscriptionId, startAt, delegatedStartAt, handoverStart);
 
             final Subscription subscription;
             if (subscriptionsWasCancelledOrShutdown) {

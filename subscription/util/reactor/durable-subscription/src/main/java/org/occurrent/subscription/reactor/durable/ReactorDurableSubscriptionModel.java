@@ -237,6 +237,13 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * {@link ReactorDurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turns the
  * refusals above into a start without a recorded position, accepting the loss window it documents.
  * <p>
+ * When the wrapped model implements {@link HistoryLossReportingSubscriptions}, this model passes the listeners and
+ * {@link #subscribeFailingIfStartLost(SubscriptionFilter, StartAt)} to it. When this model hands its subscriptions to a
+ * wrapped model that implements {@link RepositionableSubscriptions}, it resumes a subscription at a given position
+ * there. So a catch-up subscription model that wraps this model takes over a subscription whose live start the wrapped model
+ * loses as it opens, and the wrapped model doesn't restart that subscription from the present. A subscription handed
+ * over at a position stores no checkpoint before its first event, so none is stored while the catch-up replays again.
+ * <p>
  * Apart from that override, a subscription from the subscription-model default stores its start position before it
  * handles its first event, and it is durable from then on. Should the process end before that, it is as if the
  * subscribe never ran, and the next subscribe of the id starts as a new subscription would. A subscribe of the id
@@ -248,7 +255,8 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * {@link ReactorDurableSubscriptionModelConfig}.
  */
 @NullMarked
-public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions {
+public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions, HistoryLossReportingSubscriptions,
+        RepositionableSubscriptions {
     private static final Logger log = LoggerFactory.getLogger(ReactorDurableSubscriptionModel.class);
     // How long a failed delete of a cancelled subscription's checkpoint waits before it is tried again, about
     // doubling up to the longest, with jitter
@@ -385,6 +393,95 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     @Override
     public Mono<Boolean> canResumeFrom(Checkpoint checkpoint) {
         return subscription.canResumeFrom(checkpoint);
+    }
+
+    /**
+     * Adds the listener to the wrapped model, which asks it about the subscriptions this model handed to it.
+     *
+     * @throws UnsupportedOperationException If the wrapped model doesn't implement {@link HistoryLossReportingSubscriptions}.
+     */
+    @Override
+    public void addHistoryLossListener(HistoryLossReportingSubscriptions.HistoryLossListener listener) {
+        historyLossReportingOfTheWrappedModel().addHistoryLossListener(listener);
+    }
+
+    @Override
+    public void removeHistoryLossListener(HistoryLossReportingSubscriptions.HistoryLossListener listener) {
+        historyLossReporting().ifPresent(model -> model.removeHistoryLossListener(listener));
+    }
+
+    /**
+     * The wrapped model's {@link HistoryLossReportingSubscriptions#subscribeFailingIfStartLost(SubscriptionFilter, StartAt)},
+     * which stores no checkpoint, as {@link #subscribe(SubscriptionFilter, StartAt)} doesn't.
+     *
+     * @throws UnsupportedOperationException If the wrapped model doesn't implement {@link HistoryLossReportingSubscriptions}.
+     */
+    @Override
+    public Flux<CloudEvent> subscribeFailingIfStartLost(@Nullable SubscriptionFilter filter, StartAt startAt) {
+        return historyLossReportingOfTheWrappedModel().subscribeFailingIfStartLost(filter, startAt);
+    }
+
+    private Optional<HistoryLossReportingSubscriptions> historyLossReporting() {
+        return subscription instanceof SubscriptionModelCapability capabilities ? HistoryLossReportingSubscriptions.findIn(capabilities) : Optional.empty();
+    }
+
+    private HistoryLossReportingSubscriptions historyLossReportingOfTheWrappedModel() {
+        return historyLossReporting().orElseThrow(() -> new UnsupportedOperationException(subscription.getClass().getName()
+                + " doesn't implement " + HistoryLossReportingSubscriptions.class.getSimpleName()));
+    }
+
+    /**
+     * Resumes a paused subscription at {@code startAt} in the wrapped model, which keeps the action this model gave it,
+     * so the subscription stores its checkpoint after each event as before. Until the wrapped model has returned, a
+     * subscribe of the id throws {@link DuplicateSubscriptionIdException}, as for {@link #resumeSubscription(String)}.
+     *
+     * @throws IllegalStateException         If the subscription starts again in the wrapped model or waits to be handed
+     *                                       to it, as {@link #pauseSubscription(String)} describes, since that decides
+     *                                       where it starts.
+     * @throws UnsupportedOperationException If this model drives the subscription itself, or the wrapped model doesn't
+     *                                       implement {@link RepositionableSubscriptions}.
+     */
+    @Override
+    public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        RepositionableSubscriptions repositionable = (delegate == null ? Optional.<RepositionableSubscriptions>empty() : RepositionableSubscriptions.findIn(delegate))
+                .orElseThrow(() -> new UnsupportedOperationException(subscription.getClass().getName() + " doesn't implement " + RepositionableSubscriptions.class.getSimpleName()
+                        + " for subscriptions with an id"));
+        final List<KeptLifecycle> passing = new ArrayList<>();
+        final boolean kept;
+        synchronized (positionLock) {
+            kept = keeping(subscriptionId) != null;
+            if (!kept) {
+                countPassing(subscriptionId, passing);
+                wrappedCallDecided(subscriptionId);
+            }
+        }
+        if (kept) {
+            throw new IllegalStateException("Cannot resume subscription " + subscriptionId + " at " + startAt + ", because it starts again in "
+                    + subscription.getClass().getName() + " or waits to be handed to it, and that start decides where it resumes. Resume it once it has started.");
+        }
+        try {
+            return repositionable.resumeSubscription(subscriptionId, startAt);
+        } finally {
+            wrappedCallEnded(subscriptionId);
+            passing.forEach(this::passed);
+        }
+    }
+
+    /**
+     * Answers {@link HistoryLossReportingSubscriptions} only when the wrapped model has it, and
+     * {@link RepositionableSubscriptions} only when this model hands its subscriptions to a wrapped model that has it, so a
+     * catch-up subscription model that wraps this model finds both where it would find them on the wrapped model. Answers
+     * every other capability as any model does.
+     */
+    @Override
+    public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
+        if (type == HistoryLossReportingSubscriptions.class && historyLossReporting().isEmpty()
+            || type == RepositionableSubscriptions.class && (delegate == null || !delegate.hasCapability(RepositionableSubscriptions.class))) {
+            return Optional.empty();
+        }
+        return SubscriptionModel.super.capability(type);
     }
 
     @Override

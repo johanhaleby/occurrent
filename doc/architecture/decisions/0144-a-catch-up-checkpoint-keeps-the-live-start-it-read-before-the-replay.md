@@ -192,8 +192,9 @@ origin again, which delivers everything between the origin and where the earlier
 catch-up fails instead of replaying a fifth time once 4 replays in a row lost the live start, and the last 3 of those
 replays each delivered the history from the origin. So size the oplog for the longest rebuild.
 
-The check and the handover are two calls. A live start that leaves the history between them is still handed over,
-and what happens then is up to the wrapped model's handling of lost history.
+The check and the handover are two calls, and the history can drop a live start between them. The MongoDB models
+then ask the catch-up before they restart the subscription or forget it, and the catch-up takes it over and replays
+again, as [ADR 146](0146-a-catch-up-takes-over-a-live-start-the-wrapped-model-loses-as-it-opens.md) describes.
 
 When a `canResumeFrom` of your own answers `true` for a live start it can no longer resume from, the catch-up goes
 live from it anyway, and what happens then is up to the wrapped model's handling of lost history. A

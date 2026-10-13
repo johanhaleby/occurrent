@@ -711,6 +711,29 @@ public class MongoCommons {
     }
 
     /**
+     * Where a change stream opened, as {@code openingPosition}, and the position the subscription recorded right after
+     * the opening, as {@code tracked}. A model keeps one for each opening, so a loss of history can tell whether the
+     * position it lost is the one the stream opened at.
+     */
+    public record OpenedAt(StartAt openingPosition, StartAt tracked) {
+    }
+
+    /**
+     * The checkpoint a subscription reports when MongoDB no longer has the history it reads from. While
+     * {@code current} is still the position recorded right after the opening, that is the position the stream opened
+     * at, taken from {@code openedAt}. Once the subscription has moved, it is the fixed position it moved to. Null
+     * when neither is a checkpoint, such as a change stream opened at the present without an operation time, which has
+     * no position to lose. A dynamic {@code current} is never evaluated again here, since its supplier can be the
+     * caller's code.
+     */
+    public static @Nullable Checkpoint lostFrom(StartAt current, @Nullable OpenedAt openedAt) {
+        if (openedAt != null && current == openedAt.tracked()) {
+            return openedAt.openingPosition() instanceof StartAtCheckpoint position ? position.checkpoint : null;
+        }
+        return !current.isDynamic() && current instanceof StartAtCheckpoint position ? position.checkpoint : null;
+    }
+
+    /**
      * The warning a subscription model logs when {@code reply} has no operation time to record for a change stream
      * that opens at the present.
      */

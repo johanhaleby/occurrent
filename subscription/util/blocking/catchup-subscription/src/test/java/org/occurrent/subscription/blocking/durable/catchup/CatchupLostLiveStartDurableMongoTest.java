@@ -1,0 +1,445 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.subscription.blocking.durable.catchup;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
+import com.mongodb.MongoCommandException;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
+import com.mongodb.event.CommandFailedEvent;
+import com.mongodb.event.CommandListener;
+import io.cloudevents.CloudEvent;
+import org.bson.Document;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayNameGeneration;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.domain.DomainEvent;
+import org.occurrent.domain.NameDefined;
+import org.occurrent.eventstore.api.WriteCondition;
+import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CatchupListener;
+import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModelConfig;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig;
+import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.MongoTestDatabase;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
+import org.springframework.data.mongodb.MongoTransactionManager;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mongodb.MongoDBContainer;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
+import java.net.URI;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
+
+import static java.util.Objects.requireNonNull;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
+import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
+
+/**
+ * A catch-up over a durable model over a MongoDB model, which is how the Spring Boot starter stacks them, with the
+ * durable model and the catch-up sharing one checkpoint storage. The oplog loses the live start the catch-up hands
+ * over while the change stream opens, which MongoDB answers with error 286. A failpoint does so once, right after the
+ * catch-up's final check, and an event is written at that moment. The event must be delivered, and the durable model
+ * must not store the present the MongoDB model would restart from, whether that model restarts lost subscriptions or
+ * gives them up.
+ */
+@Testcontainers
+@Timeout(120)
+@DisplayNameGeneration(ReplaceUnderscores.class)
+class CatchupLostLiveStartDurableMongoTest {
+
+    private static final URI SOURCE = URI.create("urn:test");
+    private static final String SUBSCRIPTION_APP = "catchup-lost-live-start-durable-subscription";
+    private static final String SUBSCRIPTION_ID = "subscription";
+    private static final int HISTORY_LOST = 286;
+
+    @Container
+    private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion()
+            .withCommand("--replSet", "docker-rs", "--setParameter", "enableTestCommands=1");
+
+    @RegisterExtension
+    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
+
+    enum Driver {SPRING, NATIVE}
+
+    enum Replay {POSITION, TIME, DCB}
+
+    static Stream<Arguments> everyCombination() {
+        return Stream.of(Replay.values()).flatMap(replay -> Stream.of(true, false).flatMap(restart ->
+                Stream.of(Arguments.of(Driver.SPRING, replay, restart, true),
+                        Arguments.of(Driver.SPRING, replay, restart, false),
+                        Arguments.of(Driver.NATIVE, replay, restart, true),
+                        Arguments.of(Driver.NATIVE, replay, restart, false))));
+    }
+
+    private MongoClient client;
+    private MongoClient subscriptionClient;
+    private SubscriptionModel liveModel;
+    private DurableSubscriptionModel durable;
+    private ExecutorService nativeExecutor;
+    private CatchupSubscriptionModel catchup;
+    private CloudEventConverter<DomainEvent> cloudEventConverter;
+    private final AtomicInteger historyLostReplies = new AtomicInteger();
+
+    @AfterEach
+    void shutdown() {
+        if (client != null) {
+            client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", "off"));
+        }
+        if (catchup != null) {
+            catchup.shutdown();
+        }
+        if (durable != null) {
+            durable.shutdown();
+        } else if (liveModel instanceof SpringMongoSubscriptionModel spring) {
+            spring.shutdown();
+        } else if (liveModel instanceof NativeMongoSubscriptionModel nativeModel) {
+            nativeModel.shutdown();
+        }
+        if (nativeExecutor != null) {
+            nativeExecutor.shutdownNow();
+        }
+        if (subscriptionClient != null) {
+            subscriptionClient.close();
+        }
+        if (client != null) {
+            client.close();
+        }
+    }
+
+    // A storage that keeps strings, such as SpringRedisCheckpointStorage, reads every checkpoint back as a
+    // StringBasedCheckpoint, while the MongoDB storages read a change stream position back as the typed one
+    enum Storage {MONGO, STRINGS}
+
+    static Stream<Arguments> everyDriverAndStorage() {
+        return Stream.of(Driver.values()).flatMap(driver -> Stream.of(true, false).flatMap(restart ->
+                Stream.of(Storage.values()).map(storage -> Arguments.of(driver, restart, storage))));
+    }
+
+    @ParameterizedTest(name = "{0}, {1} replay, restartOnHistoryLost={2}, storing={3}")
+    @MethodSource("everyCombination")
+    void a_live_start_the_oplog_loses_as_the_change_stream_opens_replays_again_and_delivers_what_was_written_in_between(Driver driver, Replay replay, boolean restartOnHistoryLost, boolean storing) {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+        SpringMongoEventStore eventStore = eventStoreAndLiveModel(connectionString, driver, replay, restartOnHistoryLost);
+        MongoTemplate template = new MongoTemplate(client, requireNonNull(connectionString.getDatabase()));
+        List<DomainEvent> history = List.of(nameDefined("event1"), nameDefined("event2"));
+        history.forEach(event -> write(eventStore, replay, event));
+        NameDefined writtenInTheGap = nameDefined("writtenInTheGap");
+        CheckpointAwareSubscriptionModel mongoModel = (CheckpointAwareSubscriptionModel) liveModel;
+        SpringMongoCheckpointStorage storage = new SpringMongoCheckpointStorage(template, "storage");
+        CopyOnWriteArrayList<Checkpoint> saved = new CopyOnWriteArrayList<>();
+        CheckpointStorage sharedStorage = recordingSavesOf(storage, saved);
+        durable = new DurableSubscriptionModel(mongoModel, sharedStorage);
+        ArmsTheFailpointAfterTheFinalCheck armed = new ArmsTheFailpointAfterTheFinalCheck(durable, () -> {
+            client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", new Document("times", 1))
+                    .append("data", new Document("failCommands", List.of("aggregate")).append("errorCode", HISTORY_LOST).append("appName", SUBSCRIPTION_APP)));
+            write(eventStore, replay, writtenInTheGap);
+        });
+        CatchupSubscriptionModelConfig config = storing
+                ? new CatchupSubscriptionModelConfig(100, useCheckpointStorage(sharedStorage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1))
+                : new CatchupSubscriptionModelConfig(100);
+        catchup = switch (replay) {
+            case POSITION, TIME -> new CatchupSubscriptionModel(armed, eventStore, config);
+            case DCB -> new CatchupSubscriptionModel(armed, eventStore, DcbCriteria.tags(Tag.parse("name:1")), config);
+        };
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> catchupStarts = new CopyOnWriteArrayList<>();
+        catchup.listenForCatchup(SUBSCRIPTION_ID, new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                catchupStarts.add("catchupStarted");
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+            }
+        });
+
+        Subscription started = catchup.subscribe(SUBSCRIPTION_ID, replay == Replay.TIME ? StartAtTime.beginningOfTime() : StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
+
+        assertThat(started.waitUntilStarted(Duration.ofSeconds(20))).as("started").isTrue();
+        assertThat(historyLostReplies).as("the replies that said the oplog lost the history").hasValue(1);
+        Checkpoint lostLiveStart = armed.probes.getFirst();
+        Checkpoint liveStartHandedOver = armed.probes.getLast();
+        if (storing) {
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(storage.read(SUBSCRIPTION_ID)).as("the position stored when the live start was handed over").isNotNull().extracting(Checkpoint::asString).isEqualTo(liveStartHandedOver.asString()));
+        }
+        List<String> operationTimesStoredBeforeLiveEvents = operationTimesIn(saved);
+        NameDefined afterHandOver = nameDefined("afterHandOver");
+        write(eventStore, replay, afterHandOver);
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(received).as("received after the hand over").contains(afterHandOver));
+        assertAll(
+                () -> assertThat(received).as("the event written between the final check and the open of the change stream").filteredOn(writtenInTheGap::equals).hasSize(1),
+                () -> assertThat(received).as("the history").containsAll(history),
+                () -> assertThat(received).as("the event written after the hand over").filteredOn(afterHandOver::equals).hasSize(1),
+                () -> assertThat(catchupStarts).as("the catch-up started once for each replay").hasSize(2),
+                () -> assertThat(catchup.isRunning(SUBSCRIPTION_ID)).as("running").isTrue(),
+                () -> assertThat(catchup.isPaused(SUBSCRIPTION_ID)).as("paused").isFalse(),
+                () -> assertThat(liveStartHandedOver.asString()).as("the live start probed last differs from the one that was lost").isNotEqualTo(lostLiveStart.asString()),
+                () -> assertThat(operationTimesStoredBeforeLiveEvents).as("the operation times stored before any live event, none of which is the present the MongoDB model would restart from")
+                        .isSubsetOf(lostLiveStart.asString(), liveStartHandedOver.asString())
+        );
+    }
+
+    @ParameterizedTest(name = "{0}, restartOnHistoryLost={1}, {2} storage")
+    @MethodSource("everyDriverAndStorage")
+    void a_live_start_the_oplog_loses_as_a_resume_opens_it_again_replays_again_whatever_type_the_storage_reads_it_back_as(Driver driver, boolean restartOnHistoryLost, Storage storageKind) {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+        SpringMongoEventStore eventStore = eventStoreAndLiveModel(connectionString, driver, Replay.POSITION, restartOnHistoryLost);
+        MongoTemplate template = new MongoTemplate(client, requireNonNull(connectionString.getDatabase()));
+        List<DomainEvent> history = List.of(nameDefined("event1"), nameDefined("event2"));
+        history.forEach(event -> write(eventStore, Replay.POSITION, event));
+        SpringMongoCheckpointStorage mongoStorage = new SpringMongoCheckpointStorage(template, "storage");
+        CheckpointStorage storage = storageKind == Storage.MONGO ? mongoStorage : readingBackStringsOf(mongoStorage);
+        durable = new DurableSubscriptionModel((CheckpointAwareSubscriptionModel) liveModel, storage);
+        catchup = new CatchupSubscriptionModel(durable, eventStore, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        Subscription started = catchup.subscribe(SUBSCRIPTION_ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
+        assertThat(started.waitUntilStarted(Duration.ofSeconds(20))).as("started").isTrue();
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(liveModel.isRunning(SUBSCRIPTION_ID)).as("handed over").isTrue());
+        catchup.pauseSubscription(SUBSCRIPTION_ID);
+        client.getDatabase("admin").runCommand(new Document("configureFailPoint", "failCommand").append("mode", new Document("times", 1))
+                .append("data", new Document("failCommands", List.of("aggregate")).append("errorCode", HISTORY_LOST).append("appName", SUBSCRIPTION_APP)));
+        NameDefined writtenWhilePaused = nameDefined("writtenWhilePaused");
+        write(eventStore, Replay.POSITION, writtenWhilePaused);
+
+        catchup.resumeSubscription(SUBSCRIPTION_ID);
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(historyLostReplies).as("the replies that said the oplog lost the history").hasValue(1));
+        NameDefined afterResume = nameDefined("afterResume");
+        write(eventStore, Replay.POSITION, afterResume);
+        // A MongoDB model that gives up the subscription neither runs it nor holds it paused
+        await().atMost(Duration.ofSeconds(30)).until(() -> received.contains(afterResume) || !liveModel.isRunning(SUBSCRIPTION_ID) && !liveModel.isPaused(SUBSCRIPTION_ID));
+        assertThat(received).as("the event written while the subscription was paused at its live start").filteredOn(writtenWhilePaused::equals).hasSize(1);
+        assertThat(received).as("the event written after the resume").filteredOn(afterResume::equals).hasSize(1);
+    }
+
+    private SpringMongoEventStore eventStoreAndLiveModel(ConnectionString connectionString, Driver driver, Replay replay, boolean restartOnHistoryLost) {
+        client = MongoClients.create(connectionString);
+        subscriptionClient = MongoClients.create(MongoClientSettings.builder().applyConnectionString(connectionString).applicationName(SUBSCRIPTION_APP)
+                .addCommandListener(new CommandListener() {
+                    @Override
+                    public void commandFailed(CommandFailedEvent event) {
+                        if (event.getThrowable() instanceof MongoCommandException e && e.getErrorCode() == HISTORY_LOST) {
+                            historyLostReplies.incrementAndGet();
+                        }
+                    }
+                }).build());
+        MongoTemplate template = new MongoTemplate(client, requireNonNull(connectionString.getDatabase()));
+        EventStoreConfig.Builder storeConfig = new EventStoreConfig.Builder()
+                .eventStoreCollectionName("events")
+                .transactionConfig(new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(client, requireNonNull(connectionString.getDatabase()))))
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING);
+        SpringMongoEventStore eventStore = new SpringMongoEventStore(template, switch (replay) {
+            case POSITION -> storeConfig.eventStoreCapabilities(STREAM).withStreamPosition().build();
+            case TIME -> storeConfig.eventStoreCapabilities(STREAM).withoutStreamPosition().build();
+            case DCB -> storeConfig.eventStoreCapabilities(STREAM, DCB).build();
+        });
+        cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), SOURCE).idMapper(DomainEvent::eventId).build();
+        RetryStrategy retries = RetryStrategy.fixed(Duration.ofMillis(100));
+        if (driver == Driver.SPRING) {
+            liveModel = new SpringMongoSubscriptionModel(new MongoTemplate(subscriptionClient, requireNonNull(connectionString.getDatabase())),
+                    SpringMongoSubscriptionModelConfig.withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(restartOnHistoryLost).retryStrategy(retries));
+        } else {
+            nativeExecutor = Executors.newCachedThreadPool();
+            liveModel = new NativeMongoSubscriptionModel(subscriptionClient.getDatabase(requireNonNull(connectionString.getDatabase())), "events",
+                    TimeRepresentation.RFC_3339_STRING, nativeExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(restartOnHistoryLost).retryStrategy(retries));
+        }
+        return eventStore;
+    }
+
+    // Reads back what the storage holds as SpringRedisCheckpointStorage reads it back, as a StringBasedCheckpoint
+    private static CheckpointStorage readingBackStringsOf(CheckpointStorage storage) {
+        return (CheckpointStorage) Proxy.newProxyInstance(CheckpointStorage.class.getClassLoader(), new Class<?>[]{CheckpointStorage.class}, (proxy, method, args) -> {
+            final Object result;
+            try {
+                result = method.invoke(storage, args);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+            return method.getName().equals("read") && result instanceof Checkpoint checkpoint ? new StringBasedCheckpoint(checkpoint.asString()) : result;
+        });
+    }
+
+    private static List<String> operationTimesIn(List<Checkpoint> saved) {
+        return saved.stream().filter(MongoOperationTimeCheckpoint.class::isInstance).map(Checkpoint::asString).toList();
+    }
+
+    private static CheckpointStorage recordingSavesOf(CheckpointStorage storage, List<Checkpoint> saved) {
+        return (CheckpointStorage) Proxy.newProxyInstance(CheckpointStorage.class.getClassLoader(), new Class<?>[]{CheckpointStorage.class}, (proxy, method, args) -> {
+            if (method.getName().equals("save") && args[0].equals(SUBSCRIPTION_ID)) {
+                saved.add((Checkpoint) args[1]);
+            }
+            try {
+                return method.invoke(storage, args);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+        });
+    }
+
+    private static final class ArmsTheFailpointAfterTheFinalCheck implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
+        private final CheckpointAwareSubscriptionModel delegate;
+        private final Runnable afterTheFirstFinalCheck;
+        private final AtomicBoolean armed = new AtomicBoolean();
+        private volatile @Nullable Checkpoint armedFor;
+        final List<Checkpoint> probes = new CopyOnWriteArrayList<>();
+
+        private ArmsTheFailpointAfterTheFinalCheck(CheckpointAwareSubscriptionModel delegate, Runnable afterTheFirstFinalCheck) {
+            this.delegate = delegate;
+            this.afterTheFirstFinalCheck = afterTheFirstFinalCheck;
+        }
+
+        @Override
+        public boolean canResumeFrom(Checkpoint checkpoint) {
+            Checkpoint lost = armedFor;
+            if (lost != null && lost.asString().equals(checkpoint.asString())) {
+                probes.add(checkpoint);
+                return false;
+            }
+            boolean canResume = delegate.canResumeFrom(checkpoint);
+            probes.add(checkpoint);
+            if (canResume && armed.compareAndSet(false, true)) {
+                armedFor = checkpoint;
+                afterTheFirstFinalCheck.run();
+            }
+            return canResume;
+        }
+
+        @Override
+        public SubscriptionModel getWrappedSubscriptionModel() {
+            return delegate;
+        }
+
+        @Override
+        public @Nullable Checkpoint globalCheckpoint() {
+            return delegate.globalCheckpoint();
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public void stop() {
+            delegate.stop();
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            delegate.start(resumeSubscriptionsAutomatically);
+        }
+
+        @Override
+        public boolean isRunning() {
+            return delegate.isRunning();
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return delegate.isRunning(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return delegate.isPaused(subscriptionId);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return delegate.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            delegate.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            delegate.cancelSubscription(subscriptionId);
+        }
+    }
+
+    private NameDefined nameDefined(String name) {
+        return new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", name);
+    }
+
+    private Consumer<CloudEvent> toDomainEvents(List<DomainEvent> target) {
+        return cloudEvent -> target.add(cloudEventConverter.toDomainEvent(cloudEvent));
+    }
+
+    private void write(SpringMongoEventStore eventStore, Replay replay, DomainEvent event) {
+        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(event));
+        if (replay == Replay.DCB) {
+            eventStore.append(cloudEvents.stream().map(cloudEvent -> DcbCloudEvents.withTags(cloudEvent, List.of(Tag.parse("name:1")))).toList());
+        } else {
+            eventStore.write(UUID.randomUUID().toString(), WriteCondition.anyStreamVersion(), cloudEvents);
+        }
+    }
+}

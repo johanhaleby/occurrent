@@ -2398,10 +2398,30 @@ and tells you to size the oplog. On the blocking stack `waitUntilStarted()` thro
 for the longest rebuild, and for the longest time a catch-up can be stopped in the middle of a replay, if you want to
 avoid both.
 
-The check once the replay is done and the change stream that live delivery opens are two calls. A live start the
-oplog drops between them is still handed over, and with `occurrent.subscription.mongodb.restart-on-change-stream-history-lost`
-true, the Spring Boot starter's default, the MongoDB model then goes live from the present and skips the events in
-between. A larger oplog makes that less likely too.
+The check once the replay is done and the change stream that live delivery opens are two calls, and the oplog can
+drop the live start between them. The MongoDB subscription models then ask the catch-up what to do before they
+restart the subscription from the present or end it, whatever `occurrent.subscription.mongodb.restart-on-change-stream-history-lost`
+says. The catch-up takes the subscription over, logs a warning, and replays again from the position its replay first
+started from, with a new live start. That replay counts toward the 4 above. When it is the takeover's replay that gives
+up, the blocking catch-up logs the failure at `ERROR` and replays again after a backoff of up to 2 seconds, and
+`waitUntilStarted()` keeps waiting. When the MongoDB model refuses the takeover's resume at the new live start with
+`SubscriptionAlreadyRunningException` instead, the blocking catch-up logs it at `ERROR` without replaying again, and
+`waitUntilStarted()` fails with that exception. The log says whether the MongoDB model runs the subscription or holds
+it paused, and what resumes it. A reactor catch-up with a subscription id logs it at `ERROR`. While the MongoDB
+model holds the subscription paused, it stays paused, and resuming it runs the takeover's replay again, which can run
+again 3 times of its own, instead of resuming the MongoDB model where it lost the history. When a `start(true)` has
+resumed the MongoDB model there, the model loses that position again, and the catch-up replays again then. A resume of
+the catch-up between the MongoDB model's pause and the start of the takeover's replay starts that replay, on both
+stacks. When the MongoDB model resumes the subscription where it lost the history on a `start(true)` while the catch-up
+takes it over, the catch-up takes that loss over too, on both stacks, and the model pauses the subscription again.
+The takeover then resumes it at the new live start, unless the model has lost the old one again by the time the
+takeover tries. The subscription then stays paused until it is resumed, and the catch-up logs at `ERROR` what resumes
+it. On the reactor stack `waitUntilStarted()` reports the start of the first subscription in the MongoDB model, not
+the takeover. `ReactorDurableSubscriptionModel` passes both
+capabilities on from the model it wraps, so a reactor catch-up over it, over `ReactorMongoSubscriptionModel`, takes the
+subscription over too, and the durable model stores no position before the subscription delivers an event live. A
+wrapped model of your own handles a lost live start as it would without the catch-up, unless it implements
+`HistoryLossReportingSubscriptions` and `RepositionableSubscriptions` as the MongoDB models do.
 
 On the reactor stack the checkpoint stored during the replay stays stored after the catch-up reaches live delivery,
 until `ReactorDurableSubscriptionModel` stores the position of a live event or saves the subscription's quiet
@@ -2558,8 +2578,10 @@ not, key the work by the CloudEvent id before upgrading.
 A long time replay now depends on the oplog. In 0.33.0 it read its live start once it was done, so the oplog never had
 to reach back over the whole replay. Now a live start that MongoDB drops from its oplog, while the subscription is
 stopped or while the replay runs, makes the catch-up replay again from the time its replay first started from, with a
-new live start, and log a warning. When the live start is gone after 4 replays in a row, the catch-up fails with an
-`IllegalStateException` that tells you to size the oplog, as section 26 describes for a position catch-up. Size the
+new live start, and log a warning. So does a live start MongoDB drops after the check once the replay is done and
+before live delivery opens its change stream, as section 26 describes. When the live start is gone after 4 replays in
+a row, the catch-up fails with an `IllegalStateException` that tells you to size the oplog, as section 26 describes for
+a position catch-up. Size the
 oplog for the longest time replay, and for the longest time a catch-up can be stopped in the middle of one.
 
 A time stored by 0.33.0 has no live start, and none can be worked out afterwards. It resumes with a live start read at
@@ -2614,10 +2636,11 @@ The replay needs a wrapped model that can resume a subscription from a given pos
 over either of them works. Over any other wrapped model, a resume that would replay throws an `IllegalStateException`
 that names that model, where 0.33.0 had that model resume the subscription from its own position.
 
-The wrapped model must not call any method of the catch-up model from inside its own `cancelSubscription(..)`,
-`pauseSubscription(..)`, `resumeSubscription(..)`, `start(..)` or `stop()`, and its `isPaused(..)` and `isRunning(..)`
-must answer truthfully at every moment. What the catch-up model does over a wrapped model that breaks either rule is
-unspecified.
+The wrapped model must not call any method of the catch-up model from inside its own `subscribe(..)`,
+`subscribePaused(..)`, `cancelSubscription(..)`, `pauseSubscription(..)`, `resumeSubscription(..)`, `start(..)` or
+`stop()`. Its `isPaused(..)`, `isRunning(..)` and `canResumeFrom(..)`, and the `subscriptionIds()` of its
+`IntrospectableSubscriptions` when it has one, must answer truthfully at every moment. What the catch-up model does
+over a wrapped model that breaks either rule is unspecified.
 
 A replay that fails is logged at `ERROR` and runs again from the last position it stored, after a backoff that starts
 at 100 ms and doubles up to 2 seconds. That includes a failure at the handover, when reading or storing the position

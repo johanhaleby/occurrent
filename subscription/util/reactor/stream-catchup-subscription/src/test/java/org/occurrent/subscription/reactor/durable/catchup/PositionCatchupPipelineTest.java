@@ -26,6 +26,8 @@ import org.junit.jupiter.api.Timeout;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.HistoryLossReportingSubscriptions;
+import org.occurrent.subscription.api.reactor.HistoryLostException;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -377,6 +379,41 @@ class PositionCatchupPipelineTest {
         assertThat(live.liveStarts).as("nothing handed over").isEmpty();
     }
 
+    @Test
+    void a_live_start_the_model_loses_as_it_opens_replays_again_from_the_origin_and_delivers_the_event_written_in_the_gap() {
+        // The model answers true when asked if it can resume and loses the token as the live half opens at it.
+        // The event at position 4 is only reached by a replay that runs again, since opening plain goes live from the present.
+        LosingAtOpenLiveSource live = new LosingAtOpenLiveSource(1);
+        FakeReader reader = FakeReader.withEventsInRange(1, 4).headSupplier(() -> live.lostOpens.isEmpty() ? 3 : 4);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(0)).map(CloudEvent::getId))
+                .expectNext("e1", "e2", "e3")
+                .expectNext("e1", "e2", "e3", "e4")
+                .verifyComplete();
+        assertThat(live.issued).hasSize(2);
+        assertThat(live.opensAt).as("the lost token and then one read after the first replay").containsExactly(live.issued.get(0), live.issued.get(1));
+        assertThat(live.lostOpens).containsExactly(live.issued.get(0));
+        assertThat(live.opensWithoutLossReporting).as("the live half is never opened with the plain subscribe").isEmpty();
+    }
+
+    @Test
+    @Timeout(30)
+    void a_live_start_the_model_loses_as_it_opens_after_each_replay_fails_after_four_replays_instead_of_replaying_forever() {
+        LosingAtOpenLiveSource live = new LosingAtOpenLiveSource(Integer.MAX_VALUE);
+        FakeReader reader = FakeReader.withEventsInRange(1, 2).head(2);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, GlobalCheckpoint.of(0)).map(CloudEvent::getId))
+                .expectNext("e1", "e2", "e1", "e2", "e1", "e2", "e1", "e2")
+                .expectErrorSatisfies(throwable -> assertThat(throwable)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("4 replays")
+                        .hasMessageContaining("oplog"))
+                .verify(Duration.ofSeconds(20));
+        assertThat(live.opensAt).as("one open after each replay, each at a token read for that replay").hasSize(4).doesNotHaveDuplicates();
+    }
+
     private static Checkpoint checkpointOf(CloudEvent cloudEvent) {
         return ((CheckpointAwareCloudEvent) cloudEvent).getCheckpoint();
     }
@@ -486,6 +523,61 @@ class PositionCatchupPipelineTest {
         public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
             liveStarts.add(startAt.toString());
             return Flux.empty();
+        }
+    }
+
+    // Can resume from every checkpoint, reads a new token each time and loses the first losingOpens tokens as the live half opens at them.
+    private static final class LosingAtOpenLiveSource implements CheckpointAwareSubscriptionModel, HistoryLossReportingSubscriptions {
+        private final int losingOpens;
+        private final AtomicInteger tokens = new AtomicInteger();
+        private final List<Checkpoint> issued = new CopyOnWriteArrayList<>();
+        private final List<Checkpoint> opensAt = new CopyOnWriteArrayList<>();
+        private final List<Checkpoint> lostOpens = new CopyOnWriteArrayList<>();
+        private final List<String> opensWithoutLossReporting = new CopyOnWriteArrayList<>();
+
+        LosingAtOpenLiveSource(int losingOpens) {
+            this.losingOpens = losingOpens;
+        }
+
+        @Override
+        public Mono<Checkpoint> globalCheckpoint() {
+            return Mono.fromSupplier(() -> {
+                Checkpoint token = new StringBasedCheckpoint("live start " + tokens.incrementAndGet());
+                issued.add(token);
+                return token;
+            });
+        }
+
+        @Override
+        public Mono<Checkpoint> globalCheckpointAsOfNow() {
+            return globalCheckpoint();
+        }
+
+        @Override
+        public Flux<CloudEvent> subscribeFailingIfStartLost(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            return Flux.defer(() -> {
+                Checkpoint token = ((StartAt.StartAtCheckpoint) startAt).checkpoint;
+                opensAt.add(token);
+                if (lostOpens.size() < losingOpens) {
+                    lostOpens.add(token);
+                    return Flux.error(new HistoryLostException(token, new IllegalStateException("oplog no longer reaches back")));
+                }
+                return Flux.empty();
+            });
+        }
+
+        @Override
+        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            opensWithoutLossReporting.add(startAt.toString());
+            return Flux.empty();
+        }
+
+        @Override
+        public void addHistoryLossListener(HistoryLossListener listener) {
+        }
+
+        @Override
+        public void removeHistoryLossListener(HistoryLossListener listener) {
         }
     }
 }
