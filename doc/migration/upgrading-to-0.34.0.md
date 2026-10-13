@@ -2404,13 +2404,20 @@ restart the subscription from the present or end it, whatever `occurrent.subscri
 says. The catch-up takes the subscription over, logs a warning, and replays again from the position its replay first
 started from, with a new live start. That replay counts toward the 4 above. When it is the takeover's replay that gives
 up, the blocking catch-up logs the failure at `ERROR` and replays again after a backoff of up to 2 seconds, and
-`waitUntilStarted()` keeps waiting. A reactor catch-up with a subscription id logs it at `ERROR`. While the MongoDB
+`waitUntilStarted()` keeps waiting. When the MongoDB model refuses the takeover's resume at the new live start with
+`SubscriptionAlreadyRunningException` instead, the blocking catch-up logs it at `ERROR` without replaying again, and
+`waitUntilStarted()` fails with that exception. The log says whether the MongoDB model runs the subscription or holds
+it paused, and what resumes it. A reactor catch-up with a subscription id logs it at `ERROR`. While the MongoDB
 model holds the subscription paused, it stays paused, and resuming it runs the takeover's replay again, which can run
 again 3 times of its own, instead of resuming the MongoDB model where it lost the history. When a `start(true)` has
 resumed the MongoDB model there, the model loses that position again, and the catch-up replays again then. A resume of
 the catch-up between the MongoDB model's pause and the start of the takeover's replay starts that replay, on both
 stacks. When the MongoDB model resumes the subscription where it lost the history on a `start(true)` while the catch-up
-takes it over, the catch-up takes that loss over too, on both stacks, and the model pauses the subscription again. `ReactorDurableSubscriptionModel` passes both
+takes it over, the catch-up takes that loss over too, on both stacks, and the model pauses the subscription again.
+The takeover then resumes it at the new live start, unless the model has lost the old one again by the time the
+takeover tries. The subscription then stays paused until it is resumed, and the catch-up logs at `ERROR` what resumes
+it. On the reactor stack `waitUntilStarted()` reports the start of the first subscription in the MongoDB model, not
+the takeover. `ReactorDurableSubscriptionModel` passes both
 capabilities on from the model it wraps, so a reactor catch-up over it, over `ReactorMongoSubscriptionModel`, takes the
 subscription over too, and the durable model stores no position before the subscription delivers an event live. A
 wrapped model of your own handles a lost live start as it would without the catch-up, unless it implements

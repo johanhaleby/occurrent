@@ -612,7 +612,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             return true;
         }
         closeOutsideTheMonitor(paused);
-        log.warn("There was not enough oplog to resume subscription {} from {}, so it is paused and a listener takes it over.", subscriptionId, lostFrom.asString(), throwable);
+        log.warn("There was not enough oplog to resume subscription {} from {}, so it is paused, and a listener took it over.", subscriptionId, lostFrom.asString(), throwable);
         try {
             takeOver.afterPause().run();
         } catch (RuntimeException e) {

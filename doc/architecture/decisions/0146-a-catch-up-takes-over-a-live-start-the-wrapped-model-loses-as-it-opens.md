@@ -80,12 +80,18 @@ A blocking `start(true)` that read the subscriptions before the takeover was rec
 resume the wrapped model at the lost live start instead, and the wrapped model loses it again. Once the catch-up has
 taken the subscription over, it answers for that live start too, so it takes the new loss over as well, and the wrapped
 model pauses the subscription again. When the takeover's replay is done, its resume at the new live start first pauses
-the subscription if the wrapped model runs it, and pauses it again each time a `start(true)` resumes it before that
-resume returns.
+the subscription if the wrapped model runs it, and tries again when a `start(true)` resumes it before that resume
+returns. When the wrapped model has paused the subscription again by the time the resume tries again, because it lost
+the old live start once more, the resume fails instead, and the subscription stays paused until it is resumed. The
+failure is logged at `ERROR`, as below.
 
 On the blocking stack the handle the first handover returned follows the takeover, so its `waitUntilStarted()` keeps
-waiting until the new handover has opened. On the reactor stack a named subscription's start already completes once
-the change stream is subscribed, before MongoDB has answered, so there is nothing left to wait for. A reactor takeover
+waiting until the new handover has opened. On the reactor stack it follows only the subscription the first handover
+made in the wrapped model, and nothing connects it to the takeover. `ReactorMongoSubscriptionModel` reports a
+subscription started once its change stream is subscribed, before MongoDB has answered, so directly over it the handle
+has completed before MongoDB reports the loss, and it doesn't report how the takeover ends. A wrapped model that
+reports a start only later can leave the handle waiting on, or failing with, the subscription the takeover paused. A
+reactor takeover
 whose replay fails logs it at `ERROR`. While the wrapped model holds the subscription paused, it stays paused until it
 is resumed, and the resume runs the takeover's replay again, with 3 replays again of its own, instead of resuming the
 wrapped model at the lost live start. When a `start(true)` has resumed the wrapped model at the lost live start, the
@@ -95,7 +101,9 @@ The reactor catch-up without a subscription id reads its live half through `subs
 replays again on a `HistoryLostException` whose `lostFrom()` is the live start it handed over.
 
 After a cancel or a shutdown the catch-up takes nothing over, and a new handover replaces the live start it recorded
-for the id.
+for the id. On the reactor stack that also ends the catch-up's answer for the live start an earlier takeover lost. On
+the blocking stack the catch-up keeps answering for that one until it takes the subscription over again, or the id is
+subscribed again.
 
 ## Alternatives considered
 
@@ -114,10 +122,13 @@ where its replay started.
   stacks, for position, time and DCB catch-ups. The catch-up delivers what it replays again a second time, as any
   replay that runs again does.
 - A takeover's replay that gives up has no caller to throw at. The blocking catch-up logs the failure at `ERROR` and
-  runs the replay again after a backoff of up to 2 seconds, as it does for any replay a resume started. The reactor one
+  runs the replay again after a backoff of up to 2 seconds, as it does for any replay a resume started. When the
+  wrapped model refuses the resume at the new live start with `SubscriptionAlreadyRunningException`, the blocking
+  catch-up logs that at `ERROR` but doesn't run the replay again, and `waitUntilStarted()` fails with that exception.
+  The log says whether the wrapped model runs the subscription or holds it paused, and what resumes it. The reactor one
   keeps the subscription paused until it is resumed, or replays again once a `start(true)` has resumed the wrapped model
   at the lost live start and the wrapped model reports that loss again.
 - A wrapped model of your own that implements neither capability handles a lost live start as it would without the
   catch-up.
-- `waitUntilStarted()` on the reactor stack doesn't wait for a takeover. Changing that needs `ReactorMongoSubscriptionModel`
-  to report a start only once MongoDB has answered, which is a change of its own.
+- `waitUntilStarted()` on the reactor stack doesn't wait for a takeover and doesn't report how one ends. It reports the
+  start of the subscription the first handover made in the wrapped model.

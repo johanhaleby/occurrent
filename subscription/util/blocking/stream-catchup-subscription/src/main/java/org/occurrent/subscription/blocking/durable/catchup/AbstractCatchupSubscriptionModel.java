@@ -1045,10 +1045,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // the subscription read past it is left to the live delegate.
     private HistoryLossHandling takeOverIfHandedOverAt(String subscriptionId, Checkpoint lostFrom) {
         Subscribed subscription = subscribed.get(subscriptionId);
-        // A start(true) of the live delegate resumed the subscription where it lost the history after this model took
-        // it over. Paused again, since the takeover resumes it at a live start read again or keeps it paused.
+        // The live delegate resumed the subscription where it lost the history after this model took it over, as a
+        // start(true) of it can. Paused again. A replay of this model that still runs resumes it at the live start it
+        // reads, and otherwise it stays paused until it is resumed.
         if (subscription != null && subscription.owner() == this && !shuttingDown && lostFrom.equals(subscription.lostLiveStart().get())) {
             return HistoryLossHandling.takeOver(() -> {
+                CatchupAttempt running = currentAttempt.get(subscriptionId);
+                if (running == null || running.abandoned()) {
+                    log.warn("The subscription model lost the history from live start {} of catch-up subscription {} again after the catch-up took it over, and paused it. No replay of the catch-up resumes it now. {}",
+                            lostFrom.asString(), subscriptionId, whenNoReplayResumesIt(subscriptionId));
+                }
             });
         }
         HandedOver made = handedOver.get(subscriptionId);
@@ -1094,6 +1100,19 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 : "The subscription stays paused meanwhile.";
     }
 
+    // Where the subscription is once no replay of this model resumes it, and what resumes it, for a log
+    private String whenNoReplayResumesIt(String subscriptionId) {
+        SubscriptionModel liveDelegate = getWrappedSubscriptionModel();
+        if (hasParkedReplay(subscriptionId)) {
+            return "The subscription stays paused until it is resumed or start(true) is called on this model, which runs the replay it holds again.";
+        } else if (liveDelegate.isRunning(subscriptionId)) {
+            return "The subscription model runs the subscription.";
+        } else if (liveDelegate.isPaused(subscriptionId)) {
+            return "The subscription model holds the subscription paused until it is resumed. Resuming it through the catch-up replays from the position stored for it when that is one the catch-up replays from, and otherwise resumes it where the subscription model holds it. If the subscription model loses that position again, cancel the subscription and subscribe it again.";
+        }
+        return "The subscription model neither runs the subscription nor holds it paused.";
+    }
+
     /**
      * Starts the replay a takeover asked for, once the live delegate has paused the subscription after it lost the
      * history from the live start a replay on this model handed over, and returns its handle. Returns {@code null} when
@@ -1137,7 +1156,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             CatchupReplay replay = replayToResume(subscriptionId, subscription.filter(), subscription.startAt(), subscription.action(), made.replayAgainFrom());
             if (replay == null) {
                 log.error("The subscription model lost the history from the live start that catch-up subscription {} went live from, but the catch-up can't replay from \"{}\". {} Live start: {}",
-                        subscriptionId, made.replayAgainFrom().asString(), whileTakenOver(subscriptionId), made.liveStart().asString());
+                        subscriptionId, made.replayAgainFrom().asString(), whenNoReplayResumesIt(subscriptionId), made.liveStart().asString());
                 return null;
             }
             log.warn("The subscription model lost the history from the live start that catch-up subscription {} went live from, so the catch-up replays again from \"{}\" and redelivers the events in between. Live start: {}",
@@ -2747,8 +2766,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * would resume it. It runs again while it is still the current attempt, and nothing asked it to stop. A cancel, a
      * resume at a given position or a shutdown ends it, which the caller asked for. A stop, a pause asked for during the
      * replay or while it waits, or a {@link CatchupListener} that throws as the replay runs again, holds it until a
-     * resume or a start that resumes. A live delegate that already runs
-     * the subscription ends it too, since running the replay again would only hand over to it once more.
+     * resume or a start that resumes. A resume the live delegate refuses with
+     * {@link SubscriptionAlreadyRunningException} ends it too, and the log says whether the live delegate runs the
+     * subscription or holds it paused by then, and what resumes it.
      */
     private @Nullable Duration runAgainAfter(String subscriptionId, CatchupAttempt attempt, @Nullable Throwable failure) {
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
@@ -2802,7 +2822,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                         subscriptionId, failure);
             } else if (failure != null && !attempt.replay.cancelled && !shuttingDown && (owner == null || owner.replay == attempt.replay)) {
                 logFailure(subscriptionId, failure, attempt.parked ? "it was held, and runs again once the subscription is resumed or start(true) is called on this model"
-                        : failure instanceof SubscriptionAlreadyRunningException ? "it doesn't run again, since the wrapped subscription model already runs the subscription"
+                        : failure instanceof SubscriptionAlreadyRunningException ? "it doesn't run again. " + whenNoReplayResumesIt(subscriptionId)
                         : "the subscription did not go live");
             }
             return null;

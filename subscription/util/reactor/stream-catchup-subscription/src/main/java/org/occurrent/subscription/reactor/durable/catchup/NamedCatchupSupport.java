@@ -263,21 +263,25 @@ final class NamedCatchupSupport {
                     .flatMapMany(replayStart -> replayThenHandOver(replay, state, launched, replayStart, replaysAgain))
                     .subscribe(unused -> {
                     }, throwable -> {
-                        if (takenOver == null) {
-                            // A failed replay is a dead subscription, reported to whoever waits AND logged: a caller
-                            // that never blocks on waitUntilStarted() would otherwise get a dead subscription with no trace.
-                            log.error("The catch-up replay for subscription {} failed; the subscription is dead until it is subscribed again.", subscriptionId, throwable);
-                        } else {
+                        if (takenOver != null) {
                             // So a resume replays again, counting its replays again from 0
                             handedOver.computeIfPresent(subscriptionId, (id, made) -> made == takenOver ? made.withTheReplaysAgainOf(0) : made);
                             takenOver.takingOver().set(false);
-                            if (requireNonNull(named).isPaused(subscriptionId)) {
-                                log.error("The catch-up replay for subscription {} after the subscription model lost the history from its live start failed, so the subscription stays paused, and resuming it replays again.",
-                                        subscriptionId, throwable);
-                            } else {
-                                log.error("The catch-up replay for subscription {} after the subscription model lost the history from its live start failed, and the subscription model no longer holds it paused. The catch-up replays again when the subscription model reports that live start lost again, or when the subscription is resumed once it is paused.",
-                                        subscriptionId, throwable);
-                            }
+                        }
+                        if (state.handedOver.get()) {
+                            // Only the pause asked for during the replay can fail once the wrapped model has the subscription
+                            log.error("Subscription {} went live once its catch-up replay was done, but pausing it as asked for during the replay failed, so it may not be paused.",
+                                    subscriptionId, throwable);
+                        } else if (takenOver == null) {
+                            // A failed replay is a dead subscription, reported to whoever waits AND logged: a caller
+                            // that never blocks on waitUntilStarted() would otherwise get a dead subscription with no trace.
+                            log.error("The catch-up replay for subscription {} failed; the subscription is dead until it is subscribed again.", subscriptionId, throwable);
+                        } else if (requireNonNull(named).isPaused(subscriptionId)) {
+                            log.error("The catch-up replay for subscription {} after the subscription model lost the history from its live start failed, so the subscription stays paused, and resuming it replays again.",
+                                    subscriptionId, throwable);
+                        } else {
+                            log.error("The catch-up replay for subscription {} after the subscription model lost the history from its live start failed, and the subscription model no longer holds it paused. The catch-up replays again when the subscription model reports that live start lost again, or when the subscription is resumed once it is paused.",
+                                    subscriptionId, throwable);
                         }
                         // Identity-checked: unlike handOver and cancelSubscription, this callback runs outside the
                         // state monitor, so a concurrent cancel-then-resubscribe for the same id can already have
@@ -453,7 +457,8 @@ final class NamedCatchupSupport {
      * that it takes the subscription over, before the wrapped model pauses it, and {@code takingOver} while a takeover
      * replay runs. {@code lostLiveStart} is the live start the wrapped model lost when a takeover replay handed over,
      * and {@code null} otherwise. The wrapped model reports a loss of it only for a subscription a start(true) resumed
-     * there before the handover resumed it at {@code liveStart}, and the handover pauses that subscription again.
+     * there before the handover resumed it at {@code liveStart}, and taking that loss over has the wrapped model pause
+     * the subscription again.
      */
     private record HandedOver(Checkpoint liveStart, @Nullable Checkpoint lostLiveStart, Replay replay, PositionCatchupPipeline.ReplayStart replayStart, int replaysAgain,
                               CatchupState handingOver, AtomicBoolean takeOverAsked, AtomicBoolean takingOver) {

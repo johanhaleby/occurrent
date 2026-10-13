@@ -586,7 +586,7 @@ public final class ChangeStreamSubscriptions {
                     subscriptionId, lostFrom.asString(), historyLost);
             return true;
         }
-        log.warn("There was not enough oplog to resume subscription {} from {}, so it is paused and a listener takes it over.", subscriptionId, lostFrom.asString(), historyLost);
+        log.warn("There was not enough oplog to resume subscription {} from {}, so it is paused, and a listener took it over.", subscriptionId, lostFrom.asString(), historyLost);
         try {
             takeOver.afterPause().run();
         } catch (RuntimeException e) {
