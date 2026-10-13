@@ -43,9 +43,9 @@ takeover. A listener that throws fails that attempt, and the model asks again wh
 is logged at `ERROR`, and the subscription stays paused.
 
 `lostFrom` is the position the subscription opened at, or the position it had read to once it read past that one. For a
-dynamic `StartAt` it is the position the supplier answered when the change stream opened. The models don't resolve a
-dynamic `StartAt` again for it, since the catch-up's supplier reads and saves the checkpoint
-storage.
+dynamic `StartAt` it is the position the supplier answered when the change stream opened, or the operation time the
+model read as it opened when the supplier answered the present. The models don't resolve a dynamic `StartAt` again for it, since the
+catch-up's supplier reads and saves the checkpoint storage.
 
 The blocking `HistoryLossReportingSubscriptions` gets the method as a default. The reactor API gets its own
 `HistoryLossReportingSubscriptions`, which also has `subscribeFailingIfStartLost(..)`, a `subscribe(..)` whose `Flux`
@@ -59,11 +59,13 @@ subscription handed to the wrapped model at a position stores no checkpoint befo
 model stores neither the present nor the lost live start during a takeover.
 
 A catch-up records the live start it handed over for each subscription id, and takes the subscription over when the
-wrapped model loses exactly that position. It compares the two by their string form. A `resumeSubscription(id)` of
-`DurableSubscriptionModel` resumes the wrapped model at the checkpoint its storage reads back, and a storage that keeps strings, such as
-`SpringRedisCheckpointStorage`, reads it back as a `StringBasedCheckpoint`, while the catch-up recorded the typed
-checkpoint the wrapped model gave it. A loss once the subscription has read past it is ordinary lost history and
-stays with the wrapped model. After the takeover the catch-up:
+wrapped model loses exactly that position. It compares the two by their string form, because the two sides can be
+different checkpoint types for the same position. A `resumeSubscription(id)` of `DurableSubscriptionModel` resumes the
+wrapped model at the checkpoint its storage reads back, and a storage that keeps strings, such as
+`SpringRedisCheckpointStorage`, reads it back as a `StringBasedCheckpoint`, while the catch-up may have recorded the
+typed checkpoint the wrapped model gave it. The checkpoint storage conformance tests require a storage to read back
+the string form it saved, so the comparison holds whichever type each side has. A loss once the subscription has read past it is ordinary lost history
+and stays with the wrapped model. After the takeover the catch-up:
 
 1. Replays again from the position its replay first started from, with a live start read then, as it does when the
    check after the replay fails. The takeover counts toward the 3 times a replay runs again, so a catch-up whose live
