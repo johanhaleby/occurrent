@@ -131,7 +131,7 @@ final class PositionCatchupPipeline {
                     .orElseGet(() -> subscriptionModel.subscribe(liveSubscriptionFilter, liveStartAt));
             return live
                     .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(CatchupEventKey.of(cloudEvent)))
-                    .onErrorResume(throwable -> throwable instanceof HistoryLostException lost && lost.lostFrom().equals(liveFrom),
+                    .onErrorResume(throwable -> throwable instanceof HistoryLostException lost && samePosition(lost.lostFrom(), liveFrom),
                             __ -> replayAgainAfterLiveStartLost(subscriptionModel, replayStart, null, replaysAgain)
                                     .flatMapMany(again -> replayThenLive(subscriptionModel, liveSubscriptionFilter, livePredicate, again, cache, replaysAgain + 1)));
         })));
@@ -153,6 +153,12 @@ final class PositionCatchupPipeline {
                     subscriptionId == null ? "(unnamed)" : subscriptionId, lost.replayOrigin(), lost.liveFrom().asString());
             return captureLiveToken(subscriptionModel).map(liveToken -> new ReplayStart(lost.replayOrigin(), liveToken, lost.replayOrigin(), null));
         });
+    }
+
+    // By the string form, since a live start is a typed checkpoint where the wrapped model reads it and a
+    // StringBasedCheckpoint where a storage that keeps strings reads it back
+    static boolean samePosition(Checkpoint checkpoint, @Nullable Checkpoint other) {
+        return other != null && checkpoint.asString().equals(other.asString());
     }
 
     private static IllegalStateException liveStartLostEachTime(@Nullable String subscriptionId, int replays, Checkpoint lastLiveStart) {

@@ -61,6 +61,7 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
@@ -179,6 +180,15 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
 
     @Test
     void a_listener_that_takes_a_subscription_over_when_its_start_is_lost_has_it_paused_and_its_task_run_instead_of_the_model_restarting_it() {
+        verifiesTheListenerTakesTheSubscriptionOverWhenTheHistoryFromItsStartIsLost(StartAt::checkpoint);
+    }
+
+    @Test
+    void a_listener_is_asked_about_the_position_a_dynamic_start_answered_when_the_history_from_it_is_lost() {
+        verifiesTheListenerTakesTheSubscriptionOverWhenTheHistoryFromItsStartIsLost(start -> StartAt.dynamic(() -> StartAt.checkpoint(start)));
+    }
+
+    private void verifiesTheListenerTakesTheSubscriptionOverWhenTheHistoryFromItsStartIsLost(Function<Checkpoint, StartAt> startAtFrom) {
         subscriptionModel = modelOver(true);
         Checkpoint start = subscriptionModel.globalCheckpoint().block(Duration.ofSeconds(10));
         write(nameDefined());
@@ -194,7 +204,7 @@ class ReactorMongoSubscriptionModelHistoryLossTest {
         });
         FailPoint.failNext(mongoClient, SUBSCRIBER_APPLICATION_NAME, "aggregate", new Document("errorCode", HISTORY_LOST));
 
-        subscriptionModel.subscribe("sub", null, StartAt.checkpoint(start), event -> Mono.empty());
+        subscriptionModel.subscribe("sub", null, startAtFrom.apply(requireNonNull(start)), event -> Mono.empty());
 
         // A model that restarts the subscription opens a second change stream instead
         await().atMost(10, SECONDS).until(() -> taskRan.get() || commands.changeStreamsOpened().size() > 1);

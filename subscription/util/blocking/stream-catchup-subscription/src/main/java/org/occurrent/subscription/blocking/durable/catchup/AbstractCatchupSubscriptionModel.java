@@ -1014,7 +1014,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         Subscribed made = subscribed.get(subscriptionId);
         StartAt withoutLiveStart = delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
         Function<Checkpoint, StartAt> goLiveFrom = position -> {
-            if (liveStart != null && takesOverLostLiveStarts() && made != null && made.owner() == this && position.asString().equals(liveStart.asString())
+            if (liveStart != null && takesOverLostLiveStarts() && made != null && made.owner() == this && samePosition(position, liveStart)
                     && subscribed.get(subscriptionId) == made) {
                 handedOver.put(subscriptionId, new HandedOver(this, made, position, handoverStart.replayAgainFrom(position), replay, new AtomicBoolean(), new AtomicBoolean()));
             }
@@ -1048,7 +1048,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // The live delegate resumed the subscription where it lost the history after this model took it over, as a
         // start(true) of it can. Paused again. A replay of this model that still runs resumes it at the live start it
         // reads, and otherwise it stays paused until it is resumed.
-        if (subscription != null && subscription.owner() == this && !shuttingDown && lostFrom.equals(subscription.lostLiveStart().get())) {
+        if (subscription != null && subscription.owner() == this && !shuttingDown && samePosition(lostFrom, subscription.lostLiveStart().get())) {
             return HistoryLossHandling.takeOver(() -> {
                 CatchupAttempt running = currentAttempt.get(subscriptionId);
                 if (running == null || running.abandoned()) {
@@ -1058,7 +1058,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             });
         }
         HandedOver made = handedOver.get(subscriptionId);
-        if (made == null || made.owner() != this || shuttingDown || !made.liveStart().equals(lostFrom) || subscribed.get(subscriptionId) != made.subscribed()) {
+        if (made == null || made.owner() != this || shuttingDown || !samePosition(lostFrom, made.liveStart()) || subscribed.get(subscriptionId) != made.subscribed()) {
             return HistoryLossHandling.leaveToSubscriptionModel();
         }
         // Before the live delegate pauses the subscription, so a resume that finds it paused before the takeover has
@@ -1069,6 +1069,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 Thread.ofVirtual().name("occurrent-catchup-takeover-" + subscriptionId).start(() -> takeOver(subscriptionId, made));
             }
         });
+    }
+
+    // By the string form, since a live start is a typed checkpoint where the live delegate reads it and a
+    // StringBasedCheckpoint where a storage that keeps strings reads it back
+    private static boolean samePosition(Checkpoint checkpoint, @Nullable Checkpoint other) {
+        return other != null && checkpoint.asString().equals(other.asString());
     }
 
     // Under the claim, so no other call for the subscription runs in between. Tried again while the takeover is still

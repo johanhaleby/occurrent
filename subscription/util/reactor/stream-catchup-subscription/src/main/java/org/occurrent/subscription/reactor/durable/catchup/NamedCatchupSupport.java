@@ -477,11 +477,11 @@ final class NamedCatchupSupport {
         if (made == null || shutdown) {
             return HistoryLossHandling.leaveToSubscriptionModel();
         }
-        if (lostFrom.equals(made.lostLiveStart())) {
+        if (PositionCatchupPipeline.samePosition(lostFrom, made.lostLiveStart())) {
             return HistoryLossHandling.takeOver(() -> {
             });
         }
-        if (!made.liveStart().equals(lostFrom)) {
+        if (!PositionCatchupPipeline.samePosition(lostFrom, made.liveStart())) {
             return HistoryLossHandling.leaveToSubscriptionModel();
         }
         // Before the wrapped model pauses the subscription, so a resume that finds it paused before the takeover has

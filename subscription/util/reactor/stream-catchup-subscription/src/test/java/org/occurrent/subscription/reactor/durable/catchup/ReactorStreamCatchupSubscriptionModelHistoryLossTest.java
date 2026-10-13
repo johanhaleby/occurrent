@@ -57,6 +57,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.function.UnaryOperator;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -83,6 +84,16 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
     @Test
     void a_live_start_lost_as_the_wrapped_model_opens_at_it_is_taken_over_and_the_event_written_in_the_gap_is_delivered_when_the_model_ends_the_subscription() {
         verifiesTheGapEventIsDeliveredAndTheSubscriptionResumedAtANewLiveStart(new LosingLiveStartModel(false));
+    }
+
+    @Test
+    void a_live_start_the_wrapped_model_reports_lost_as_another_checkpoint_type_with_the_same_string_form_is_taken_over() {
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        wrapped.reportsTheLostPositionAs = position -> new TypedPosition(position.asString());
+        verifiesTheGapEventIsDeliveredAndTheSubscriptionResumedAtANewLiveStart(wrapped);
+    }
+
+    private record TypedPosition(String asString) implements Checkpoint {
     }
 
     private void verifiesTheGapEventIsDeliveredAndTheSubscriptionResumedAtANewLiveStart(LosingLiveStartModel wrapped) {
@@ -590,6 +601,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         volatile Runnable beforeTheNextResumeAtAPosition = () -> {
         };
         volatile Loses loses = Loses.WHEN_THE_TEST_SAYS;
+        volatile UnaryOperator<Checkpoint> reportsTheLostPositionAs = UnaryOperator.identity();
 
         LosingLiveStartModel(boolean restartsFromThePresent) {
             this.restartsFromThePresent = restartsFromThePresent;
@@ -628,7 +640,7 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         private void losesTheLiveStartOf(String subscriptionId) {
             Held lost = held.get(subscriptionId);
             for (HistoryLossListener listener : listeners) {
-                if (listener.handleHistoryLoss(subscriptionId, lost.position()) instanceof HistoryLossHandling.TakeOver takeOver) {
+                if (listener.handleHistoryLoss(subscriptionId, reportsTheLostPositionAs.apply(lost.position())) instanceof HistoryLossHandling.TakeOver takeOver) {
                     held.computeIfPresent(subscriptionId, (id, current) -> current.at(current.position(), State.PAUSED));
                     beforeTheTakeoverRuns.run();
                     takeOversRun.incrementAndGet();

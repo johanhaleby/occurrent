@@ -50,6 +50,7 @@ import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
+import org.occurrent.subscription.mongodb.internal.MongoCommons.OpenedAt;
 import org.slf4j.Logger;
 
 import java.time.Duration;
@@ -539,28 +540,11 @@ public final class ChangeStreamSubscriptions {
         }
     }
 
-    // Where this attempt opened the change stream, and what currentStartAt held right after, so a loss of history can
-    // tell whether the position it lost is the one it opened at
-    private record OpenedAt(StartAt openingPosition, StartAt tracked) {
-    }
-
-    // The position the subscription opened at while nothing has moved it since, and otherwise the fixed position it has
-    // moved to. Null when neither is a checkpoint, such as a change stream opened at the present without an operation
-    // time, which has no position to lose. The dynamic position is never evaluated again here, since its supplier can
-    // read and write the checkpoint storage
-    private static @Nullable Checkpoint lostFrom(AtomicReference<StartAt> currentStartAt, @Nullable OpenedAt openedAt) {
-        StartAt current = currentStartAt.get();
-        if (openedAt != null && current == openedAt.tracked()) {
-            return openedAt.openingPosition() instanceof StartAtCheckpoint position ? position.checkpoint : null;
-        }
-        return !current.isDynamic() && current instanceof StartAtCheckpoint position ? position.checkpoint : null;
-    }
-
     // Asks the listeners in the order they were added, and the first that takes the subscription over gets it. A
     // listener that throws fails this attempt, so the retry asks again. True when a listener took the subscription
     // over, whether or not the run was still current to pause
     private boolean takenOverAfterHistoryLoss(String subscriptionId, InternalSubscription internalSubscription, @Nullable OpenedAt openedAt, RuntimeException historyLost) {
-        Checkpoint lostFrom = lostFrom(internalSubscription.currentStartAt, openedAt);
+        Checkpoint lostFrom = MongoCommons.lostFrom(internalSubscription.currentStartAt.get(), openedAt);
         if (lostFrom == null || historyLossListeners.isEmpty()) {
             return false;
         }

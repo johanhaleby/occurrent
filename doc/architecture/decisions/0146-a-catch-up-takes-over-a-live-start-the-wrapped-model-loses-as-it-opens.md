@@ -42,8 +42,9 @@ subscription over gets it. A pause, a resume or a cancel of the subscription, or
 takeover. A listener that throws fails that attempt, and the model asks again when it tries again. A task that throws
 is logged at `ERROR`, and the subscription stays paused.
 
-`lostFrom` is the position the subscription opened at, or the position it had read to once it read past that one. The
-models don't resolve a dynamic `StartAt` again for it, since the catch-up's supplier reads and saves the checkpoint
+`lostFrom` is the position the subscription opened at, or the position it had read to once it read past that one. For a
+dynamic `StartAt` it is the position the supplier answered when the change stream opened. The models don't resolve a
+dynamic `StartAt` again for it, since the catch-up's supplier reads and saves the checkpoint
 storage.
 
 The blocking `HistoryLossReportingSubscriptions` gets the method as a default. The reactor API gets its own
@@ -58,7 +59,10 @@ subscription handed to the wrapped model at a position stores no checkpoint befo
 model stores neither the present nor the lost live start during a takeover.
 
 A catch-up records the live start it handed over for each subscription id, and takes the subscription over when the
-wrapped model loses exactly that position. A loss once the subscription has read past it is ordinary lost history and
+wrapped model loses exactly that position. It compares the two by their string form. A `resumeSubscription(id)` of
+`DurableSubscriptionModel` resumes the wrapped model at the checkpoint its storage reads back, and a storage that keeps strings, such as
+`SpringRedisCheckpointStorage`, reads it back as a `StringBasedCheckpoint`, while the catch-up recorded the typed
+checkpoint the wrapped model gave it. A loss once the subscription has read past it is ordinary lost history and
 stays with the wrapped model. After the takeover the catch-up:
 
 1. Replays again from the position its replay first started from, with a live start read then, as it does when the

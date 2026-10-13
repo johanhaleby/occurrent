@@ -44,6 +44,7 @@ import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
+import org.occurrent.subscription.mongodb.internal.MongoCommons.OpenedAt;
 import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -261,7 +262,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             AtomicReference<Present> presentAt = new AtomicReference<>(presentNow());
             // Only while the Flux hasn't moved off startAt, so a loss after it has read on is handled as subscribe handles it
             Predicate<Throwable> startLost = throwable -> start != null && isChangeStreamHistoryLost(throwable) && currentStartAt.get() == startAt;
-            return changeStream(filter, currentStartAt, presentAt, currentStartAt::compareAndSet, currentStartAt::set, () -> {
+            return changeStream(filter, currentStartAt, presentAt, currentStartAt::compareAndSet, __ -> {
+            }, currentStartAt::set, () -> {
             }).retryWhen(unboundedBackoff().filter(throwable -> !startLost.test(throwable) && shouldRestart(null, throwable, () -> {
                 // Set before currentStartAt, so an opening that reads StartAt.now() also reads this moment
                 presentAt.set(presentNow());
@@ -369,14 +371,14 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
         // concatMap can buffer several documents ahead of a slow action, so the position moves only once the action's
         // Mono has completed, and a pause, a cancel or a restart delivers again at most the event in hand
-        return changeStream(internalSubscription.filter, currentStartAt, internalSubscription.presentAt, (expected, pinned) -> run.compareAndMove(currentStartAt, expected, pinned), __ -> {
+        return changeStream(internalSubscription.filter, currentStartAt, internalSubscription.presentAt, (expected, pinned) -> run.compareAndMove(currentStartAt, expected, pinned), run::openedAt, __ -> {
         }, run::opened)
                 .concatMap(cloudEvent -> run.step(() -> deliver(internalSubscription, run, cloudEvent)));
     }
 
     private Flux<Void> readsWithQuietPositions(InternalSubscription internalSubscription, Run run) {
         AtomicReference<StartAt> currentStartAt = internalSubscription.currentStartAt;
-        return openingPosition(currentStartAt, internalSubscription.presentAt, (expected, pinned) -> run.compareAndMove(currentStartAt, expected, pinned))
+        return openingPosition(currentStartAt, internalSubscription.presentAt, (expected, pinned) -> run.compareAndMove(currentStartAt, expected, pinned), run::openedAt)
                 .flatMapMany(position -> Flux.usingWhen(
                         changeStreamAt(position, internalSubscription.filter).flatMap(DriverChangeStreamCursor::open).doOnSubscribe(__ -> run.opened()),
                         cursor -> Mono.defer(() -> nextBatch(internalSubscription, run, cursor)).repeat(),
@@ -482,13 +484,13 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return Retry.backoff(Long.MAX_VALUE, config.minBackoff).maxBackoff(config.maxBackoff);
     }
 
-    // Reads through ReactiveMongoOperations.changeStream. recordOpeningPosition compares and sets the position, and
-    // onSubscribe runs when the change stream is subscribed to.
+    // Reads through ReactiveMongoOperations.changeStream. recordOpeningPosition compares and sets the position, opened is
+    // told where the change stream opens, and onSubscribe runs when the change stream is subscribed to.
     private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt,
-                                          BiPredicate<StartAt, StartAt> recordOpeningPosition,
+                                          BiPredicate<StartAt, StartAt> recordOpeningPosition, Consumer<OpenedAt> opened,
                                           Consumer<StartAt> onDocumentRead, Runnable onSubscribe) {
         SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
-        return openingPosition(currentStartAt, presentAt, recordOpeningPosition).flatMapMany(openingPosition -> {
+        return openingPosition(currentStartAt, presentAt, recordOpeningPosition, opened).flatMapMany(openingPosition -> {
             // builder::resumeAt maps to the driver's startAtOperationTime here rather than to a resume token,
             // and that includes an operation stamped at exactly the given time.
             ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, openingPosition, subscriptionModelContext);
@@ -522,21 +524,27 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     // Does what MongoCommons.resolveOpeningPosition does without blocking, and opens at presentAt rather than at the
     // time the server answers. Its javadoc says why a position that resolves to the present is recorded before the
-    // change stream opens. record compares and sets the position.
-    private Mono<StartAt> openingPosition(AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt, BiPredicate<StartAt, StartAt> record) {
+    // change stream opens. record compares and sets the position, and opened is told where the stream opens.
+    private Mono<StartAt> openingPosition(AtomicReference<StartAt> currentStartAt, AtomicReference<Present> presentAt, BiPredicate<StartAt, StartAt> record,
+                                          Consumer<OpenedAt> opened) {
         return Mono.defer(() -> {
             SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
             StartAt tracked = currentStartAt.get();
             StartAt resolved = tracked.get(subscriptionModelContext);
             if (!MongoCommons.opensAtThePresent(resolved)) {
-                return Mono.just(requireNonNull(resolved));
+                StartAt openingPosition = requireNonNull(resolved);
+                opened.accept(new OpenedAt(openingPosition, tracked));
+                return Mono.just(openingPosition);
             }
             return operationTimeAsOf(presentAt.get())
                     .flatMap(operationTime -> {
-                        if (record.test(tracked, MongoCommons.pinnedTo(tracked, operationTime))) {
-                            return Mono.just(StartAt.checkpoint(new MongoOperationTimeCheckpoint(operationTime)));
+                        StartAt pinned = MongoCommons.pinnedTo(tracked, operationTime);
+                        if (record.test(tracked, pinned)) {
+                            StartAt openingPosition = StartAt.checkpoint(new MongoOperationTimeCheckpoint(operationTime));
+                            opened.accept(new OpenedAt(openingPosition, pinned));
+                            return Mono.just(openingPosition);
                         }
-                        return openingPosition(currentStartAt, presentAt, record);
+                        return openingPosition(currentStartAt, presentAt, record, opened);
                     });
         });
     }
@@ -579,12 +587,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             return false;
         }
         String subscriptionId = internalSubscription.subscriptionId;
-        StartAt opened = internalSubscription.currentStartAt.get();
-        // A dynamic position is never resolved again here, since its supplier can be the caller's code
-        if (opened.isDynamic() || !(opened instanceof StartAt.StartAtCheckpoint position)) {
+        Checkpoint lostFrom = MongoCommons.lostFrom(internalSubscription.currentStartAt.get(), run.openedAt());
+        if (lostFrom == null) {
             return false;
         }
-        Checkpoint lostFrom = position.checkpoint;
         HistoryLossHandling.TakeOver takeOver = null;
         try {
             for (HistoryLossListener listener : historyLossListeners) {
@@ -1046,6 +1052,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         private boolean open = true;
         private int stepsUnderWay;
         private boolean hasEnded;
+        private volatile @Nullable OpenedAt openedAt;
 
         Mono<Void> started() {
             return started.asMono();
@@ -1058,6 +1065,15 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         // The change stream was subscribed to
         void opened() {
             started.tryEmitEmpty();
+        }
+
+        // Where the run last opened the change stream
+        void openedAt(OpenedAt openedAt) {
+            this.openedAt = openedAt;
+        }
+
+        @Nullable OpenedAt openedAt() {
+            return openedAt;
         }
 
         void failedToStart(Throwable throwable) {
