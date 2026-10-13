@@ -55,6 +55,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.stream.LongStream;
 
@@ -417,6 +418,80 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         }
     }
 
+    @Test
+    void a_start_of_the_wrapped_model_that_resumes_the_subscription_where_it_lost_the_history_just_before_the_takeover_resumes_it_skips_nothing_when_the_model_restarts_from_the_present() {
+        verifiesAStartThatResumesTheLostLiveStartJustBeforeTheTakeoverResumesTheSubscriptionSkipsNothing(new LosingLiveStartModel(true));
+    }
+
+    @Test
+    void a_start_of_the_wrapped_model_that_resumes_the_subscription_where_it_lost_the_history_just_before_the_takeover_resumes_it_skips_nothing_when_the_model_ends_the_subscription() {
+        verifiesAStartThatResumesTheLostLiveStartJustBeforeTheTakeoverResumesTheSubscriptionSkipsNothing(new LosingLiveStartModel(false));
+    }
+
+    // The start runs after the takeover paused the subscription for its resume at the new live start, and the
+    // subscription it resumes loses the history again once that resume has been asked for
+    private void verifiesAStartThatResumesTheLostLiveStartJustBeforeTheTakeoverResumesTheSubscriptionSkipsNothing(LosingLiveStartModel wrapped) {
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            subscribeAndHandOver(catchup);
+            Checkpoint lost = wrapped.issued.get(0);
+            reader.head = 4;
+            wrapped.beforeTheNextResumeAtAPosition = () -> wrapped.resumeSubscription(ID);
+
+            wrapped.opensAndLosesTheLiveStart();
+            wrapped.oplogLoses(lost);
+
+            assertThat(wrapped.restartedFromThePresent).as("restarts from the present").isEmpty();
+            assertThat(wrapped.ended).as("subscriptions the wrapped model ended").isEmpty();
+            assertThat(received).as("the history again, now with the event written in the gap").containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e4");
+            assertThat(wrapped.positionOf(ID)).as("runs from the live start read for the replay that ran again").isEqualTo(wrapped.issued.get(1));
+            assertThat(catchup.isRunning(ID)).isTrue();
+            wrapped.deliver(liveEvent("e5", 5));
+            assertThat(received).as("the resumed subscription delivers what is written after it").endsWith("e4", "e5");
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
+    @Test
+    void a_takeover_whose_resume_at_the_new_live_start_throws_replays_again_once_the_subscription_is_resumed() {
+        verifiesATakeoverWhoseResumeThrowsReplaysAgain((catchup, wrapped) -> catchup.resumeSubscription(ID));
+    }
+
+    @Test
+    void a_takeover_whose_resume_at_the_new_live_start_throws_replays_again_once_a_start_of_the_wrapped_model_resumes_the_subscription_where_it_lost_the_history() {
+        verifiesATakeoverWhoseResumeThrowsReplaysAgain((catchup, wrapped) -> {
+            wrapped.resumeSubscription(ID);
+            wrapped.oplogLoses(wrapped.issued.get(0));
+        });
+    }
+
+    private void verifiesATakeoverWhoseResumeThrowsReplaysAgain(BiConsumer<ReactorStreamCatchupSubscriptionModel, LosingLiveStartModel> resume) {
+        LosingLiveStartModel wrapped = new LosingLiveStartModel(true);
+        ReactorStreamCatchupSubscriptionModel catchup = catchupOver(wrapped);
+        try {
+            subscribeAndHandOver(catchup);
+            Checkpoint lost = wrapped.issued.get(0);
+            reader.head = 4;
+            wrapped.beforeTheNextResumeAtAPosition = () -> {
+                throw new IllegalStateException("Refused while the subscription model keeps the subscription");
+            };
+            wrapped.opensAndLosesTheLiveStart();
+            assertThat(wrapped.isPaused(ID)).as("held paused once the resume at the new live start was refused").isTrue();
+
+            resume.accept(catchup, wrapped);
+            wrapped.oplogLoses(lost);
+
+            assertThat(wrapped.restartedFromThePresent).as("restarts from the present").isEmpty();
+            assertThat(received).as("the history twice more, each time with the event written in the gap")
+                    .containsExactly("e1", "e2", "e3", "e1", "e2", "e3", "e4", "e1", "e2", "e3", "e4");
+            assertThat(wrapped.positionOf(ID)).as("runs from the live start read for the replay that ran once more").isEqualTo(wrapped.issued.get(2));
+            assertThat(catchup.isRunning(ID)).isTrue();
+        } finally {
+            catchup.shutdown();
+        }
+    }
+
     private ReactorStreamCatchupSubscriptionModel catchupOver(LosingLiveStartModel wrapped) {
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, reader);
         catchup.listenForCatchup(ID, new CatchupListener() {
@@ -512,6 +587,8 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
         private final AtomicBoolean losesOnTheNextCheckWhetherItRuns = new AtomicBoolean();
         volatile Runnable beforeTheTakeoverRuns = () -> {
         };
+        volatile Runnable beforeTheNextResumeAtAPosition = () -> {
+        };
         volatile Loses loses = Loses.WHEN_THE_TEST_SAYS;
 
         LosingLiveStartModel(boolean restartsFromThePresent) {
@@ -535,6 +612,17 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
             String subscriptionId = openThatLoses;
             openThatLoses = null;
             losesTheLiveStartOf(subscriptionId);
+        }
+
+        // A subscription that runs from a position the oplog no longer holds loses it, and one that runs from
+        // anywhere else doesn't
+        void oplogLoses(Checkpoint lost) {
+            List.copyOf(held.keySet()).forEach(subscriptionId -> {
+                Held current = held.get(subscriptionId);
+                if (current != null && current.state() == State.RUNNING && current.position().equals(lost)) {
+                    losesTheLiveStartOf(subscriptionId);
+                }
+            });
         }
 
         private void losesTheLiveStartOf(String subscriptionId) {
@@ -638,6 +726,10 @@ class ReactorStreamCatchupSubscriptionModelHistoryLossTest {
 
         @Override
         public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            Runnable beforeThisResume = beforeTheNextResumeAtAPosition;
+            beforeTheNextResumeAtAPosition = () -> {
+            };
+            beforeThisResume.run();
             Checkpoint position = ((StartAt.StartAtCheckpoint) startAt).checkpoint;
             resumedAt.add(position);
             Held current = held.get(subscriptionId);

@@ -55,6 +55,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.RepositionableSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
@@ -205,6 +206,16 @@ class ReactorCatchupLostLiveStartMongoTest {
         verifiesAFluxReplaysAgain(Replay.DCB, false);
     }
 
+    @Test
+    void a_start_of_the_wrapped_model_that_resumes_a_stream_subscription_where_the_oplog_lost_the_history_just_before_the_takeover_resumes_it_skips_nothing_when_the_model_restarts_lost_subscriptions() {
+        verifiesAStartThatResumesTheLostLiveStartJustBeforeTheTakeoverResumesTheSubscriptionSkipsNothing(true);
+    }
+
+    @Test
+    void a_start_of_the_wrapped_model_that_resumes_a_stream_subscription_where_the_oplog_lost_the_history_just_before_the_takeover_resumes_it_skips_nothing_when_the_model_ends_lost_subscriptions() {
+        verifiesAStartThatResumesTheLostLiveStartJustBeforeTheTakeoverResumesTheSubscriptionSkipsNothing(false);
+    }
+
     private void verifiesASubscriptionWithAnIdReplaysAgain(Replay replay, boolean restartLostSubscriptions) {
         NameDefined history1 = nameDefined();
         NameDefined history2 = nameDefined();
@@ -240,6 +251,48 @@ class ReactorCatchupLostLiveStartMongoTest {
         );
     }
 
+    // The takeover's final check arms the fail point again and writes an event after the new live start, and the
+    // takeover's resume at that live start is preceded by a start(true) that resumes the subscription at the lost one,
+    // which the fail point then fails once more
+    private void verifiesAStartThatResumesTheLostLiveStartJustBeforeTheTakeoverResumesTheSubscriptionSkipsNothing(boolean restartLostSubscriptions) {
+        Replay replay = Replay.STREAM;
+        NameDefined history1 = nameDefined();
+        NameDefined history2 = nameDefined();
+        NameDefined writtenInTheGap = nameDefined();
+        NameDefined afterTheNewLiveStart = nameDefined();
+        NameDefined afterHandOver = nameDefined();
+        write(replay, history1);
+        write(replay, history2);
+        ArmsTheFailPointAfterTheFinalCheck armed = new ArmsTheFailPointAfterTheFinalCheck(mongoModel(restartLostSubscriptions),
+                () -> failsTheNextChangeStreamOpenAfterWriting(replay, writtenInTheGap), () -> failsTheNextChangeStreamOpenAfterWriting(replay, afterTheNewLiveStart));
+        catchup = new ReactorCatchupSubscriptionModel(armed, eventStore, eventStore, null, null, 100, 1000);
+        catchup.listenForCatchup(SUBSCRIPTION_ID, new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                catchupsStarted.incrementAndGet();
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+            }
+        });
+
+        Subscription started = catchup.subscribe(SUBSCRIPTION_ID, filter(replay), StartAt.checkpoint(GlobalCheckpoint.of(0)), event -> Mono.fromRunnable(() -> received.add(event.getId())));
+
+        started.waitUntilStarted().block(Duration.ofSeconds(30));
+        assertThat(waitsFor(() -> historyLostReplies.get() == 2 && catchupsStarted.get() >= 2 && !catchup.isCatchingUp(SUBSCRIPTION_ID) && catchup.isRunning(SUBSCRIPTION_ID) && !catchup.isPaused(SUBSCRIPTION_ID)))
+                .as("the oplog lost the history twice and the subscription runs again, started %s times, with %s replies that said the oplog lost the history", catchupsStarted.get(), historyLostReplies.get()).isTrue();
+        write(replay, afterHandOver);
+        assertThat(waitsFor(() -> received.contains(afterHandOver.eventId()))).as("received after the hand over").isTrue();
+        assertAll(
+                () -> assertThat(armed.resumedWhereTheHistoryWasLost).as("the start resumed the subscription at the lost live start before the takeover resumed it").isTrue(),
+                () -> assertThat(received).as("the event written after the live start the takeover hands over to").contains(afterTheNewLiveStart.eventId()),
+                () -> assertThat(received).as("the event written between the final check and the open of the change stream").contains(writtenInTheGap.eventId()),
+                () -> assertThat(received).as("the history").contains(history1.eventId(), history2.eventId()),
+                () -> assertThat(received).as("the event written after the hand over").contains(afterHandOver.eventId())
+        );
+    }
+
     private void verifiesAFluxReplaysAgain(Replay replay, boolean restartLostSubscriptions) {
         NameDefined history1 = nameDefined();
         NameDefined history2 = nameDefined();
@@ -264,17 +317,25 @@ class ReactorCatchupLostLiveStartMongoTest {
 
     // Fails the next change stream open once with 286 and writes an event between the live start and the open
     private ReactorCatchupSubscriptionModel catchupWhoseFinalCheckIsFollowedByALostLiveStart(NameDefined writtenInTheGap, Replay replay, boolean restartLostSubscriptions) {
+        ArmsTheFailPointAfterTheFinalCheck armed = new ArmsTheFailPointAfterTheFinalCheck(mongoModel(restartLostSubscriptions), () -> failsTheNextChangeStreamOpenAfterWriting(replay, writtenInTheGap), null);
+        return new ReactorCatchupSubscriptionModel(armed, eventStore, eventStore, null, null, 100, 1000);
+    }
+
+    private ReactorMongoSubscriptionModel mongoModel(boolean restartLostSubscriptions) {
         mongoModel = new ReactorMongoSubscriptionModel(new ReactiveMongoTemplate(subscriberClient, requireNonNull(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reactorlostlivestart").getDatabase())),
                 "events", TimeRepresentation.RFC_3339_STRING,
                 ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)).restartSubscriptionsOnChangeStreamHistoryLost(restartLostSubscriptions));
-        ArmsTheFailPointAfterTheFinalCheck armed = new ArmsTheFailPointAfterTheFinalCheck(mongoModel, () -> Mono.from(writerClient.getDatabase("admin").runCommand(
+        return mongoModel;
+    }
+
+    private Mono<Void> failsTheNextChangeStreamOpenAfterWriting(Replay replay, DomainEvent event) {
+        return Mono.from(writerClient.getDatabase("admin").runCommand(
                         new Document("configureFailPoint", "failCommand").append("mode", new Document("times", 1))
                                 .append("data", new Document("failCommands", List.of("aggregate")).append("errorCode", HISTORY_LOST).append("appName", SUBSCRIBER_APPLICATION_NAME))))
-                .then(writeReactively(replay, writtenInTheGap))
+                .then(writeReactively(replay, event))
                 // The ping brings the cluster time the client knows past the event, and the delay moves the present a second past it
                 .then(Mono.from(subscriberClient.getDatabase("admin").runCommand(new Document("ping", 1))).then())
-                .then(Mono.delay(Duration.ofMillis(1100)).then()));
-        return new ReactorCatchupSubscriptionModel(armed, eventStore, eventStore, null, null, 100, 1000);
+                .then(Mono.delay(Duration.ofMillis(1100)).then());
     }
 
     private static SubscriptionFilter filter(Replay replay) {
@@ -310,27 +371,50 @@ class ReactorCatchupLostLiveStartMongoTest {
         };
     }
 
-    // Runs the task once after the first resume check and forwards every other call, capabilities included
-    private static final class ArmsTheFailPointAfterTheFinalCheck implements CheckpointAwareSubscriptionModel, SubscriptionModel {
+    // Runs the first task once after the first resume check that passes, and forwards every other call, capabilities
+    // included. With a second task, it runs that once after the second resume check that passes, and the first resume
+    // at a position starts the wrapped model first, which resumes every subscription it holds paused where it was held.
+    private static final class ArmsTheFailPointAfterTheFinalCheck implements CheckpointAwareSubscriptionModel, SubscriptionModel, RepositionableSubscriptions {
         private final ReactorMongoSubscriptionModel delegate;
         private final Supplier<Mono<Void>> afterTheFirstFinalCheck;
-        private final AtomicBoolean armed = new AtomicBoolean();
+        private final @Nullable Supplier<Mono<Void>> afterTheSecondFinalCheck;
+        private final AtomicInteger checksPassed = new AtomicInteger();
+        private final AtomicBoolean resumedAtAPosition = new AtomicBoolean();
+        private volatile boolean resumedWhereTheHistoryWasLost;
 
-        private ArmsTheFailPointAfterTheFinalCheck(ReactorMongoSubscriptionModel delegate, Supplier<Mono<Void>> afterTheFirstFinalCheck) {
+        private ArmsTheFailPointAfterTheFinalCheck(ReactorMongoSubscriptionModel delegate, Supplier<Mono<Void>> afterTheFirstFinalCheck, @Nullable Supplier<Mono<Void>> afterTheSecondFinalCheck) {
             this.delegate = delegate;
             this.afterTheFirstFinalCheck = afterTheFirstFinalCheck;
+            this.afterTheSecondFinalCheck = afterTheSecondFinalCheck;
         }
 
         @Override
         public Mono<Boolean> canResumeFrom(Checkpoint checkpoint) {
-            return delegate.canResumeFrom(checkpoint).flatMap(canResume -> canResume && armed.compareAndSet(false, true)
-                    ? Mono.defer(afterTheFirstFinalCheck).thenReturn(true)
-                    : Mono.just(canResume));
+            return delegate.canResumeFrom(checkpoint).flatMap(canResume -> {
+                if (!canResume) {
+                    return Mono.just(false);
+                }
+                int passed = checksPassed.incrementAndGet();
+                if (passed == 1) {
+                    return Mono.defer(afterTheFirstFinalCheck).thenReturn(true);
+                }
+                Supplier<Mono<Void>> second = afterTheSecondFinalCheck;
+                return passed == 2 && second != null ? Mono.defer(second).thenReturn(true) : Mono.just(true);
+            });
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            if (afterTheSecondFinalCheck != null && resumedAtAPosition.compareAndSet(false, true)) {
+                delegate.start(true);
+                resumedWhereTheHistoryWasLost = delegate.isRunning(subscriptionId);
+            }
+            return delegate.resumeSubscription(subscriptionId, startAt);
         }
 
         @Override
         public <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
-            return delegate.capability(type);
+            return type == RepositionableSubscriptions.class ? Optional.of(type.cast(this)) : delegate.capability(type);
         }
 
         @Override

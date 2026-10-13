@@ -35,6 +35,7 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.CatchupListener;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -168,6 +169,70 @@ class StreamCatchupTakeoverLifecycleTest {
         letTheTakeoverReplayGo.countDown();
         assertThat(started.waitUntilStarted(Duration.ofSeconds(10))).as("started once the takeover has handed over").isTrue();
         assertThat(liveModel.openedAt).as("the live starts the live model opened").hasSize(1);
+    }
+
+    @ParameterizedTest(name = "storing={0}")
+    @ValueSource(booleans = {true, false})
+    @Timeout(60)
+    void a_start_that_resumes_the_subscription_where_the_live_model_lost_the_history_while_the_takeover_replays_skips_nothing_when_the_loss_is_reported_before_the_takeover_hands_over(boolean storing) throws InterruptedException {
+        verifiesAStartThatResumesTheLostLiveStartWhileTheTakeoverReplaysSkipsNothing(storing, true);
+    }
+
+    @ParameterizedTest(name = "storing={0}")
+    @ValueSource(booleans = {true, false})
+    @Timeout(60)
+    void a_start_that_resumes_the_subscription_where_the_live_model_lost_the_history_while_the_takeover_replays_skips_nothing_when_the_takeover_hands_over_before_the_loss_is_reported(boolean storing) throws InterruptedException {
+        verifiesAStartThatResumesTheLostLiveStartWhileTheTakeoverReplaysSkipsNothing(storing, false);
+    }
+
+    // The start finds no takeover while the live model opens at the live start, and the live model resumes the
+    // subscription where it lost the history once the takeover replays
+    private void verifiesAStartThatResumesTheLostLiveStartWhileTheTakeoverReplaysSkipsNothing(boolean storing, boolean lossReportedFirst) throws InterruptedException {
+        CountDownLatch inTheFirstOpen = new CountDownLatch(1);
+        CountDownLatch letTheFirstOpenGo = new CountDownLatch(1);
+        liveModel = new LiveStartLosingSubscriptionModel(inMemorySubscriptionModel, true, false, () -> write(writtenInTheGap))
+                .beforeTheFirstOpen(() -> {
+                    inTheFirstOpen.countDown();
+                    awaitUnchecked(letTheFirstOpenGo);
+                })
+                .startResumingWhereItWasHeldOnceThisReturns(() -> {
+                    letTheFirstOpenGo.countDown();
+                    awaitUnchecked(inTheTakeoverReplay);
+                });
+        blocksInTheTakeoverReplay = true;
+        create(storing);
+        catchup.subscribe(ID, StartAt.checkpoint(GlobalCheckpoint.of(0)), action());
+        assertThat(inTheFirstOpen.await(10, TimeUnit.SECONDS)).as("the live model opens at the live start").isTrue();
+
+        catchup.start(true);
+
+        assertAll(
+                () -> assertThat(inTheTakeoverReplay.getCount()).as("the takeover replays").isZero(),
+                () -> assertThat(liveModel.lostLiveStarts).as("the live starts the live model lost").hasSize(1),
+                () -> assertThat(liveModel.isRunning(ID)).as("the start resumed the subscription where the live model lost the history").isTrue()
+        );
+        Checkpoint lost = liveModel.lostLiveStarts.getFirst();
+        if (lossReportedFirst) {
+            liveModel.losesWhatAStartResumedAt(lost);
+            letTheTakeoverReplayGo.countDown();
+        } else {
+            letTheTakeoverReplayGo.countDown();
+            assertThat(waitUpTo(Duration.ofSeconds(10), () -> !catchup.isCatchingUp(ID))).as("the takeover replay has ended").isTrue();
+            liveModel.losesWhatAStartResumedAt(lost);
+        }
+        boolean handedOver = waitUpTo(Duration.ofSeconds(10), () -> !liveModel.openedAt.isEmpty() && !catchup.isCatchingUp(ID) && catchup.isRunning(ID));
+        NameDefined afterTheHandover = nameDefined("afterTheHandover");
+        write(afterTheHandover);
+        boolean delivered = waitUpTo(Duration.ofSeconds(5), () -> received.contains(afterTheHandover));
+
+        assertAll(
+                () -> assertThat(liveModel.restartedFromThePresent).as("restarts from the present").isEmpty(),
+                () -> assertThat(handedOver).as("the takeover resumed the subscription at the live start it read again").isTrue(),
+                () -> assertThat(liveModel.openedAt).as("the live starts the live model opened").hasSize(1),
+                () -> assertThat(catchup.isPaused(ID)).as("paused").isFalse(),
+                () -> assertThat(received).as("the event written in between").contains(writtenInTheGap),
+                () -> assertThat(delivered).as("the event written after the handover is delivered").isTrue()
+        );
     }
 
     @ParameterizedTest(name = "storing={0}")

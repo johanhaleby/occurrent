@@ -2404,10 +2404,13 @@ restart the subscription from the present or end it, whatever `occurrent.subscri
 says. The catch-up takes the subscription over, logs a warning, and replays again from the position its replay first
 started from, with a new live start. That replay counts toward the 4 above. When it is the takeover's replay that gives
 up, the blocking catch-up logs the failure at `ERROR` and replays again after a backoff of up to 2 seconds, and
-`waitUntilStarted()` keeps waiting. A reactor catch-up with a subscription id logs it at `ERROR` and keeps the
-subscription paused. Resuming it runs the takeover's replay again, which can run again 3 times of its own, and doesn't
-resume the MongoDB model where it lost the history. A resume of the catch-up between the MongoDB model's pause and the
-start of the takeover's replay starts that replay, on both stacks. `ReactorDurableSubscriptionModel` passes both
+`waitUntilStarted()` keeps waiting. A reactor catch-up with a subscription id logs it at `ERROR`. While the MongoDB
+model holds the subscription paused, it stays paused, and resuming it runs the takeover's replay again, which can run
+again 3 times of its own, instead of resuming the MongoDB model where it lost the history. When a `start(true)` has
+resumed the MongoDB model there, the model loses that position again, and the catch-up replays again then. A resume of
+the catch-up between the MongoDB model's pause and the start of the takeover's replay starts that replay, on both
+stacks. When the MongoDB model resumes the subscription where it lost the history on a `start(true)` while the catch-up
+takes it over, the catch-up takes that loss over too, on both stacks, and the model pauses the subscription again. `ReactorDurableSubscriptionModel` passes both
 capabilities on from the model it wraps, so a reactor catch-up over it, over `ReactorMongoSubscriptionModel`, takes the
 subscription over too, and the durable model stores no position before the subscription delivers an event live. A
 wrapped model of your own handles a lost live start as it would without the catch-up, unless it implements
