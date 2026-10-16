@@ -234,7 +234,8 @@ public final class CatchupProjectionFeed<E> {
      * <p>
      * Unlike {@link #acceptAndWait(Object)}, this never waits for a replay and never runs one on the calling thread, so
      * a Kafka consumer keeps polling while the catch-up runs. A catch-up the view asks for while this call runs its
-     * code replays on a thread of its own, which this starts before it returns, see {@link #catchUp()}. It folds with no metadata, see {@link #acceptOrDefer(EventMetadata, Object)}.
+     * code replays on a virtual thread this call starts before it returns, or on the thread that asked for it first,
+     * when that is another thread, see {@link #catchUp()}. It folds with no metadata, see {@link #acceptOrDefer(EventMetadata, Object)}.
      *
      * @param event The domain event received from the external source.
      * @return {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#DEFERRED}.
@@ -345,8 +346,8 @@ public final class CatchupProjectionFeed<E> {
      * view's code has returned, on the thread that asked first, and before the feed call that ran the view's code on
      * that thread returns, such as the {@link #acceptAndWait(Object)} that delivered the event, unless an interrupt makes that
      * thread give up or leave it as described below. When that feed call is {@link #acceptOrDefer(Object)}, the replay
-     * runs on a thread of its own instead, started before {@link #acceptOrDefer(Object)} returns without waiting for
-     * it. A call from another thread that asks before that replay starts
+     * runs on a virtual thread that call starts instead, before {@link #acceptOrDefer(Object)} returns without waiting
+     * for it. A call from another thread that asks before that replay starts
      * asks for the same replay, and can return before it has run. A view that hands the call to another thread and
      * waits for it is not recognized, and waits for a replay that cannot start while it waits.
      * <p>
@@ -366,7 +367,7 @@ public final class CatchupProjectionFeed<E> {
      * gives up, stay asked for. A later call takes them over when it is a {@code catchUp()}, {@link #goLive()}, or
      * {@link #acceptAndWait(Object)} that folds its event live, made outside the view's code on any thread. Before that call
      * returns or throws, their replay has run, been refused, or been given up or put back again. An
-     * {@link #acceptOrDefer(Object)} made outside the view's code hands them to a thread of its own instead, and returns
+     * {@link #acceptOrDefer(Object)} made outside the view's code starts a virtual thread for them instead, and returns
      * without waiting for that replay. A call on another
      * thread that finds them taken over returns without waiting for that replay. The call that takes them over can be
      * on a thread where the view never asked, and a {@code catchUp()} or {@link #goLive()} throws the failure of that

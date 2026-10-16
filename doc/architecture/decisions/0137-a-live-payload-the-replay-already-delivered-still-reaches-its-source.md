@@ -160,7 +160,8 @@ that blocks on the call from a thread it switched to, while a replay holds live 
 cannot end while the view blocks. Both engines answer a `catchUp()` they recognize this way `true` without waiting,
 whether it has anything to replay or not, and its replay does not start before the view's code returns. The blocking
 engine runs that replay once the view's code has returned, on the thread that asked first, before the call into the
-handover that ran the view's code on that thread returns. An ask from any thread before that replay takes its turn asks
+handover that ran the view's code on that thread returns. When that call is `acceptIfLive`, it starts a virtual thread
+for the replay instead and returns without waiting. An ask from any thread before that replay takes its turn asks
 for the same replay, so a call on another thread can return before the replay has run. That replay stops only for a stop
 that came after every ask it stands for. A catch-up failure refuses only the asks made before it, and only when it comes
 before the replay starts or finds the history caught up already, so a failure while the replay runs refuses none of
@@ -192,7 +193,8 @@ is interrupted where the replay would wait, it gives up the asks made on it and 
 an interrupted thread, the thread puts back every ask the replay stands for and logs a warning. The asks it puts back,
 and the asks of other threads when it gives up, stay, and their replay runs on the thread of a later call into the
 handover, such as a catch-up or a live delivery made outside the handover's own code, before that call returns. That
-call can be interrupted too, and then gives up or puts back the asks again. So a `catchUp()` on a thread where the view
+call can be interrupted too, and then gives up or puts back the asks again. An `acceptIfLive` starts a virtual thread
+for these asks instead and returns without waiting. So a `catchUp()` on a thread where the view
 never asked can throw the failure of that replay. Asks left this way run only when a later call comes, so if none comes,
 their replay does not run. A view that waits for a `catchUp()` that replays from a thread it switched to is not
 recognized, so it still waits for a replay that cannot start while the view waits.

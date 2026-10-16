@@ -479,7 +479,8 @@ public final class BlockingHandover<T, K> {
      * currently draining a buffer for it to wait in.
      * <p>
      * This never waits for a replay and never runs one on the calling thread. A catch-up that this handover's own code
-     * asked for, and that this thread would otherwise run, runs on a thread of its own, started before this returns.
+     * asked for runs on a virtual thread this call starts before it returns, or on the thread that asked for it first,
+     * when that is another thread.
      *
      * @return {@code true} once the payload has genuinely landed: delivered live just now, or already delivered by
      *         an earlier attempt. {@code false} whenever this call did not deliver it, whether because this
@@ -635,8 +636,8 @@ public final class BlockingHandover<T, K> {
      * it, and replays like any other catch-up. On that thread it runs before the {@link #accept(Object)},
      * {@link #acceptReportingDelivery(Object)} or {@code catchUp} call that ran the code returns, unless an interrupt
      * makes that thread give up or leave it as described below. When that call is {@link #acceptIfLive(Object)}, the
-     * replay runs on a thread of its own instead, started before {@link #acceptIfLive(Object)} returns without waiting
-     * for it. A call from any thread
+     * replay runs on a virtual thread that call starts instead, before {@link #acceptIfLive(Object)} returns without
+     * waiting for it. A call from any thread
      * that asks before that replay takes its turn asks for the same replay, so a call on another thread can return
      * before the replay has run. That replay keeps replaying while the {@link Source} of any call it stands for answers
      * {@link Source#keepReplaying()} with {@code true}, and makes every other call on the source of the call that asked
@@ -660,7 +661,7 @@ public final class BlockingHandover<T, K> {
      * over when it is made from outside this handover's own code, on any thread, and is a {@code catchUp}, or an
      * {@link #accept(Object)} or {@link #acceptReportingDelivery(Object)} that delivers its payload live or finds it
      * delivered already. Before that call returns or throws, their replay has run, been refused, or been given up or
-     * put back again as above. An {@link #acceptIfLive(Object)} that returns hands them to a thread of its own
+     * put back again as above. An {@link #acceptIfLive(Object)} that returns starts a virtual thread for them
      * instead, and returns without waiting for their replay. A
      * call on another thread that finds them taken over returns without waiting for that replay. The call that takes
      * them over can be on a thread where no code asked, and a {@code catchUp} throws the failure of that replay like

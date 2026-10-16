@@ -153,10 +153,10 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     /**
      * Feed a single event from a broker, or from any other source that delivers the event again when it is not
      * acknowledged. As {@link #accept(CloudEvent)}, except an event that would only buffer, a
-     * {@link CatchupThenPushSubscriptionModel} in front still replaying, say, is refused instead of buffered. One narrow
-     * case still waits. A replay that starts on an already live catch-up model after this call found it live, and
-     * before the event reaches its handler, holds the event until that replay ends rather than refusing it. The
-     * returned {@link Mono} waits for it all the same.
+     * {@link CatchupThenPushSubscriptionModel} in front still replaying, say, is refused instead of buffered. An event
+     * queued just before a replay starts on an already live catch-up model is refused the same way. The replay takes
+     * it out of the queue unless its handler has started on it, and the returned {@link Mono} completes with
+     * {@link RoutingOutcome#DEFERRED} instead of waiting for the replay.
      * <p>
      * Act on the {@link RoutingOutcome#disposition()} of the outcome the returned {@link Mono} completes with.
      * Acknowledge the message on {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED}, the two outcomes

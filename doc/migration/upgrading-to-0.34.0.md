@@ -1189,7 +1189,8 @@ projection, so one with no event left to hand over goes live as if there had bee
 
 `acceptOrDefer(..)` never waits for a catch-up, so a Kafka consumer that calls it keeps polling through a long replay.
 Nor does it run one on the calling thread. A catch-up the fold asks for while the call applies the event replays on a
-thread of its own. Once the feed is live it applies the event and returns `RoutingOutcome.DELIVERED`, so `DELIVERED`
+virtual thread that call starts, or on the thread that asked for it first, when that is another thread. Once
+the feed is live it applies the event and returns `RoutingOutcome.DELIVERED`, so `DELIVERED`
 means the event has been applied. Before that, during a catch-up, and after a `stopCatchUp()` that stopped a replay
 before the feed went live, it returns `RoutingOutcome.DEFERRED` and keeps the event nowhere. Leave the message
 unacknowledged then, and the broker delivers it again. A stop that ends a replay on a feed that was already live keeps

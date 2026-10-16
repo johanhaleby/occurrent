@@ -530,8 +530,8 @@ public final class ReactiveHandover<T, K> {
      * It never waits for a replay. A catch-up that starts replaying pauses live delivery, and from then on this
      * refuses a payload rather than queue it, and completes {@code false} for each payload it queued whose delivery
      * has not started yet, taking it out of the queue. A payload whose delivery has started completes once that
-     * delivery ends, and the replay waits for it. The replay runs on a scheduler thread, never on the thread that
-     * delivered a payload inline for this call.
+     * delivery ends, and the replay waits for it. The replay runs on a scheduler thread. It does not start on the
+     * thread that delivered a payload inline for this call until that inline delivery has returned.
      *
      * @return A {@link Mono} that completes with {@code true} only once the payload's delivery has completed,
      *         delivered live by this call, or by an earlier attempt with the same key. An earlier attempt still
