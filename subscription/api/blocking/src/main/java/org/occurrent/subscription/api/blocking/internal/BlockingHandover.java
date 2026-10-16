@@ -477,6 +477,9 @@ public final class BlockingHandover<T, K> {
      * <p>
      * A payload fed while this handover is stopped is refused the same way, for the same reason: nothing is
      * currently draining a buffer for it to wait in.
+     * <p>
+     * This never waits for a replay and never runs one on the calling thread. A catch-up that this handover's own code
+     * asked for, and that this thread would otherwise run, runs on a thread of its own, started before this returns.
      *
      * @return {@code true} once the payload has genuinely landed: delivered live just now, or already delivered by
      *         an earlier attempt. {@code false} whenever this call did not deliver it, whether because this
@@ -521,7 +524,15 @@ public final class BlockingHandover<T, K> {
                 }
             }
         }
-        deliverLive(payload, deliverKey, replayedBy);
+        try {
+            if (deliverKey != null) {
+                deliverOutsideLock(payload, deliverKey);
+            } else if (replayedBy != null) {
+                reportAlreadyDeliveredByReplay(replayedBy, payload);
+            }
+        } finally {
+            handOffCatchUpsAskedByOwnCode();
+        }
         return landed;
     }
 
@@ -622,8 +633,10 @@ public final class BlockingHandover<T, K> {
      * a fold, live or replayed, and every {@link Source} callback. The {@code true} means the catch-up was asked for,
      * not that it has run. Its replay runs once that code has returned, on the thread of the first call that asked for
      * it, and replays like any other catch-up. On that thread it runs before the {@link #accept(Object)},
-     * {@link #acceptReportingDelivery(Object)}, {@link #acceptIfLive(Object)} or {@code catchUp} call that ran the code
-     * returns, unless an interrupt makes that thread give up or leave it as described below. A call from any thread
+     * {@link #acceptReportingDelivery(Object)} or {@code catchUp} call that ran the code returns, unless an interrupt
+     * makes that thread give up or leave it as described below. When that call is {@link #acceptIfLive(Object)}, the
+     * replay runs on a thread of its own instead, started before {@link #acceptIfLive(Object)} returns without waiting
+     * for it. A call from any thread
      * that asks before that replay takes its turn asks for the same replay, so a call on another thread can return
      * before the replay has run. That replay keeps replaying while the {@link Source} of any call it stands for answers
      * {@link Source#keepReplaying()} with {@code true}, and makes every other call on the source of the call that asked
@@ -634,9 +647,9 @@ public final class BlockingHandover<T, K> {
      * fails while the replay runs refuses none of its calls. A call made on a handover that had already failed is not
      * refused for that failure. Neither a stop nor a refusal is reported. A failure of its replay is handled like that
      * of any other catch-up, so unless it failed on an interrupted thread, this handover refuses every later payload. A
-     * {@code catchUp} call that runs the replay throws that failure. An {@link #accept(Object)},
-     * {@link #acceptReportingDelivery(Object)} or {@link #acceptIfLive(Object)} that runs it logs the failure instead
-     * of throwing it, since the failure is not about its payload.
+     * {@code catchUp} call that runs the replay throws that failure. An {@link #accept(Object)} or
+     * {@link #acceptReportingDelivery(Object)} that runs it, or the thread an {@link #acceptIfLive(Object)} started for
+     * it, logs the failure instead of throwing it, since the failure is not about the payload that was fed.
      * <p>
      * An interrupt keeps the thread that runs such a replay from waiting. When that thread is interrupted where the
      * replay would wait, for the deliveries or for another replay, it gives up every call made on it that is still
@@ -644,10 +657,11 @@ public final class BlockingHandover<T, K> {
      * thread, as above, the thread puts back every call the replay stands for, logs a warning, and runs no further
      * replay before it returns. It throws nothing for that failure, not even from a {@code catchUp}. The calls it puts
      * back, and the calls on other threads when it gives up, stay asked for. A later call into this handover takes them
-     * over when it is made from outside this handover's own code, on any thread, and is a {@code catchUp}, an
-     * {@link #acceptIfLive(Object)} that returns, or an {@link #accept(Object)} or
-     * {@link #acceptReportingDelivery(Object)} that delivers its payload live or finds it delivered already. Before
-     * that call returns or throws, their replay has run, been refused, or been given up or put back again as above. A
+     * over when it is made from outside this handover's own code, on any thread, and is a {@code catchUp}, or an
+     * {@link #accept(Object)} or {@link #acceptReportingDelivery(Object)} that delivers its payload live or finds it
+     * delivered already. Before that call returns or throws, their replay has run, been refused, or been given up or
+     * put back again as above. An {@link #acceptIfLive(Object)} that returns hands them to a thread of its own
+     * instead, and returns without waiting for their replay. A
      * call on another thread that finds them taken over returns without waiting for that replay. The call that takes
      * them over can be on a thread where no code asked, and a {@code catchUp} throws the failure of that replay like
      * any replay it runs. Calls left this way replay only when such a call comes, so if none comes, their replay does
@@ -1075,6 +1089,26 @@ public final class BlockingHandover<T, K> {
         }
     }
 
+    // For acceptIfLive(..), whose caller never waits for a replay. The asks this thread would run go to a thread of
+    // their own, in the same record and order, and that thread runs them the way runCatchUpsAskedByOwnCode(..) does.
+    // An ask another thread runs is left to it.
+    private void handOffCatchUpsAskedByOwnCode() {
+        if (callDepth.get() != null) {
+            return;
+        }
+        Thread runner;
+        synchronized (lock) {
+            AskedCatchUp<T> asked = askedByOwnCode;
+            if (asked == null || (asked.askedOn != null && asked.askedOn != Thread.currentThread())) {
+                return;
+            }
+            runner = Thread.ofVirtual().name("occurrent-asked-catch-up-" + describe())
+                    .unstarted(() -> runCatchUpsAskedByOwnCode(false));
+            asked.askedOn = runner;
+        }
+        runner.start();
+    }
+
     // Runs once the calling thread has left this handover's code, so the replay no longer waits for it. A failure is
     // recorded by the catch-up and refuses every later payload, unless the thread is interrupted. It is thrown only
     // when throwFailure is set, since the code that asked was told true and a live payload's caller has its payload
@@ -1119,7 +1153,7 @@ public final class BlockingHandover<T, K> {
                     }
                     throw e;
                 }
-                log.error("A catch-up that the own code of the {} asked for failed. The call that ran it fed a "
+                log.error("A catch-up that the own code of the {} asked for failed. It ran for a call that fed a "
                         + "payload, so the failure is logged rather than thrown, and it is recorded like that of any "
                         + "failed catch-up.",
                         describe(), e);

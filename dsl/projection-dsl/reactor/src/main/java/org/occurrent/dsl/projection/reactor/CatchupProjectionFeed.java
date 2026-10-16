@@ -247,8 +247,9 @@ public final class CatchupProjectionFeed<E> {
      * delivers it again.
      * <p>
      * {@link RoutingOutcome#DEFERRED} covers an event fed before {@link #catchUp()} or {@link #goLive()} has taken the
-     * feed live, while a replay runs, and after {@link #stopCatchUp()} stopped a replay before the feed went live.
-     * {@link RoutingOutcome#DELIVERED} also covers an event the replay or an earlier delivery already folded, which is
+     * feed live, while a replay runs, and after {@link #stopCatchUp()} stopped a replay before the feed went live. It
+     * also covers an event queued before a replay started and not yet being folded, which that replay takes back out
+     * of the queue, so this never waits for a replay. {@link RoutingOutcome#DELIVERED} also covers an event the replay or an earlier delivery already folded, which is
      * not folded again while its id is among the latest {@link CatchupThenLiveOptions#dedupCacheSize()} ids this feed
      * remembers. An event older than that is folded a second time, and the {@link Mono} completes with
      * {@link RoutingOutcome#DELIVERED} once that fold has completed. An earlier delivery of the same event that is

@@ -169,7 +169,8 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      *     <li>{@link RoutingOutcome#FILTERED} when the subscription's filter declined the event. Redelivering it to
      *     the same filter would only be declined again.</li>
      *     <li>{@link RoutingOutcome#DEFERRED} when a {@link CatchupThenPushSubscriptionModel} in front has not gone
-     *     live, because its replay is still running, say. The handler never ran, so have the broker deliver it again
+     *     live, because its replay is still running, say, or starts a replay before its handler has started on the
+     *     event, since this never waits for a replay. The handler never ran, so have the broker deliver it again
      *     later.</li>
      *     <li>{@link RoutingOutcome#UNAVAILABLE} when no subscription is registered, this model is stopped, or the
      *     subscription is paused. Stopping a {@link CatchupThenPushSubscriptionModel} in front stops this model too,

@@ -223,7 +223,7 @@ public final class DomainEventFeed<E> {
      * Feed a live domain event to the registered projection without waiting for its catch-up. The returned
      * {@link Mono} completes with {@link RoutingOutcome#DELIVERED} once the event is folded, and with
      * {@link RoutingOutcome#DEFERRED} right away while the projection is not live, without keeping the event anywhere.
-     * Acknowledge the message on {@link RoutingOutcome#DELIVERED} and leave it unacknowledged on
+     * It never waits for a replay, see {@link CatchupProjectionFeed#acceptOrDefer(Object)}. Acknowledge the message on {@link RoutingOutcome#DELIVERED} and leave it unacknowledged on
      * {@link RoutingOutcome#DEFERRED}, so the broker delivers it again. No {@link Filter} is applied, the same as for
      * {@link #acceptAndWait(Object)}.
      * <p>
@@ -306,9 +306,9 @@ public final class DomainEventFeed<E> {
      * projection went live. The
      * underlying {@code ReactiveHandover.acceptIfLive} refuses such an event outright rather than buffering it, so
      * the returned {@link Mono} completes with {@link RoutingOutcome#DEFERRED} right away, never waiting on a
-     * replay or a drain that might resolve it only much later. One evaluation decides both the live check and the
-     * hand-over together, so there is no window between "is it live" and "hand it over" for a concurrent
-     * {@link #goLive(String)} to land in. Redelivering a {@link RoutingOutcome#DEFERRED} event is always safe. The
+     * replay or a drain that might resolve it only much later. A replay that starts while the event is being handed
+     * over, or after it was queued and before its fold started, makes it complete with
+     * {@link RoutingOutcome#DEFERRED} too, and the event is not kept. Redelivering a {@link RoutingOutcome#DEFERRED} event is always safe. The
      * attempt that reported it was never accepted in the first place, nothing here folded it, so retrying is safe
      * until it completes with {@link RoutingOutcome#DELIVERED}, the same way a caller with nowhere else to
      * redeliver from, {@link #goLive(String)} exists precisely for a registration whose events are not in the local
