@@ -989,6 +989,47 @@ class CatchupProjectionFeedTest {
         }
     }
 
+    // "3" is queued behind the fold of "2" when the second catchUp() starts replaying. The fold of "2" has started, so
+    // the replay waits for it, and "3" has not, so it is answered deferred at once and never folded.
+    @Test
+    void accept_or_defer_queued_behind_a_live_fold_completes_deferred_when_a_catch_up_starts_and_the_event_is_never_folded() throws Exception {
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CountDownLatch foldingTwo = new CountDownLatch(1);
+        CountDownLatch releaseTwo = new CountDownLatch(1);
+        Function<Counted, Mono<Void>> fold = event -> Mono.fromRunnable(() -> {
+            if (event.eventId().equals("2")) {
+                foldingTwo.countDown();
+                try {
+                    releaseTwo.await(30, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            folded.add(event.eventId());
+        });
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create("counter", fold,
+                Filter.all(), reader("1"), countedConverter(), Counted::eventId, null);
+        feed.catchUp().block(ofSeconds(5));
+        try {
+            CompletableFuture<RoutingOutcome> two = feed.acceptOrDefer(new Counted("2")).subscribeOn(Schedulers.boundedElastic()).toFuture();
+            awaitLatch(foldingTwo);
+            CompletableFuture<RoutingOutcome> three = CompletableFuture.supplyAsync(() -> feed.acceptOrDefer(new Counted("3")).toFuture()).join();
+            assertThat(three).as("3 queued behind the fold of 2").isNotDone();
+
+            CompletableFuture<Void> replaying = feed.catchUp().toFuture();
+
+            assertThat(three).as("3 before the fold of 2 is released").succeedsWithin(ofSeconds(5)).isEqualTo(RoutingOutcome.DEFERRED);
+            assertThat(two).as("2 while its fold is held").isNotDone();
+            releaseTwo.countDown();
+            assertThat(two).succeedsWithin(ofSeconds(5)).isEqualTo(RoutingOutcome.DELIVERED);
+            assertThat(replaying).succeedsWithin(ofSeconds(5));
+            assertThat(feed.acceptOrDefer(new Counted("4")).block(ofSeconds(5))).as("the barrier behind 3").isEqualTo(RoutingOutcome.DELIVERED);
+            assertThat(folded).doesNotContain("3").endsWith("4");
+        } finally {
+            releaseTwo.countDown();
+        }
+    }
+
     @Test
     @SuppressWarnings("removal")
     void the_deprecated_accept_forwards_to_accept_and_wait_and_completes_once_the_event_is_folded() {
